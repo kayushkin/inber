@@ -9,6 +9,36 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
+// ModelInfo describes a Claude model with metadata for tracking.
+type ModelInfo struct {
+	ID              string  // e.g., "claude-sonnet-4-5-20250929"
+	ContextWindow   int     // max tokens
+	InputCostPer1M  float64 // cost per 1M input tokens
+	OutputCostPer1M float64 // cost per 1M output tokens
+}
+
+// Models is a registry of known Claude models.
+var Models = map[string]ModelInfo{
+	"claude-sonnet-4-5-20250929": {
+		ID:              "claude-sonnet-4-5-20250929",
+		ContextWindow:   200000,
+		InputCostPer1M:  3.00,
+		OutputCostPer1M: 15.00,
+	},
+	"claude-sonnet-4-6": {
+		ID:              "claude-sonnet-4-6",
+		ContextWindow:   200000,
+		InputCostPer1M:  3.00,
+		OutputCostPer1M: 15.00,
+	},
+	"claude-opus-4-6": {
+		ID:              "claude-opus-4-6",
+		ContextWindow:   200000,
+		InputCostPer1M:  15.00,
+		OutputCostPer1M: 75.00,
+	},
+}
+
 // Tool defines a tool the agent can use.
 type Tool struct {
 	Name        string
@@ -20,16 +50,14 @@ type Tool struct {
 // Agent runs the conversation loop with Claude.
 type Agent struct {
 	client *anthropic.Client
-	model  string
 	system string
 	tools  []Tool
 }
 
-// New creates an agent with the given model and system prompt.
-func New(client *anthropic.Client, model string, system string) *Agent {
+// New creates an agent with the given system prompt.
+func New(client *anthropic.Client, system string) *Agent {
 	return &Agent{
 		client: client,
-		model:  model,
 		system: system,
 	}
 }
@@ -50,7 +78,8 @@ type TurnResult struct {
 // Run sends a conversation to Claude and loops until it gets a final text
 // response (no more tool calls). It mutates the messages slice in place,
 // appending assistant and tool result messages.
-func (a *Agent) Run(ctx context.Context, messages *[]anthropic.MessageParam) (*TurnResult, error) {
+// The model parameter specifies which Claude model to use for this run.
+func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.MessageParam) (*TurnResult, error) {
 	result := &TurnResult{}
 
 	// Build tool params
@@ -69,8 +98,8 @@ func (a *Agent) Run(ctx context.Context, messages *[]anthropic.MessageParam) (*T
 
 	for {
 		params := anthropic.MessageNewParams{
-			Model:    anthropic.Model(a.model),
-			Messages: *messages,
+			Model:     anthropic.Model(model),
+			Messages:  *messages,
 			MaxTokens: 8192,
 		}
 

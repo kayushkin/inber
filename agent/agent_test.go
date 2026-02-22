@@ -22,13 +22,13 @@ func skipIfNoKey(t *testing.T) *anthropic.Client {
 
 func TestSimpleResponse(t *testing.T) {
 	client := skipIfNoKey(t)
-	a := agent.New(client, "claude-sonnet-4-5-20250929", "You are a helpful assistant. Be very brief.")
+	a := agent.New(client, "You are a helpful assistant. Be very brief.")
 
 	messages := []anthropic.MessageParam{
 		anthropic.NewUserMessage(anthropic.NewTextBlock("What is 2+2? Reply with just the number.")),
 	}
 
-	result, err := a.Run(context.Background(), &messages)
+	result, err := a.Run(context.Background(), "claude-sonnet-4-5-20250929", &messages)
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestSimpleResponse(t *testing.T) {
 
 func TestToolCall(t *testing.T) {
 	client := skipIfNoKey(t)
-	a := agent.New(client, "claude-sonnet-4-5-20250929", "You are a helpful assistant. Use the add tool to add numbers. Be very brief.")
+	a := agent.New(client, "You are a helpful assistant. Use the add tool to add numbers. Be very brief.")
 
 	a.AddTool(agent.Tool{
 		Name:        "add",
@@ -79,7 +79,7 @@ func TestToolCall(t *testing.T) {
 		anthropic.NewUserMessage(anthropic.NewTextBlock("What is 37 + 58? Use the add tool.")),
 	}
 
-	result, err := a.Run(context.Background(), &messages)
+	result, err := a.Run(context.Background(), "claude-sonnet-4-5-20250929", &messages)
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestToolCall(t *testing.T) {
 
 func TestMultipleToolCalls(t *testing.T) {
 	client := skipIfNoKey(t)
-	a := agent.New(client, "claude-sonnet-4-5-20250929", "You are a calculator. Use tools for all math. Be very brief.")
+	a := agent.New(client, "You are a calculator. Use tools for all math. Be very brief.")
 
 	a.AddTool(agent.Tool{
 		Name:        "multiply",
@@ -124,7 +124,7 @@ func TestMultipleToolCalls(t *testing.T) {
 		anthropic.NewUserMessage(anthropic.NewTextBlock("What is 6 * 7? Then what is 8 * 9? Use the multiply tool for each.")),
 	}
 
-	result, err := a.Run(context.Background(), &messages)
+	result, err := a.Run(context.Background(), "claude-sonnet-4-5-20250929", &messages)
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -138,13 +138,13 @@ func TestMultipleToolCalls(t *testing.T) {
 
 func TestConversationContinuity(t *testing.T) {
 	client := skipIfNoKey(t)
-	a := agent.New(client, "claude-sonnet-4-5-20250929", "You are a helpful assistant. Be very brief.")
+	a := agent.New(client, "You are a helpful assistant. Be very brief.")
 
 	messages := []anthropic.MessageParam{
 		anthropic.NewUserMessage(anthropic.NewTextBlock("My name is Inber. Just say hi.")),
 	}
 
-	result1, err := a.Run(context.Background(), &messages)
+	result1, err := a.Run(context.Background(), "claude-sonnet-4-5-20250929", &messages)
 	if err != nil {
 		t.Fatalf("Run 1 failed: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestConversationContinuity(t *testing.T) {
 	// Continue the conversation
 	messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock("What's my name?")))
 
-	result2, err := a.Run(context.Background(), &messages)
+	result2, err := a.Run(context.Background(), "claude-sonnet-4-5-20250929", &messages)
 	if err != nil {
 		t.Fatalf("Run 2 failed: %v", err)
 	}
@@ -161,6 +161,38 @@ func TestConversationContinuity(t *testing.T) {
 
 	if result2.Text == "" {
 		t.Fatal("expected non-empty response")
+	}
+}
+
+func TestSameAgentDifferentModels(t *testing.T) {
+	client := skipIfNoKey(t)
+	a := agent.New(client, "You are a helpful assistant. Be very brief.")
+
+	// First run with Sonnet
+	messages1 := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("What is 5+5? Reply with just the number.")),
+	}
+
+	result1, err := a.Run(context.Background(), "claude-sonnet-4-5-20250929", &messages1)
+	if err != nil {
+		t.Fatalf("Run with Sonnet failed: %v", err)
+	}
+	t.Logf("Sonnet response: %s (in=%d out=%d)", result1.Text, result1.InputTokens, result1.OutputTokens)
+
+	// Second run with Sonnet 4.6 (different model, same agent)
+	messages2 := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("What is 7+7? Reply with just the number.")),
+	}
+
+	result2, err := a.Run(context.Background(), "claude-sonnet-4-6", &messages2)
+	if err != nil {
+		t.Fatalf("Run with Sonnet 4.6 failed: %v", err)
+	}
+	t.Logf("Sonnet 4.6 response: %s (in=%d out=%d)", result2.Text, result2.InputTokens, result2.OutputTokens)
+
+	// Verify both got results
+	if result1.Text == "" || result2.Text == "" {
+		t.Fatal("expected non-empty responses from both models")
 	}
 }
 
