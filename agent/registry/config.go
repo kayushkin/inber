@@ -5,17 +5,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/kayushkin/inber/agent"
 )
 
 // AgentConfig defines an agent's configuration
 type AgentConfig struct {
-	Name     string        `json:"name"`
-	Role     string        `json:"role"`
-	System   string        `json:"-"` // loaded from markdown file
-	Model    string        `json:"model"`
-	Thinking int64         `json:"thinking"`
-	Tools    []string      `json:"tools"`
-	Context  ContextConfig `json:"context"`
+	Name     string               `json:"name"`
+	Role     string               `json:"role"`
+	System   string               `json:"-"` // loaded from markdown file
+	Model    string               `json:"model"`
+	Thinking int64                `json:"thinking"`
+	Tools    []string             `json:"tools"`
+	Context  ContextConfig        `json:"context"`
+	Hooks    *agent.HookConfig    `json:"hooks,omitempty"`
 }
 
 // ContextConfig defines context settings for an agent

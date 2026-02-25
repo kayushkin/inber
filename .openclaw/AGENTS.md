@@ -73,10 +73,11 @@ go build -o inber ./cmd/inber/
 
 1. ~~Agent loop + tools + logging~~ ✅
 2. ~~Context system with auto-loading (identity, repo map, recent files)~~ ✅
-3. Memory system — SQLite + embeddings + importance scoring
-4. Multi-agent orchestration
-5. Streaming responses
-6. Config file system (replace CLI flags)
+3. ~~Lifecycle hooks & event system~~ ✅
+4. Memory system — SQLite + embeddings + importance scoring
+5. Multi-agent orchestration
+6. Streaming responses
+7. Config file system (replace CLI flags)
 
 ## Context System (Implemented)
 
@@ -88,6 +89,30 @@ The context system automatically builds useful context when the agent starts:
 - **Project docs** — Auto-loads `.openclaw/AGENTS.md`, `README.md`, etc.
 
 Context is built per-message using tag-based prioritization with a 50k token budget. See `context/README.md` for details.
+
+## Hooks System (Implemented)
+
+The agent framework includes a comprehensive lifecycle hooks/event system:
+
+- **8 event types** — session_start, before_request, after_response, tool_call, tool_result, before_spawn, after_spawn, session_end
+- **Gatekeeper mode** — agents can intercept and approve/deny/modify events for other agents (e.g., security checks, cost limits)
+- **Scheduled triggers** — agents can be configured to activate on a timer (e.g., every 5 minutes)
+- **Event bus pattern** — decoupled, extensible, composable
+
+Hooks are configured per-agent in `agents.json`:
+```json
+{
+  "hooks": {
+    "hooks": ["on_tool_call", "on_before_spawn"],
+    "gatekeeper_for": ["coder"],
+    "schedule": {
+      "interval": "5m"
+    }
+  }
+}
+```
+
+See `HOOKS.md` for complete documentation.
 
 ## After Every Task
 
