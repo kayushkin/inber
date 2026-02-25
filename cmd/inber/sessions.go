@@ -38,12 +38,28 @@ var sessionsContextCmd = &cobra.Command{
 	Run:   runSessionsContext,
 }
 
+var sessionsPromptsCmd = &cobra.Command{
+	Use:   "prompts <id>",
+	Short: "List prompt breakdowns for a session",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSessionsPrompts,
+}
+
+var sessionsPromptCmd = &cobra.Command{
+	Use:   "prompt <id> <turn>",
+	Short: "Show a specific prompt breakdown",
+	Args:  cobra.ExactArgs(2),
+	Run:   runSessionsPrompt,
+}
+
 var sessionsLimit int
 
 func init() {
 	sessionsCmd.AddCommand(sessionsListCmd)
 	sessionsCmd.AddCommand(sessionsShowCmd)
 	sessionsCmd.AddCommand(sessionsContextCmd)
+	sessionsCmd.AddCommand(sessionsPromptsCmd)
+	sessionsCmd.AddCommand(sessionsPromptCmd)
 	
 	sessionsListCmd.Flags().IntVarP(&sessionsLimit, "limit", "n", 10, "Number of sessions to show")
 }
@@ -250,4 +266,50 @@ func runSessionsContext(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Println("No context found in session.")
+}
+
+func runSessionsPrompts(cmd *cobra.Command, args []string) {
+	sessionID := args[0]
+
+	repoRoot, _ := findRepoRoot()
+	if repoRoot == "" {
+		repoRoot, _ = os.Getwd()
+	}
+
+	logsDir := filepath.Join(repoRoot, "logs")
+	files, err := session.ListPromptBreakdowns(logsDir, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(files) == 0 {
+		fmt.Println("No prompt breakdowns found.")
+		return
+	}
+
+	fmt.Printf("Prompt breakdowns for %s:\n\n", sessionID)
+	for _, f := range files {
+		fmt.Printf("  %s\n", filepath.Base(f))
+	}
+}
+
+func runSessionsPrompt(cmd *cobra.Command, args []string) {
+	sessionID := args[0]
+	turn := 0
+	fmt.Sscanf(args[1], "%d", &turn)
+
+	repoRoot, _ := findRepoRoot()
+	if repoRoot == "" {
+		repoRoot, _ = os.Getwd()
+	}
+
+	logsDir := filepath.Join(repoRoot, "logs")
+	content, err := session.ReadPromptBreakdown(logsDir, sessionID, turn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println(content)
 }

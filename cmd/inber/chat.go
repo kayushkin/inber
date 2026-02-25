@@ -14,7 +14,7 @@ import (
 	"github.com/kayushkin/inber/agent/registry"
 	inbercontext "github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/memory"
-	"github.com/kayushkin/inber/session"
+	sessionMod "github.com/kayushkin/inber/session"
 	"github.com/kayushkin/inber/tools"
 	"github.com/spf13/cobra"
 )
@@ -23,6 +23,7 @@ var (
 	chatModel          string
 	chatThinking       int64
 	chatAgent          string
+	chatStep           bool
 )
 
 var chatCmd = &cobra.Command{
@@ -36,6 +37,7 @@ func init() {
 	chatCmd.Flags().StringVarP(&chatModel, "model", "m", agent.DefaultModel, "Claude model to use")
 	chatCmd.Flags().Int64VarP(&chatThinking, "thinking", "t", 0, "Enable extended thinking with token budget (0=disabled)")
 	chatCmd.Flags().StringVarP(&chatAgent, "agent", "a", "", "Agent name to load from registry")
+	chatCmd.Flags().BoolVarP(&chatStep, "step", "s", false, "Enable step mode (pause after each model turn)")
 }
 
 func runChat(cmd *cobra.Command, args []string) {
@@ -116,7 +118,7 @@ func runChat(cmd *cobra.Command, args []string) {
 		agentName = "default"
 	}
 	
-	sess, err := session.New("logs", chatModel, agentName, "")
+	sess, err := sessionMod.New("logs", chatModel, agentName, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: logging disabled: %v\n", err)
 	} else {
@@ -175,39 +177,50 @@ func runChat(cmd *cobra.Command, args []string) {
 		a.SetThinking(chatThinking)
 	}
 
-	// Wire up hooks: logging + display
-	displayHooks := &agent.Hooks{
-		OnThinking: func(text string) {
-			DisplayThinking(text)
-		},
-		OnToolCall: func(toolID, name string, input []byte) {
-			DisplayToolCall(name, string(input))
-		},
-		OnToolResult: func(toolID, name, output string, isError bool) {
-			DisplayToolResult(name, output, isError)
-		},
-	}
+	// Prompt breakdown tracking
+	turnCounter := 0
 
-	if sess != nil {
-		logHooks := sess.Hooks()
-		a.SetHooks(&agent.Hooks{
-			OnRequest: logHooks.OnRequest,
+	// Build hooks helper
+	buildHooks := func() *agent.Hooks {
+		hooks := &agent.Hooks{
 			OnThinking: func(text string) {
-				logHooks.OnThinking(text)
-				displayHooks.OnThinking(text)
+				DisplayThinking(text)
 			},
 			OnToolCall: func(toolID, name string, input []byte) {
-				logHooks.OnToolCall(toolID, name, input)
-				displayHooks.OnToolCall(toolID, name, input)
+				DisplayToolCall(name, string(input))
 			},
 			OnToolResult: func(toolID, name, output string, isError bool) {
-				logHooks.OnToolResult(toolID, name, output, isError)
-				displayHooks.OnToolResult(toolID, name, output, isError)
+				DisplayToolResult(name, output, isError)
 			},
-		})
-	} else {
-		a.SetHooks(displayHooks)
+		}
+
+		if sess != nil {
+			logHooks := sess.Hooks()
+			hooks = &agent.Hooks{
+				OnRequest: func(params *anthropic.MessageNewParams) {
+					logHooks.OnRequest(params)
+					// Prompt breakdown
+					turnCounter++
+					sessionMod.WritePromptBreakdown(sess.FilePath(), sess.SessionID(), turnCounter, params)
+				},
+				OnThinking: func(text string) {
+					logHooks.OnThinking(text)
+					DisplayThinking(text)
+				},
+				OnToolCall: func(toolID, name string, input []byte) {
+					logHooks.OnToolCall(toolID, name, input)
+					DisplayToolCall(name, string(input))
+				},
+				OnToolResult: func(toolID, name, output string, isError bool) {
+					logHooks.OnToolResult(toolID, name, output, isError)
+					DisplayToolResult(name, output, isError)
+				},
+			}
+		}
+		return hooks
 	}
+
+	a.SetHooks(buildHooks())
 
 	// REPL
 	var messages []anthropic.MessageParam
@@ -219,6 +232,9 @@ func runChat(cmd *cobra.Command, args []string) {
 	}
 	if chatAgent != "" {
 		header += fmt.Sprintf(" — agent: %s", chatAgent)
+	}
+	if chatStep {
+		header += " — step mode"
 	}
 	fmt.Printf("%s — ctrl+d to quit\n", header)
 
@@ -251,37 +267,7 @@ func runChat(cmd *cobra.Command, args []string) {
 			a.SetThinking(chatThinking)
 		}
 		
-		// Re-attach hooks
-		if sess != nil {
-			logHooks := sess.Hooks()
-			a.SetHooks(&agent.Hooks{
-				OnRequest: logHooks.OnRequest,
-				OnThinking: func(text string) {
-					logHooks.OnThinking(text)
-					DisplayThinking(text)
-				},
-				OnToolCall: func(toolID, name string, input []byte) {
-					logHooks.OnToolCall(toolID, name, input)
-					DisplayToolCall(name, string(input))
-				},
-				OnToolResult: func(toolID, name, output string, isError bool) {
-					logHooks.OnToolResult(toolID, name, output, isError)
-					DisplayToolResult(name, output, isError)
-				},
-			})
-		} else {
-			a.SetHooks(&agent.Hooks{
-				OnThinking: func(text string) {
-					DisplayThinking(text)
-				},
-				OnToolCall: func(toolID, name string, input []byte) {
-					DisplayToolCall(name, string(input))
-				},
-				OnToolResult: func(toolID, name, output string, isError bool) {
-					DisplayToolResult(name, output, isError)
-				},
-			})
-		}
+		a.SetHooks(buildHooks())
 
 		result, err := a.Run(context.Background(), chatModel, &messages)
 		if err != nil {
@@ -295,8 +281,177 @@ func runChat(cmd *cobra.Command, args []string) {
 
 		DisplayResponse(result.Text)
 		DisplayStats(result, chatModel)
+
+		// Step mode
+		if chatStep {
+			if !runStepMode(scanner, contextStore, &messages, buildSystemPrompt) {
+				break
+			}
+		}
 	}
 	fmt.Println()
+}
+
+// runStepMode runs the step-mode REPL. Returns false if user wants to quit.
+func runStepMode(scanner *bufio.Scanner, store *inbercontext.Store, messages *[]anthropic.MessageParam, buildSysPrompt func(*inbercontext.Store, string) string) bool {
+	for {
+		fmt.Printf("\n%s[step]%s > ", cyan+bold, reset)
+		if !scanner.Scan() {
+			return false
+		}
+		input := strings.TrimSpace(scanner.Text())
+
+		switch {
+		case input == "" || input == "c" || input == "continue":
+			return true
+
+		case input == "q" || input == "quit":
+			return false
+
+		case input == "context":
+			chunks := store.ListAll()
+			if len(chunks) == 0 {
+				fmt.Println("  No context chunks.")
+				continue
+			}
+			fmt.Printf("  %-12s %-20s %-8s %s\n", "ID", "Tags", "Tokens", "Source")
+			fmt.Printf("  %-12s %-20s %-8s %s\n", "---", "---", "---", "---")
+			for _, c := range chunks {
+				id := c.ID
+				if len(id) > 12 {
+					id = id[:12]
+				}
+				tags := strings.Join(c.Tags, ",")
+				if len(tags) > 20 {
+					tags = tags[:20]
+				}
+				fmt.Printf("  %-12s %-20s %-8d %s\n", id, tags, c.Tokens, c.Source)
+			}
+
+		case strings.HasPrefix(input, "context add "):
+			parts := strings.SplitN(input, " ", 4)
+			if len(parts) < 4 {
+				fmt.Println("  Usage: context add <tag> <text>")
+				continue
+			}
+			tag := parts[2]
+			text := parts[3]
+			id := fmt.Sprintf("step-%d", len(store.ListAll()))
+			err := store.Add(inbercontext.Chunk{
+				ID:     id,
+				Text:   text,
+				Tags:   []string{tag},
+				Source: "user",
+			})
+			if err != nil {
+				fmt.Printf("  %serror: %v%s\n", red, err, reset)
+			} else {
+				fmt.Printf("  Added chunk %s\n", id)
+			}
+
+		case strings.HasPrefix(input, "context remove "):
+			id := strings.TrimPrefix(input, "context remove ")
+			if store.Delete(id) {
+				fmt.Printf("  Removed %s\n", id)
+			} else {
+				fmt.Printf("  %snot found: %s%s\n", red, id, reset)
+			}
+
+		case strings.HasPrefix(input, "context edit "):
+			parts := strings.SplitN(input, " ", 4)
+			if len(parts) < 4 {
+				fmt.Println("  Usage: context edit <id> <new-text>")
+				continue
+			}
+			id := parts[2]
+			newText := parts[3]
+			chunk, ok := store.Get(id)
+			if !ok {
+				fmt.Printf("  %snot found: %s%s\n", red, id, reset)
+				continue
+			}
+			chunk.Text = newText
+			chunk.Tokens = inbercontext.EstimateTokens(newText)
+			store.Add(chunk)
+			fmt.Printf("  Updated %s\n", id)
+
+		case input == "messages":
+			msgs := *messages
+			if len(msgs) == 0 {
+				fmt.Println("  No messages.")
+				continue
+			}
+			for i, msg := range msgs {
+				role := string(msg.Role)
+				content := "(no text)"
+				for _, block := range msg.Content {
+					if block.OfText != nil {
+						content = block.OfText.Text
+						break
+					}
+					if block.OfToolResult != nil {
+						content = "[tool_result]"
+						break
+					}
+				}
+				if len(content) > 80 {
+					content = content[:80] + "..."
+				}
+				fmt.Printf("  %d. %s%-9s%s %s\n", i+1, bold, role, reset, content)
+			}
+
+		case strings.HasPrefix(input, "messages drop "):
+			nStr := strings.TrimPrefix(input, "messages drop ")
+			n := 0
+			fmt.Sscanf(nStr, "%d", &n)
+			if n <= 0 {
+				fmt.Println("  Usage: messages drop <n>")
+				continue
+			}
+			msgs := *messages
+			if n > len(msgs) {
+				n = len(msgs)
+			}
+			*messages = msgs[:len(msgs)-n]
+			fmt.Printf("  Dropped %d messages\n", n)
+
+		case input == "system":
+			prompt := buildSysPrompt(store, "")
+			if prompt == "" {
+				fmt.Println("  (empty system prompt)")
+			} else {
+				if len(prompt) > 2000 {
+					fmt.Println(prompt[:2000] + "...")
+				} else {
+					fmt.Println(prompt)
+				}
+			}
+
+		case input == "tokens":
+			sysPrompt := buildSysPrompt(store, "")
+			sysTok := inbercontext.EstimateTokens(sysPrompt)
+			msgTok := 0
+			for _, msg := range *messages {
+				msgTok += 4
+				for _, block := range msg.Content {
+					if block.OfText != nil {
+						msgTok += inbercontext.EstimateTokens(block.OfText.Text)
+					}
+				}
+			}
+			ctxTok := 0
+			for _, c := range store.ListAll() {
+				ctxTok += c.Tokens
+			}
+			fmt.Printf("  System: ~%d tokens\n", sysTok)
+			fmt.Printf("  Messages: ~%d tokens\n", msgTok)
+			fmt.Printf("  Context chunks: ~%d tokens\n", ctxTok)
+			fmt.Printf("  Total: ~%d tokens\n", sysTok+msgTok)
+
+		default:
+			fmt.Printf("  %sUnknown command. Available: continue, context, messages, system, tokens, quit%s\n", dim, reset)
+		}
+	}
 }
 
 // findRepoRoot finds the repository root by looking for .git directory

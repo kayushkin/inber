@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kayushkin/inber/memory"
@@ -56,12 +57,33 @@ var memoryStatsCmd = &cobra.Command{
 	Run:   runMemoryStats,
 }
 
+var memoryCompactCmd = &cobra.Command{
+	Use:   "compact",
+	Short: "Compact old low-access memories",
+	Run:   runMemoryCompact,
+}
+
+var memoryPruneCmd = &cobra.Command{
+	Use:   "prune",
+	Short: "Show/run conversation pruning",
+	Run:   runMemoryPrune,
+}
+
+var memoryDecayCmd = &cobra.Command{
+	Use:   "decay",
+	Short: "Run importance decay on all memories",
+	Run:   runMemoryDecay,
+}
+
 var (
-	memorySearchLimit int
-	memoryListLimit   int
-	memoryListMin     float64
-	memorySaveTags    []string
+	memorySearchLimit    int
+	memoryListLimit      int
+	memoryListMin        float64
+	memorySaveTags       []string
 	memorySaveImportance float64
+	memoryCompactAge     string
+	memoryCompactMinAccess int
+	memoryPruneDryRun    bool
 )
 
 func init() {
@@ -71,12 +93,18 @@ func init() {
 	memoryCmd.AddCommand(memorySaveCmd)
 	memoryCmd.AddCommand(memoryForgetCmd)
 	memoryCmd.AddCommand(memoryStatsCmd)
+	memoryCmd.AddCommand(memoryCompactCmd)
+	memoryCmd.AddCommand(memoryPruneCmd)
+	memoryCmd.AddCommand(memoryDecayCmd)
 	
 	memorySearchCmd.Flags().IntVarP(&memorySearchLimit, "limit", "n", 10, "Maximum results")
 	memoryListCmd.Flags().IntVarP(&memoryListLimit, "limit", "n", 20, "Maximum results")
 	memoryListCmd.Flags().Float64VarP(&memoryListMin, "min-importance", "i", 0.5, "Minimum importance")
 	memorySaveCmd.Flags().StringSliceVarP(&memorySaveTags, "tags", "t", []string{}, "Tags (comma-separated)")
 	memorySaveCmd.Flags().Float64VarP(&memorySaveImportance, "importance", "i", 0.5, "Importance (0-1)")
+	memoryCompactCmd.Flags().StringVar(&memoryCompactAge, "age", "168h", "Minimum age for compaction (e.g., 168h for 7 days)")
+	memoryCompactCmd.Flags().IntVar(&memoryCompactMinAccess, "min-access", 3, "Minimum access count threshold")
+	memoryPruneCmd.Flags().BoolVar(&memoryPruneDryRun, "dry-run", false, "Show what would be pruned without pruning")
 }
 
 func getMemoryStore() *memory.Store {
@@ -282,6 +310,87 @@ func runMemoryStats(cmd *cobra.Command, args []string) {
 			fmt.Printf("  %s  %s %d\n", bucket, bar, count)
 		}
 	}
+}
+
+func runMemoryCompact(cmd *cobra.Command, args []string) {
+	store := getMemoryStore()
+	defer store.Close()
+
+	age, err := time.ParseDuration(memoryCompactAge)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid age duration: %v\n", err)
+		os.Exit(1)
+	}
+
+	results, err := store.Compact(age, memoryCompactMinAccess)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("Nothing to compact.")
+		return
+	}
+
+	fmt.Printf("Compacted %d groups:\n\n", len(results))
+	for _, r := range results {
+		fmt.Printf("  %s%s%s ← %d memories (tags: %s)\n",
+			bold, r.NewID, reset, r.Count, strings.Join(r.Tags, ", "))
+	}
+}
+
+func runMemoryPrune(cmd *cobra.Command, args []string) {
+	store := getMemoryStore()
+	defer store.Close()
+
+	// Show memories that would be affected by compaction (low importance)
+	all, err := store.ListRecent(1000, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	var prunable []memory.Memory
+	for _, m := range all {
+		if m.Importance < 0.3 && m.AccessCount < 2 {
+			prunable = append(prunable, m)
+		}
+	}
+
+	if len(prunable) == 0 {
+		fmt.Println("No memories eligible for pruning.")
+		return
+	}
+
+	fmt.Printf("Found %d prunable memories:\n\n", len(prunable))
+	for _, m := range prunable {
+		fmt.Printf("  [%s] imp=%.2f access=%d %s%s%s\n",
+			m.ID[:8], m.Importance, m.AccessCount, dim, truncateText(m.Content, 60), reset)
+	}
+
+	if memoryPruneDryRun {
+		fmt.Println("\n(dry run — no changes made)")
+		return
+	}
+
+	// Actually forget them
+	for _, m := range prunable {
+		store.Forget(m.ID)
+	}
+	fmt.Printf("\nPruned %d memories.\n", len(prunable))
+}
+
+func runMemoryDecay(cmd *cobra.Command, args []string) {
+	store := getMemoryStore()
+	defer store.Close()
+
+	if err := store.DecayImportance(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Importance decay applied.")
 }
 
 func truncateText(s string, max int) string {

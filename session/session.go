@@ -189,6 +189,38 @@ func (s *Session) LogRequest(payload json.RawMessage) {
 	})
 }
 
+// LogCompaction logs a memory compaction event.
+func (s *Session) LogCompaction(original []string, newID string, tags []string) {
+	data := map[string]interface{}{
+		"original_ids": original,
+		"new_id":       newID,
+		"tags":         tags,
+	}
+	raw, _ := json.Marshal(data)
+	s.write(Entry{
+		Timestamp: time.Now(),
+		Role:      "compaction",
+		Content:   fmt.Sprintf("compacted %d memories into %s", len(original), newID),
+		Request:   json.RawMessage(raw),
+	})
+}
+
+// LogPrune logs a conversation pruning event.
+func (s *Session) LogPrune(removed int, tokensFreed int, strategy string) {
+	data := map[string]interface{}{
+		"removed":      removed,
+		"tokens_freed": tokensFreed,
+		"strategy":     strategy,
+	}
+	raw, _ := json.Marshal(data)
+	s.write(Entry{
+		Timestamp: time.Now(),
+		Role:      "prune",
+		Content:   fmt.Sprintf("pruned %d messages (%d tokens freed, strategy: %s)", removed, tokensFreed, strategy),
+		Request:   json.RawMessage(raw),
+	})
+}
+
 // Close finalizes the session log.
 func (s *Session) Close() {
 	s.mu.Lock()
