@@ -9,36 +9,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// ModelInfo describes a Claude model with metadata for tracking.
-type ModelInfo struct {
-	ID              string  // e.g., "claude-sonnet-4-5-20250929"
-	ContextWindow   int     // max tokens
-	InputCostPer1M  float64 // cost per 1M input tokens
-	OutputCostPer1M float64 // cost per 1M output tokens
-}
-
-// Models is a registry of known Claude models.
-var Models = map[string]ModelInfo{
-	"claude-sonnet-4-5-20250929": {
-		ID:              "claude-sonnet-4-5-20250929",
-		ContextWindow:   200000,
-		InputCostPer1M:  3.00,
-		OutputCostPer1M: 15.00,
-	},
-	"claude-sonnet-4-6": {
-		ID:              "claude-sonnet-4-6",
-		ContextWindow:   200000,
-		InputCostPer1M:  3.00,
-		OutputCostPer1M: 15.00,
-	},
-	"claude-opus-4-6": {
-		ID:              "claude-opus-4-6",
-		ContextWindow:   200000,
-		InputCostPer1M:  15.00,
-		OutputCostPer1M: 75.00,
-	},
-}
-
 // Tool defines a tool the agent can use.
 type Tool struct {
 	Name        string
@@ -47,11 +17,21 @@ type Tool struct {
 	Run         func(ctx context.Context, input string) (string, error)
 }
 
+// Hooks allows callers to observe tool calls and results (e.g., for logging).
+type Hooks struct {
+	OnRequest    func(params *anthropic.MessageNewParams) // called before each API request
+	OnThinking   func(text string)                        // called when thinking blocks are received
+	OnToolCall   func(toolID, name string, input []byte)
+	OnToolResult func(toolID, name, output string, isError bool)
+}
+
 // Agent runs the conversation loop with Claude.
 type Agent struct {
-	client *anthropic.Client
-	system string
-	tools  []Tool
+	client       *anthropic.Client
+	system       string
+	tools        []Tool
+	hooks        *Hooks
+	thinkingBudget int64 // 0 = disabled, >0 = budget tokens for extended thinking
 }
 
 // New creates an agent with the given system prompt.
@@ -62,6 +42,17 @@ func New(client *anthropic.Client, system string) *Agent {
 	}
 }
 
+// SetHooks attaches observation hooks for tool calls/results.
+func (a *Agent) SetHooks(h *Hooks) {
+	a.hooks = h
+}
+
+// SetThinking enables extended thinking with the given token budget.
+// Budget must be >= 1024. Set to 0 to disable.
+func (a *Agent) SetThinking(budgetTokens int64) {
+	a.thinkingBudget = budgetTokens
+}
+
 // AddTool registers a tool the agent can call.
 func (a *Agent) AddTool(t Tool) {
 	a.tools = append(a.tools, t)
@@ -69,8 +60,9 @@ func (a *Agent) AddTool(t Tool) {
 
 // TurnResult is what comes back from a single Run call.
 type TurnResult struct {
-	Text       string // Final text response
-	ToolCalls  int    // Total tool calls made during this turn
+	Text         string // Final text response
+	Thinking     string // Thinking/reasoning text (if extended thinking enabled)
+	ToolCalls    int    // Total tool calls made during this turn
 	InputTokens  int
 	OutputTokens int
 }
@@ -113,6 +105,18 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 			params.Tools = toolParams
 		}
 
+		if a.thinkingBudget > 0 {
+			params.Thinking = anthropic.ThinkingConfigParamUnion{
+				OfEnabled: &anthropic.ThinkingConfigEnabledParam{
+					BudgetTokens: a.thinkingBudget,
+				},
+			}
+		}
+
+		if a.hooks != nil && a.hooks.OnRequest != nil {
+			a.hooks.OnRequest(&params)
+		}
+
 		resp, err := a.client.Messages.New(ctx, params)
 		if err != nil {
 			return result, fmt.Errorf("api call failed: %w", err)
@@ -120,6 +124,16 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 
 		result.InputTokens += int(resp.Usage.InputTokens)
 		result.OutputTokens += int(resp.Usage.OutputTokens)
+
+		// Extract thinking blocks
+		for _, block := range resp.Content {
+			if block.Type == "thinking" {
+				result.Thinking += block.Thinking
+				if a.hooks != nil && a.hooks.OnThinking != nil {
+					a.hooks.OnThinking(block.Thinking)
+				}
+			}
+		}
 
 		// Append assistant message
 		*messages = append(*messages, resp.ToParam())
@@ -145,22 +159,37 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 
 				result.ToolCalls++
 
+				if a.hooks != nil && a.hooks.OnToolCall != nil {
+					a.hooks.OnToolCall(block.ID, block.Name, []byte(block.Input))
+				}
+
 				tool, ok := toolMap[block.Name]
 				if !ok {
+					errMsg := fmt.Sprintf("error: unknown tool %q", block.Name)
+					if a.hooks != nil && a.hooks.OnToolResult != nil {
+						a.hooks.OnToolResult(block.ID, block.Name, errMsg, true)
+					}
 					toolResults = append(toolResults, anthropic.NewToolResultBlock(
-						block.ID, fmt.Sprintf("error: unknown tool %q", block.Name), true,
+						block.ID, errMsg, true,
 					))
 					continue
 				}
 
 				output, err := tool.Run(ctx, string(block.Input))
 				if err != nil {
+					errMsg := fmt.Sprintf("error: %s", err)
+					if a.hooks != nil && a.hooks.OnToolResult != nil {
+						a.hooks.OnToolResult(block.ID, block.Name, errMsg, true)
+					}
 					toolResults = append(toolResults, anthropic.NewToolResultBlock(
-						block.ID, fmt.Sprintf("error: %s", err), true,
+						block.ID, errMsg, true,
 					))
 					continue
 				}
 
+				if a.hooks != nil && a.hooks.OnToolResult != nil {
+					a.hooks.OnToolResult(block.ID, block.Name, output, false)
+				}
 				toolResults = append(toolResults, anthropic.NewToolResultBlock(
 					block.ID, output, false,
 				))

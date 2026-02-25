@@ -1,3 +1,4 @@
 inber
 *.exe
 .env
+logs/
