@@ -32,6 +32,7 @@ func init() {
 
 	// Add subcommands
 	rootCmd.AddCommand(chatCmd)
+	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(agentsCmd)
 	rootCmd.AddCommand(sessionsCmd)
 	rootCmd.AddCommand(memoryCmd)
