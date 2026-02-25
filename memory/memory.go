@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -39,14 +40,13 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	// Create schema
+	// Create normalized schema
 	schema := `
 	CREATE TABLE IF NOT EXISTS memories (
 		id TEXT PRIMARY KEY,
 		content TEXT NOT NULL,
 		summary TEXT,
 		original_id TEXT,
-		tags TEXT NOT NULL,
 		importance REAL NOT NULL DEFAULT 0.5,
 		access_count INTEGER NOT NULL DEFAULT 0,
 		last_accessed INTEGER NOT NULL,
@@ -58,6 +58,49 @@ func NewStore(dbPath string) (*Store, error) {
 	CREATE INDEX IF NOT EXISTS idx_last_accessed ON memories(last_accessed);
 	CREATE INDEX IF NOT EXISTS idx_created_at ON memories(created_at);
 	CREATE INDEX IF NOT EXISTS idx_source ON memories(source);
+
+	CREATE TABLE IF NOT EXISTS memory_tags (
+		memory_id TEXT NOT NULL,
+		tag TEXT NOT NULL,
+		FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_memory_tags_memory_id ON memory_tags(memory_id);
+	CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag);
+
+	CREATE TABLE IF NOT EXISTS sessions (
+		id TEXT PRIMARY KEY,
+		agent_name TEXT,
+		model TEXT,
+		started_at INTEGER NOT NULL,
+		ended_at INTEGER,
+		input_tokens INTEGER DEFAULT 0,
+		output_tokens INTEGER DEFAULT 0,
+		cost REAL DEFAULT 0,
+		summary TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
+	CREATE INDEX IF NOT EXISTS idx_sessions_agent_name ON sessions(agent_name);
+
+	CREATE TABLE IF NOT EXISTS session_tags (
+		session_id TEXT NOT NULL,
+		tag TEXT NOT NULL,
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_session_tags_session_id ON session_tags(session_id);
+	CREATE INDEX IF NOT EXISTS idx_session_tags_tag ON session_tags(tag);
+
+	CREATE TABLE IF NOT EXISTS memory_usage (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		memory_id TEXT NOT NULL,
+		session_id TEXT NOT NULL,
+		turn_number INTEGER NOT NULL,
+		usage_type TEXT NOT NULL,
+		accessed_at INTEGER NOT NULL,
+		FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE,
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_memory_usage_memory_id ON memory_usage(memory_id);
+	CREATE INDEX IF NOT EXISTS idx_memory_usage_session_id ON memory_usage(session_id);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
@@ -93,35 +136,55 @@ func (s *Store) Save(m Memory) error {
 		m.Importance = 0.5
 	}
 
-	// Serialize tags and embedding
-	tagsJSON, err := json.Marshal(m.Tags)
-	if err != nil {
-		return fmt.Errorf("marshal tags: %w", err)
-	}
+	// Serialize embedding
 	embJSON, err := json.Marshal(m.Embedding)
 	if err != nil {
 		return fmt.Errorf("marshal embedding: %w", err)
 	}
 
+	// Start transaction
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Insert memory
 	query := `
-	INSERT INTO memories (id, content, summary, original_id, tags, importance, access_count, last_accessed, created_at, source, embedding)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO memories (id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err = s.db.Exec(query,
+	_, err = tx.Exec(query,
 		m.ID, m.Content, nullString(m.Summary), nullString(m.OriginalID),
-		string(tagsJSON), m.Importance, m.AccessCount,
+		m.Importance, m.AccessCount,
 		m.LastAccessed.Unix(), m.CreatedAt.Unix(), m.Source, embJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("insert memory: %w", err)
 	}
-	return nil
+
+	// Insert tags
+	if len(m.Tags) > 0 {
+		tagStmt, err := tx.Prepare("INSERT INTO memory_tags (memory_id, tag) VALUES (?, ?)")
+		if err != nil {
+			return fmt.Errorf("prepare tag insert: %w", err)
+		}
+		defer tagStmt.Close()
+
+		for _, tag := range m.Tags {
+			if _, err := tagStmt.Exec(m.ID, tag); err != nil {
+				return fmt.Errorf("insert tag: %w", err)
+			}
+		}
+	}
+
+	return tx.Commit()
 }
 
 // Get retrieves a memory by ID and updates access tracking.
 func (s *Store) Get(id string) (*Memory, error) {
 	query := `
-	SELECT id, content, summary, original_id, tags, importance, access_count, last_accessed, created_at, source, embedding
+	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding
 	FROM memories
 	WHERE id = ?
 	`
@@ -129,11 +192,11 @@ func (s *Store) Get(id string) (*Memory, error) {
 
 	var m Memory
 	var summary, originalID sql.NullString
-	var tagsJSON, embJSON []byte
+	var embJSON []byte
 	var lastAccessed, createdAt int64
 
 	err := row.Scan(
-		&m.ID, &m.Content, &summary, &originalID, &tagsJSON,
+		&m.ID, &m.Content, &summary, &originalID,
 		&m.Importance, &m.AccessCount, &lastAccessed, &createdAt, &m.Source, &embJSON,
 	)
 	if err == sql.ErrNoRows {
@@ -148,11 +211,24 @@ func (s *Store) Get(id string) (*Memory, error) {
 	m.LastAccessed = time.Unix(lastAccessed, 0)
 	m.CreatedAt = time.Unix(createdAt, 0)
 
-	if err := json.Unmarshal(tagsJSON, &m.Tags); err != nil {
-		return nil, fmt.Errorf("unmarshal tags: %w", err)
-	}
 	if err := json.Unmarshal(embJSON, &m.Embedding); err != nil {
 		return nil, fmt.Errorf("unmarshal embedding: %w", err)
+	}
+
+	// Fetch tags
+	tagRows, err := s.db.Query("SELECT tag FROM memory_tags WHERE memory_id = ?", id)
+	if err != nil {
+		return nil, fmt.Errorf("query tags: %w", err)
+	}
+	defer tagRows.Close()
+
+	m.Tags = []string{}
+	for tagRows.Next() {
+		var tag string
+		if err := tagRows.Scan(&tag); err != nil {
+			continue
+		}
+		m.Tags = append(m.Tags, tag)
 	}
 
 	// Update access tracking synchronously
@@ -189,7 +265,7 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 
 	// Fetch all non-forgotten memories
 	sqlQuery := `
-	SELECT id, content, summary, original_id, tags, importance, access_count, last_accessed, created_at, source, embedding
+	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding
 	FROM memories
 	WHERE importance > 0
 	`
@@ -205,15 +281,16 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 		score  float64
 	}
 	var candidates []scored
+	memoryIDs := []string{}
 
 	for rows.Next() {
 		var m Memory
 		var summary, originalID sql.NullString
-		var tagsJSON, embJSON []byte
+		var embJSON []byte
 		var lastAccessed, createdAt int64
 
 		err := rows.Scan(
-			&m.ID, &m.Content, &summary, &originalID, &tagsJSON,
+			&m.ID, &m.Content, &summary, &originalID,
 			&m.Importance, &m.AccessCount, &lastAccessed, &createdAt, &m.Source, &embJSON,
 		)
 		if err != nil {
@@ -225,9 +302,6 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 		m.LastAccessed = time.Unix(lastAccessed, 0)
 		m.CreatedAt = time.Unix(createdAt, 0)
 
-		if err := json.Unmarshal(tagsJSON, &m.Tags); err != nil {
-			continue
-		}
 		if err := json.Unmarshal(embJSON, &m.Embedding); err != nil {
 			continue
 		}
@@ -243,10 +317,46 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 		score := similarity * m.Importance * recencyBoost
 
 		candidates = append(candidates, scored{memory: m, score: score})
+		memoryIDs = append(memoryIDs, m.ID)
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate rows: %w", err)
+	}
+
+	// Fetch tags for all memories in a single query
+	if len(memoryIDs) > 0 {
+		tagMap := make(map[string][]string)
+		
+		// Build IN clause
+		placeholders := make([]string, len(memoryIDs))
+		args := make([]interface{}, len(memoryIDs))
+		for i, id := range memoryIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		
+		tagQuery := fmt.Sprintf("SELECT memory_id, tag FROM memory_tags WHERE memory_id IN (%s)", 
+			strings.Join(placeholders, ","))
+		
+		tagRows, err := s.db.Query(tagQuery, args...)
+		if err == nil {
+			defer tagRows.Close()
+			for tagRows.Next() {
+				var memID, tag string
+				if err := tagRows.Scan(&memID, &tag); err == nil {
+					tagMap[memID] = append(tagMap[memID], tag)
+				}
+			}
+		}
+		
+		// Attach tags to memories
+		for i := range candidates {
+			candidates[i].memory.Tags = tagMap[candidates[i].memory.ID]
+			if candidates[i].memory.Tags == nil {
+				candidates[i].memory.Tags = []string{}
+			}
+		}
 	}
 
 	// Sort by score (descending)
@@ -302,7 +412,7 @@ func (s *Store) DecayImportance() error {
 // ListRecent returns the N most recently created memories with importance > threshold.
 func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
 	query := `
-	SELECT id, content, summary, original_id, tags, importance, access_count, last_accessed, created_at, source, embedding
+	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding
 	FROM memories
 	WHERE importance >= ?
 	ORDER BY created_at DESC
@@ -315,14 +425,16 @@ func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
 	defer rows.Close()
 
 	var result []Memory
+	var memoryIDs []string
+	
 	for rows.Next() {
 		var m Memory
 		var summary, originalID sql.NullString
-		var tagsJSON, embJSON []byte
+		var embJSON []byte
 		var lastAccessed, createdAt int64
 
 		err := rows.Scan(
-			&m.ID, &m.Content, &summary, &originalID, &tagsJSON,
+			&m.ID, &m.Content, &summary, &originalID,
 			&m.Importance, &m.AccessCount, &lastAccessed, &createdAt, &m.Source, &embJSON,
 		)
 		if err != nil {
@@ -334,17 +446,53 @@ func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
 		m.LastAccessed = time.Unix(lastAccessed, 0)
 		m.CreatedAt = time.Unix(createdAt, 0)
 
-		if err := json.Unmarshal(tagsJSON, &m.Tags); err != nil {
-			continue
-		}
 		if err := json.Unmarshal(embJSON, &m.Embedding); err != nil {
 			continue
 		}
 
 		result = append(result, m)
+		memoryIDs = append(memoryIDs, m.ID)
 	}
 
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Fetch tags for all memories
+	if len(memoryIDs) > 0 {
+		tagMap := make(map[string][]string)
+		
+		placeholders := make([]string, len(memoryIDs))
+		args := make([]interface{}, len(memoryIDs))
+		for i, id := range memoryIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		
+		tagQuery := fmt.Sprintf("SELECT memory_id, tag FROM memory_tags WHERE memory_id IN (%s)", 
+			strings.Join(placeholders, ","))
+		
+		tagRows, err := s.db.Query(tagQuery, args...)
+		if err == nil {
+			defer tagRows.Close()
+			for tagRows.Next() {
+				var memID, tag string
+				if err := tagRows.Scan(&memID, &tag); err == nil {
+					tagMap[memID] = append(tagMap[memID], tag)
+				}
+			}
+		}
+		
+		// Attach tags to memories
+		for i := range result {
+			result[i].Tags = tagMap[result[i].ID]
+			if result[i].Tags == nil {
+				result[i].Tags = []string{}
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // cosineSimilarity computes the cosine similarity between two vectors.
@@ -370,4 +518,75 @@ func cosineSimilarity(a, b []float64) float64 {
 // nullString returns a sql.NullString from a string.
 func nullString(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: s != ""}
+}
+
+// Session represents a tracked agent session.
+type Session struct {
+	ID           string
+	AgentName    string
+	Model        string
+	StartedAt    time.Time
+	EndedAt      time.Time
+	InputTokens  int
+	OutputTokens int
+	Cost         float64
+	Summary      string
+	Tags         []string
+}
+
+// SaveSession stores a session record.
+func (s *Store) SaveSession(sess Session) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	query := `
+	INSERT INTO sessions (id, agent_name, model, started_at, ended_at, input_tokens, output_tokens, cost, summary)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err = tx.Exec(query,
+		sess.ID, sess.AgentName, sess.Model,
+		sess.StartedAt.Unix(), nullInt64(sess.EndedAt),
+		sess.InputTokens, sess.OutputTokens, sess.Cost, nullString(sess.Summary),
+	)
+	if err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+
+	// Insert tags
+	if len(sess.Tags) > 0 {
+		tagStmt, err := tx.Prepare("INSERT INTO session_tags (session_id, tag) VALUES (?, ?)")
+		if err != nil {
+			return fmt.Errorf("prepare tag insert: %w", err)
+		}
+		defer tagStmt.Close()
+
+		for _, tag := range sess.Tags {
+			if _, err := tagStmt.Exec(sess.ID, tag); err != nil {
+				return fmt.Errorf("insert tag: %w", err)
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
+// TrackMemoryUsage records when a memory was used in a session.
+func (s *Store) TrackMemoryUsage(memoryID, sessionID string, turnNumber int, usageType string) error {
+	query := `
+	INSERT INTO memory_usage (memory_id, session_id, turn_number, usage_type, accessed_at)
+	VALUES (?, ?, ?, ?, ?)
+	`
+	_, err := s.db.Exec(query, memoryID, sessionID, turnNumber, usageType, time.Now().Unix())
+	return err
+}
+
+// nullInt64 returns a sql.NullInt64 from a time.Time.
+func nullInt64(t time.Time) sql.NullInt64 {
+	if t.IsZero() {
+		return sql.NullInt64{Valid: false}
+	}
+	return sql.NullInt64{Int64: t.Unix(), Valid: true}
 }
