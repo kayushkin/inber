@@ -4,7 +4,7 @@ The registry package provides multi-agent support for inber, allowing you to def
 
 ## Features
 
-- **YAML-based agent configuration** - Define agents declaratively
+- **Markdown + JSON agent configuration** - Identity in natural language, settings in JSON
 - **Session isolation** - Each agent has its own conversation log
 - **Context isolation** - Each agent has its own tagged context store
 - **Tool scoping** - Control which tools each agent can access
@@ -39,24 +39,55 @@ result, err := coder.Run(ctx, "claude-sonnet-4-5", &messages)
 
 ## Agent Configuration
 
-Create YAML files in the `agents/` directory:
+Agents are defined using two files:
 
-```yaml
-name: coder
-role: "software engineer"
-system: |
-  You are a coding specialist.
-model: claude-sonnet-4-5
-thinking: 0
-tools:
-  - shell
-  - read_file
-  - write_file
-context:
-  tags:
-    - code
-  budget: 50000
+### 1. Identity (Markdown)
+
+Create `.md` files in `agents/` directory with natural language descriptions:
+
+**agents/coder.md:**
+```markdown
+# Coder Agent
+
+You are a coding specialist. You write, test, and debug code with a focus on:
+
+- Clean, maintainable code
+- Comprehensive tests
+- Clear documentation
+
+You have full shell access and can read/write/edit files.
 ```
+
+### 2. Settings (JSON)
+
+Create `agents.json` in the project root with system configuration:
+
+```json
+{
+  "agents": {
+    "coder": {
+      "name": "coder",
+      "role": "software engineer",
+      "model": "claude-sonnet-4-5",
+      "thinking": 0,
+      "tools": [
+        "shell",
+        "read_file",
+        "write_file"
+      ],
+      "context": {
+        "tags": ["code"],
+        "budget": 50000
+      }
+    }
+  }
+}
+```
+
+The registry automatically:
+- Loads `agents.json` for system settings
+- Loads `agents/{name}.md` for each agent's system prompt
+- Merges them into complete agent configurations
 
 ## API
 
@@ -94,7 +125,7 @@ func (r *Registry) CloseAll()
 type AgentConfig struct {
     Name     string        // Unique agent identifier
     Role     string        // Brief role description
-    System   string        // System prompt
+    System   string        // System prompt (loaded from .md file)
     Model    string        // Claude model (default: claude-sonnet-4-5)
     Thinking int64         // Extended thinking budget (0 = disabled)
     Tools    []string      // Tool names agent can access

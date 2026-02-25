@@ -1,0 +1,64 @@
+{
+  "agents": {
+    "coder": {
+      "name": "coder",
+      "role": "software engineer",
+      "model": "claude-sonnet-4-5",
+      "thinking": 0,
+      "tools": [
+        "shell",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_files"
+      ],
+      "context": {
+        "tags": [
+          "code",
+          "errors",
+          "tests",
+          "debugging"
+        ],
+        "budget": 50000
+      }
+    },
+    "researcher": {
+      "name": "researcher",
+      "role": "research and analysis specialist",
+      "model": "claude-sonnet-4-5",
+      "thinking": 0,
+      "tools": [
+        "read_file",
+        "list_files"
+      ],
+      "context": {
+        "tags": [
+          "research",
+          "data",
+          "analysis",
+          "documentation"
+        ],
+        "budget": 30000
+      }
+    },
+    "orchestrator": {
+      "name": "orchestrator",
+      "role": "task orchestrator and delegation manager",
+      "model": "claude-sonnet-4-5",
+      "thinking": 2048,
+      "tools": [
+        "spawn_agent",
+        "read_file",
+        "list_files"
+      ],
+      "context": {
+        "tags": [
+          "identity",
+          "delegation",
+          "orchestration"
+        ],
+        "budget": 20000
+      }
+    }
+  }
+}

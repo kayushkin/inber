@@ -6,34 +6,54 @@ Inber now supports multiple agents with isolated sessions, contexts, and tool ac
 
 ## Agent Configuration
 
-Agents are defined in YAML files in the `agents/` directory:
+Agents are defined using two files:
 
-```yaml
-# agents/coder.yaml
-name: coder
-role: "software engineer"
-system: |
-  You are a coding specialist. You write, test, and debug code.
-model: claude-sonnet-4-5
-thinking: 0
-tools:
-  - shell
-  - read_file
-  - write_file
-  - edit_file
-  - list_files
-context:
-  tags:
-    - code
-    - errors
-  budget: 50000
+### 1. Identity (Markdown)
+
+Create `.md` files in the `agents/` directory with natural language descriptions:
+
+```markdown
+# agents/coder.md
+# Coder Agent
+
+You are a coding specialist. You write, test, and debug code.
+
+You have full shell access and can read/write/edit files.
+```
+
+### 2. System Config (JSON)
+
+Define system settings in `agents.json`:
+
+```json
+{
+  "agents": {
+    "coder": {
+      "name": "coder",
+      "role": "software engineer",
+      "model": "claude-sonnet-4-5",
+      "thinking": 0,
+      "tools": [
+        "shell",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_files"
+      ],
+      "context": {
+        "tags": ["code", "errors"],
+        "budget": 50000
+      }
+    }
+  }
+}
 ```
 
 ### Configuration Fields
 
+JSON fields:
 - **name** (required): Unique agent identifier
 - **role** (required): Brief role description
-- **system** (required): System prompt for the agent
 - **model** (optional): Claude model to use (default: claude-sonnet-4-5)
 - **thinking** (optional): Token budget for extended thinking (0 = disabled)
 - **tools** (required): List of tool names this agent can access
@@ -41,6 +61,9 @@ context:
   - **tags**: Tags this agent's context should include
   - **budget**: Token budget for context
   - **inherit_parent**: Whether to inherit parent agent's context (default: false)
+
+Markdown files:
+- **system**: System prompt loaded from `agents/{name}.md`
 
 ## Available Tools
 
@@ -203,27 +226,38 @@ func main() {
 
 ## Adding Custom Agents
 
-1. Create a YAML file in `agents/`:
+1. Create a markdown file in `agents/`:
 
-```yaml
-# agents/my-agent.yaml
-name: my-agent
-role: "your custom role"
-system: |
-  Your custom system prompt here.
-model: claude-sonnet-4-5
-tools:
-  - read_file
-  - write_file
-context:
-  tags:
-    - custom
-  budget: 20000
+```markdown
+# agents/my-agent.md
+# My Custom Agent
+
+Your custom system prompt here. Write this in natural language, 
+like you're briefing the agent on their role.
 ```
 
-2. The registry automatically loads all `.yaml` files from the `agents/` directory.
+2. Add configuration to `agents.json`:
 
-3. Use your agent:
+```json
+{
+  "agents": {
+    "my-agent": {
+      "name": "my-agent",
+      "role": "your custom role",
+      "model": "claude-sonnet-4-5",
+      "tools": ["read_file", "write_file"],
+      "context": {
+        "tags": ["custom"],
+        "budget": 20000
+      }
+    }
+  }
+}
+```
+
+3. The registry automatically loads the configuration and identity file.
+
+4. Use your agent:
 
 ```go
 myAgent, err := reg.Get("my-agent")

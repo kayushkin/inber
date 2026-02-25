@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,32 +11,56 @@ import (
 )
 
 func TestLoadConfig(t *testing.T) {
-	// Create temp config file
+	// Create temp config files
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "test-agent.yaml")
-
-	configYAML := `
-name: test-agent
-role: "test role"
-system: "test system prompt"
-model: claude-sonnet-4-5
-thinking: 2048
-tools:
-  - read_file
-  - write_file
-context:
-  tags:
-    - test
-  budget: 10000
-`
-
-	if err := os.WriteFile(configPath, []byte(configYAML), 0644); err != nil {
+	agentsDir := filepath.Join(tmpDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadConfig(configPath)
+	// Create agents.json
+	configJSON := map[string]interface{}{
+		"agents": map[string]interface{}{
+			"test-agent": map[string]interface{}{
+				"name":     "test-agent",
+				"role":     "test role",
+				"model":    "claude-sonnet-4-5",
+				"thinking": 2048,
+				"tools":    []string{"read_file", "write_file"},
+				"context": map[string]interface{}{
+					"tags":   []string{"test"},
+					"budget": 10000,
+				},
+			},
+		},
+	}
+
+	configData, err := json.MarshalIndent(configJSON, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(tmpDir, "agents.json")
+	if err := os.WriteFile(configPath, configData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create markdown file
+	mdPath := filepath.Join(agentsDir, "test-agent.md")
+	mdContent := "# Test Agent\n\nThis is a test system prompt."
+	if err := os.WriteFile(mdPath, []byte(mdContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load config
+	configs, err := LoadConfig(configPath, agentsDir)
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	cfg, ok := configs["test-agent"]
+	if !ok {
+		t.Fatal("test-agent not found in configs")
 	}
 
 	if cfg.Name != "test-agent" {
@@ -53,37 +78,53 @@ context:
 	if len(cfg.Context.Tags) != 1 || cfg.Context.Tags[0] != "test" {
 		t.Errorf("expected tags [test], got %v", cfg.Context.Tags)
 	}
+	if cfg.System != mdContent {
+		t.Errorf("expected system %q, got %q", mdContent, cfg.System)
+	}
 }
 
 func TestLoadConfigDir(t *testing.T) {
 	tmpDir := t.TempDir()
-
-	// Create multiple config files
-	configs := map[string]string{
-		"agent1.yaml": `
-name: agent1
-role: "role1"
-system: "system1"
-tools:
-  - read_file
-`,
-		"agent2.yaml": `
-name: agent2
-role: "role2"
-system: "system2"
-tools:
-  - write_file
-`,
+	agentsDir := filepath.Join(tmpDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
 	}
 
-	for filename, content := range configs {
-		path := filepath.Join(tmpDir, filename)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatal(err)
-		}
+	// Create agents.json with multiple agents
+	configJSON := map[string]interface{}{
+		"agents": map[string]interface{}{
+			"agent1": map[string]interface{}{
+				"name":  "agent1",
+				"role":  "role1",
+				"tools": []string{"read_file"},
+			},
+			"agent2": map[string]interface{}{
+				"name":  "agent2",
+				"role":  "role2",
+				"tools": []string{"write_file"},
+			},
+		},
 	}
 
-	loaded, err := LoadConfigDir(tmpDir)
+	configData, err := json.MarshalIndent(configJSON, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(tmpDir, "agents.json")
+	if err := os.WriteFile(configPath, configData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create markdown files
+	if err := os.WriteFile(filepath.Join(agentsDir, "agent1.md"), []byte("system1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "agent2.md"), []byte("system2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadConfigDir(agentsDir)
 	if err != nil {
 		t.Fatalf("LoadConfigDir failed: %v", err)
 	}
@@ -109,16 +150,30 @@ func TestRegistryBasics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create a test config
-	configPath := filepath.Join(configDir, "test.yaml")
-	configYAML := `
-name: test
-role: "test"
-system: "test system"
-tools:
-  - read_file
-`
-	if err := os.WriteFile(configPath, []byte(configYAML), 0644); err != nil {
+	// Create agents.json
+	configJSON := map[string]interface{}{
+		"agents": map[string]interface{}{
+			"test": map[string]interface{}{
+				"name":  "test",
+				"role":  "test",
+				"tools": []string{"read_file"},
+			},
+		},
+	}
+
+	configData, err := json.MarshalIndent(configJSON, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(tmpDir, "agents.json")
+	if err := os.WriteFile(configPath, configData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create markdown file
+	mdPath := filepath.Join(configDir, "test.md")
+	if err := os.WriteFile(mdPath, []byte("test system"), 0644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -16,64 +16,72 @@ Transform inber from a single-agent framework into a multi-agent orchestration s
 
 ## Architecture
 
-### 1. Agent Definition (Config + Code)
+### 1. Agent Definition (Markdown + JSON)
 
-Agents are defined in YAML config files:
+Agents are defined using two files:
 
-```yaml
-# agents/orchestrator.yaml
-name: orchestrator
-role: "task orchestrator and delegation manager"
-system: |
-  You coordinate complex tasks by delegating to specialist agents.
-  You have access to spawn_agent tool to create sub-agents.
-model: claude-sonnet-4-5
-thinking: 2048
-tools:
-  - spawn_agent
-  - read_file
-  - list_files
-context:
-  tags:
-    - identity
-    - delegation
-  budget: 20000
+**Identity files (agents/*.md)** - Natural language system prompts:
 
-# agents/coder.yaml
-name: coder
-role: "software engineer"
-system: |
-  You are a coding specialist. You write, test, and debug code.
-  Focus on code quality, tests, and clear documentation.
-model: claude-sonnet-4-5
-tools:
-  - shell
-  - read_file
-  - write_file
-  - edit_file
-  - list_files
-context:
-  tags:
-    - code
-    - errors
-    - tests
-  budget: 50000
+```markdown
+# agents/orchestrator.md
+# Task Orchestrator
 
-# agents/researcher.yaml
-name: researcher
-role: "research and analysis"
-system: |
-  You research topics, analyze data, and provide insights.
-  No shell access — read-only operations.
-model: claude-sonnet-4-5
-tools:
-  - read_file
-  - list_files
-context:
-  tags:
-    - research
-    - data
-  budget: 30000
+You coordinate complex tasks by delegating to specialist agents.
+You have access to spawn_agent tool to create sub-agents.
+
+# agents/coder.md
+# Coder Agent
+
+You are a coding specialist. You write, test, and debug code.
+Focus on code quality, tests, and clear documentation.
+
+# agents/researcher.md
+# Research & Analysis Specialist
+
+You research topics, analyze data, and provide insights.
+No shell access — read-only operations.
+```
+
+**System config (agents.json)** - Structured settings:
+
+```json
+{
+  "agents": {
+    "orchestrator": {
+      "name": "orchestrator",
+      "role": "task orchestrator and delegation manager",
+      "model": "claude-sonnet-4-5",
+      "thinking": 2048,
+      "tools": ["spawn_agent", "read_file", "list_files"],
+      "context": {
+        "tags": ["identity", "delegation"],
+        "budget": 20000
+      }
+    },
+    "coder": {
+      "name": "coder",
+      "role": "software engineer",
+      "model": "claude-sonnet-4-5",
+      "thinking": 0,
+      "tools": ["shell", "read_file", "write_file", "edit_file", "list_files"],
+      "context": {
+        "tags": ["code", "errors", "tests"],
+        "budget": 50000
+      }
+    },
+    "researcher": {
+      "name": "researcher",
+      "role": "research and analysis",
+      "model": "claude-sonnet-4-5",
+      "thinking": 0,
+      "tools": ["read_file", "list_files"],
+      "context": {
+        "tags": ["research", "data"],
+        "budget": 30000
+      }
+    }
+  }
+}
 ```
 
 ### 2. Agent Registry
@@ -227,14 +235,14 @@ No direct agent-to-agent messaging in v1. Keep it simple: hierarchical spawn wit
 
 ## Implementation Plan
 
-### Phase 1: Core Registry (this PR)
+### Phase 1: Core Registry
 
-- [ ] Create `agent/registry/` package
-- [ ] Define `AgentConfig` struct
-- [ ] Implement YAML config loading
-- [ ] Build agent registry with lazy initialization
-- [ ] Add per-agent context store mapping
-- [ ] Add per-agent session management
+- [x] Create `agent/registry/` package
+- [x] Define `AgentConfig` struct
+- [x] Implement markdown + JSON config loading
+- [x] Build agent registry with lazy initialization
+- [x] Add per-agent context store mapping
+- [x] Add per-agent session management
 
 ### Phase 2: Tool Scoping
 
@@ -271,13 +279,14 @@ inber/
     models.go
     registry/              # NEW
       registry.go          # Registry, AgentConfig
-      config.go            # YAML loading
+      config.go            # Markdown + JSON loading
       loader.go            # Agent creation logic
       spawn.go             # Sub-agent spawning
   agents/                  # NEW - agent configs
-    orchestrator.yaml
-    coder.yaml
-    researcher.yaml
+    orchestrator.md        # Identity/system prompt
+    coder.md
+    researcher.md
+  agents.json              # NEW - system configuration
   tools/
     tools.go
     spawn.go               # NEW - spawn_agent tool

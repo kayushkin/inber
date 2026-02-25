@@ -1,82 +1,82 @@
 package registry
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"gopkg.in/yaml.v3"
 )
 
 // AgentConfig defines an agent's configuration
 type AgentConfig struct {
-	Name     string        `yaml:"name"`
-	Role     string        `yaml:"role"`
-	System   string        `yaml:"system"`
-	Model    string        `yaml:"model"`
-	Thinking int64         `yaml:"thinking"`
-	Tools    []string      `yaml:"tools"`
-	Context  ContextConfig `yaml:"context"`
+	Name     string        `json:"name"`
+	Role     string        `json:"role"`
+	System   string        `json:"-"` // loaded from markdown file
+	Model    string        `json:"model"`
+	Thinking int64         `json:"thinking"`
+	Tools    []string      `json:"tools"`
+	Context  ContextConfig `json:"context"`
 }
 
 // ContextConfig defines context settings for an agent
 type ContextConfig struct {
-	Tags         []string `yaml:"tags"`
-	Budget       int      `yaml:"budget"`        // token budget for context
-	InheritParent bool    `yaml:"inherit_parent"` // inherit parent's context
+	Tags         []string `json:"tags"`
+	Budget       int      `json:"budget"`         // token budget for context
+	InheritParent bool    `json:"inherit_parent"` // inherit parent's context
 }
 
-// LoadConfig loads an agent config from a YAML file
-func LoadConfig(path string) (*AgentConfig, error) {
-	data, err := os.ReadFile(path)
+// agentsFile is the JSON config file structure
+type agentsFile struct {
+	Agents map[string]*AgentConfig `json:"agents"`
+}
+
+// LoadConfig loads an agent config from JSON + markdown files
+// configPath should point to the agents.json file
+// identityDir should point to the directory containing .md files
+func LoadConfig(configPath, identityDir string) (map[string]*AgentConfig, error) {
+	// Read JSON config
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	var cfg AgentConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse yaml: %w", err)
+	var af agentsFile
+	if err := json.Unmarshal(data, &af); err != nil {
+		return nil, fmt.Errorf("parse json: %w", err)
 	}
 
-	// Validate required fields
-	if cfg.Name == "" {
-		return nil, fmt.Errorf("agent name is required")
-	}
-	if cfg.System == "" {
-		return nil, fmt.Errorf("agent system prompt is required")
-	}
-	if cfg.Model == "" {
-		cfg.Model = "claude-sonnet-4-5" // default model
+	if len(af.Agents) == 0 {
+		return nil, fmt.Errorf("no agents defined in %s", configPath)
 	}
 
-	return &cfg, nil
+	// Load identity (system prompt) from markdown files
+	for name, cfg := range af.Agents {
+		mdPath := filepath.Join(identityDir, name+".md")
+		identityData, err := os.ReadFile(mdPath)
+		if err != nil {
+			return nil, fmt.Errorf("read identity for %s: %w", name, err)
+		}
+
+		cfg.System = string(identityData)
+
+		// Validate required fields
+		if cfg.Name == "" {
+			return nil, fmt.Errorf("agent name is required")
+		}
+		if cfg.System == "" {
+			return nil, fmt.Errorf("agent %s: system prompt is empty", name)
+		}
+		if cfg.Model == "" {
+			cfg.Model = "claude-sonnet-4-5" // default model
+		}
+	}
+
+	return af.Agents, nil
 }
 
-// LoadConfigDir loads all agent configs from a directory
+// LoadConfigDir loads agent configs from a directory
+// Expects: agents.json and .md files in the same directory
 func LoadConfigDir(dir string) (map[string]*AgentConfig, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("read dir: %w", err)
-	}
-
-	configs := make(map[string]*AgentConfig)
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
-			continue
-		}
-
-		path := filepath.Join(dir, entry.Name())
-		cfg, err := LoadConfig(path)
-		if err != nil {
-			return nil, fmt.Errorf("load %s: %w", entry.Name(), err)
-		}
-
-		configs[cfg.Name] = cfg
-	}
-
-	if len(configs) == 0 {
-		return nil, fmt.Errorf("no agent configs found in %s", dir)
-	}
-
-	return configs, nil
+	configPath := filepath.Join(dir, "..", "agents.json")
+	return LoadConfig(configPath, dir)
 }
