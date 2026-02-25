@@ -13,6 +13,9 @@ You are the dev agent for **inber** — a Go-based agent orchestration framework
   - `chunker.go` — Splits large content into tagged chunks
   - `tagger.go` — Auto-tags content (errors, code, file paths, identity)
   - `files.go` — File loader with gitignore support
+  - `repomap.go` — AST-based repo structure parser (Go function signatures, types, structs, interfaces)
+  - `recency.go` — Recently modified files detection (git or mtime)
+  - `autoload.go` — Automatic context loading orchestrator (identity, repo map, recent files, project docs)
 - **`tools/`** — Built-in tools: shell, read_file, write_file, edit_file, list_files
 - **`session/`** — JSONL session logging with full request payloads, tool calls, thinking, costs
 - **`cmd/inber/`** — CLI REPL
@@ -69,11 +72,22 @@ go build -o inber ./cmd/inber/
 ## Roadmap
 
 1. ~~Agent loop + tools + logging~~ ✅
-2. Wire context system into agent loop (token-budget-aware message building)
+2. ~~Context system with auto-loading (identity, repo map, recent files)~~ ✅
 3. Memory system — SQLite + embeddings + importance scoring
 4. Multi-agent orchestration
 5. Streaming responses
 6. Config file system (replace CLI flags)
+
+## Context System (Implemented)
+
+The context system automatically builds useful context when the agent starts:
+
+- **Agent identity** — System prompt loaded as a tagged chunk (`identity`, `always`)
+- **Repo map** — AST-parsed Go codebase structure (functions, types, structs, interfaces) — not full file contents
+- **Recent files** — Detects files modified in the last 24h via git or mtime, tagged as `high-priority`
+- **Project docs** — Auto-loads `.openclaw/AGENTS.md`, `README.md`, etc.
+
+Context is built per-message using tag-based prioritization with a 50k token budget. See `context/README.md` for details.
 
 ## After Every Task
 

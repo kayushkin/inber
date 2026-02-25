@@ -1,4 +1,4 @@
-inber
+/inber
 *.exe
 .env
 logs/
