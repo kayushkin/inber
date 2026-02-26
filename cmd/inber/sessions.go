@@ -72,7 +72,7 @@ func init() {
 }
 
 func runSessionsList(cmd *cobra.Command, args []string) {
-	repoRoot, _ := findRepoRoot()
+	repoRoot, _ := FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -178,7 +178,7 @@ func findSessionFile(logsDir, sessionID string) string {
 func runSessionsShow(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 	
-	repoRoot, _ := findRepoRoot()
+	repoRoot, _ := FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -233,7 +233,7 @@ func runSessionsShow(cmd *cobra.Command, args []string) {
 func runSessionsContext(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 	
-	repoRoot, _ := findRepoRoot()
+	repoRoot, _ := FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -282,7 +282,7 @@ func runSessionsContext(cmd *cobra.Command, args []string) {
 func runSessionsPrompts(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 
-	repoRoot, _ := findRepoRoot()
+	repoRoot, _ := FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -310,7 +310,7 @@ func runSessionsPrompt(cmd *cobra.Command, args []string) {
 	turn := 0
 	fmt.Sscanf(args[1], "%d", &turn)
 
-	repoRoot, _ := findRepoRoot()
+	repoRoot, _ := FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -326,7 +326,7 @@ func runSessionsPrompt(cmd *cobra.Command, args []string) {
 }
 
 func runSessionsActive(cmd *cobra.Command, args []string) {
-	repoRoot, _ := findRepoRoot()
+	repoRoot, _ := FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}

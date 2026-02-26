@@ -108,7 +108,7 @@ func init() {
 }
 
 func getMemoryStore() *memory.Store {
-	repoRoot, _ := findRepoRoot()
+	repoRoot, _ := FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}

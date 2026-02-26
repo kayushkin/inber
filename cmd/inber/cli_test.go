@@ -29,7 +29,7 @@ func setupTestRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	// Create .git dir so findRepoRoot works
+	// Create .git dir so FindRepoRoot works
 	os.MkdirAll(filepath.Join(dir, ".git"), 0755)
 
 	// Create agents dir with a test agent
@@ -61,14 +61,14 @@ func TestFindRepoRoot(t *testing.T) {
 	subdir := filepath.Join(dir, "a", "b", "c")
 	os.MkdirAll(subdir, 0755)
 
-	// findRepoRoot from subdirectory should find root
+	// FindRepoRoot from subdirectory should find root
 	orig, _ := os.Getwd()
 	defer os.Chdir(orig)
 
 	os.Chdir(subdir)
-	root, err := findRepoRoot()
+	root, err := FindRepoRoot()
 	if err != nil {
-		t.Fatalf("findRepoRoot failed: %v", err)
+		t.Fatalf("FindRepoRoot failed: %v", err)
 	}
 	if root != dir {
 		t.Errorf("expected %s, got %s", dir, root)
@@ -82,7 +82,7 @@ func TestFindRepoRoot_NotInRepo(t *testing.T) {
 	defer os.Chdir(orig)
 
 	os.Chdir(dir)
-	_, err := findRepoRoot()
+	_, err := FindRepoRoot()
 	if err == nil {
 		t.Error("expected error when not in a git repository")
 	}
@@ -565,7 +565,8 @@ func TestBuildSystemPrompt(t *testing.T) {
 		Tokens: 20,
 	})
 
-	prompt := buildSystemPrompt(store, "hello")
+	eng := &Engine{ContextStore: store}
+	prompt := eng.BuildSystemPrompt("hello")
 	if !strings.Contains(prompt, "test agent") {
 		t.Errorf("expected identity in system prompt, got: %s", prompt)
 	}

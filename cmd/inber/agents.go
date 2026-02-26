@@ -35,7 +35,7 @@ func init() {
 }
 
 func runAgentsList(cmd *cobra.Command, args []string) {
-	repoRoot, _ := findRepoRoot()
+	repoRoot, _ := FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -71,7 +71,7 @@ func runAgentsList(cmd *cobra.Command, args []string) {
 func runAgentsShow(cmd *cobra.Command, args []string) {
 	agentName := args[0]
 	
-	repoRoot, _ := findRepoRoot()
+	repoRoot, _ := FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}

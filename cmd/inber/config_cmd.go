@@ -42,7 +42,7 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 		fmt.Printf("%sANTHROPIC_API_KEY: not set%s\n", red, reset)
 	}
 	
-	repoRoot, err := findRepoRoot()
+	repoRoot, err := FindRepoRoot()
 	if err != nil {
 		fmt.Printf("\nRepo root: %s(not in a git repository)%s\n", dim, reset)
 	} else {
@@ -69,7 +69,7 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 }
 
 func runConfigInit(cmd *cobra.Command, args []string) {
-	repoRoot, err := findRepoRoot()
+	repoRoot, err := FindRepoRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: not in a git repository\n")
 		os.Exit(1)
