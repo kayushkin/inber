@@ -74,6 +74,13 @@ export $(cat .env | xargs) && go test ./... -v
 go build -o inber ./cmd/inber/
 ```
 
+**Always build and run tests before pushing.** Every commit must:
+1. `go build ./cmd/inber/` — must compile cleanly
+2. `go test ./...` — all tests must pass
+3. Only then `git push`
+
+If tests fail, fix them before pushing. No exceptions.
+
 ## Running
 
 ```bash
