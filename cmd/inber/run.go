@@ -210,9 +210,16 @@ func runRun(cmd *cobra.Command, args []string) {
 			}
 		},
 	}
+	turnCounter := 0
 	if sess != nil {
 		logHooks := sess.Hooks()
-		hooks.OnRequest = logHooks.OnRequest
+		hooks.OnRequest = func(params *anthropic.MessageNewParams) {
+			if logHooks.OnRequest != nil {
+				logHooks.OnRequest(params)
+			}
+			turnCounter++
+			sessionMod.WritePromptBreakdown(sess.FilePath(), sess.SessionID(), turnCounter, params)
+		}
 		hooks.OnThinking = logHooks.OnThinking
 	}
 	a.SetHooks(hooks)
