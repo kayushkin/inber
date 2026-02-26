@@ -47,14 +47,17 @@ func AutoLoad(cfg AutoLoadConfig) (*Store, error) {
 		return nil, fmt.Errorf("failed to load identity: %w", err)
 	}
 	
-	// 2. Build repo map
+	// 2. Memory usage instructions (always loaded; tools may or may not be present)
+	loadMemoryInstructions(store)
+
+	// 3. Build repo map (was 2)
 	if cfg.RepoMapEnabled {
 		if err := loadRepoMap(store, cfg); err != nil {
 			return nil, fmt.Errorf("failed to build repo map: %w", err)
 		}
 	}
 	
-	// 3. Find recently modified files
+	// 4. Find recently modified files
 	if cfg.RecencyWindow > 0 {
 		if err := loadRecentFiles(store, cfg); err != nil {
 			// Don't fail if recency detection fails, just log a warning
@@ -140,6 +143,29 @@ func loadRecentFiles(store *Store, cfg AutoLoadConfig) error {
 	}
 	
 	return store.Add(chunk)
+}
+
+// MemoryInstructions is the default system prompt text for memory tool usage.
+const MemoryInstructions = `You have persistent memory across sessions via these tools:
+- memory_search: Search your memories before answering questions about past work, preferences, or decisions
+- memory_save: Save important information — decisions made, user preferences, project context, lessons learned
+- memory_forget: Mark outdated or incorrect memories as forgotten
+
+Guidelines:
+- Search memory at the start of conversations about ongoing projects
+- Save key decisions and their reasoning
+- Save user preferences when explicitly stated
+- Don't save trivial or temporary information
+- Review and forget outdated memories when you notice them`
+
+// loadMemoryInstructions adds a context chunk with memory usage guidelines.
+func loadMemoryInstructions(store *Store) {
+	store.Add(Chunk{
+		ID:     "memory-instructions",
+		Text:   MemoryInstructions,
+		Tags:   []string{"identity", "always", "memory"},
+		Source: "system",
+	})
 }
 
 // LoadProjectContext is a convenience function that loads context from project markers

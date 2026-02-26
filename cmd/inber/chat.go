@@ -10,6 +10,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/google/uuid"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 	inbercontext "github.com/kayushkin/inber/context"
@@ -293,7 +294,51 @@ func runChat(cmd *cobra.Command, args []string) {
 			}
 		}
 	}
+
+	// Auto-save session summary to memory
+	if memStore != nil && len(messages) > 0 {
+		saveSessionSummary(memStore, messages, agentName)
+	}
+
 	fmt.Println()
+}
+
+// saveSessionSummary generates a brief session summary and saves it to memory.
+func saveSessionSummary(store *memory.Store, messages []anthropic.MessageParam, agentName string) {
+	var parts []string
+	for _, msg := range messages {
+		role := string(msg.Role)
+		for _, block := range msg.Content {
+			if block.OfText != nil {
+				text := block.OfText.Text
+				if len(text) > 200 {
+					text = text[:200] + "..."
+				}
+				parts = append(parts, fmt.Sprintf("%s: %s", role, text))
+			}
+		}
+	}
+
+	if len(parts) == 0 {
+		return
+	}
+
+	summary := fmt.Sprintf("Session summary (%s):\n%s", agentName, strings.Join(parts, "\n"))
+	if len(summary) > 2000 {
+		summary = summary[:2000]
+	}
+
+	m := memory.Memory{
+		ID:         uuid.New().String(),
+		Content:    summary,
+		Tags:       []string{"session-summary", agentName},
+		Importance: 0.4,
+		Source:     "system",
+	}
+
+	if err := store.Save(m); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to save session summary: %v\n", err)
+	}
 }
 
 // runStepMode runs the step-mode REPL. Returns false if user wants to quit.

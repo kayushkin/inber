@@ -172,6 +172,17 @@ func runRun(cmd *cobra.Command, args []string) {
 	// Add tools unless disabled
 	if !runNoTools {
 		var agentTools []agent.Tool
+		// Load memory store for tools (separate from context loading above)
+		var runMemStore *memory.Store
+		if !runRaw {
+			// Memory may already be loaded above for context; reuse the path logic
+			ms, err := memory.OpenOrCreate(repoRoot)
+			if err == nil {
+				runMemStore = ms
+				defer runMemStore.Close()
+			}
+		}
+
 		if agentConfig != nil && len(agentConfig.Tools) > 0 {
 			for _, toolName := range agentConfig.Tools {
 				for _, t := range tools.All() {
@@ -181,8 +192,24 @@ func runRun(cmd *cobra.Command, args []string) {
 					}
 				}
 			}
+			// Add memory tools if agent config lists them
+			if runMemStore != nil {
+				for _, toolName := range agentConfig.Tools {
+					if strings.HasPrefix(toolName, "memory_") {
+						for _, t := range memory.AllMemoryTools(runMemStore) {
+							if t.Name == toolName {
+								agentTools = append(agentTools, t)
+								break
+							}
+						}
+					}
+				}
+			}
 		} else {
 			agentTools = tools.All()
+			if runMemStore != nil {
+				agentTools = append(agentTools, memory.AllMemoryTools(runMemStore)...)
+			}
 		}
 		for _, t := range agentTools {
 			a.AddTool(t)
