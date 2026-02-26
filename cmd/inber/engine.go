@@ -49,7 +49,8 @@ type Engine struct {
 	AgentName    string
 	AgentConfig  *registry.AgentConfig
 	Messages     []anthropic.MessageParam
-	TurnCounter  int
+	TurnCounter          int
+	turnBreakdownWritten bool
 
 	repoRoot    string
 	agentTools  []agent.Tool
@@ -279,8 +280,13 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			if logHooks.OnRequest != nil {
 				logHooks.OnRequest(params)
 			}
-			e.TurnCounter++
-			sessionMod.WritePromptBreakdown(e.Session.FilePath(), e.Session.SessionID(), e.TurnCounter, params)
+			// Only write prompt breakdown on the first API call per user turn
+			// (not on tool-result continuation calls)
+			if !e.turnBreakdownWritten {
+				e.TurnCounter++
+				sessionMod.WritePromptBreakdown(e.Session.FilePath(), e.Session.SessionID(), e.TurnCounter, params)
+				e.turnBreakdownWritten = true
+			}
 		}
 		hooks.OnThinking = func(text string) {
 			if logHooks.OnThinking != nil {
@@ -313,6 +319,7 @@ func (e *Engine) buildHooks() *agent.Hooks {
 
 // RunTurn sends a user message, rebuilds the system prompt, runs the agent, and returns the result.
 func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
+	e.turnBreakdownWritten = false
 	if e.Session != nil {
 		e.Session.LogUser(input)
 	}
