@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/session"
 	"github.com/spf13/cobra"
 )
 
@@ -98,7 +99,7 @@ func runRun(cmd *cobra.Command, args []string) {
 	fmt.Print(result.Text)
 
 	// Stats to stderr
-	cost := calcCost(eng.Model, result.InputTokens, result.OutputTokens)
+	cost := session.CalcCost(eng.Model, result.InputTokens, result.OutputTokens)
 	fmt.Fprintf(os.Stderr, "\n[in=%d | out=%d | tools=%d | $%.4f]\n",
 		result.InputTokens, result.OutputTokens, result.ToolCalls, cost)
 }

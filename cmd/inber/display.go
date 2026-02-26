@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/session"
 )
 
 // ANSI color helpers
@@ -72,28 +73,17 @@ func DisplayResponse(text string) {
 	fmt.Printf("\n%s\n", text)
 }
 
-// DisplayStats prints token usage and cost.
+// DisplayStats prints token usage and cost using the shared CalcCost from session package.
 func DisplayStats(result *agent.TurnResult, model string) {
-	cost := calcCost(model, result.InputTokens, result.OutputTokens)
-	parts := []string{
-		fmt.Sprintf("in=%d", result.InputTokens),
-		fmt.Sprintf("out=%d", result.OutputTokens),
+	ev := session.TimelineEvent{
+		Type:         "stats",
+		InputTokens:  result.InputTokens,
+		OutputTokens: result.OutputTokens,
+		ToolCalls:    result.ToolCalls,
+		Cost:         session.CalcCost(model, result.InputTokens, result.OutputTokens),
+		Model:        model,
 	}
-	if result.ToolCalls > 0 {
-		parts = append(parts, fmt.Sprintf("tools=%d", result.ToolCalls))
-	}
-	if cost > 0 {
-		parts = append(parts, fmt.Sprintf("$%.4f", cost))
-	}
-	fmt.Printf("%s[%s]%s\n", dim, strings.Join(parts, " | "), reset)
-}
-
-func calcCost(model string, inTok, outTok int) float64 {
-	info, ok := agent.Models[model]
-	if !ok {
-		return 0
-	}
-	return (float64(inTok)*info.InputCostPer1M + float64(outTok)*info.OutputCostPer1M) / 1_000_000
+	fmt.Println(session.FormatTerminalStats(ev))
 }
 
 func summarizeInput(raw string) string {

@@ -45,6 +45,7 @@ type Engine struct {
 	ContextStore *inbercontext.Store
 	MemStore     *memory.Store
 	Session      *sessionMod.Session
+	Timeline     *sessionMod.Timeline
 	Model        string
 	AgentName    string
 	AgentConfig  *registry.AgentConfig
@@ -143,6 +144,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		fmt.Fprintf(os.Stderr, "warning: logging disabled: %v\n", err)
 	} else {
 		e.Session = sess
+		e.Timeline = sessionMod.NewTimeline(sess.FilePath(), sess.SessionID())
 		fmt.Fprintf(os.Stderr, "%slogging to %s%s\n", dim, sess.FilePath(), reset)
 		if _, err := sessionMod.RegisterActive(repoRoot, sess, cfg.CommandName); err == nil {
 			// deferred cleanup in Close()
@@ -281,6 +283,27 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			}
 			e.TurnCounter++
 			sessionMod.WritePromptBreakdown(e.Session.FilePath(), e.Session.SessionID(), e.TurnCounter, params)
+
+			// Timeline: add prompt event
+			if e.Timeline != nil {
+				userMsg := "(tool results)"
+				if e.TurnCounter == 1 || len(params.Messages) > 0 {
+					// Extract last user message
+					for i := len(params.Messages) - 1; i >= 0; i-- {
+						if params.Messages[i].Role == "user" {
+							for _, block := range params.Messages[i].Content {
+								if block.OfText != nil {
+									userMsg = block.OfText.Text
+									break
+								}
+							}
+							break
+						}
+					}
+				}
+				promptFile := fmt.Sprintf("prompts/%s-turn-%d.md", e.Session.SessionID(), e.TurnCounter)
+				e.Timeline.AddPrompt(userMsg, e.TurnCounter, promptFile)
+			}
 		}
 		hooks.OnThinking = func(text string) {
 			if logHooks.OnThinking != nil {
@@ -294,6 +317,9 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			if logHooks.OnToolCall != nil {
 				logHooks.OnToolCall(toolID, name, input)
 			}
+			if e.Timeline != nil {
+				e.Timeline.AddToolCall(name, string(input))
+			}
 			if origToolCall != nil {
 				origToolCall(toolID, name, input)
 			}
@@ -301,6 +327,9 @@ func (e *Engine) buildHooks() *agent.Hooks {
 		hooks.OnToolResult = func(toolID, name, output string, isError bool) {
 			if logHooks.OnToolResult != nil {
 				logHooks.OnToolResult(toolID, name, output, isError)
+			}
+			if e.Timeline != nil {
+				e.Timeline.AddToolResult(name, output, isError)
 			}
 			if origToolResult != nil {
 				origToolResult(toolID, name, output, isError)
@@ -329,6 +358,13 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	if e.Session != nil {
 		e.Session.LogAssistant(result.Text, result.InputTokens, result.OutputTokens, result.ToolCalls)
+	}
+
+	// Timeline: add response and stats, then write
+	if e.Timeline != nil {
+		e.Timeline.AddResponse(result.Text)
+		e.Timeline.AddStats(e.Model, result.InputTokens, result.OutputTokens, result.ToolCalls)
+		e.Timeline.WriteFile()
 	}
 
 	return result, nil

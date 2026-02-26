@@ -52,6 +52,13 @@ var sessionsPromptCmd = &cobra.Command{
 	Run:   runSessionsPrompt,
 }
 
+var sessionsTimelineCmd = &cobra.Command{
+	Use:   "timeline <id>",
+	Short: "Show the session timeline",
+	Args:  cobra.ExactArgs(1),
+	Run:   runSessionsTimeline,
+}
+
 var sessionsActiveCmd = &cobra.Command{
 	Use:   "active",
 	Short: "Show currently running sessions",
@@ -66,6 +73,7 @@ func init() {
 	sessionsCmd.AddCommand(sessionsContextCmd)
 	sessionsCmd.AddCommand(sessionsPromptsCmd)
 	sessionsCmd.AddCommand(sessionsPromptCmd)
+	sessionsCmd.AddCommand(sessionsTimelineCmd)
 	sessionsCmd.AddCommand(sessionsActiveCmd)
 	
 	sessionsListCmd.Flags().IntVarP(&sessionsLimit, "limit", "n", 10, "Number of sessions to show")
@@ -323,6 +331,24 @@ func runSessionsPrompt(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Println(content)
+}
+
+func runSessionsTimeline(cmd *cobra.Command, args []string) {
+	sessionID := args[0]
+
+	repoRoot, _ := FindRepoRoot()
+	if repoRoot == "" {
+		repoRoot, _ = os.Getwd()
+	}
+
+	logsDir := filepath.Join(repoRoot, "logs")
+	content, err := session.ReadTimelineFile(logsDir, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Print(content)
 }
 
 func runSessionsActive(cmd *cobra.Command, args []string) {
