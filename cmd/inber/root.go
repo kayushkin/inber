@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/joho/godotenv"
+	"github.com/kayushkin/inber/agent"
 	"github.com/spf13/cobra"
 )
 
@@ -14,8 +15,8 @@ var rootCmd = &cobra.Command{
 	Long: `inber is a Claude-powered agent framework with persistent memory,
 context management, and multi-agent orchestration.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Default to chat command if no subcommand given
-		chatCmd.Run(cmd, args)
+		// Default to run command if no subcommand given
+		runRun(cmd, args)
 	},
 }
 
@@ -29,6 +30,14 @@ func Execute() {
 func init() {
 	// Load .env file
 	godotenv.Load()
+
+	// Add run command flags to root command so `inber <prompt>` works
+	rootCmd.Flags().StringVarP(&runModel, "model", "m", agent.DefaultModel, "Claude model to use")
+	rootCmd.Flags().Int64VarP(&runThinking, "thinking", "t", 0, "Enable extended thinking with token budget (0=disabled)")
+	rootCmd.Flags().StringVarP(&runAgent, "agent", "a", "", "Agent name to load from registry")
+	rootCmd.Flags().BoolVar(&runRaw, "raw", false, "Skip context and memory loading")
+	rootCmd.Flags().BoolVar(&runNoTools, "no-tools", false, "Disable all tools")
+	rootCmd.Flags().StringVar(&runSystem, "system", "", "Override system prompt")
 
 	// Add subcommands
 	rootCmd.AddCommand(chatCmd)
