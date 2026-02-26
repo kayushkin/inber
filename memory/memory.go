@@ -183,12 +183,13 @@ func (s *Store) Save(m Memory) error {
 
 // Get retrieves a memory by ID and updates access tracking.
 func (s *Store) Get(id string) (*Memory, error) {
+	// Support prefix matching (e.g., first 8 chars of UUID)
 	query := `
 	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding
 	FROM memories
-	WHERE id = ?
+	WHERE id = ? OR id LIKE ?
 	`
-	row := s.db.QueryRow(query, id)
+	row := s.db.QueryRow(query, id, id+"%")
 
 	var m Memory
 	var summary, originalID sql.NullString
@@ -383,8 +384,8 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 
 // Forget marks a memory as forgotten (soft delete by setting importance to 0).
 func (s *Store) Forget(id string) error {
-	query := `UPDATE memories SET importance = 0 WHERE id = ?`
-	res, err := s.db.Exec(query, id)
+	query := `UPDATE memories SET importance = 0 WHERE id = ? OR id LIKE ?`
+	res, err := s.db.Exec(query, id, id+"%")
 	if err != nil {
 		return fmt.Errorf("forget memory: %w", err)
 	}
