@@ -10,10 +10,23 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "inber",
+	Use:   "inber [prompt]",
 	Short: "inber - Go-based agent orchestration framework",
 	Long: `inber is a Claude-powered agent framework with persistent memory,
-context management, and multi-agent orchestration.`,
+context management, and multi-agent orchestration.
+
+When called without a subcommand, acts as 'inber run' - sends a single message 
+and prints the response.
+
+Examples:
+  inber "explain this error"
+  inber chat                     # start interactive session
+  inber run "one-off query"`,
+	// Disable flag parsing errors for unknown subcommands
+	// This allows "inber hello world" to be treated as args, not subcommands
+	DisableFlagParsing: false,
+	// Accept any number of args
+	Args: cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Default to run command if no subcommand given
 		runRun(cmd, args)
