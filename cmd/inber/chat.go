@@ -124,6 +124,10 @@ func runChat(cmd *cobra.Command, args []string) {
 	} else {
 		defer sess.Close()
 		fmt.Printf("%slogging to %s%s\n", dim, sess.FilePath(), reset)
+		// Register active session
+		if _, err := sessionMod.RegisterActive(repoRoot, sess, "chat"); err == nil {
+			defer sessionMod.UnregisterActive(repoRoot, sess.SessionID())
+		}
 	}
 
 	// Agent setup

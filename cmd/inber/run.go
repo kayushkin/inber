@@ -10,10 +10,13 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"encoding/json"
+
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 	inbercontext "github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/memory"
+	sessionMod "github.com/kayushkin/inber/session"
 	"github.com/kayushkin/inber/tools"
 	"github.com/spf13/cobra"
 )
@@ -139,6 +142,23 @@ func runRun(cmd *cobra.Command, args []string) {
 		systemPrompt = buildSystemPrompt(contextStore, input)
 	}
 
+	// Session logging
+	agentName := runAgent
+	if agentName == "" {
+		agentName = "run"
+	}
+
+	sess, err := sessionMod.New("logs", runModel, agentName, "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: logging disabled: %v\n", err)
+	} else {
+		defer sess.Close()
+		// Register active session
+		if _, err := sessionMod.RegisterActive(repoRoot, sess, "run"); err == nil {
+			defer sessionMod.UnregisterActive(repoRoot, sess.SessionID())
+		}
+	}
+
 	// API setup
 	key := agent.APIKey()
 	if key == "" {
@@ -174,16 +194,32 @@ func runRun(cmd *cobra.Command, args []string) {
 	}
 
 	// Tool call output goes to stderr so stdout stays clean
-	a.SetHooks(&agent.Hooks{
+	hooks := &agent.Hooks{
 		OnToolCall: func(toolID, name string, input []byte) {
 			fmt.Fprintf(os.Stderr, "⚡ %s\n", name)
+			if sess != nil {
+				sess.LogToolCall(toolID, name, json.RawMessage(input))
+			}
 		},
 		OnToolResult: func(toolID, name, output string, isError bool) {
 			if isError {
 				fmt.Fprintf(os.Stderr, "  ✗ %s\n", truncate(output, 200))
 			}
+			if sess != nil {
+				sess.LogToolResult(toolID, name, output, isError)
+			}
 		},
-	})
+	}
+	if sess != nil {
+		logHooks := sess.Hooks()
+		hooks.OnRequest = logHooks.OnRequest
+		hooks.OnThinking = logHooks.OnThinking
+	}
+	a.SetHooks(hooks)
+
+	if sess != nil {
+		sess.LogUser(input)
+	}
 
 	messages := []anthropic.MessageParam{
 		anthropic.NewUserMessage(anthropic.NewTextBlock(input)),
@@ -193,6 +229,10 @@ func runRun(cmd *cobra.Command, args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+
+	if sess != nil {
+		sess.LogAssistant(result.Text, result.InputTokens, result.OutputTokens, result.ToolCalls)
 	}
 
 	// Print response to stdout — clean, no ANSI
