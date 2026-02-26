@@ -51,12 +51,8 @@ func WritePromptBreakdown(logFilePath string, sessionID string, turn int, params
 			}
 			sb.WriteString(fmt.Sprintf("### Block %d%s (%d tokens)\n\n", i+1, label, tokens))
 
-			// Show full content for small blocks, head+tail for large
-			if len(text) <= 1000 {
-				sb.WriteString(text + "\n\n")
-			} else {
-				sb.WriteString(text[:500] + "\n\n...\n\n" + text[len(text)-200:] + "\n\n")
-			}
+			// Show full content for all blocks
+			sb.WriteString(text + "\n\n")
 		}
 	}
 
