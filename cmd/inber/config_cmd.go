@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/kayushkin/aiauth"
 	"github.com/kayushkin/inber/agent"
 	"github.com/spf13/cobra"
 )
@@ -44,9 +45,10 @@ func init() {
 func runConfigShow(cmd *cobra.Command, args []string) {
 	fmt.Printf("%sConfiguration:%s\n\n", bold+blue, reset)
 	
-	key := agent.APIKey()
-	if key != "" {
-		fmt.Printf("ANTHROPIC_API_KEY: %s...%s\n", key[:8], key[len(key)-4:])
+	store := aiauth.DefaultStore()
+	key, keyErr := store.AnthropicKey()
+	if keyErr == nil && key != "" {
+		fmt.Printf("ANTHROPIC_API_KEY: %s\n", aiauth.MaskKey(key))
 	} else {
 		fmt.Printf("%sANTHROPIC_API_KEY: not set%s\n", red, reset)
 	}

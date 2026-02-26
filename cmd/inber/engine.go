@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/google/uuid"
+	"github.com/kayushkin/aiauth"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 	inbercontext "github.com/kayushkin/inber/context"
@@ -40,6 +40,7 @@ type EngineConfig struct {
 
 // Engine encapsulates the shared setup and execution logic for chat and run.
 type Engine struct {
+	AuthStore    *aiauth.Store
 	Client       *anthropic.Client
 	Agent        *agent.Agent
 	ContextStore *inbercontext.Store
@@ -152,13 +153,13 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 	}
 
-	// API client
-	key := agent.APIKey()
-	if key == "" {
-		return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
+	// API client (via aiauth with auto-refresh)
+	e.AuthStore = aiauth.DefaultStore()
+	client, err := e.AuthStore.AnthropicClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Anthropic client: %w", err)
 	}
-	client := anthropic.NewClient(option.WithAPIKey(key))
-	e.Client = &client
+	e.Client = client
 
 	// Tools
 	if !cfg.NoTools {
