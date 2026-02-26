@@ -52,10 +52,11 @@ type Engine struct {
 	Messages     []anthropic.MessageParam
 	TurnCounter  int
 
-	repoRoot    string
-	agentTools  []agent.Tool
-	display     *DisplayHooks
-	thinkingBud int64
+	repoRoot       string
+	agentTools     []agent.Tool
+	display        *DisplayHooks
+	thinkingBud    int64
+	lastNamedBlocks []NamedBlock
 }
 
 // NewEngine creates and fully initializes an Engine: context, memory, tools, session, hooks.
@@ -222,26 +223,35 @@ func (e *Engine) buildTools() []agent.Tool {
 	return result
 }
 
-// BuildSystemPrompt builds a context-aware system prompt.
-func (e *Engine) BuildSystemPrompt(userMessage string) string {
+// NamedBlock is a system prompt chunk with an ID for prompt breakdown labeling.
+type NamedBlock struct {
+	ID   string
+	Text string
+}
+
+// BuildSystemPrompt builds a context-aware system prompt as individual named blocks.
+func (e *Engine) BuildSystemPrompt(userMessage string) []NamedBlock {
 	if e.ContextStore == nil {
-		return ""
+		return nil
 	}
 	messageTags := inbercontext.AutoTag(userMessage, "user")
 	builder := inbercontext.NewBuilder(e.ContextStore, 50000)
 	chunks := builder.Build(messageTags)
 
-	var parts []string
-	for _, chunk := range chunks {
-		parts = append(parts, chunk.Text)
+	blocks := make([]NamedBlock, len(chunks))
+	for i, chunk := range chunks {
+		blocks[i] = NamedBlock{ID: chunk.ID, Text: chunk.Text}
 	}
-
-	return strings.Join(parts, "\n\n---\n\n")
+	return blocks
 }
 
 // buildAgent creates a fresh Agent with current system prompt, tools, and hooks.
-func (e *Engine) buildAgent(systemPrompt string) *agent.Agent {
-	a := agent.New(e.Client, systemPrompt)
+func (e *Engine) buildAgent(blocks []NamedBlock) *agent.Agent {
+	systemBlocks := make([]anthropic.TextBlockParam, len(blocks))
+	for i, b := range blocks {
+		systemBlocks[i] = anthropic.TextBlockParam{Text: b.Text}
+	}
+	a := agent.NewWithSystemBlocks(e.Client, systemBlocks)
 	for _, t := range e.agentTools {
 		a.AddTool(t)
 	}
@@ -282,7 +292,12 @@ func (e *Engine) buildHooks() *agent.Hooks {
 				logHooks.OnRequest(params)
 			}
 			e.TurnCounter++
-			sessionMod.WritePromptBreakdown(e.Session.FilePath(), e.Session.SessionID(), e.TurnCounter, params)
+			// Convert engine NamedBlocks to session NamedBlocks for breakdown labeling
+			var sBlocks []sessionMod.NamedBlock
+			for _, b := range e.lastNamedBlocks {
+				sBlocks = append(sBlocks, sessionMod.NamedBlock{ID: b.ID, Text: b.Text})
+			}
+			sessionMod.WritePromptBreakdown(e.Session.FilePath(), e.Session.SessionID(), e.TurnCounter, params, sBlocks)
 
 			// Timeline: add prompt event
 			if e.Timeline != nil {
@@ -348,8 +363,9 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	e.Messages = append(e.Messages, anthropic.NewUserMessage(anthropic.NewTextBlock(input)))
 
-	systemPrompt := e.BuildSystemPrompt(input)
-	e.buildAgent(systemPrompt)
+	systemBlocks := e.BuildSystemPrompt(input)
+	e.lastNamedBlocks = systemBlocks
+	e.buildAgent(systemBlocks)
 
 	result, err := e.Agent.Run(context.Background(), e.Model, &e.Messages)
 	if err != nil {

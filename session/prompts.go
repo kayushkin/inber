@@ -10,8 +10,15 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// PromptBreakdown writes a prompt breakdown file for a given turn.
-func WritePromptBreakdown(logFilePath string, sessionID string, turn int, params *anthropic.MessageNewParams) error {
+// NamedBlock is a system prompt chunk with an ID for labeling in breakdowns.
+type NamedBlock struct {
+	ID   string
+	Text string
+}
+
+// WritePromptBreakdown writes a prompt breakdown file for a given turn.
+// blockNames optionally provides labels for system blocks (pass nil to omit labels).
+func WritePromptBreakdown(logFilePath string, sessionID string, turn int, params *anthropic.MessageNewParams, blockNames []NamedBlock) error {
 	// Derive prompts dir from log path
 	logsDir := filepath.Dir(logFilePath)
 	promptsDir := filepath.Join(logsDir, "prompts")
@@ -36,11 +43,19 @@ func WritePromptBreakdown(logFilePath string, sessionID string, turn int, params
 			text := block.Text
 			tokens := len(text) / 4
 			systemTokens += tokens
-			sb.WriteString(fmt.Sprintf("### Block %d (%d tokens)\n\n", i+1, tokens))
-			if len(text) > 500 {
-				sb.WriteString(text[:500] + "...\n\n")
-			} else {
+
+			// Label from named blocks if available
+			label := ""
+			if i < len(blockNames) && blockNames[i].ID != "" {
+				label = " — " + blockNames[i].ID
+			}
+			sb.WriteString(fmt.Sprintf("### Block %d%s (%d tokens)\n\n", i+1, label, tokens))
+
+			// Show full content for small blocks, head+tail for large
+			if len(text) <= 1000 {
 				sb.WriteString(text + "\n\n")
+			} else {
+				sb.WriteString(text[:500] + "\n\n...\n\n" + text[len(text)-200:] + "\n\n")
 			}
 		}
 	}

@@ -23,7 +23,7 @@ func TestWritePromptBreakdown(t *testing.T) {
 		},
 	}
 
-	err := WritePromptBreakdown(logFile, "test-session", 1, &params)
+	err := WritePromptBreakdown(logFile, "test-session", 1, &params, nil)
 	if err != nil {
 		t.Fatalf("WritePromptBreakdown failed: %v", err)
 	}

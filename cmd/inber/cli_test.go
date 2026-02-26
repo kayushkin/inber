@@ -566,8 +566,15 @@ func TestBuildSystemPrompt(t *testing.T) {
 	})
 
 	eng := &Engine{ContextStore: store}
-	prompt := eng.BuildSystemPrompt("hello")
-	if !strings.Contains(prompt, "test agent") {
-		t.Errorf("expected identity in system prompt, got: %s", prompt)
+	blocks := eng.BuildSystemPrompt("hello")
+	found := false
+	for _, b := range blocks {
+		if strings.Contains(b.Text, "test agent") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected identity in system prompt blocks")
 	}
 }

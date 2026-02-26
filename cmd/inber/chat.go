@@ -97,7 +97,7 @@ func runChat(cmd *cobra.Command, args []string) {
 }
 
 // runStepMode runs the step-mode REPL. Returns false if user wants to quit.
-func runStepMode(scanner *bufio.Scanner, store *inbercontext.Store, messages *[]anthropic.MessageParam, buildSysPrompt func(string) string) bool {
+func runStepMode(scanner *bufio.Scanner, store *inbercontext.Store, messages *[]anthropic.MessageParam, buildSysPrompt func(string) []NamedBlock) bool {
 	for {
 		fmt.Printf("\n%s[step]%s > ", cyan+bold, reset)
 		if !scanner.Scan() {
@@ -220,20 +220,26 @@ func runStepMode(scanner *bufio.Scanner, store *inbercontext.Store, messages *[]
 			fmt.Printf("  Dropped %d messages\n", n)
 
 		case input == "system":
-			prompt := buildSysPrompt("")
-			if prompt == "" {
+			blocks := buildSysPrompt("")
+			if len(blocks) == 0 {
 				fmt.Println("  (empty system prompt)")
 			} else {
-				if len(prompt) > 2000 {
-					fmt.Println(prompt[:2000] + "...")
-				} else {
-					fmt.Println(prompt)
+				for _, b := range blocks {
+					fmt.Printf("  --- %s ---\n", b.ID)
+					text := b.Text
+					if len(text) > 2000 {
+						text = text[:2000] + "..."
+					}
+					fmt.Println(text)
 				}
 			}
 
 		case input == "tokens":
-			sysPrompt := buildSysPrompt("")
-			sysTok := inbercontext.EstimateTokens(sysPrompt)
+			blocks := buildSysPrompt("")
+			sysTok := 0
+			for _, b := range blocks {
+				sysTok += inbercontext.EstimateTokens(b.Text)
+			}
 			msgTok := 0
 			for _, msg := range *messages {
 				msgTok += 4

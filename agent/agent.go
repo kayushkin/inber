@@ -29,6 +29,7 @@ type Hooks struct {
 type Agent struct {
 	client         *anthropic.Client
 	system         string
+	systemBlocks   []anthropic.TextBlockParam
 	tools          []Tool
 	hooks          *Hooks // legacy hooks for backward compatibility
 	hookRegistry   *HookRegistry
@@ -42,6 +43,14 @@ func New(client *anthropic.Client, system string) *Agent {
 	return &Agent{
 		client: client,
 		system: system,
+	}
+}
+
+// NewWithSystemBlocks creates an agent with pre-built system blocks.
+func NewWithSystemBlocks(client *anthropic.Client, blocks []anthropic.TextBlockParam) *Agent {
+	return &Agent{
+		client:       client,
+		systemBlocks: blocks,
 	}
 }
 
@@ -109,7 +118,9 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 			MaxTokens: 8192,
 		}
 
-		if a.system != "" {
+		if len(a.systemBlocks) > 0 {
+			params.System = a.systemBlocks
+		} else if a.system != "" {
 			params.System = []anthropic.TextBlockParam{
 				{Text: a.system},
 			}
