@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/joho/godotenv"
 	"github.com/kayushkin/inber/agent"
@@ -41,8 +42,19 @@ func Execute() {
 }
 
 func init() {
-	// Load .env file
-	godotenv.Load()
+	// Load .env files in priority order:
+	// 1. Current directory .env (project-specific)
+	// 2. ~/.config/inber/.env (user-specific)
+	// 3. System environment variables (already available)
+	
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		userConfigPath := filepath.Join(homeDir, ".config", "inber", ".env")
+		_ = godotenv.Load(userConfigPath) // Ignore error if file doesn't exist
+	}
+	
+	// Load local .env (overrides user config if present)
+	_ = godotenv.Load()
 
 	// Add run command flags to root command so `inber <prompt>` works
 	rootCmd.Flags().StringVarP(&runModel, "model", "m", agent.DefaultModel, "Claude model to use")

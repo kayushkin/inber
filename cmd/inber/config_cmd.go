@@ -27,9 +27,18 @@ var configInitCmd = &cobra.Command{
 	Run:   runConfigInit,
 }
 
+var configUserCmd = &cobra.Command{
+	Use:   "user",
+	Short: "Initialize user-level config at ~/.config/inber",
+	Long: `Creates ~/.config/inber/.env with your API key.
+This allows inber to work from any directory.`,
+	Run: runConfigUser,
+}
+
 func init() {
 	configCmd.AddCommand(configShowCmd)
 	configCmd.AddCommand(configInitCmd)
+	configCmd.AddCommand(configUserCmd)
 }
 
 func runConfigShow(cmd *cobra.Command, args []string) {
@@ -40,6 +49,17 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 		fmt.Printf("ANTHROPIC_API_KEY: %s...%s\n", key[:8], key[len(key)-4:])
 	} else {
 		fmt.Printf("%sANTHROPIC_API_KEY: not set%s\n", red, reset)
+	}
+	
+	// Show config file locations
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		userConfigPath := filepath.Join(homeDir, ".config", "inber", ".env")
+		if _, err := os.Stat(userConfigPath); err == nil {
+			fmt.Printf("User config: %s\n", userConfigPath)
+		} else {
+			fmt.Printf("User config: %snot found%s (run 'inber config user' to create)\n", dim, reset)
+		}
 	}
 	
 	repoRoot, err := FindRepoRoot()
@@ -143,4 +163,51 @@ ANTHROPIC_API_KEY=your-key-here
 	}
 
 	fmt.Println("\nConfiguration initialized!")
+}
+
+func runConfigUser(cmd *cobra.Command, args []string) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: could not determine home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	configDir := filepath.Join(homeDir, ".config", "inber")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "error creating config directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	envPath := filepath.Join(configDir, ".env")
+	
+	// Check if file already exists
+	if _, err := os.Stat(envPath); err == nil {
+		fmt.Printf("Config file already exists at %s\n", envPath)
+		fmt.Println("Edit it manually to update your API key.")
+		return
+	}
+
+	// Prompt for API key
+	fmt.Println("Enter your Anthropic API key (or press Enter to create empty file):")
+	var apiKey string
+	fmt.Scanln(&apiKey)
+
+	var content string
+	if apiKey != "" {
+		content = fmt.Sprintf("# Anthropic API key for inber\nANTHROPIC_API_KEY=%s\n", apiKey)
+	} else {
+		content = "# Anthropic API key for inber\n# Get your key from: https://console.anthropic.com/\nANTHROPIC_API_KEY=your-key-here\n"
+	}
+
+	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil { // 0600 = user read/write only
+		fmt.Fprintf(os.Stderr, "error creating config file: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\n%sUser config created at:%s %s\n", green, reset, envPath)
+	if apiKey == "" {
+		fmt.Printf("\n%sRemember to edit the file and add your API key!%s\n", yellow, reset)
+	} else {
+		fmt.Printf("\n%sAPI key saved. You can now use inber from any directory.%s\n", green, reset)
+	}
 }
