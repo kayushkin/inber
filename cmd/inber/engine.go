@@ -86,7 +86,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	// Load agent config
 	var identityText string
 	if cfg.AgentName != "" {
-		configs, err := registry.LoadConfig(
+		registryCfg, err := registry.LoadConfig(
 			filepath.Join(repoRoot, "agents.json"),
 			filepath.Join(repoRoot, "agents"),
 		)
@@ -94,7 +94,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			return nil, fmt.Errorf("error loading agents: %w", err)
 		}
 
-		ac, ok := configs[cfg.AgentName]
+		ac, ok := registryCfg.Agents[cfg.AgentName]
 		if !ok {
 			return nil, fmt.Errorf("agent not found: %s", cfg.AgentName)
 		}

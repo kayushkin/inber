@@ -40,7 +40,7 @@ func runAgentsList(cmd *cobra.Command, args []string) {
 		repoRoot, _ = os.Getwd()
 	}
 
-	configs, err := registry.LoadConfig(
+	cfg, err := registry.LoadConfig(
 		filepath.Join(repoRoot, "agents.json"),
 		filepath.Join(repoRoot, "agents"),
 	)
@@ -49,22 +49,29 @@ func runAgentsList(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	if len(configs) == 0 {
+	if len(cfg.Agents) == 0 {
 		fmt.Println("No agents configured.")
 		return
 	}
 
-	fmt.Printf("Configured agents (%d):\n\n", len(configs))
-	for name, cfg := range configs {
-		model := cfg.Model
+	fmt.Printf("Configured agents (%d):\n\n", len(cfg.Agents))
+	if cfg.Default != "" {
+		fmt.Printf("  Default: %s%s%s\n\n", bold+blue, cfg.Default, reset)
+	}
+	for name, agentCfg := range cfg.Agents {
+		model := agentCfg.Model
 		if model == "" {
 			model = "(default)"
 		}
-		tools := fmt.Sprintf("%d tools", len(cfg.Tools))
-		if len(cfg.Tools) == 0 {
+		tools := fmt.Sprintf("%d tools", len(agentCfg.Tools))
+		if len(agentCfg.Tools) == 0 {
 			tools = "all tools"
 		}
-		fmt.Printf("  %s%-20s%s  model: %-25s  %s\n", bold, name, reset, model, tools)
+		defaultMarker := ""
+		if name == cfg.Default {
+			defaultMarker = " " + green + "*" + reset
+		}
+		fmt.Printf("  %s%-20s%s%s  model: %-25s  %s\n", bold, name, reset, defaultMarker, model, tools)
 	}
 }
 
@@ -76,7 +83,7 @@ func runAgentsShow(cmd *cobra.Command, args []string) {
 		repoRoot, _ = os.Getwd()
 	}
 
-	configs, err := registry.LoadConfig(
+	registryCfg, err := registry.LoadConfig(
 		filepath.Join(repoRoot, "agents.json"),
 		filepath.Join(repoRoot, "agents"),
 	)
@@ -85,26 +92,31 @@ func runAgentsShow(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	cfg, ok := configs[agentName]
+	agentCfg, ok := registryCfg.Agents[agentName]
 	if !ok {
 		Log.Error("agent not found: %s", agentName)
 		os.Exit(1)
 	}
 
-	fmt.Printf("%s%s%s\n", bold+blue, cfg.Name, reset)
-	fmt.Printf("Model: %s\n", cfg.Model)
+	fmt.Printf("%s%s%s", bold+blue, agentCfg.Name, reset)
+	if agentName == registryCfg.Default {
+		fmt.Printf(" %s(default)%s", green, reset)
+	}
+	fmt.Println()
 	
-	if len(cfg.Tools) > 0 {
-		fmt.Printf("Tools: %s\n", strings.Join(cfg.Tools, ", "))
+	fmt.Printf("Model: %s\n", agentCfg.Model)
+	
+	if len(agentCfg.Tools) > 0 {
+		fmt.Printf("Tools: %s\n", strings.Join(agentCfg.Tools, ", "))
 	} else {
 		fmt.Printf("Tools: all\n")
 	}
 	
-	if cfg.Thinking > 0 {
-		fmt.Printf("Thinking: %d tokens\n", cfg.Thinking)
+	if agentCfg.Thinking > 0 {
+		fmt.Printf("Thinking: %d tokens\n", agentCfg.Thinking)
 	}
 	
 	fmt.Printf("\nIdentity:\n%s\n", dim+"---"+reset)
-	fmt.Println(cfg.System)
+	fmt.Println(agentCfg.System)
 	fmt.Printf("%s\n", dim+"---"+reset)
 }

@@ -27,13 +27,20 @@ type ContextConfig struct {
 
 // agentsFile is the JSON config file structure
 type agentsFile struct {
-	Agents map[string]*AgentConfig `json:"agents"`
+	Default string                     `json:"default"` // default agent name
+	Agents  map[string]*AgentConfig    `json:"agents"`
+}
+
+// RegistryConfig holds the loaded configuration including default agent
+type RegistryConfig struct {
+	Default string
+	Agents  map[string]*AgentConfig
 }
 
 // LoadConfig loads an agent config from JSON + markdown files
 // configPath should point to the agents.json file
 // identityDir should point to the directory containing .md files
-func LoadConfig(configPath, identityDir string) (map[string]*AgentConfig, error) {
+func LoadConfig(configPath, identityDir string) (*RegistryConfig, error) {
 	// Read JSON config
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -71,12 +78,23 @@ func LoadConfig(configPath, identityDir string) (map[string]*AgentConfig, error)
 		}
 	}
 
-	return af.Agents, nil
+	// Set default agent if specified
+	defaultAgent := af.Default
+	if defaultAgent != "" {
+		if _, ok := af.Agents[defaultAgent]; !ok {
+			return nil, fmt.Errorf("default agent %q not found in agents", defaultAgent)
+		}
+	}
+
+	return &RegistryConfig{
+		Default: defaultAgent,
+		Agents:  af.Agents,
+	}, nil
 }
 
 // LoadConfigDir loads agent configs from a directory
 // Expects: agents.json and .md files in the same directory
-func LoadConfigDir(dir string) (map[string]*AgentConfig, error) {
+func LoadConfigDir(dir string) (*RegistryConfig, error) {
 	configPath := filepath.Join(dir, "..", "agents.json")
 	return LoadConfig(configPath, dir)
 }

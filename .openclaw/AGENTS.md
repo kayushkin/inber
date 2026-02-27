@@ -100,17 +100,23 @@ If tests fail, fix them before pushing. No exceptions.
 5. ~~Memory system — SQLite, TF-IDF search, importance/decay, agent tools~~ ✅
 6. ~~Pretty display — ANSI colors, tool call visualization, thinking blocks~~ ✅
 7. ~~Extended thinking support — budget config, thinking extraction/display/logging~~ ✅
+8. ~~System prompt documentation — comprehensive docs about inber framework for agents~~ ✅
+9. ~~Task-manager agent — default entry point that delegates to specialists~~ ✅
+10. ~~Agent templates — reusable templates for creating new specialized agents~~ ✅
+11. ~~Default agent support — agents.json "default" field for entry-point agent~~ ✅
 
 ### Next
-8. **Memory triggers & auto-save** — automatic memory creation on session end, user requests, decisions, errors. System prompt instructions for when to use memory_save.
-9. **Streaming responses** — stream tokens as they arrive instead of waiting for full response
-10. **Sub-agent spawning tool** — orchestrator agent can spawn sub-agents as a tool call
-11. **Compaction** — LLM-driven summarization of old memories, with lineage pointers for expand
-12. **Reflection** — auto-generate higher-level insights from recent memories (Generative Agents pattern)
-13. **Real embeddings** — swap TF-IDF for actual embedding model (local or API)
-14. **Config file system** — replace CLI flags with project config
-15. **Conversation pruning** — token-budget-aware message trimming using context builder
-16. **Pure-Go SQLite** — swap go-sqlite3 (CGO) for modernc.org/sqlite for static binaries
+12. **Memory tools registration** — ensure memory tools are properly registered in CLI
+13. **Streaming responses** — stream tokens as they arrive instead of waiting for full response
+14. **Sub-agent spawning tool** — orchestrator/task-manager can spawn sub-agents as a tool call
+15. **Dynamic agent creation** — task-manager can create new agent configs on-the-fly
+16. **Memory triggers & auto-save** — automatic memory creation on session end, user requests, decisions, errors
+17. **Compaction** — LLM-driven summarization of old memories, with lineage pointers for expand
+18. **Reflection** — auto-generate higher-level insights from recent memories (Generative Agents pattern)
+19. **Real embeddings** — swap TF-IDF for actual embedding model (local or API)
+20. **Config file system** — replace CLI flags with project config
+21. **Conversation pruning** — token-budget-aware message trimming using context builder
+22. **Pure-Go SQLite** — swap go-sqlite3 (CGO) for modernc.org/sqlite for static binaries
 
 ### Next (continued)
 17. **Message routing & session attachment** — when a new inbound message arrives, an evaluator agent (or heuristic) determines which active session it belongs to. If it matches an existing session, inject it into that session's context before the next turn. If it's a new conversation, create a new session. If multiple sessions could match, use recency + topic similarity to pick.

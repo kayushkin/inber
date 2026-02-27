@@ -53,12 +53,12 @@ func TestLoadConfig(t *testing.T) {
 	}
 
 	// Load config
-	configs, err := LoadConfig(configPath, agentsDir)
+	registryCfg, err := LoadConfig(configPath, agentsDir)
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	cfg, ok := configs["test-agent"]
+	cfg, ok := registryCfg.Agents["test-agent"]
 	if !ok {
 		t.Fatal("test-agent not found in configs")
 	}
@@ -124,19 +124,19 @@ func TestLoadConfigDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := LoadConfigDir(agentsDir)
+	registryCfg, err := LoadConfigDir(agentsDir)
 	if err != nil {
 		t.Fatalf("LoadConfigDir failed: %v", err)
 	}
 
-	if len(loaded) != 2 {
-		t.Errorf("expected 2 configs, got %d", len(loaded))
+	if len(registryCfg.Agents) != 2 {
+		t.Errorf("expected 2 configs, got %d", len(registryCfg.Agents))
 	}
 
-	if _, ok := loaded["agent1"]; !ok {
+	if _, ok := registryCfg.Agents["agent1"]; !ok {
 		t.Error("agent1 not loaded")
 	}
-	if _, ok := loaded["agent2"]; !ok {
+	if _, ok := registryCfg.Agents["agent2"]; !ok {
 		t.Error("agent2 not loaded")
 	}
 }

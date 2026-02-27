@@ -7,6 +7,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/context"
+	"github.com/kayushkin/inber/memory"
 	"github.com/kayushkin/inber/session"
 )
 
@@ -15,6 +16,7 @@ type Registry struct {
 	mu       sync.RWMutex
 	client   *anthropic.Client
 	logsDir  string
+	default_ string
 	configs  map[string]*AgentConfig
 	agents   map[string]*agent.Agent
 	contexts map[string]*context.Store
@@ -24,7 +26,7 @@ type Registry struct {
 
 // New creates a registry and loads agent configs from the given directory
 func New(client *anthropic.Client, configDir, logsDir string) (*Registry, error) {
-	configs, err := LoadConfigDir(configDir)
+	cfg, err := LoadConfigDir(configDir)
 	if err != nil {
 		return nil, fmt.Errorf("load configs: %w", err)
 	}
@@ -32,7 +34,8 @@ func New(client *anthropic.Client, configDir, logsDir string) (*Registry, error)
 	r := &Registry{
 		client:   client,
 		logsDir:  logsDir,
-		configs:  configs,
+		default_: cfg.Default,
+		configs:  cfg.Agents,
 		agents:   make(map[string]*agent.Agent),
 		contexts: make(map[string]*context.Store),
 		sessions: make(map[string]*session.Session),
@@ -52,6 +55,20 @@ func (r *Registry) List() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// Default returns the default agent name (if configured)
+func (r *Registry) Default() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.default_
+}
+
+// SetMemoryStore registers memory tools with the given memory store
+func (r *Registry) SetMemoryStore(store *memory.Store) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools.RegisterMemoryTools(store)
 }
 
 // GetConfig returns the config for the named agent

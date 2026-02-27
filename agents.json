@@ -1,5 +1,30 @@
 {
+  "default": "task-manager",
   "agents": {
+    "task-manager": {
+      "name": "task-manager",
+      "role": "primary orchestrator and task dispatcher",
+      "model": "claude-sonnet-4-5",
+      "thinking": 2048,
+      "tools": [
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_files",
+        "memory_search",
+        "memory_save",
+        "memory_expand",
+        "memory_forget"
+      ],
+      "context": {
+        "tags": [
+          "identity",
+          "coordination",
+          "planning"
+        ],
+        "budget": 40000
+      }
+    },
     "coder": {
       "name": "coder",
       "role": "software engineer",
@@ -10,7 +35,11 @@
         "read_file",
         "write_file",
         "edit_file",
-        "list_files"
+        "list_files",
+        "memory_search",
+        "memory_save",
+        "memory_expand",
+        "memory_forget"
       ],
       "context": {
         "tags": [
@@ -29,7 +58,9 @@
       "thinking": 0,
       "tools": [
         "read_file",
-        "list_files"
+        "list_files",
+        "memory_search",
+        "memory_expand"
       ],
       "context": {
         "tags": [
@@ -49,7 +80,9 @@
       "tools": [
         "spawn_agent",
         "read_file",
-        "list_files"
+        "list_files",
+        "memory_search",
+        "memory_save"
       ],
       "context": {
         "tags": [
