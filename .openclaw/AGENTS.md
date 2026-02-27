@@ -130,6 +130,17 @@ If tests fail, fix them before pushing. No exceptions.
   - **Cursor/Windsurf** — headless or API mode if available, otherwise browser automation
   - **Codex CLI** — OpenAI's coding agent, similar pty-based control
   - Architecture: unified `SubAgent` interface with adapters per orchestrator. Inber acts as meta-orchestrator — routes tasks to the best tool for the job (e.g., Claude Code for refactoring, Cursor for UI work, OpenClaw for system tasks). Each adapter handles spawn/send/receive/kill lifecycle.
+- **Coding manager agent fleet** — a project-aware coding manager that spawns specialized agents per project:
+  - **Coder agent** — writes/edits code, focused on implementation
+  - **Test agent** — writes and runs tests, validates the coder's output
+  - **Ship agent** — commits, pushes, deploys (runs deploy scripts, verifies live)
+  - Manager orchestrates the cycle: coder → test agent validates → ship agent deploys
+  - Automated pipeline mode: coder writes code, test agent auto-runs, if green → ship agent deploys. If red → loops back to coder with failures.
+  - Each agent role has a **standard .md identity file** that's project-agnostic and shareable across repos (e.g. `agents/templates/coder.md`, `agents/templates/tester.md`, `agents/templates/shipper.md`)
+  - Project-specific context (deploy scripts, test commands, CI config) lives in per-project `.inber/project.md` or similar
+  - Ship agent should know how to: `git add/commit/push`, run deploy scripts, verify deployment, rollback on failure
+  - Consider: pre-commit hooks, PR creation vs direct push, staging vs production
+  - Long-term: the manager learns which patterns work per-project via memory
 - Web UI for session viewing / memory browsing
 - MCP (Model Context Protocol) tool integration
 - Token usage tracking and cost dashboards
