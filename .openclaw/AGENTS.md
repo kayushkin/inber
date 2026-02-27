@@ -141,6 +141,15 @@ If tests fail, fix them before pushing. No exceptions.
   - Ship agent should know how to: `git add/commit/push`, run deploy scripts, verify deployment, rollback on failure
   - Consider: pre-commit hooks, PR creation vs direct push, staging vs production
   - Long-term: the manager learns which patterns work per-project via memory
+- **Agent party UI** — web frontend showing agents as pixel-art characters in a "camp" view:
+  - Each Míl shown with their avatar, name, level, current status
+  - Idle agents sit around camp, active ones shown on their quest with a progress indicator
+  - Stuck/errored agents wave or flash to get your attention — click to see what's wrong and intervene
+  - Quest log viewer per agent — see their adventure history, XP progression
+  - Character evolution — avatars update as agents level up (new gear, effects, class upgrades)
+  - Drag-and-drop task assignment — drop a task on an agent to assign it
+  - Party management — compose teams, see who works well together (via memory/stats)
+  - Real-time: WebSocket updates as agents start/finish/error
 - Web UI for session viewing / memory browsing
 - MCP (Model Context Protocol) tool integration
 - Token usage tracking and cost dashboards

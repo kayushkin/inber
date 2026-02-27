@@ -39,6 +39,12 @@ func (r *ToolRegistry) RegisterMemoryTools(store *memory.Store) {
 	r.Register("memory_forget", memory.ForgetTool(store))
 }
 
+// RegisterSpawnTool adds the spawn_agent tool to the registry.
+// Must be called after registry creation since it needs a reference to the registry itself.
+func (r *ToolRegistry) RegisterSpawnTool(spawnTool agent.Tool) {
+	r.Register("spawn_agent", spawnTool)
+}
+
 // Register adds a tool to the registry
 func (r *ToolRegistry) Register(name string, tool agent.Tool) {
 	r.tools[name] = tool

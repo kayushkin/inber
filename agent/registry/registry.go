@@ -42,6 +42,9 @@ func New(client *anthropic.Client, configDir, logsDir string) (*Registry, error)
 		tools:    NewToolRegistry(),
 	}
 
+	// Register spawn_agent tool (requires registry reference)
+	r.tools.RegisterSpawnTool(r.SpawnAgentTool())
+
 	return r, nil
 }
 

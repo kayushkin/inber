@@ -169,7 +169,7 @@ func loadMemoryInstructions(store *Store) {
 }
 
 // LoadProjectContext is a convenience function that loads context from project markers
-// It looks for .openclaw/AGENTS.md, .openclaw/TOOLS.md, README.md, etc.
+// It looks for .openclaw/AGENTS.md, .openclaw/TOOLS.md, .inber/project.md, README.md, etc.
 func LoadProjectContext(store *Store, rootDir string) error {
 	projectFiles := []struct {
 		Path string
@@ -177,6 +177,7 @@ func LoadProjectContext(store *Store, rootDir string) error {
 	}{
 		{".openclaw/AGENTS.md", []string{"agents", "architecture", "always", "docs"}},
 		{".openclaw/TOOLS.md", []string{"tools", "setup", "docs"}},
+		{".inber/project.md", []string{"project", "always", "config", "deploy", "tests"}},
 		{"README.md", []string{"readme", "docs", "overview"}},
 		{"DESIGN.md", []string{"design", "architecture", "docs"}},
 		{"ARCHITECTURE.md", []string{"architecture", "docs"}},

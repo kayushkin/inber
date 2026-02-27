@@ -25,9 +25,9 @@
         "budget": 40000
       }
     },
-    "coder": {
-      "name": "coder",
-      "role": "software engineer",
+    "fionn": {
+      "name": "fionn",
+      "role": "scholar — code implementation specialist",
       "model": "claude-sonnet-4-5",
       "thinking": 0,
       "tools": [
@@ -46,9 +46,75 @@
           "code",
           "errors",
           "tests",
-          "debugging"
+          "debugging",
+          "project"
         ],
         "budget": 50000
+      }
+    },
+    "scathach": {
+      "name": "scathach",
+      "role": "sentinel — testing and validation specialist",
+      "model": "claude-sonnet-4-5",
+      "thinking": 0,
+      "tools": [
+        "shell",
+        "read_file",
+        "list_files",
+        "memory_search"
+      ],
+      "context": {
+        "tags": [
+          "code",
+          "tests",
+          "validation",
+          "project"
+        ],
+        "budget": 40000
+      }
+    },
+    "oisin": {
+      "name": "oisin",
+      "role": "courier — deployment and git workflow specialist",
+      "model": "claude-sonnet-4-5",
+      "thinking": 0,
+      "tools": [
+        "shell",
+        "read_file",
+        "list_files",
+        "memory_search",
+        "memory_save"
+      ],
+      "context": {
+        "tags": [
+          "deployment",
+          "git",
+          "project",
+          "verification"
+        ],
+        "budget": 30000
+      }
+    },
+    "bran": {
+      "name": "bran",
+      "role": "strategist — software development pipeline orchestrator",
+      "model": "claude-sonnet-4-5",
+      "thinking": 2048,
+      "tools": [
+        "spawn_agent",
+        "read_file",
+        "list_files",
+        "memory_search",
+        "memory_save"
+      ],
+      "context": {
+        "tags": [
+          "identity",
+          "coordination",
+          "pipeline",
+          "project"
+        ],
+        "budget": 30000
       }
     },
     "researcher": {
