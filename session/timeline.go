@@ -245,10 +245,9 @@ func FormatTerminalStats(ev TimelineEvent) string {
 func (tl *Timeline) WriteFile() error {
 	tl.mu.Lock()
 	dir := tl.logsDir
-	sid := tl.sessionID
 	tl.mu.Unlock()
 
-	path := filepath.Join(dir, sid+"-timeline.md")
+	path := filepath.Join(dir, "timeline.md")
 	content := tl.Format()
 	return os.WriteFile(path, []byte(content), 0644)
 }
@@ -257,7 +256,7 @@ func (tl *Timeline) WriteFile() error {
 func (tl *Timeline) TimelinePath() string {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
-	return filepath.Join(tl.logsDir, tl.sessionID+"-timeline.md")
+	return filepath.Join(tl.logsDir, "timeline.md")
 }
 
 // ReadTimelineFile reads a timeline markdown file from disk given logs dir and session ID.
@@ -268,7 +267,7 @@ func ReadTimelineFile(logsDir, sessionID string) (string, error) {
 		if err != nil || info.IsDir() {
 			return nil
 		}
-		if strings.Contains(info.Name(), sessionID) && strings.HasSuffix(info.Name(), "-timeline.md") {
+		if info.Name() == "timeline.md" && strings.Contains(path, sessionID) {
 			found = path
 			return filepath.SkipAll
 		}

@@ -29,7 +29,7 @@ func TestWritePromptBreakdown(t *testing.T) {
 	}
 
 	// Check file exists
-	path := filepath.Join(dir, "prompts", "test-session-turn-1.md")
+	path := filepath.Join(dir, "prompts", "turn-1.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("failed to read breakdown: %v", err)
@@ -39,11 +39,30 @@ func TestWritePromptBreakdown(t *testing.T) {
 	if !strings.Contains(content, "Turn 1") {
 		t.Error("expected 'Turn 1' in breakdown")
 	}
-	if !strings.Contains(content, "System Prompt") {
-		t.Error("expected 'System Prompt' in breakdown")
+	if !strings.Contains(content, "system.md") {
+		t.Error("expected link to system.md in breakdown")
 	}
-	if !strings.Contains(content, "Token Breakdown") {
-		t.Error("expected 'Token Breakdown' in breakdown")
+	if !strings.Contains(content, "Tokens") {
+		t.Error("expected 'Tokens' in breakdown")
+	}
+	// Check system.md index was written
+	sysPath := filepath.Join(dir, "prompts", "system.md")
+	sysData, err := os.ReadFile(sysPath)
+	if err != nil {
+		t.Fatalf("system.md not written: %v", err)
+	}
+	if !strings.Contains(string(sysData), "System Prompt") {
+		t.Error("expected 'System Prompt' in system.md")
+	}
+	// Check individual block file was written
+	blockFiles, _ := filepath.Glob(filepath.Join(dir, "prompts", "system-01-*.md"))
+	if len(blockFiles) == 0 {
+		t.Error("expected system block file to be written")
+	}
+	// Check tools.md was written
+	toolsPath := filepath.Join(dir, "prompts", "tools.md")
+	if _, err := os.ReadFile(toolsPath); err != nil {
+		t.Fatalf("tools.md not written: %v", err)
 	}
 }
 
@@ -52,8 +71,12 @@ func TestListPromptBreakdowns(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0755)
 
-	os.WriteFile(filepath.Join(promptsDir, "sess1-turn-1.md"), []byte("test"), 0644)
-	os.WriteFile(filepath.Join(promptsDir, "sess1-turn-2.md"), []byte("test"), 0644)
+	// New format: prompts inside session dir
+	sessDir := filepath.Join(dir, "sess1")
+	sessPDir := filepath.Join(sessDir, "prompts")
+	os.MkdirAll(sessPDir, 0755)
+	os.WriteFile(filepath.Join(sessPDir, "turn-1.md"), []byte("test"), 0644)
+	os.WriteFile(filepath.Join(sessPDir, "turn-2.md"), []byte("test"), 0644)
 
 	files, err := ListPromptBreakdowns(dir, "sess1")
 	if err != nil {
@@ -69,7 +92,10 @@ func TestReadPromptBreakdown(t *testing.T) {
 	promptsDir := filepath.Join(dir, "prompts")
 	os.MkdirAll(promptsDir, 0755)
 
-	os.WriteFile(filepath.Join(promptsDir, "sess1-turn-1.md"), []byte("# Turn 1 content"), 0644)
+	sessDir := filepath.Join(dir, "sess1")
+	sessPDir := filepath.Join(sessDir, "prompts")
+	os.MkdirAll(sessPDir, 0755)
+	os.WriteFile(filepath.Join(sessPDir, "turn-1.md"), []byte("# Turn 1 content"), 0644)
 
 	content, err := ReadPromptBreakdown(dir, "sess1", 1)
 	if err != nil {

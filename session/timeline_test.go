@@ -101,7 +101,10 @@ func TestTimelineFormat(t *testing.T) {
 
 func TestTimelineWriteAndRead(t *testing.T) {
 	dir := t.TempDir()
-	logFile := filepath.Join(dir, "test.jsonl")
+	// Simulate new dir structure: logs/agent/session-id/
+	sessionDir := filepath.Join(dir, "test-session")
+	os.MkdirAll(sessionDir, 0755)
+	logFile := filepath.Join(sessionDir, "session.jsonl")
 	os.Create(logFile)
 
 	tl := NewTimeline(logFile, "test-session")
@@ -114,12 +117,12 @@ func TestTimelineWriteAndRead(t *testing.T) {
 	}
 
 	// Verify file exists
-	path := filepath.Join(dir, "test-session-timeline.md")
+	path := filepath.Join(sessionDir, "timeline.md")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("timeline file not found: %v", err)
 	}
 
-	// Read it back
+	// Read it back (search from parent dir)
 	content, err := ReadTimelineFile(dir, "test-session")
 	if err != nil {
 		t.Fatalf("ReadTimelineFile: %v", err)

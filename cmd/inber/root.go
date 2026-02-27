@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -36,7 +35,7 @@ Examples:
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 }
@@ -63,6 +62,8 @@ func init() {
 	rootCmd.Flags().BoolVar(&runRaw, "raw", false, "Skip context and memory loading")
 	rootCmd.Flags().BoolVar(&runNoTools, "no-tools", false, "Disable all tools")
 	rootCmd.Flags().StringVar(&runSystem, "system", "", "Override system prompt")
+	rootCmd.Flags().BoolVarP(&runNew, "new", "n", false, "Start a new session instead of continuing the default")
+	rootCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "Run in a one-off session without affecting the main session")
 
 	// Add subcommands
 	rootCmd.AddCommand(chatCmd)

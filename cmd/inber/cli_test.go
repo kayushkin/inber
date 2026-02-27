@@ -175,7 +175,9 @@ func TestSessionsList(t *testing.T) {
 		Content:   "hello",
 	}
 	data, _ := json.Marshal(entry)
-	os.WriteFile(filepath.Join(logsDir, "20260224-120000-abc123.jsonl"), data, 0644)
+	sessDir := filepath.Join(logsDir, "2026-02-24_120000_abc1")
+	os.MkdirAll(sessDir, 0755)
+	os.WriteFile(filepath.Join(sessDir, "session.jsonl"), data, 0644)
 
 	var buf bytes.Buffer
 	old := os.Stdout
@@ -190,7 +192,7 @@ func TestSessionsList(t *testing.T) {
 	buf.ReadFrom(r)
 
 	output := buf.String()
-	if !strings.Contains(output, "abc123") {
+	if !strings.Contains(output, "2026-02-24_120000_abc1") {
 		t.Errorf("expected session ID in output, got: %s", output)
 	}
 }
@@ -401,18 +403,19 @@ func TestSessionsListSubdirectories(t *testing.T) {
 
 	logsDir := filepath.Join(dir, "logs")
 
-	// Create top-level session (old format)
-	os.MkdirAll(logsDir, 0755)
+	// Create top-level session (new dir format)
+	topSessDir := filepath.Join(logsDir, "2026-02-24_120000_ab12")
+	os.MkdirAll(topSessDir, 0755)
 	entry := session.Entry{Timestamp: time.Now(), Role: "user", Content: "top level"}
 	data, _ := json.Marshal(entry)
-	os.WriteFile(filepath.Join(logsDir, "20260224-120000-toplevel.jsonl"), data, 0644)
+	os.WriteFile(filepath.Join(topSessDir, "session.jsonl"), data, 0644)
 
-	// Create session in agent subdirectory (new format)
-	agentDir := filepath.Join(logsDir, "myagent")
-	os.MkdirAll(agentDir, 0755)
+	// Create session in agent subdirectory
+	agentSessDir := filepath.Join(logsDir, "myagent", "2026-02-25_190214_cd34")
+	os.MkdirAll(agentSessDir, 0755)
 	entry2 := session.Entry{Timestamp: time.Now(), Role: "user", Content: "from agent"}
 	data2, _ := json.Marshal(entry2)
-	os.WriteFile(filepath.Join(agentDir, "2026-02-25_190214.jsonl"), data2, 0644)
+	os.WriteFile(filepath.Join(agentSessDir, "session.jsonl"), data2, 0644)
 
 	var buf bytes.Buffer
 	old := os.Stdout
@@ -427,10 +430,10 @@ func TestSessionsListSubdirectories(t *testing.T) {
 	buf.ReadFrom(r)
 
 	output := buf.String()
-	if !strings.Contains(output, "toplevel") {
+	if !strings.Contains(output, "2026-02-24_120000_ab12") {
 		t.Errorf("expected top-level session in output, got: %s", output)
 	}
-	if !strings.Contains(output, "2026-02-25_190214") {
+	if !strings.Contains(output, "2026-02-25_190214_cd34") {
 		t.Errorf("expected subdirectory session in output, got: %s", output)
 	}
 	if !strings.Contains(output, "[myagent]") {

@@ -3,6 +3,8 @@
 package session
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,6 +19,7 @@ import (
 // Entry is a single log line in the session JSONL file.
 type Entry struct {
 	Timestamp    time.Time       `json:"ts"`
+	Turn         int             `json:"turn,omitempty"`          // API round-trip number (increments on each request)
 	Role         string          `json:"role"`                    // "user", "assistant", "tool_call", "tool_result", "system", "request"
 	Content      string          `json:"content,omitempty"`       // text content
 	Model        string          `json:"model,omitempty"`         // model used (assistant entries)
@@ -40,8 +43,17 @@ type Session struct {
 	agentName string // agent name for multi-agent support
 	parentID  string // parent session ID (empty for root)
 	sessionID string // unique session ID
+	turn      int    // current API round-trip number
 	totalIn   int
 	totalOut  int
+	db        *DB    // session tracking DB (nil if unavailable)
+}
+
+// shortID generates a 4-character hex random string for session uniqueness.
+func shortID() string {
+	b := make([]byte, 2)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // New creates a session logger. Logs go to logsDir/agentName/YYYY-MM-DD_HHMMSS[-subN].jsonl.
@@ -59,24 +71,19 @@ func New(logsDir, model, agentName, parentID string) (*Session, error) {
 	}
 
 	now := time.Now()
-	sessionID := now.Format("2006-01-02_150405")
-	
+	sessionID := now.Format("2006-01-02_150405") + "_" + shortID()
+
 	// Add suffix for sub-agent sessions
-	suffix := ""
 	if parentID != "" {
-		// Count existing sub-sessions to generate unique suffix
-		entries, _ := os.ReadDir(agentDir)
-		subCount := 0
-		for _, e := range entries {
-			if !e.IsDir() && filepath.Ext(e.Name()) == ".jsonl" {
-				subCount++
-			}
-		}
-		suffix = fmt.Sprintf("-sub%d", subCount+1)
-		sessionID += suffix
+		sessionID += "-sub"
 	}
-	
-	filename := filepath.Join(agentDir, sessionID+".jsonl")
+
+	sessionDir := filepath.Join(agentDir, sessionID)
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		return nil, fmt.Errorf("create session dir: %w", err)
+	}
+
+	filename := filepath.Join(sessionDir, "session.jsonl")
 	f, err := os.Create(filename)
 	if err != nil {
 		return nil, fmt.Errorf("create log file: %w", err)
@@ -120,10 +127,35 @@ func (s *Session) AgentName() string {
 	return s.agentName
 }
 
+// AttachDB attaches a session tracking database and registers this session.
+func (s *Session) AttachDB(db *DB, command string) {
+	s.db = db
+	if db != nil {
+		db.InsertSession(&SessionRow{
+			ID:        s.sessionID,
+			Agent:     s.agentName,
+			Model:     s.model,
+			Command:   command,
+			ParentID:  s.parentID,
+			PID:       os.Getpid(),
+			StartedAt: s.start,
+			LogFile:   s.FilePath(),
+		})
+	}
+}
+
+// currentTurn returns the current turn number (0 before first request).
+func (s *Session) currentTurn() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turn
+}
+
 // LogUser logs a user message.
 func (s *Session) LogUser(text string) {
 	s.write(Entry{
 		Timestamp: time.Now(),
+		Turn:      s.currentTurn(),
 		Role:      "user",
 		Content:   text,
 	})
@@ -135,10 +167,12 @@ func (s *Session) LogAssistant(text string, inTokens, outTokens, toolCalls int) 
 	s.totalIn += inTokens
 	s.totalOut += outTokens
 	cost := s.cost()
+	turn := s.turn
 	s.mu.Unlock()
 
 	s.write(Entry{
 		Timestamp:    time.Now(),
+		Turn:         turn,
 		Role:         "assistant",
 		Content:      text,
 		Model:        s.model,
@@ -148,10 +182,23 @@ func (s *Session) LogAssistant(text string, inTokens, outTokens, toolCalls int) 
 	})
 }
 
+// EndTurn records turn completion in the DB (called after each API response).
+func (s *Session) EndTurn(inTokens, outTokens, toolCalls int, stopReason, errMsg string) {
+	if s.db == nil {
+		return
+	}
+	s.mu.Lock()
+	turn := s.turn
+	s.mu.Unlock()
+	cost := CalcCost(s.model, inTokens, outTokens)
+	s.db.EndTurn(s.sessionID, turn, inTokens, outTokens, toolCalls, cost, stopReason, errMsg)
+}
+
 // LogToolCall logs a tool invocation by the assistant.
 func (s *Session) LogToolCall(toolID, name string, input json.RawMessage) {
 	s.write(Entry{
 		Timestamp: time.Now(),
+		Turn:      s.currentTurn(),
 		Role:      "tool_call",
 		ToolID:    toolID,
 		ToolName:  name,
@@ -163,6 +210,7 @@ func (s *Session) LogToolCall(toolID, name string, input json.RawMessage) {
 func (s *Session) LogToolResult(toolID, name, output string, isError bool) {
 	s.write(Entry{
 		Timestamp: time.Now(),
+		Turn:      s.currentTurn(),
 		Role:      "tool_result",
 		ToolID:    toolID,
 		ToolName:  name,
@@ -175,18 +223,34 @@ func (s *Session) LogToolResult(toolID, name, output string, isError bool) {
 func (s *Session) LogThinking(text string) {
 	s.write(Entry{
 		Timestamp: time.Now(),
+		Turn:      s.currentTurn(),
 		Role:      "thinking",
 		Content:   text,
 	})
 }
 
-// LogRequest logs the full API request payload (messages, tools, system prompt, model).
+// LogRequest logs the full API request payload and advances the turn counter.
 func (s *Session) LogRequest(payload json.RawMessage) {
+	now := time.Now()
+	s.mu.Lock()
+	s.turn++
+	turn := s.turn
+	s.mu.Unlock()
+
 	s.write(Entry{
-		Timestamp: time.Now(),
+		Timestamp: now,
+		Turn:      turn,
 		Role:      "request",
 		Request:   payload,
 	})
+
+	if s.db != nil {
+		s.db.InsertTurn(&TurnRow{
+			SessionID: s.sessionID,
+			Turn:      turn,
+			StartedAt: now,
+		})
+	}
 }
 
 // LogCompaction logs a memory compaction event.
@@ -221,7 +285,7 @@ func (s *Session) LogPrune(removed int, tokensFreed int, strategy string) {
 	})
 }
 
-// Close finalizes the session log.
+// Close finalizes the session log and marks it completed in the DB.
 func (s *Session) Close() {
 	s.mu.Lock()
 	cost := s.cost()
@@ -236,6 +300,36 @@ func (s *Session) Close() {
 		TotalCost:    cost,
 	})
 	s.file.Close()
+
+	if s.db != nil {
+		s.db.EndSession(s.sessionID, "completed", "")
+	}
+}
+
+// CloseWithError finalizes the session log and marks it as errored in the DB.
+func (s *Session) CloseWithError(err error) {
+	s.mu.Lock()
+	cost := s.cost()
+	s.mu.Unlock()
+
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+
+	s.write(Entry{
+		Timestamp:    time.Now(),
+		Role:         "system",
+		Content:      fmt.Sprintf("session error — %s — total tokens: in=%d out=%d — cost: $%.4f", errMsg, s.totalIn, s.totalOut, cost),
+		InputTokens:  s.totalIn,
+		OutputTokens: s.totalOut,
+		TotalCost:    cost,
+	})
+	s.file.Close()
+
+	if s.db != nil {
+		s.db.EndSession(s.sessionID, "error", errMsg)
+	}
 }
 
 // FilePath returns the path to the log file.

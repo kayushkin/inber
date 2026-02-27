@@ -9,6 +9,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 	inbercontext "github.com/kayushkin/inber/context"
+	sessionMod "github.com/kayushkin/inber/session"
 	"github.com/spf13/cobra"
 )
 
@@ -46,7 +47,7 @@ func runChat(cmd *cobra.Command, args []string) {
 		},
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 	defer eng.Close()
@@ -78,7 +79,7 @@ func runChat(cmd *cobra.Command, args []string) {
 
 		result, err := eng.RunTurn(input)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%serror: %v%s\n", red, err, reset)
+			Log.Errorf("%v", err)
 			continue
 		}
 
@@ -97,7 +98,7 @@ func runChat(cmd *cobra.Command, args []string) {
 }
 
 // runStepMode runs the step-mode REPL. Returns false if user wants to quit.
-func runStepMode(scanner *bufio.Scanner, store *inbercontext.Store, messages *[]anthropic.MessageParam, buildSysPrompt func(string) []NamedBlock) bool {
+func runStepMode(scanner *bufio.Scanner, store *inbercontext.Store, messages *[]anthropic.MessageParam, buildSysPrompt func(string) []sessionMod.NamedBlock) bool {
 	for {
 		fmt.Printf("\n%s[step]%s > ", cyan+bold, reset)
 		if !scanner.Scan() {

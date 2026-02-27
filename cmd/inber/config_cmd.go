@@ -93,14 +93,14 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 func runConfigInit(cmd *cobra.Command, args []string) {
 	repoRoot, err := FindRepoRoot()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: not in a git repository\n")
+		Log.Error("not in a git repository")
 		os.Exit(1)
 	}
 
 	// Create .inber directory
 	inberDir := filepath.Join(repoRoot, ".inber")
 	if err := os.MkdirAll(inberDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "error creating .inber: %v\n", err)
+		Log.Error("creating .inber: %v", err)
 		os.Exit(1)
 	}
 
@@ -119,7 +119,7 @@ func runConfigInit(cmd *cobra.Command, args []string) {
 }
 `
 		if err := os.WriteFile(agentsPath, []byte(example), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "error creating agents.json: %v\n", err)
+			Log.Error("creating agents.json: %v", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Created %s\n", agentsPath)
@@ -128,7 +128,7 @@ func runConfigInit(cmd *cobra.Command, args []string) {
 	// Create agents directory
 	agentsDir := filepath.Join(repoRoot, "agents")
 	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "error creating agents/: %v\n", err)
+		Log.Error("creating agents/: %v", err)
 		os.Exit(1)
 	}
 
@@ -145,7 +145,7 @@ You are a helpful coding assistant with access to tools for:
 Use these tools to help the user accomplish their tasks.
 `
 		if err := os.WriteFile(defaultIdentity, []byte(identity), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "error creating default.md: %v\n", err)
+			Log.Error("creating default.md: %v", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Created %s\n", defaultIdentity)
@@ -158,7 +158,7 @@ Use these tools to help the user accomplish their tasks.
 ANTHROPIC_API_KEY=your-key-here
 `
 		if err := os.WriteFile(envPath, []byte(env), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "error creating .env: %v\n", err)
+			Log.Error("creating .env: %v", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Created %s (remember to add your API key)\n", envPath)
@@ -170,13 +170,13 @@ ANTHROPIC_API_KEY=your-key-here
 func runConfigUser(cmd *cobra.Command, args []string) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: could not determine home directory: %v\n", err)
+		Log.Error("could not determine home directory: %v", err)
 		os.Exit(1)
 	}
 
 	configDir := filepath.Join(homeDir, ".config", "inber")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "error creating config directory: %v\n", err)
+		Log.Error("creating config directory: %v", err)
 		os.Exit(1)
 	}
 
@@ -202,7 +202,7 @@ func runConfigUser(cmd *cobra.Command, args []string) {
 	}
 
 	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil { // 0600 = user read/write only
-		fmt.Fprintf(os.Stderr, "error creating config file: %v\n", err)
+		Log.Error("creating config file: %v", err)
 		os.Exit(1)
 	}
 

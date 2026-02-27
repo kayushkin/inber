@@ -18,18 +18,23 @@ var (
 	runRaw      bool
 	runNoTools  bool
 	runSystem   string
+	runNew    bool
+	runDetach bool
 )
 
 var runCmd = &cobra.Command{
 	Use:   "run [message]",
-	Short: "Send a single message and print the response to stdout",
-	Long: `Run a single turn against Claude and print the response to stdout.
-Reads from stdin if no message argument is provided.
+	Short: "Send a single message and print the response",
+	Long: `Send a message and print the response. Equivalent to a one-message chat.
+
+Use -c/--continue to resume the most recent session instead of starting fresh.
 
 Examples:
   inber run "explain this error"
   echo "summarize this" | inber run
-  inber run -a myagent "refactor this function"
+  inber run -n "start fresh task"         # new session (becomes default)
+  inber run -d "one-off question"        # detached, doesn't affect main session
+  inber run -a myagent "refactor this"
   inber run --raw --system "You are a translator" "translate to French: hello"
   inber run --no-tools "what time is it?"`,
 	Run: runRun,
@@ -42,6 +47,8 @@ func init() {
 	runCmd.Flags().BoolVar(&runRaw, "raw", false, "Skip context and memory loading")
 	runCmd.Flags().BoolVar(&runNoTools, "no-tools", false, "Disable all tools")
 	runCmd.Flags().StringVar(&runSystem, "system", "", "Override system prompt")
+	runCmd.Flags().BoolVarP(&runNew, "new", "n", false, "Start a new session instead of continuing the default")
+	runCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "Run in a one-off session without affecting the main session")
 }
 
 func runRun(cmd *cobra.Command, args []string) {
@@ -52,15 +59,15 @@ func runRun(cmd *cobra.Command, args []string) {
 	} else {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error reading stdin: %v\n", err)
+			Log.Error("reading stdin: %v", err)
 			os.Exit(1)
 		}
 		input = strings.TrimSpace(string(data))
 	}
 
 	if input == "" {
-		fmt.Fprintln(os.Stderr, "error: no message provided")
-		fmt.Fprintln(os.Stderr, "usage: inber run \"your message\" or echo \"message\" | inber run")
+		Log.Error("no message provided")
+		Log.Plain("usage: inber run \"your message\" or echo \"message\" | inber run")
 		os.Exit(1)
 	}
 
@@ -72,6 +79,8 @@ func runRun(cmd *cobra.Command, args []string) {
 		NoTools:        runNoTools,
 		SystemOverride: runSystem,
 		CommandName:    "run",
+		NewSession:     runNew,
+		Detach:         runDetach,
 		Display: &DisplayHooks{
 			OnToolCall: func(name string, input string) {
 				fmt.Fprintf(os.Stderr, "⚡ %s\n", name)
@@ -84,14 +93,14 @@ func runRun(cmd *cobra.Command, args []string) {
 		},
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 	defer eng.Close()
 
 	result, err := eng.RunTurn(input)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 

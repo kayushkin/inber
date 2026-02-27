@@ -118,6 +118,12 @@ If tests fail, fix them before pushing. No exceptions.
 19. **In-flight message handling** — handle messages that arrive while an agent is mid-turn. Options: buffer and inject at next turn boundary, interrupt current turn, or queue for after current turn completes. Configurable per-agent.
 
 ### Future
+- **External orchestrator sub-agents** — spawn and control other AI coding agents as sub-agents:
+  - **OpenClaw** — attach as sub-agent via gateway API, leverage its tool ecosystem
+  - **Claude Code** — run as background process, send tasks via stdin/pty, scrape output
+  - **Cursor/Windsurf** — headless or API mode if available, otherwise browser automation
+  - **Codex CLI** — OpenAI's coding agent, similar pty-based control
+  - Architecture: unified `SubAgent` interface with adapters per orchestrator. Inber acts as meta-orchestrator — routes tasks to the best tool for the job (e.g., Claude Code for refactoring, Cursor for UI work, OpenClaw for system tasks). Each adapter handles spawn/send/receive/kill lifecycle.
 - Web UI for session viewing / memory browsing
 - MCP (Model Context Protocol) tool integration
 - Token usage tracking and cost dashboards

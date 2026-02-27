@@ -96,42 +96,36 @@ func runSessionsList(cmd *cobra.Command, args []string) {
 
 	var sessions []sessionInfo
 	filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
+		if err != nil || d.IsDir() {
 			return nil
 		}
-		
-		// Determine agent name from subdirectory
-		relDir, _ := filepath.Rel(logsDir, filepath.Dir(path))
-		agentName := ""
-		if relDir != "." {
-			agentName = relDir
-		}
-		
-		name := strings.TrimSuffix(d.Name(), ".jsonl")
-		
-		// Try new format: YYYY-MM-DD_HHMMSS
-		if t, err := time.Parse("2006-01-02_150405", name); err == nil {
-			sessions = append(sessions, sessionInfo{
-				ID:        name,
-				Agent:     agentName,
-				StartTime: t,
-				FilePath:  path,
-			})
-			return nil
-		}
-		
-		// Try old format: YYYYMMDD-HHMMSS-<id>
-		parts := strings.Split(name, "-")
-		if len(parts) >= 3 {
-			timeStr := parts[0] + parts[1]
-			if t, err := time.Parse("20060102150405", timeStr); err == nil {
-				id := strings.Join(parts[2:], "-")
-				sessions = append(sessions, sessionInfo{
-					ID:        id,
-					Agent:     agentName,
-					StartTime: t,
-					FilePath:  path,
-				})
+		if d.Name() == "session.jsonl" {
+			// New format: logs/{agent}/{session_id}/session.jsonl
+			sessionDir := filepath.Dir(path)
+			sessionID := filepath.Base(sessionDir)
+			agentDir := filepath.Dir(sessionDir)
+			relAgent, _ := filepath.Rel(logsDir, agentDir)
+			agentName := ""
+			if relAgent != "." {
+				agentName = relAgent
+			}
+			timePart := sessionID
+			if len(timePart) > 17 {
+				timePart = timePart[:17]
+			}
+			if t, err := time.Parse("2006-01-02_150405", timePart); err == nil {
+				sessions = append(sessions, sessionInfo{ID: sessionID, Agent: agentName, StartTime: t, FilePath: path})
+			}
+		} else if strings.HasSuffix(d.Name(), ".jsonl") {
+			// Legacy flat format: logs/{agent}/{session_id}.jsonl
+			relDir, _ := filepath.Rel(logsDir, filepath.Dir(path))
+			agentName := ""
+			if relDir != "." {
+				agentName = relDir
+			}
+			name := strings.TrimSuffix(d.Name(), ".jsonl")
+			if t, err := time.Parse("2006-01-02_150405", name); err == nil {
+				sessions = append(sessions, sessionInfo{ID: name, Agent: agentName, StartTime: t, FilePath: path})
 			}
 		}
 		return nil
@@ -174,6 +168,12 @@ func findSessionFile(logsDir, sessionID string) string {
 		if err != nil || d.IsDir() {
 			return nil
 		}
+		// New format: logs/{agent}/{session_id}/session.jsonl
+		if d.Name() == "session.jsonl" && strings.Contains(filepath.Dir(path), sessionID) {
+			logFile = path
+			return filepath.SkipAll
+		}
+		// Legacy format: logs/{agent}/{session_id}.jsonl
 		if strings.Contains(d.Name(), sessionID) && strings.HasSuffix(d.Name(), ".jsonl") {
 			logFile = path
 			return filepath.SkipAll
@@ -195,14 +195,14 @@ func runSessionsShow(cmd *cobra.Command, args []string) {
 	logFile := findSessionFile(logsDir, sessionID)
 
 	if logFile == "" {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+		Log.Error("session not found: %s", sessionID)
 		os.Exit(1)
 	}
 
 	// Read and display
 	data, err := os.ReadFile(logFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error reading session: %v\n", err)
+		Log.Error("reading session: %v", err)
 		os.Exit(1)
 	}
 
@@ -250,14 +250,14 @@ func runSessionsContext(cmd *cobra.Command, args []string) {
 	logFile := findSessionFile(logsDir, sessionID)
 
 	if logFile == "" {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+		Log.Error("session not found: %s", sessionID)
 		os.Exit(1)
 	}
 
 	// Read and find request with system prompt
 	data, err := os.ReadFile(logFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error reading session: %v\n", err)
+		Log.Error("reading session: %v", err)
 		os.Exit(1)
 	}
 
@@ -298,7 +298,7 @@ func runSessionsPrompts(cmd *cobra.Command, args []string) {
 	logsDir := filepath.Join(repoRoot, "logs")
 	files, err := session.ListPromptBreakdowns(logsDir, sessionID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -326,7 +326,7 @@ func runSessionsPrompt(cmd *cobra.Command, args []string) {
 	logsDir := filepath.Join(repoRoot, "logs")
 	content, err := session.ReadPromptBreakdown(logsDir, sessionID, turn)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -344,7 +344,7 @@ func runSessionsTimeline(cmd *cobra.Command, args []string) {
 	logsDir := filepath.Join(repoRoot, "logs")
 	content, err := session.ReadTimelineFile(logsDir, sessionID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -357,9 +357,16 @@ func runSessionsActive(cmd *cobra.Command, args []string) {
 		repoRoot, _ = os.Getwd()
 	}
 
-	active, err := session.ListActive(repoRoot)
+	sdb, err := session.OpenDB(repoRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
+		os.Exit(1)
+	}
+	defer sdb.Close()
+
+	active, err := sdb.ListActive()
+	if err != nil {
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -370,12 +377,14 @@ func runSessionsActive(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("Active sessions (%d):\n\n", len(active))
 	for _, s := range active {
-		duration := time.Since(s.StartTime).Truncate(time.Second)
-		fmt.Printf("  %sPID %d%s  %s  %s%-8s%s  agent=%s  (%s)\n",
+		duration := s.Duration.Truncate(time.Second)
+		fmt.Printf("  %sPID %d%s  %s  %s%-8s%s  agent=%s  turns=%d  $%.4f  (%s)\n",
 			bold, s.PID, reset,
 			s.Command,
-			dim, s.SessionID, reset,
+			dim, s.ID, reset,
 			s.Agent,
+			s.Turns,
+			s.TotalCost,
 			duration)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,6 +36,8 @@ type EngineConfig struct {
 	SystemOverride string
 	RepoRoot       string
 	CommandName    string // "chat" or "run" for session registration
+	NewSession     bool   // start fresh instead of continuing default session
+	Detach         bool   // one-off session, don't save to workspace
 	Display        *DisplayHooks
 }
 
@@ -46,6 +49,7 @@ type Engine struct {
 	ContextStore *inbercontext.Store
 	MemStore     *memory.Store
 	Session      *sessionMod.Session
+	SessionDB    *sessionMod.DB
 	Timeline     *sessionMod.Timeline
 	Model        string
 	AgentName    string
@@ -56,8 +60,9 @@ type Engine struct {
 	repoRoot       string
 	agentTools     []agent.Tool
 	display        *DisplayHooks
+	workspace      *sessionMod.Workspace
 	thinkingBud    int64
-	lastNamedBlocks []NamedBlock
+	lastNamedBlocks []sessionMod.NamedBlock
 }
 
 // NewEngine creates and fully initializes an Engine: context, memory, tools, session, hooks.
@@ -108,7 +113,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 	// Context & memory
 	if cfg.SystemOverride == "" && !cfg.Raw {
-		fmt.Fprintf(os.Stderr, "%sloading context...%s", dim, reset)
+		Log.Infof("loading context...")
 		contextCfg := inbercontext.DefaultAutoLoadConfig(repoRoot)
 		if identityText == "" {
 			identityText = "You are a helpful coding assistant. You have access to shell, file reading/writing/editing, and directory listing tools. Use them to help the user."
@@ -117,44 +122,84 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 		cs, err := inbercontext.AutoLoad(contextCfg)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\nwarning: context auto-load failed: %v\n", err)
+			Log.Warn("context auto-load failed: %v", err)
 			cs = inbercontext.NewStore()
 		}
 		if err := inbercontext.LoadProjectContext(cs, repoRoot); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to load project context: %v\n", err)
+			Log.Warn("failed to load project context: %v", err)
 		}
 		e.ContextStore = cs
+		// Append to the "loading context..." line (no newline from Infof)
 		fmt.Fprintf(os.Stderr, " done (%d chunks)\n", cs.Count())
 
 		// Memory
 		ms, err := memory.OpenOrCreate(repoRoot)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: memory disabled: %v\n", err)
+			Log.Warn("memory disabled: %v", err)
 		} else {
 			e.MemStore = ms
 			if err := memory.LoadIntoContext(ms, cs, 10, 0.6); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to load memories: %v\n", err)
+				Log.Warn("failed to load memories: %v", err)
 			}
 		}
 	} else if cfg.Raw && identityText == "" {
 		identityText = "You are a helpful assistant."
 	}
 
-	// Session
+	// Session continuity: resume by default, --new to start fresh, --detach for one-off
+	ws := sessionMod.NewWorkspace(repoRoot, e.AgentName)
+	if cfg.Detach {
+		// Detached: don't load or save workspace messages
+		e.workspace = nil
+	} else {
+		e.workspace = ws
+		if !cfg.NewSession {
+			if msgs, err := ws.LoadMessages(); err == nil && len(msgs) > 0 {
+				e.Messages = msgs
+				Log.Info("resuming session (%d messages)", len(msgs))
+			}
+		} else {
+			ws.ClearMessages()
+		}
+	}
+
+	// Session DB (tracks sessions/turns in SQLite)
+	sdb, err := sessionMod.OpenDB(repoRoot)
+	if err != nil {
+		Log.Warn("session tracking disabled: %v", err)
+	} else {
+		e.SessionDB = sdb
+		if n, _ := sdb.DetectInterrupted(); n > 0 {
+			Log.Warn("detected %d interrupted session(s) from previous runs", n)
+		}
+	}
+
 	sess, err := sessionMod.New("logs", e.Model, e.AgentName, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: logging disabled: %v\n", err)
+		Log.Warn("logging disabled: %v", err)
 	} else {
 		e.Session = sess
 		e.Timeline = sessionMod.NewTimeline(sess.FilePath(), sess.SessionID())
-		fmt.Fprintf(os.Stderr, "%slogging to %s%s\n", dim, sess.FilePath(), reset)
-		if _, err := sessionMod.RegisterActive(repoRoot, sess, cfg.CommandName); err == nil {
-			// deferred cleanup in Close()
+		Log.Info("logging to %s", sess.FilePath())
+		if sdb != nil {
+			sess.AttachDB(sdb, cfg.CommandName)
 		}
 	}
 
 	// API client (via aiauth with auto-refresh)
 	e.AuthStore = aiauth.DefaultStore()
+	resolved, err := e.AuthStore.ResolveCredential("anthropic")
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve Anthropic credentials: %w", err)
+	}
+	switch resolved.Source {
+	case "oauth":
+		Log.Info("auth: Claude Pro/Max (OAuth)")
+	case "env":
+		Log.Warn("using API key fallback (ANTHROPIC_API_KEY env var) — not Claude Pro/Max")
+	default:
+		Log.Info("auth: %s", resolved.Source)
+	}
 	client, err := e.AuthStore.AnthropicClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Anthropic client: %w", err)
@@ -184,6 +229,15 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			Tags:   []string{"identity"},
 			Source: "identity",
 		})
+	}
+
+	// Write tools list to workspace for reference
+	if e.workspace != nil && len(e.agentTools) > 0 {
+		toolInfos := make([]sessionMod.ToolInfo, len(e.agentTools))
+		for i, t := range e.agentTools {
+			toolInfos[i] = sessionMod.ToolInfo{Name: t.Name, Description: t.Description}
+		}
+		e.workspace.WriteToolsList(toolInfos)
 	}
 
 	return e, nil
@@ -224,14 +278,8 @@ func (e *Engine) buildTools() []agent.Tool {
 	return result
 }
 
-// NamedBlock is a system prompt chunk with an ID for prompt breakdown labeling.
-type NamedBlock struct {
-	ID   string
-	Text string
-}
-
 // BuildSystemPrompt builds a context-aware system prompt as individual named blocks.
-func (e *Engine) BuildSystemPrompt(userMessage string) []NamedBlock {
+func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 	if e.ContextStore == nil {
 		return nil
 	}
@@ -239,15 +287,27 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []NamedBlock {
 	builder := inbercontext.NewBuilder(e.ContextStore, 50000)
 	chunks := builder.Build(messageTags)
 
-	blocks := make([]NamedBlock, len(chunks))
+	blocks := make([]sessionMod.NamedBlock, len(chunks))
 	for i, chunk := range chunks {
-		blocks[i] = NamedBlock{ID: chunk.ID, Text: chunk.Text}
+		blocks[i] = sessionMod.NamedBlock{ID: chunk.ID, Text: chunk.Text}
 	}
+
+	if e.workspace != nil {
+		// If workspace has edits, use those instead
+		if wsBlocks, err := e.workspace.ReadSystem(); err == nil && wsBlocks != nil {
+			Log.Info("using edited prompt from %s (%d blocks)", e.workspace.Dir, len(wsBlocks))
+			blocks = wsBlocks
+		}
+
+		// Write current prompt to workspace for editing before next turn
+		e.workspace.WriteSystem(blocks)
+	}
+
 	return blocks
 }
 
 // buildAgent creates a fresh Agent with current system prompt, tools, and hooks.
-func (e *Engine) buildAgent(blocks []NamedBlock) *agent.Agent {
+func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	systemBlocks := make([]anthropic.TextBlockParam, len(blocks))
 	for i, b := range blocks {
 		systemBlocks[i] = anthropic.TextBlockParam{Text: b.Text}
@@ -293,12 +353,7 @@ func (e *Engine) buildHooks() *agent.Hooks {
 				logHooks.OnRequest(params)
 			}
 			e.TurnCounter++
-			// Convert engine NamedBlocks to session NamedBlocks for breakdown labeling
-			var sBlocks []sessionMod.NamedBlock
-			for _, b := range e.lastNamedBlocks {
-				sBlocks = append(sBlocks, sessionMod.NamedBlock{ID: b.ID, Text: b.Text})
-			}
-			sessionMod.WritePromptBreakdown(e.Session.FilePath(), e.Session.SessionID(), e.TurnCounter, params, sBlocks)
+			sessionMod.WritePromptBreakdown(e.Session.FilePath(), e.Session.SessionID(), e.TurnCounter, params, e.lastNamedBlocks)
 
 			// Timeline: add prompt event
 			if e.Timeline != nil {
@@ -317,9 +372,25 @@ func (e *Engine) buildHooks() *agent.Hooks {
 						}
 					}
 				}
-				promptFile := fmt.Sprintf("prompts/%s-turn-%d.md", e.Session.SessionID(), e.TurnCounter)
+				promptFile := fmt.Sprintf("prompts/turn-%d.md", e.TurnCounter)
 				e.Timeline.AddPrompt(userMsg, e.TurnCounter, promptFile)
 			}
+		}
+		hooks.OnResponse = func(resp *anthropic.Message) {
+			stopReason := string(resp.StopReason)
+			toolCalls := 0
+			for _, block := range resp.Content {
+				if block.Type == "tool_use" {
+					toolCalls++
+				}
+			}
+			e.Session.EndTurn(
+				int(resp.Usage.InputTokens),
+				int(resp.Usage.OutputTokens),
+				toolCalls,
+				stopReason,
+				"",
+			)
 		}
 		hooks.OnThinking = func(text string) {
 			if logHooks.OnThinking != nil {
@@ -384,7 +455,27 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 		e.Timeline.WriteFile()
 	}
 
+	// Save messages snapshot for session resume
+	e.saveMessages()
+
 	return result, nil
+}
+
+// saveMessages writes the current messages to the workspace and session log dir.
+func (e *Engine) saveMessages() {
+	data, err := json.Marshal(e.Messages)
+	if err != nil {
+		return
+	}
+	// Save to workspace (persistent default session)
+	if e.workspace != nil {
+		e.workspace.SaveMessages(data)
+	}
+	// Also save to session log dir
+	if e.Session != nil {
+		sessDir := filepath.Dir(e.Session.FilePath())
+		os.WriteFile(filepath.Join(sessDir, "messages.json"), data, 0644)
+	}
 }
 
 // LogUser logs a user message to the session (for external callers that need pre-logging).
@@ -414,7 +505,10 @@ func (e *Engine) Close() {
 
 	if e.Session != nil {
 		e.Session.Close()
-		sessionMod.UnregisterActive(e.repoRoot, e.Session.SessionID())
+	}
+
+	if e.SessionDB != nil {
+		e.SessionDB.Close()
 	}
 }
 
@@ -452,7 +546,7 @@ func saveSessionSummary(store *memory.Store, messages []anthropic.MessageParam, 
 	}
 
 	if err := store.Save(m); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to save session summary: %v\n", err)
+		Log.Warn("failed to save session summary: %v", err)
 	}
 }
 

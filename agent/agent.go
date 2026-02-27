@@ -19,8 +19,9 @@ type Tool struct {
 
 // Hooks allows callers to observe tool calls and results (e.g., for logging).
 type Hooks struct {
-	OnRequest    func(params *anthropic.MessageNewParams) // called before each API request
-	OnThinking   func(text string)                        // called when thinking blocks are received
+	OnRequest    func(params *anthropic.MessageNewParams)                    // called before each API request
+	OnResponse   func(resp *anthropic.Message)                               // called after each API response
+	OnThinking   func(text string)                                           // called when thinking blocks are received
 	OnToolCall   func(toolID, name string, input []byte)
 	OnToolResult func(toolID, name, output string, isError bool)
 }
@@ -31,8 +32,7 @@ type Agent struct {
 	system         string
 	systemBlocks   []anthropic.TextBlockParam
 	tools          []Tool
-	hooks          *Hooks // legacy hooks for backward compatibility
-	hookRegistry   *HookRegistry
+	hooks          *Hooks
 	agentName      string
 	sessionID      string
 	thinkingBudget int64 // 0 = disabled, >0 = budget tokens for extended thinking
@@ -54,20 +54,9 @@ func NewWithSystemBlocks(client *anthropic.Client, blocks []anthropic.TextBlockP
 	}
 }
 
-// SetHooks attaches observation hooks for tool calls/results (legacy).
+// SetHooks attaches observation hooks for tool calls/results.
 func (a *Agent) SetHooks(h *Hooks) {
 	a.hooks = h
-}
-
-// SetHookRegistry attaches a hook registry for lifecycle events.
-func (a *Agent) SetHookRegistry(hr *HookRegistry) {
-	a.hookRegistry = hr
-}
-
-// SetIdentity sets the agent name and session ID for hook events.
-func (a *Agent) SetIdentity(agentName, sessionID string) {
-	a.agentName = agentName
-	a.sessionID = sessionID
 }
 
 // SetThinking enables extended thinking with the given token budget.
@@ -138,22 +127,8 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 			}
 		}
 
-		// Legacy hooks
 		if a.hooks != nil && a.hooks.OnRequest != nil {
 			a.hooks.OnRequest(&params)
-		}
-
-		// New hook system: before_request
-		if a.hookRegistry != nil {
-			event := BeforeRequestEvent(a.agentName, a.sessionID, &params)
-			hookResult, err := a.hookRegistry.Dispatch(ctx, event)
-			if err != nil {
-				return result, fmt.Errorf("before_request hook error: %w", err)
-			}
-			if hookResult.Action == ActionAbort {
-				return result, fmt.Errorf("request aborted by hook: %s", hookResult.Message)
-			}
-			// TODO: handle ActionModify to update params
 		}
 
 		resp, err := a.client.Messages.New(ctx, params)
@@ -164,12 +139,8 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 		result.InputTokens += int(resp.Usage.InputTokens)
 		result.OutputTokens += int(resp.Usage.OutputTokens)
 
-		// New hook system: after_response
-		if a.hookRegistry != nil {
-			event := AfterResponseEvent(a.agentName, a.sessionID, resp)
-			if _, err := a.hookRegistry.Dispatch(ctx, event); err != nil {
-				return result, fmt.Errorf("after_response hook error: %w", err)
-			}
+		if a.hooks != nil && a.hooks.OnResponse != nil {
+			a.hooks.OnResponse(resp)
 		}
 
 		// Extract thinking blocks
@@ -206,28 +177,8 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 
 				result.ToolCalls++
 
-				// Legacy hooks
 				if a.hooks != nil && a.hooks.OnToolCall != nil {
 					a.hooks.OnToolCall(block.ID, block.Name, []byte(block.Input))
-				}
-
-				// New hook system: tool_call
-				if a.hookRegistry != nil {
-					event := ToolCallEvent(a.agentName, a.sessionID, block.ID, block.Name, []byte(block.Input))
-					hookResult, err := a.hookRegistry.Dispatch(ctx, event)
-					if err != nil {
-						return result, fmt.Errorf("tool_call hook error: %w", err)
-					}
-					if hookResult.Action == ActionAbort {
-						errMsg := fmt.Sprintf("tool call aborted by hook: %s", hookResult.Message)
-						if a.hooks != nil && a.hooks.OnToolResult != nil {
-							a.hooks.OnToolResult(block.ID, block.Name, errMsg, true)
-						}
-						toolResults = append(toolResults, anthropic.NewToolResultBlock(
-							block.ID, errMsg, true,
-						))
-						continue
-					}
 				}
 
 				tool, ok := toolMap[block.Name]
@@ -245,14 +196,8 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 				output, err := tool.Run(ctx, string(block.Input))
 				if err != nil {
 					errMsg := fmt.Sprintf("error: %s", err)
-					// Legacy hooks
 					if a.hooks != nil && a.hooks.OnToolResult != nil {
 						a.hooks.OnToolResult(block.ID, block.Name, errMsg, true)
-					}
-					// New hook system
-					if a.hookRegistry != nil {
-						event := ToolResultEvent(a.agentName, a.sessionID, block.ID, block.Name, errMsg, true)
-						a.hookRegistry.Dispatch(ctx, event)
 					}
 					toolResults = append(toolResults, anthropic.NewToolResultBlock(
 						block.ID, errMsg, true,
@@ -260,14 +205,8 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 					continue
 				}
 
-				// Legacy hooks
 				if a.hooks != nil && a.hooks.OnToolResult != nil {
 					a.hooks.OnToolResult(block.ID, block.Name, output, false)
-				}
-				// New hook system
-				if a.hookRegistry != nil {
-					event := ToolResultEvent(a.agentName, a.sessionID, block.ID, block.Name, output, false)
-					a.hookRegistry.Dispatch(ctx, event)
 				}
 				toolResults = append(toolResults, anthropic.NewToolResultBlock(
 					block.ID, output, false,

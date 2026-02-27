@@ -115,7 +115,7 @@ func getMemoryStore() *memory.Store {
 
 	store, err := memory.OpenOrCreate(repoRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error opening memory store: %v\n", err)
+		Log.Error("opening memory store: %v", err)
 		os.Exit(1)
 	}
 	return store
@@ -128,7 +128,7 @@ func runMemorySearch(cmd *cobra.Command, args []string) {
 
 	results, err := store.Search(query, memorySearchLimit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -153,7 +153,7 @@ func runMemoryList(cmd *cobra.Command, args []string) {
 
 	results, err := store.ListRecent(memoryListLimit, memoryListMin)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -178,7 +178,7 @@ func runMemoryShow(cmd *cobra.Command, args []string) {
 
 	m, err := store.Get(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -214,7 +214,7 @@ func runMemorySave(cmd *cobra.Command, args []string) {
 	}
 
 	if err := store.Save(m); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -227,7 +227,7 @@ func runMemoryForget(cmd *cobra.Command, args []string) {
 	defer store.Close()
 
 	if err := store.Forget(id); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -241,7 +241,7 @@ func runMemoryStats(cmd *cobra.Command, args []string) {
 	// Get all memories
 	all, err := store.ListRecent(10000, 0)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -318,13 +318,13 @@ func runMemoryCompact(cmd *cobra.Command, args []string) {
 
 	age, err := time.ParseDuration(memoryCompactAge)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "invalid age duration: %v\n", err)
+		Log.Error("invalid age duration: %v", err)
 		os.Exit(1)
 	}
 
 	results, err := store.Compact(age, memoryCompactMinAccess)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -347,7 +347,7 @@ func runMemoryPrune(cmd *cobra.Command, args []string) {
 	// Show memories that would be affected by compaction (low importance)
 	all, err := store.ListRecent(1000, 0)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -386,7 +386,7 @@ func runMemoryDecay(cmd *cobra.Command, args []string) {
 	defer store.Close()
 
 	if err := store.DecayImportance(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		Log.Error("%v", err)
 		os.Exit(1)
 	}
 

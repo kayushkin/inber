@@ -45,7 +45,7 @@ func runAgentsList(cmd *cobra.Command, args []string) {
 		filepath.Join(repoRoot, "agents"),
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading agents: %v\n", err)
+		Log.Error("loading agents: %v", err)
 		os.Exit(1)
 	}
 
@@ -81,13 +81,13 @@ func runAgentsShow(cmd *cobra.Command, args []string) {
 		filepath.Join(repoRoot, "agents"),
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading agents: %v\n", err)
+		Log.Error("loading agents: %v", err)
 		os.Exit(1)
 	}
 
 	cfg, ok := configs[agentName]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "agent not found: %s\n", agentName)
+		Log.Error("agent not found: %s", agentName)
 		os.Exit(1)
 	}
 
