@@ -162,7 +162,7 @@
     "party": {
       "name": "party",
       "role": "inber-party fullstack developer — RPG UI for agent visualization",
-      "model": "claude-sonnet-4-5",
+      "model": "claude-opus-4-6",
       "thinking": 0,
       "tools": [
         "shell",
