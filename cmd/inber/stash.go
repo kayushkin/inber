@@ -213,5 +213,20 @@ func DetectAndStashLargeBlocks(
 		modifiedText = strings.Join(rebuiltText, "\n\n")
 	}
 
+	// 3. Fallback: if total message is still large and nothing was stashed,
+	// stash the entire message (e.g., repetitive error dumps with small paragraphs)
+	if len(stashed) == 0 {
+		totalTokens := inbercontext.EstimateTokens(modifiedText)
+		if totalTokens >= cfg.UserMessageThreshold {
+			result, err := StashLargeContent(modifiedText, sessionID, memStore, cfg)
+			if err != nil {
+				Log.Warn("failed to stash entire large message: %v", err)
+			} else if result != nil {
+				stashed = append(stashed, *result)
+				modifiedText = result.Summary
+			}
+		}
+	}
+
 	return modifiedText, stashed, nil
 }

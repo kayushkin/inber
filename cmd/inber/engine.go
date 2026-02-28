@@ -11,6 +11,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/google/uuid"
 	"github.com/kayushkin/aiauth"
+	"github.com/kayushkin/aiauth/providers"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 	inbercontext "github.com/kayushkin/inber/context"
@@ -202,6 +203,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	}
 
 	// API client (via aiauth with auto-refresh)
+	aiauth.RegisterProvider(&providers.Anthropic{})
 	e.AuthStore = aiauth.DefaultStore()
 	client, err := e.AuthStore.AnthropicClient()
 	if err != nil {
