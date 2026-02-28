@@ -437,7 +437,13 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 // pruneIfNeeded checks if conversation should be pruned and does so if necessary.
 func (e *Engine) pruneIfNeeded() {
-	cfg := DefaultPruneConfig()
+	// Use role-based config if agent config available
+	var cfg PruneConfig
+	if e.AgentConfig != nil && e.AgentConfig.Role != "" {
+		cfg = PruneConfigForRole(e.AgentConfig.Role)
+	} else {
+		cfg = DefaultPruneConfig()
+	}
 	
 	if !ShouldPrune(e.Messages, cfg) {
 		return

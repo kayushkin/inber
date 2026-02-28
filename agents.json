@@ -3,7 +3,7 @@
   "agents": {
     "task-manager": {
       "name": "task-manager",
-      "role": "primary orchestrator and task dispatcher",
+      "role": "orchestrator — primary task dispatcher",
       "model": "claude-sonnet-4-5",
       "thinking": 2048,
       "tools": [
@@ -29,7 +29,7 @@
     },
     "fionn": {
       "name": "fionn",
-      "role": "scholar — code implementation specialist",
+      "role": "coder — code implementation specialist",
       "model": "claude-sonnet-4-5",
       "thinking": 0,
       "tools": [
@@ -56,7 +56,7 @@
     },
     "scathach": {
       "name": "scathach",
-      "role": "sentinel — testing and validation specialist",
+      "role": "tester — testing and validation specialist",
       "model": "claude-sonnet-4-5",
       "thinking": 0,
       "tools": [
@@ -99,7 +99,7 @@
     },
     "bran": {
       "name": "bran",
-      "role": "strategist — software development pipeline orchestrator",
+      "role": "orchestrator — software development pipeline coordinator",
       "model": "claude-sonnet-4-5",
       "thinking": 2048,
       "tools": [
@@ -143,7 +143,7 @@
     },
     "orchestrator": {
       "name": "orchestrator",
-      "role": "task orchestrator and delegation manager",
+      "role": "orchestrator — task delegation manager",
       "model": "claude-sonnet-4-5",
       "thinking": 2048,
       "tools": [
