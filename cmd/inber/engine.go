@@ -39,6 +39,8 @@ type EngineConfig struct {
 	NewSession     bool   // start fresh instead of continuing default session
 	Detach         bool   // one-off session, don't save to workspace
 	Display        *DisplayHooks
+	StashConfig    *StashConfig      // Large message stashing config (nil = use defaults)
+	ExtractConfig  *ExtractionConfig // Background extraction config (nil = use defaults)
 }
 
 // Engine encapsulates the shared setup and execution logic for chat and run.
@@ -56,12 +58,14 @@ type Engine struct {
 	Messages     []anthropic.MessageParam
 	TurnCounter  int
 
-	repoRoot       string
-	agentTools     []agent.Tool
-	display        *DisplayHooks
-	workspace      *sessionMod.Workspace
-	thinkingBud    int64
+	repoRoot        string
+	agentTools      []agent.Tool
+	display         *DisplayHooks
+	workspace       *sessionMod.Workspace
+	thinkingBud     int64
 	lastNamedBlocks []sessionMod.NamedBlock
+	stashCfg        StashConfig
+	extractCfg      ExtractionConfig
 }
 
 // NewEngine creates and fully initializes an Engine: context, memory, tools, session, hooks.
@@ -75,11 +79,24 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 	}
 
+	// Initialize configs with defaults if not provided
+	stashCfg := DefaultStashConfig()
+	if cfg.StashConfig != nil {
+		stashCfg = *cfg.StashConfig
+	}
+
+	extractCfg := DefaultExtractionConfig()
+	if cfg.ExtractConfig != nil {
+		extractCfg = *cfg.ExtractConfig
+	}
+
 	e := &Engine{
 		Model:       cfg.Model,
 		repoRoot:    repoRoot,
 		display:     cfg.Display,
 		thinkingBud: cfg.Thinking,
+		stashCfg:    stashCfg,
+		extractCfg:  extractCfg,
 	}
 
 	// Load agent config
@@ -404,16 +421,38 @@ func (e *Engine) buildHooks() *agent.Hooks {
 
 // RunTurn sends a user message, rebuilds the system prompt, runs the agent, and returns the result.
 func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
+	// Get session ID for tagging
+	sessionID := ""
 	if e.Session != nil {
+		sessionID = e.Session.SessionID()
 		e.Session.LogUser(input)
 	}
 
-	e.Messages = append(e.Messages, anthropic.NewUserMessage(anthropic.NewTextBlock(input)))
+	// 1. STASH LARGE USER MESSAGES (before sending to LLM)
+	processedInput := input
+	if e.stashCfg.Enabled && e.MemStore != nil {
+		tokens := inbercontext.EstimateTokens(input)
+		if tokens > e.stashCfg.UserMessageThreshold {
+			modifiedInput, stashed, err := DetectAndStashLargeBlocks(input, sessionID, e.MemStore, e.stashCfg)
+			if err != nil {
+				Log.Warn("failed to stash large user message: %v", err)
+			} else if len(stashed) > 0 {
+				processedInput = modifiedInput
+				totalStashed := 0
+				for _, s := range stashed {
+					totalStashed += s.Tokens
+				}
+				Log.Info("stashed %d large blocks from user message (%d tokens)", len(stashed), totalStashed)
+			}
+		}
+	}
+
+	e.Messages = append(e.Messages, anthropic.NewUserMessage(anthropic.NewTextBlock(processedInput)))
 
 	// Prune conversation if needed (keep last 35 turns)
 	e.pruneIfNeeded()
 
-	systemBlocks := e.BuildSystemPrompt(input)
+	systemBlocks := e.BuildSystemPrompt(processedInput)
 	e.lastNamedBlocks = systemBlocks
 	e.buildAgent(systemBlocks)
 
@@ -424,6 +463,79 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	if e.Session != nil {
 		e.Session.LogAssistant(result.Text, result.InputTokens, result.OutputTokens, result.ToolCalls)
+	}
+
+	// 2. BACKGROUND MEMORY EXTRACTION (after turn completes, async)
+	if e.extractCfg.Enabled && e.MemStore != nil {
+		// Note: we don't have detailed tool call info in TurnResult,
+		// but extraction will work without it
+		var toolCalls []ToolCallSummary
+		
+		// Launch extraction in background goroutine
+		go BackgroundExtractMemories(
+			context.Background(),
+			e.Client,
+			input, // Original user input (not stashed version)
+			result.Text,
+			toolCalls,
+			sessionID,
+			e.MemStore,
+			e.extractCfg,
+			&Log,
+		)
+	}
+
+	// 3. STASH LARGE ASSISTANT RESPONSES (for next turn)
+	// Don't modify the response the user sees, but modify it in conversation history
+	if e.stashCfg.Enabled && e.MemStore != nil {
+		responseTokens := inbercontext.EstimateTokens(result.Text)
+		if responseTokens > e.stashCfg.AssistantThreshold {
+			// The response is already in e.Messages (added by Agent.Run)
+			// We need to modify the last message (assistant message) in the history
+			if len(e.Messages) > 0 && e.Messages[len(e.Messages)-1].Role == anthropic.MessageParamRoleAssistant {
+				lastMsg := &e.Messages[len(e.Messages)-1]
+				
+				// Find text blocks in the message
+				var modifiedContent []anthropic.ContentBlockParamUnion
+				stashedAny := false
+				
+				for _, block := range lastMsg.Content {
+					if block.OfText != nil {
+						text := block.OfText.Text
+						textTokens := inbercontext.EstimateTokens(text)
+						
+						if textTokens > e.stashCfg.MinBlockSize {
+							modifiedText, stashed, err := DetectAndStashLargeBlocks(text, sessionID, e.MemStore, e.stashCfg)
+							if err != nil {
+								Log.Warn("failed to stash assistant response: %v", err)
+								modifiedContent = append(modifiedContent, block)
+							} else if len(stashed) > 0 {
+								stashedAny = true
+								modifiedContent = append(modifiedContent, anthropic.ContentBlockParamUnion{
+									OfText: &anthropic.TextBlockParam{Text: modifiedText},
+								})
+								totalStashed := 0
+								for _, s := range stashed {
+									totalStashed += s.Tokens
+								}
+								Log.Info("stashed %d large blocks from assistant response (%d tokens)", len(stashed), totalStashed)
+							} else {
+								modifiedContent = append(modifiedContent, block)
+							}
+						} else {
+							modifiedContent = append(modifiedContent, block)
+						}
+					} else {
+						// Keep non-text blocks as-is
+						modifiedContent = append(modifiedContent, block)
+					}
+				}
+				
+				if stashedAny {
+					lastMsg.Content = modifiedContent
+				}
+			}
+		}
 	}
 
 	// Save messages snapshot for session resume
