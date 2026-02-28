@@ -1,11 +1,12 @@
 package session
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/kayushkin/inber/agent"
@@ -39,102 +40,6 @@ type TimelineEvent struct {
 	Model        string
 }
 
-// Timeline accumulates events during a session and writes a timeline markdown file.
-type Timeline struct {
-	mu        sync.Mutex
-	sessionID string
-	logsDir   string // directory containing the session log file
-	startTime time.Time
-	events    []TimelineEvent
-	turnTool  int // running tool count for current turn
-}
-
-// NewTimeline creates a new timeline for a session.
-func NewTimeline(logFilePath, sessionID string) *Timeline {
-	return &Timeline{
-		sessionID: sessionID,
-		logsDir:   filepath.Dir(logFilePath),
-		startTime: time.Now(),
-	}
-}
-
-// AddPrompt adds a prompt event.
-func (tl *Timeline) AddPrompt(userMessage string, turnNumber int, promptFile string) {
-	tl.mu.Lock()
-	defer tl.mu.Unlock()
-	tl.turnTool = 0
-	tl.events = append(tl.events, TimelineEvent{
-		Type:        "prompt",
-		Timestamp:   time.Now(),
-		UserMessage: truncateStr(userMessage, 120),
-		TurnNumber:  turnNumber,
-		PromptFile:  promptFile,
-	})
-}
-
-// AddToolCall adds a tool_call event.
-func (tl *Timeline) AddToolCall(name, input string) {
-	tl.mu.Lock()
-	defer tl.mu.Unlock()
-	tl.turnTool++
-	tl.events = append(tl.events, TimelineEvent{
-		Type:      "tool_call",
-		Timestamp: time.Now(),
-		ToolName:  name,
-		ToolInput: summarizeToolInput(name, input),
-		ToolCount: tl.turnTool,
-	})
-}
-
-// AddToolResult adds a tool_result event.
-func (tl *Timeline) AddToolResult(name, output string, isError bool) {
-	tl.mu.Lock()
-	defer tl.mu.Unlock()
-	tl.events = append(tl.events, TimelineEvent{
-		Type:        "tool_result",
-		Timestamp:   time.Now(),
-		ToolName:    name,
-		ToolOutput:  summarizeToolOutput(output),
-		ToolIsError: isError,
-	})
-}
-
-// AddResponse adds a response event.
-func (tl *Timeline) AddResponse(text string) {
-	tl.mu.Lock()
-	defer tl.mu.Unlock()
-	tl.events = append(tl.events, TimelineEvent{
-		Type:         "response",
-		Timestamp:    time.Now(),
-		ResponseText: truncateStr(text, 120),
-	})
-}
-
-// AddStats adds a stats event.
-func (tl *Timeline) AddStats(model string, inTok, outTok, toolCalls int) {
-	tl.mu.Lock()
-	defer tl.mu.Unlock()
-	cost := CalcCost(model, inTok, outTok)
-	tl.events = append(tl.events, TimelineEvent{
-		Type:         "stats",
-		Timestamp:    time.Now(),
-		InputTokens:  inTok,
-		OutputTokens: outTok,
-		ToolCalls:    toolCalls,
-		Cost:         cost,
-		Model:        model,
-	})
-}
-
-// Events returns a copy of the timeline events.
-func (tl *Timeline) Events() []TimelineEvent {
-	tl.mu.Lock()
-	defer tl.mu.Unlock()
-	out := make([]TimelineEvent, len(tl.events))
-	copy(out, tl.events)
-	return out
-}
-
 // CalcCost calculates cost from model and token counts.
 func CalcCost(model string, inTok, outTok int) float64 {
 	info, ok := agent.Models[model]
@@ -142,17 +47,6 @@ func CalcCost(model string, inTok, outTok int) float64 {
 		return 0
 	}
 	return (float64(inTok)*info.InputCostPer1M + float64(outTok)*info.OutputCostPer1M) / 1_000_000
-}
-
-// Format produces the markdown timeline file content.
-func (tl *Timeline) Format() string {
-	tl.mu.Lock()
-	events := make([]TimelineEvent, len(tl.events))
-	copy(events, tl.events)
-	startTime := tl.startTime
-	tl.mu.Unlock()
-
-	return FormatTimeline(events, startTime)
 }
 
 // FormatTimeline formats a slice of events into markdown.
@@ -226,7 +120,7 @@ func FormatTimeline(events []TimelineEvent, startTime time.Time) string {
 	return sb.String()
 }
 
-// FormatTerminal formats the last stats event as ANSI-colored terminal output.
+// FormatTerminalStats formats the last stats event as ANSI-colored terminal output.
 func FormatTerminalStats(ev TimelineEvent) string {
 	parts := []string{
 		fmt.Sprintf("in=%d", ev.InputTokens),
@@ -241,48 +135,168 @@ func FormatTerminalStats(ev TimelineEvent) string {
 	return fmt.Sprintf("\033[2m[%s]\033[0m", strings.Join(parts, " | "))
 }
 
-// WriteFile writes the timeline markdown to disk.
-func (tl *Timeline) WriteFile() error {
-	tl.mu.Lock()
-	dir := tl.logsDir
-	tl.mu.Unlock()
+// ReconstructTimelineFromJSONL reads a session.jsonl file and reconstructs the timeline.
+func ReconstructTimelineFromJSONL(logFilePath string) ([]TimelineEvent, time.Time, error) {
+	file, err := os.Open(logFilePath)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("open log file: %w", err)
+	}
+	defer file.Close()
 
-	path := filepath.Join(dir, "timeline.md")
-	content := tl.Format()
-	return os.WriteFile(path, []byte(content), 0644)
+	var events []TimelineEvent
+	var startTime time.Time
+	scanner := bufio.NewScanner(file)
+	turnToolCount := make(map[int]int) // turn -> tool count
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		var entry Entry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+
+		// First entry defines start time
+		if startTime.IsZero() {
+			startTime = entry.Timestamp
+		}
+
+		switch entry.Role {
+		case "request":
+			// Extract user message from request
+			var req struct {
+				Messages []struct {
+					Role    string `json:"role"`
+					Content []struct {
+						Type string `json:"type"`
+						Text string `json:"text,omitempty"`
+					} `json:"content"`
+				} `json:"messages"`
+			}
+			if err := json.Unmarshal(entry.Request, &req); err == nil {
+				userMsg := "(tool results)"
+				// Find the last user message
+				for i := len(req.Messages) - 1; i >= 0; i-- {
+					if req.Messages[i].Role == "user" {
+						for _, block := range req.Messages[i].Content {
+							if block.Type == "text" && block.Text != "" {
+								userMsg = block.Text
+								break
+							}
+						}
+						break
+					}
+				}
+				events = append(events, TimelineEvent{
+					Type:        "prompt",
+					Timestamp:   entry.Timestamp,
+					TurnNumber:  entry.Turn,
+					UserMessage: truncateStr(userMsg, 120),
+					PromptFile:  fmt.Sprintf("prompts/turn-%d.md", entry.Turn),
+				})
+				turnToolCount[entry.Turn] = 0
+			}
+
+		case "thinking":
+			// Could add thinking events if desired
+			// For now, skip to keep timeline concise
+
+		case "tool_call":
+			turnToolCount[entry.Turn]++
+			events = append(events, TimelineEvent{
+				Type:      "tool_call",
+				Timestamp: entry.Timestamp,
+				ToolName:  entry.ToolName,
+				ToolInput: summarizeToolInput(entry.ToolName, string(entry.ToolInput)),
+				ToolCount: turnToolCount[entry.Turn],
+			})
+
+		case "tool_result":
+			events = append(events, TimelineEvent{
+				Type:        "tool_result",
+				Timestamp:   entry.Timestamp,
+				ToolName:    entry.ToolName,
+				ToolOutput:  summarizeToolOutput(entry.Content),
+				ToolIsError: entry.IsError,
+			})
+
+		case "assistant":
+			events = append(events, TimelineEvent{
+				Type:         "response",
+				Timestamp:    entry.Timestamp,
+				ResponseText: truncateStr(entry.Content, 120),
+			})
+
+			// Add stats after response
+			if entry.InputTokens > 0 || entry.OutputTokens > 0 {
+				// Count tool calls in this turn
+				toolCalls := 0
+				for j := len(events) - 1; j >= 0; j-- {
+					if events[j].Type == "tool_call" {
+						toolCalls++
+					}
+					if events[j].Type == "prompt" {
+						break
+					}
+				}
+				
+				events = append(events, TimelineEvent{
+					Type:         "stats",
+					Timestamp:    entry.Timestamp,
+					InputTokens:  entry.InputTokens,
+					OutputTokens: entry.OutputTokens,
+					ToolCalls:    toolCalls,
+					Cost:         CalcCost(entry.Model, entry.InputTokens, entry.OutputTokens),
+					Model:        entry.Model,
+				})
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, time.Time{}, fmt.Errorf("read log file: %w", err)
+	}
+
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+
+	return events, startTime, nil
 }
 
-// TimelinePath returns the path where the timeline file is written.
-func (tl *Timeline) TimelinePath() string {
-	tl.mu.Lock()
-	defer tl.mu.Unlock()
-	return filepath.Join(tl.logsDir, "timeline.md")
+// ReadTimelineFromJSONL reads a session.jsonl file and generates a timeline markdown.
+func ReadTimelineFromJSONL(logsDir, sessionID string) (string, error) {
+	// Find the session.jsonl file
+	logFile := findSessionJSONL(logsDir, sessionID)
+	if logFile == "" {
+		return "", fmt.Errorf("session log not found: %s", sessionID)
+	}
+
+	events, startTime, err := ReconstructTimelineFromJSONL(logFile)
+	if err != nil {
+		return "", err
+	}
+
+	return FormatTimeline(events, startTime), nil
 }
 
-// ReadTimelineFile reads a timeline markdown file from disk given logs dir and session ID.
-func ReadTimelineFile(logsDir, sessionID string) (string, error) {
-	// Search in logsDir and subdirs
+// findSessionJSONL finds the session.jsonl file for a given session ID.
+func findSessionJSONL(logsDir, sessionID string) string {
 	var found string
-	filepath.Walk(logsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+	filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
 			return nil
 		}
-		if info.Name() == "timeline.md" && strings.Contains(path, sessionID) {
+		if d.Name() == "session.jsonl" && strings.Contains(path, sessionID) {
 			found = path
 			return filepath.SkipAll
 		}
 		return nil
 	})
-
-	if found == "" {
-		return "", fmt.Errorf("timeline not found for session: %s", sessionID)
-	}
-
-	data, err := os.ReadFile(found)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
+	return found
 }
 
 func truncateStr(s string, max int) string {
@@ -296,32 +310,37 @@ func truncateStr(s string, max int) string {
 func summarizeToolInput(name, raw string) string {
 	// Extract a concise representation
 	raw = strings.TrimSpace(raw)
+	
 	// For shell/exec, try to extract the command
 	if name == "shell" || name == "bash" {
-		if idx := strings.Index(raw, "command"); idx >= 0 {
-			// Extract command value
-			start := strings.Index(raw[idx:], ":")
-			if start >= 0 {
-				val := strings.TrimSpace(raw[idx+start+1:])
-				val = strings.Trim(val, "\"}")
-				if len(val) > 100 {
-					val = val[:100] + "..."
-				}
-				return fmt.Sprintf("`%s`", val)
+		var input struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal([]byte(raw), &input); err == nil && input.Command != "" {
+			if len(input.Command) > 100 {
+				return fmt.Sprintf("`%s...`", input.Command[:100])
 			}
+			return fmt.Sprintf("`%s`", input.Command)
 		}
 	}
+	
 	// For file tools, try to extract the path
 	if strings.Contains(name, "file") || strings.Contains(name, "write") || strings.Contains(name, "read") || strings.Contains(name, "edit") {
-		if idx := strings.Index(raw, "path"); idx >= 0 {
-			start := strings.Index(raw[idx:], ":")
-			if start >= 0 {
-				val := strings.TrimSpace(raw[idx+start+1:])
-				val = strings.Trim(val, "\",}")
-				return fmt.Sprintf("`%s`", val)
+		var input struct {
+			Path     string `json:"path"`
+			FilePath string `json:"file_path"`
+		}
+		if err := json.Unmarshal([]byte(raw), &input); err == nil {
+			path := input.Path
+			if path == "" {
+				path = input.FilePath
+			}
+			if path != "" {
+				return fmt.Sprintf("`%s`", path)
 			}
 		}
 	}
+	
 	// Generic: truncate
 	s := raw
 	if len(s) > 80 {

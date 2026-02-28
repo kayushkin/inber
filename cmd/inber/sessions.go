@@ -342,7 +342,7 @@ func runSessionsTimeline(cmd *cobra.Command, args []string) {
 	}
 
 	logsDir := filepath.Join(repoRoot, "logs")
-	content, err := session.ReadTimelineFile(logsDir, sessionID)
+	content, err := session.ReadTimelineFromJSONL(logsDir, sessionID)
 	if err != nil {
 		Log.Error("%v", err)
 		os.Exit(1)

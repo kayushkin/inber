@@ -82,14 +82,8 @@ func runRun(cmd *cobra.Command, args []string) {
 		NewSession:     runNew,
 		Detach:         runDetach,
 		Display: &DisplayHooks{
-			OnToolCall: func(name string, input string) {
-				fmt.Fprintf(os.Stderr, "⚡ %s\n", name)
-			},
-			OnToolResult: func(name string, output string, isError bool) {
-				if isError {
-					fmt.Fprintf(os.Stderr, "  ✗ %s\n", truncate(output, 200))
-				}
-			},
+			OnToolCall:   DisplayToolCall,
+			OnToolResult: DisplayToolResult,
 		},
 	})
 	if err != nil {

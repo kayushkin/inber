@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -22,26 +23,245 @@ const (
 	blue    = "\033[34m"
 )
 
-// DisplayToolCall prints a tool call to the terminal.
+// DisplayToolCall prints a tool call to the terminal with inline payload.
 func DisplayToolCall(name string, input string) {
 	fmt.Printf("\n%s⚡ %s%s", magenta+bold, name, reset)
-	// Show a compact version of the input
-	summary := summarizeInput(input)
-	if summary != "" {
-		fmt.Printf(" %s%s%s", dim, summary, reset)
+	
+	// Show payload inline if small enough
+	payload := formatToolPayload(name, input)
+	if payload != "" {
+		fmt.Printf(" %s%s%s", dim, payload, reset)
 	}
+	
 	fmt.Println()
 }
 
-// DisplayToolResult prints a tool result to the terminal.
+// DisplayToolResult prints a tool result to the terminal with inline summary.
 func DisplayToolResult(name string, output string, isError bool) {
 	if isError {
-		fmt.Printf("%s  ✗ %s%s\n", red, truncate(output, 200), reset)
+		// Show error inline, truncated
+		errMsg := strings.ReplaceAll(output, "\n", " ")
+		if len(errMsg) > 100 {
+			errMsg = errMsg[:100] + "…"
+		}
+		fmt.Printf("%s  ✗ %s%s\n", red, errMsg, reset)
 		return
 	}
-	lines := strings.Count(output, "\n") + 1
+	
+	// Show result summary
+	summary := formatToolResult(name, output)
+	fmt.Printf("%s  → %s%s\n", dim, summary, reset)
+}
+
+// formatToolPayload formats the tool input payload for inline display.
+func formatToolPayload(name, rawInput string) string {
+	// Parse the JSON input
+	var input map[string]interface{}
+	if err := json.Unmarshal([]byte(rawInput), &input); err != nil {
+		// If parsing fails, just show truncated raw
+		if len(rawInput) <= 120 {
+			return rawInput
+		}
+		return rawInput[:120] + "…"
+	}
+
+	// Tool-specific formatting
+	switch name {
+	case "shell", "bash":
+		if cmd, ok := input["command"].(string); ok {
+			if len(cmd) > 100 {
+				return fmt.Sprintf("$ %s…", cmd[:100])
+			}
+			return fmt.Sprintf("$ %s", cmd)
+		}
+
+	case "read_file":
+		if path, ok := input["path"].(string); ok {
+			return path
+		}
+		if path, ok := input["file_path"].(string); ok {
+			return path
+		}
+
+	case "write_file":
+		var path string
+		if p, ok := input["path"].(string); ok {
+			path = p
+		} else if p, ok := input["file_path"].(string); ok {
+			path = p
+		}
+		
+		var size string
+		if content, ok := input["content"].(string); ok {
+			lines := strings.Count(content, "\n") + 1
+			size = fmt.Sprintf("%d lines", lines)
+		}
+		
+		if path != "" && size != "" {
+			return fmt.Sprintf("%s (%s)", path, size)
+		} else if path != "" {
+			return path
+		}
+
+	case "edit_file":
+		if path, ok := input["path"].(string); ok {
+			return path
+		}
+		if path, ok := input["file_path"].(string); ok {
+			return path
+		}
+
+	case "list_files":
+		if path, ok := input["path"].(string); ok {
+			return path
+		}
+		if path, ok := input["directory"].(string); ok {
+			return path
+		}
+
+	case "memory_save":
+		if content, ok := input["content"].(string); ok {
+			if len(content) > 60 {
+				content = content[:60] + "…"
+			}
+			return fmt.Sprintf("{\"content\":\"%s\"}", content)
+		}
+
+	case "memory_search":
+		if query, ok := input["query"].(string); ok {
+			if len(query) > 60 {
+				return fmt.Sprintf("{\"query\":\"%s…\"}", query[:60])
+			}
+			return fmt.Sprintf("{\"query\":\"%s\"}", query)
+		}
+
+	case "memory_forget":
+		if id, ok := input["id"].(string); ok {
+			return fmt.Sprintf("{\"id\":\"%s\"}", id)
+		}
+
+	case "memory_expand":
+		if id, ok := input["id"].(string); ok {
+			return fmt.Sprintf("{\"id\":\"%s\"}", id)
+		}
+	}
+
+	// Generic JSON formatting
+	// Serialize compact and truncate if needed
+	compact, err := json.Marshal(input)
+	if err != nil {
+		return ""
+	}
+	
+	s := string(compact)
+	if len(s) <= 120 {
+		return s
+	}
+	return s[:120] + "…"
+}
+
+// formatToolResult formats the tool result for inline display.
+func formatToolResult(name, output string) string {
 	bytes := len(output)
-	fmt.Printf("%s  → %d lines, %d bytes%s\n", dim, lines, bytes, reset)
+	lines := strings.Count(output, "\n") + 1
+
+	// Tool-specific formatting
+	switch name {
+	case "shell", "bash":
+		// Show first line if it's short, otherwise just "OK" or line count
+		if bytes == 0 {
+			return "OK (no output)"
+		}
+		firstLine := strings.Split(output, "\n")[0]
+		if len(firstLine) <= 80 && lines == 1 {
+			return firstLine
+		}
+		if bytes < 100 && lines <= 3 {
+			return strings.ReplaceAll(output, "\n", " ")
+		}
+		return fmt.Sprintf("%d lines", lines)
+
+	case "read_file":
+		if lines > 1 {
+			return fmt.Sprintf("%d lines", lines)
+		}
+		return fmt.Sprintf("%d bytes", bytes)
+
+	case "write_file":
+		if lines > 1 {
+			return fmt.Sprintf("wrote %d lines", lines)
+		}
+		return fmt.Sprintf("wrote %d bytes", bytes)
+
+	case "edit_file":
+		// Try to extract edit summary from output
+		if strings.Contains(output, "replaced") || strings.Contains(output, "edited") {
+			firstLine := strings.Split(output, "\n")[0]
+			if len(firstLine) <= 100 {
+				return firstLine
+			}
+		}
+		return "edited"
+
+	case "list_files":
+		// Count files listed
+		fileCount := 0
+		for _, line := range strings.Split(output, "\n") {
+			if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "total") {
+				fileCount++
+			}
+		}
+		if fileCount > 0 {
+			return fmt.Sprintf("%d items", fileCount)
+		}
+		return "OK"
+
+	case "memory_save":
+		// Extract memory ID if present
+		var result struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(output), &result); err == nil && result.ID != "" {
+			return fmt.Sprintf("saved %s", result.ID[:8])
+		}
+		return fmt.Sprintf("saved (%d bytes)", bytes)
+
+	case "memory_search":
+		// Count results
+		var result struct {
+			Memories []interface{} `json:"memories"`
+		}
+		if err := json.Unmarshal([]byte(output), &result); err == nil {
+			return fmt.Sprintf("%d results", len(result.Memories))
+		}
+		return "OK"
+
+	case "memory_forget":
+		return "deleted"
+
+	case "memory_expand":
+		// Show how many related memories were expanded
+		var result struct {
+			Related []interface{} `json:"related"`
+		}
+		if err := json.Unmarshal([]byte(output), &result); err == nil && len(result.Related) > 0 {
+			return fmt.Sprintf("expanded (%d related)", len(result.Related))
+		}
+		return "expanded"
+	}
+
+	// Generic: show byte/line count
+	if bytes == 0 {
+		return "OK"
+	}
+	if lines > 1 {
+		return fmt.Sprintf("%d lines", lines)
+	}
+	// Single line: show it if short enough
+	if bytes <= 80 {
+		return output
+	}
+	return fmt.Sprintf("%d bytes", bytes)
 }
 
 // DisplayThinking prints thinking/reasoning text.
@@ -84,24 +304,4 @@ func DisplayStats(result *agent.TurnResult, model string) {
 		Model:        model,
 	}
 	fmt.Println(session.FormatTerminalStats(ev))
-}
-
-func summarizeInput(raw string) string {
-	// Quick extraction of key fields for display
-	s := strings.TrimSpace(raw)
-	if len(s) > 120 {
-		s = s[:120] + "…"
-	}
-	// Clean up JSON for display
-	s = strings.ReplaceAll(s, "\"", "")
-	s = strings.ReplaceAll(s, "{", "")
-	s = strings.ReplaceAll(s, "}", "")
-	return strings.TrimSpace(s)
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
 }
