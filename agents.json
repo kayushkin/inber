@@ -158,6 +158,36 @@
         ],
         "budget": 20000
       }
+    },
+    "party": {
+      "name": "party",
+      "role": "inber-party fullstack developer — RPG UI for agent visualization",
+      "model": "claude-sonnet-4-5",
+      "thinking": 0,
+      "tools": [
+        "shell",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_files",
+        "memory_search",
+        "memory_save",
+        "memory_expand",
+        "memory_forget"
+      ],
+      "context": {
+        "tags": [
+          "code",
+          "frontend",
+          "backend",
+          "react",
+          "go",
+          "postgres",
+          "inber-party",
+          "project"
+        ],
+        "budget": 50000
+      }
     }
   }
 }
