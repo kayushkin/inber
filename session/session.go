@@ -181,21 +181,21 @@ func (s *Session) LogAssistant(text string, inTokens, outTokens, toolCalls int) 
 		OutputTokens: outTokens,
 		TotalCost:    cost,
 	})
-
-	// Append to timeline.md after logging the assistant response
-	s.appendTimelineEntry(turn, inTokens, outTokens, toolCalls)
 }
 
 // EndTurn records turn completion in the DB (called after each API response).
 func (s *Session) EndTurn(inTokens, outTokens, toolCalls int, stopReason, errMsg string) {
-	if s.db == nil {
-		return
-	}
 	s.mu.Lock()
 	turn := s.turn
 	s.mu.Unlock()
-	cost := CalcCost(s.model, inTokens, outTokens)
-	s.db.EndTurn(s.sessionID, turn, inTokens, outTokens, toolCalls, cost, stopReason, errMsg)
+	
+	if s.db != nil {
+		cost := CalcCost(s.model, inTokens, outTokens)
+		s.db.EndTurn(s.sessionID, turn, inTokens, outTokens, toolCalls, cost, stopReason, errMsg)
+	}
+	
+	// Append to timeline.md after each turn completes
+	s.appendTimelineEntry(turn, inTokens, outTokens, toolCalls)
 }
 
 // LogToolCall logs a tool invocation by the assistant.
