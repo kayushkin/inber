@@ -13,15 +13,16 @@ import (
 
 // Registry manages multiple agents with isolated sessions and contexts
 type Registry struct {
-	mu       sync.RWMutex
-	client   *anthropic.Client
-	logsDir  string
-	default_ string
-	configs  map[string]*AgentConfig
-	agents   map[string]*agent.Agent
-	contexts map[string]*context.Store
-	sessions map[string]*session.Session
-	tools    *ToolRegistry
+	mu           sync.RWMutex
+	client       *anthropic.Client
+	logsDir      string
+	default_     string
+	configs      map[string]*AgentConfig
+	agents       map[string]*agent.Agent
+	contexts     map[string]*context.Store
+	sessions     map[string]*session.Session
+	tools        *ToolRegistry
+	spawnManager *SpawnManager
 }
 
 // New creates a registry and loads agent configs from the given directory
@@ -32,18 +33,20 @@ func New(client *anthropic.Client, configDir, logsDir string) (*Registry, error)
 	}
 
 	r := &Registry{
-		client:   client,
-		logsDir:  logsDir,
-		default_: cfg.Default,
-		configs:  cfg.Agents,
-		agents:   make(map[string]*agent.Agent),
-		contexts: make(map[string]*context.Store),
-		sessions: make(map[string]*session.Session),
-		tools:    NewToolRegistry(),
+		client:       client,
+		logsDir:      logsDir,
+		default_:     cfg.Default,
+		configs:      cfg.Agents,
+		agents:       make(map[string]*agent.Agent),
+		contexts:     make(map[string]*context.Store),
+		sessions:     make(map[string]*session.Session),
+		tools:        NewToolRegistry(),
+		spawnManager: NewSpawnManager(logsDir),
 	}
 
 	// Register spawn_agent tool (requires registry reference)
 	r.tools.RegisterSpawnTool(r.SpawnAgentTool())
+	r.tools.Register("check_spawns", r.CheckSpawnsTool())
 
 	return r, nil
 }

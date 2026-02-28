@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -12,16 +13,18 @@ import (
 
 // SpawnAgentTool creates a tool that spawns sub-agents for task delegation.
 // This is how orchestrator agents (like Bran) delegate work to specialists.
+// By default, spawning is ASYNC (fire-and-forget). Use wait:true for synchronous behavior.
 func (r *Registry) SpawnAgentTool() agent.Tool {
 	type input struct {
 		Agent   string `json:"agent"`
 		Task    string `json:"task"`
-		Timeout int    `json:"timeout"` // seconds, 0 = no timeout
+		Timeout int    `json:"timeout"` // seconds, 0 = default (300s)
+		Wait    bool   `json:"wait"`    // if true, block until completion
 	}
 
 	return agent.Tool{
 		Name:        "spawn_agent",
-		Description: "Spawn a sub-agent to complete a task. Use this to delegate work to specialists: fionn (coding), scathach (testing), oisin (deployment), etc. Returns the agent's response.",
+		Description: "Spawn a sub-agent to complete a task. BY DEFAULT this is ASYNC (returns immediately with task ID). Use wait:true to block until completion. Use this to delegate work to specialists: fionn (coding), scathach (testing), oisin (deployment), etc.",
 		InputSchema: anthropic.ToolInputSchemaParam{
 			Required: []string{"agent", "task"},
 			Properties: map[string]any{
@@ -36,6 +39,10 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 				"timeout": map[string]any{
 					"type":        "integer",
 					"description": "Timeout in seconds (optional, default 300)",
+				},
+				"wait": map[string]any{
+					"type":        "boolean",
+					"description": "If true, block until agent completes. If false (default), return immediately with task ID.",
 				},
 			},
 		},
@@ -58,23 +65,146 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 				timeout = 5 * time.Minute
 			}
 
-			// Create context with timeout
-			taskCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
+			// Async mode (default): spawn and return task ID immediately
+			if !in.Wait {
+				taskID, err := r.spawnManager.SpawnAsync(ctx, r, in.Agent, in.Task, timeout)
+				if err != nil {
+					return "", fmt.Errorf("spawn failed: %w", err)
+				}
 
-			// Spawn and run the agent
-			result, err := r.SpawnAndRun(taskCtx, in.Agent, in.Task)
+				return fmt.Sprintf("🚀 Spawned %s (task %s)\n\nTask: %s\n\nStatus: Running in background\n\nUse check_spawns to see results when ready.",
+					in.Agent, taskID, truncate(in.Task, 100)), nil
+			}
+
+			// Sync mode (wait:true): block until completion
+			taskID, err := r.spawnManager.SpawnAsync(ctx, r, in.Agent, in.Task, timeout)
 			if err != nil {
-				return fmt.Sprintf("❌ Agent %s failed: %s", in.Agent, err), nil
+				return "", fmt.Errorf("spawn failed: %w", err)
+			}
+
+			// Wait for completion
+			result, err := r.spawnManager.WaitForCompletion(taskID, 500*time.Millisecond, timeout)
+			if err != nil {
+				return "", fmt.Errorf("wait failed: %w", err)
+			}
+
+			if result.Status == "failed" {
+				return fmt.Sprintf("❌ Agent %s failed: %s", in.Agent, result.Error), nil
 			}
 
 			// Format result with metadata
-			response := fmt.Sprintf("✅ Agent: %s\n\n%s\n\n[Tokens: in=%d out=%d | Tools: %d]",
-				in.Agent, result.Text, result.InputTokens, result.OutputTokens, result.ToolCalls)
+			response := fmt.Sprintf("✅ Agent: %s (task %s)\n\n%s\n\n[Tokens: in=%d out=%d | Tools: %d]",
+				in.Agent, taskID, result.Result, result.InputTokens, result.OutputTokens, result.ToolCalls)
 
 			return response, nil
 		},
 	}
+}
+
+// CheckSpawnsTool creates a tool to check status of spawned agents
+func (r *Registry) CheckSpawnsTool() agent.Tool {
+	type input struct {
+		TaskID string `json:"task_id"` // optional: check specific task
+		All    bool   `json:"all"`     // show all tasks, including completed
+	}
+
+	return agent.Tool{
+		Name:        "check_spawns",
+		Description: "Check status of spawned sub-agents. Returns task results when ready.",
+		InputSchema: anthropic.ToolInputSchemaParam{
+			Properties: map[string]any{
+				"task_id": map[string]any{
+					"type":        "string",
+					"description": "Specific task ID to check (optional)",
+				},
+				"all": map[string]any{
+					"type":        "boolean",
+					"description": "Show all tasks including completed ones (default: running only)",
+				},
+			},
+		},
+		Run: func(ctx context.Context, raw string) (string, error) {
+			var in input
+			if err := json.Unmarshal([]byte(raw), &in); err != nil {
+				return "", fmt.Errorf("parse input: %w", err)
+			}
+
+			// Check specific task
+			if in.TaskID != "" {
+				spawn, err := r.spawnManager.GetStatus(in.TaskID)
+				if err != nil {
+					return "", err
+				}
+				return formatSpawn(spawn, true), nil
+			}
+
+			// List all spawns
+			spawns := r.spawnManager.ListSpawns()
+			if len(spawns) == 0 {
+				return "No spawned agents.", nil
+			}
+
+			var parts []string
+			for _, spawn := range spawns {
+				if !in.All && spawn.Status != "running" {
+					continue
+				}
+				parts = append(parts, formatSpawn(spawn, false))
+			}
+
+			if len(parts) == 0 {
+				return "No running spawns. Use all:true to see completed tasks.", nil
+			}
+
+			return strings.Join(parts, "\n\n---\n\n"), nil
+		},
+	}
+}
+
+// formatSpawn formats a SpawnedAgent for display
+func formatSpawn(spawn *SpawnedAgent, detailed bool) string {
+	icon := "⏳"
+	switch spawn.Status {
+	case "completed":
+		icon = "✅"
+	case "failed":
+		icon = "❌"
+	}
+
+	elapsed := time.Since(spawn.StartedAt)
+	if spawn.Status != "running" {
+		elapsed = spawn.CompletedAt.Sub(spawn.StartedAt)
+	}
+
+	header := fmt.Sprintf("%s Task %s — %s — %s (%.1fs)",
+		icon, spawn.ID, spawn.Agent, spawn.Status, elapsed.Seconds())
+
+	if !detailed {
+		return header + "\n" + truncate(spawn.Task, 80)
+	}
+
+	// Detailed view
+	var parts []string
+	parts = append(parts, header)
+	parts = append(parts, fmt.Sprintf("Task: %s", spawn.Task))
+
+	if spawn.Status == "completed" {
+		parts = append(parts, fmt.Sprintf("\nResult:\n%s", spawn.Result))
+		parts = append(parts, fmt.Sprintf("\n[Tokens: in=%d out=%d | Tools: %d]",
+			spawn.InputTokens, spawn.OutputTokens, spawn.ToolCalls))
+	} else if spawn.Status == "failed" {
+		parts = append(parts, fmt.Sprintf("\nError: %s", spawn.Error))
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+// truncate shortens a string with ellipsis
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // SpawnAndRun creates a new agent instance, runs the task, and returns the result.

@@ -7,6 +7,8 @@
       "model": "claude-sonnet-4-5",
       "thinking": 2048,
       "tools": [
+        "spawn_agent",
+        "check_spawns",
         "read_file",
         "write_file",
         "edit_file",
@@ -102,6 +104,7 @@
       "thinking": 2048,
       "tools": [
         "spawn_agent",
+        "check_spawns",
         "read_file",
         "list_files",
         "memory_search",
@@ -145,6 +148,7 @@
       "thinking": 2048,
       "tools": [
         "spawn_agent",
+        "check_spawns",
         "read_file",
         "list_files",
         "memory_search",
