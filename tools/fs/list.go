@@ -46,7 +46,8 @@ func ListFiles() agent.Tool {
 					}
 					lines = append(lines, name)
 				}
-				return strings.Join(lines, "\n"), nil
+				// Apply smart truncation at 50 entries
+				return internal.TruncateList(lines, 50), nil
 			}
 
 			var lines []string
@@ -75,7 +76,8 @@ func ListFiles() agent.Tool {
 			if len(lines) >= maxEntries {
 				lines = append(lines, fmt.Sprintf("... (truncated at %d entries)", maxEntries))
 			}
-			return strings.Join(lines, "\n"), nil
+			// Apply smart truncation at 50 entries
+			return internal.TruncateList(lines, 50), nil
 		},
 	}
 }

@@ -25,11 +25,10 @@ func Hello() string {
 	
 	// Configure auto-load
 	cfg := AutoLoadConfig{
-		RootDir:        tmpDir,
-		AgentName:      "test-agent",
-		IdentityText:   "You are a test agent.",
-		RepoMapEnabled: true,
-		RecencyWindow:  1 * time.Hour,
+		RootDir:       tmpDir,
+		AgentName:     "test-agent",
+		IdentityText:  "You are a test agent.",
+		RecencyWindow: 1 * time.Hour,
 	}
 	
 	// Load context
@@ -54,18 +53,8 @@ func Hello() string {
 		}
 	}
 	
-	// Verify repo map chunk exists
-	repoMap, ok := store.Get("repo-map")
-	if !ok {
-		t.Error("repo-map chunk not found")
-	} else {
-		if !strings.Contains(repoMap.Text, "func Hello()") {
-			t.Errorf("repo map missing function signature: %s", repoMap.Text)
-		}
-		if !hasTag(repoMap.Tags, "repo-map") {
-			t.Error("repo map chunk missing 'repo-map' tag")
-		}
-	}
+	// Repo map is now a tool, not auto-loaded
+	// (removed repo-map chunk check)
 	
 	// Recent files chunk should exist if files were just created
 	recentFiles, ok := store.Get("recent-files")
@@ -87,10 +76,9 @@ func TestLoadIdentityFromFile(t *testing.T) {
 	}
 	
 	cfg := AutoLoadConfig{
-		RootDir:        tmpDir,
-		AgentName:      "test-agent",
-		IdentityFile:   identityFile,
-		RepoMapEnabled: false,
+		RootDir:      tmpDir,
+		AgentName:    "test-agent",
+		IdentityFile: identityFile,
 	}
 	
 	store, err := AutoLoad(cfg)

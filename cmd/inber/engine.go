@@ -235,6 +235,16 @@ func (e *Engine) buildTools() []agent.Tool {
 
 	if e.AgentConfig != nil && len(e.AgentConfig.Tools) > 0 {
 		for _, toolName := range e.AgentConfig.Tools {
+			// Handle repo_map tool specially
+			if toolName == "repo_map" {
+				ignorePatterns := []string{
+					"*.log", "*.tmp", ".git/*", "vendor/*",
+					"node_modules/*", ".openclaw/*", "logs/*",
+				}
+				result = append(result, tools.RepoMap(e.repoRoot, ignorePatterns))
+				continue
+			}
+			
 			for _, t := range tools.All() {
 				if t.Name == toolName {
 					result = append(result, t)
@@ -259,6 +269,12 @@ func (e *Engine) buildTools() []agent.Tool {
 		if e.MemStore != nil {
 			result = append(result, memory.AllMemoryTools(e.MemStore)...)
 		}
+		// Add repo_map tool by default
+		ignorePatterns := []string{
+			"*.log", "*.tmp", ".git/*", "vendor/*",
+			"node_modules/*", ".openclaw/*", "logs/*",
+		}
+		result = append(result, tools.RepoMap(e.repoRoot, ignorePatterns))
 	}
 
 	return result
@@ -394,6 +410,9 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	e.Messages = append(e.Messages, anthropic.NewUserMessage(anthropic.NewTextBlock(input)))
 
+	// Prune conversation if needed (keep last 35 turns)
+	e.pruneIfNeeded()
+
 	systemBlocks := e.BuildSystemPrompt(input)
 	e.lastNamedBlocks = systemBlocks
 	e.buildAgent(systemBlocks)
@@ -409,8 +428,71 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	// Save messages snapshot for session resume
 	e.saveMessages()
+	
+	// Checkpoint if needed (every 20 turns)
+	e.checkpointIfNeeded()
 
 	return result, nil
+}
+
+// pruneIfNeeded checks if conversation should be pruned and does so if necessary.
+func (e *Engine) pruneIfNeeded() {
+	cfg := DefaultPruneConfig()
+	
+	if !ShouldPrune(e.Messages, cfg) {
+		return
+	}
+
+	sessionID := ""
+	if e.Session != nil {
+		sessionID = e.Session.SessionID()
+	}
+
+	pruned, result, err := PruneConversation(
+		context.Background(),
+		e.Messages,
+		e.MemStore,
+		sessionID,
+		cfg,
+	)
+
+	if err != nil {
+		Log.Warn("pruning failed: %v", err)
+		return
+	}
+
+	if result.PrunedMessages > 0 {
+		e.Messages = pruned
+		Log.Info("pruned %d messages (%d tokens freed, %d memories saved)",
+			result.PrunedMessages, result.TokensFreed, result.MemoriesSaved)
+		
+		if e.Session != nil {
+			e.Session.LogPrune(result.PrunedMessages, result.TokensFreed, result.Strategy)
+		}
+	}
+}
+
+// checkpointIfNeeded creates a checkpoint if we've reached the checkpoint interval.
+func (e *Engine) checkpointIfNeeded() {
+	if e.Session == nil {
+		return
+	}
+
+	cfg := sessionMod.DefaultCheckpointConfig()
+	if !sessionMod.ShouldCheckpoint(e.TurnCounter, cfg) {
+		return
+	}
+
+	// Generate summary and extract key facts
+	summary := sessionMod.GenerateConversationSummary(e.Messages)
+	keyFacts := sessionMod.ExtractKeyFacts(e.Messages, 10)
+
+	err := e.Session.SaveCheckpoint(e.Messages, summary, keyFacts)
+	if err != nil {
+		Log.Warn("checkpoint failed: %v", err)
+	} else {
+		Log.Info("checkpoint saved (turn %d)", e.TurnCounter)
+	}
 }
 
 // saveMessages writes the current messages to the workspace and session log dir.

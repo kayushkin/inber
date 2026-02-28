@@ -117,6 +117,16 @@ If tests fail, fix them before pushing. No exceptions.
 20. **Config file system** — replace CLI flags with project config
 21. **Conversation pruning** — token-budget-aware message trimming using context builder
 22. **Pure-Go SQLite** — swap go-sqlite3 (CGO) for modernc.org/sqlite for static binaries
+23. **Claude Max token maximization** — maximize value from Claude Max subscription:
+   - Research how the weekly token refresh works (when it resets, budget size, rollover behavior)
+   - Investigate if API returns remaining quota (headers, endpoints for usage tracking)
+   - If tokens would go unused before refresh, find productive ways to spend them:
+     - Pre-compute and cache repo maps for large projects
+     - Run memory compaction and reflection passes
+     - Pre-generate embeddings for all code/docs
+     - Background code analysis (complexity, test coverage, technical debt)
+     - Proactive test generation for uncovered code paths
+   - Goal: don't leave tokens on the table, extract maximum value from the subscription
 
 ### Next (continued)
 17. **Message routing & session attachment** — when a new inbound message arrives, an evaluator agent (or heuristic) determines which active session it belongs to. If it matches an existing session, inject it into that session's context before the next turn. If it's a new conversation, create a new session. If multiple sessions could match, use recency + topic similarity to pick.

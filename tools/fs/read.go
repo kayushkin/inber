@@ -35,6 +35,7 @@ func ReadFile() agent.Tool {
 				return fmt.Sprintf("error: %s", err), nil
 			}
 			content := string(data)
+			truncatedByUser := false
 
 			if in.Offset > 0 || in.Limit > 0 {
 				lines := strings.Split(content, "\n")
@@ -50,12 +51,16 @@ func ReadFile() agent.Tool {
 					end = start + in.Limit
 				}
 				content = strings.Join(lines[start:end], "\n")
+				truncatedByUser = true
 			}
 
 			const maxBytes = 100_000
 			if len(content) > maxBytes {
 				content = content[:maxBytes] + "\n... (truncated)"
 			}
+			
+			// Apply smart line truncation if user didn't specify offset/limit
+			content = internal.TruncateFileRead(content, truncatedByUser)
 			return content, nil
 		},
 	}

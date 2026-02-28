@@ -13,18 +13,16 @@ type AutoLoadConfig struct {
 	IdentityFile    string        // Path to agent identity/system prompt file (optional)
 	IdentityText    string        // Direct identity text (used if IdentityFile is empty)
 	AgentName       string        // Agent name for identity chunk
-	RepoMapEnabled  bool          // Whether to build repo map
 	RecencyWindow   time.Duration // How far back to look for recent files (e.g., 24h)
-	IgnorePatterns  []string      // Patterns to ignore in repo map
+	IgnorePatterns  []string      // Patterns to ignore in file operations
 }
 
 // DefaultAutoLoadConfig returns sensible defaults
 func DefaultAutoLoadConfig(rootDir string) AutoLoadConfig {
 	return AutoLoadConfig{
-		RootDir:        rootDir,
-		AgentName:      "inber",
-		RepoMapEnabled: true,
-		RecencyWindow:  24 * time.Hour,
+		RootDir:       rootDir,
+		AgentName:     "inber",
+		RecencyWindow: 24 * time.Hour,
 		IgnorePatterns: []string{
 			"*.log",
 			"*.tmp",
@@ -38,7 +36,8 @@ func DefaultAutoLoadConfig(rootDir string) AutoLoadConfig {
 }
 
 // AutoLoad builds initial context chunks for the agent
-// Returns a populated store with identity, repo map, and recent files
+// Returns a populated store with identity and recent files.
+// Note: Repo map is now available via the repo_map tool instead of auto-loading.
 func AutoLoad(cfg AutoLoadConfig) (*Store, error) {
 	store := NewStore()
 	
@@ -49,15 +48,8 @@ func AutoLoad(cfg AutoLoadConfig) (*Store, error) {
 	
 	// 2. Memory usage instructions (always loaded; tools may or may not be present)
 	loadMemoryInstructions(store)
-
-	// 3. Build repo map (was 2)
-	if cfg.RepoMapEnabled {
-		if err := loadRepoMap(store, cfg); err != nil {
-			return nil, fmt.Errorf("failed to build repo map: %w", err)
-		}
-	}
 	
-	// 4. Find recently modified files
+	// 3. Find recently modified files
 	if cfg.RecencyWindow > 0 {
 		if err := loadRecentFiles(store, cfg); err != nil {
 			// Don't fail if recency detection fails, just log a warning
@@ -97,23 +89,7 @@ func loadIdentity(store *Store, cfg AutoLoadConfig) error {
 	return store.Add(chunk)
 }
 
-// loadRepoMap builds and stores the repository structure map
-func loadRepoMap(store *Store, cfg AutoLoadConfig) error {
-	repoMap, err := BuildRepoMap(cfg.RootDir, cfg.IgnorePatterns)
-	if err != nil {
-		return err
-	}
-	
-	// Create repo map chunk
-	chunk := Chunk{
-		ID:     "repo-map",
-		Text:   repoMap,
-		Tags:   []string{"repo-map", "structure", "always", "code"},
-		Source: "system",
-	}
-	
-	return store.Add(chunk)
-}
+// Note: loadRepoMap removed - repo map is now available via the repo_map tool
 
 // loadRecentFiles detects and stores information about recently modified files
 func loadRecentFiles(store *Store, cfg AutoLoadConfig) error {

@@ -34,11 +34,14 @@ func Shell() agent.Tool {
 			out, err := cmd.CombinedOutput()
 			result := string(out)
 			if err != nil {
-				return fmt.Sprintf("%s\nexit: %s", result, err), nil
+				result = fmt.Sprintf("%s\nexit: %s", result, err)
 			}
 			if result == "" {
 				result = "(no output)"
 			}
+			
+			// Apply smart truncation to keep context manageable
+			result = internal.TruncateShellOutput(result)
 			return result, nil
 		},
 	}
