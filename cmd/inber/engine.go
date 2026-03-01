@@ -67,7 +67,9 @@ type Engine struct {
 	thinkingBud     int64
 	lastNamedBlocks []sessionMod.NamedBlock
 	stashCfg        StashConfig
-	extractCfg      ExtractionConfig
+	extractCfg         ExtractionConfig
+	consecutiveErrors  int  // track consecutive tool errors for context escalation
+	lastTurnHadError   bool
 }
 
 // NewEngine creates and fully initializes an Engine: context, memory, tools, session, hooks.
@@ -337,34 +339,56 @@ func (e *Engine) buildTools() []agent.Tool {
 	return result
 }
 
+// contextBudget returns adaptive MinImportance and TokenBudget based on how
+// the session is going. Start lean, escalate when struggling.
+func (e *Engine) contextBudget(userMessage string) (minImportance float64, tokenBudget int) {
+	msgTokens := inbercontext.EstimateTokens(userMessage)
+
+	switch {
+	case e.consecutiveErrors >= 3:
+		// Stuck in a loop — pull in broad context to unstick
+		return 0.3, 40000
+	case e.consecutiveErrors >= 1 || e.lastTurnHadError:
+		// Hit an error — load more to help recover
+		return 0.5, 25000
+	case msgTokens > 500:
+		// Complex/long user message — give it more context
+		return 0.6, 20000
+	default:
+		// Normal turn — stay lean (identity + always_load + high-importance only)
+		return 0.8, 12000
+	}
+}
+
 // BuildSystemPrompt builds a context-aware system prompt as individual named blocks.
 func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 	// Use memory-backed context if available
 	if e.MemStore != nil {
 		messageTags := inbercontext.AutoTag(userMessage, "user")
-		
+		minImportance, tokenBudget := e.contextBudget(userMessage)
+
 		req := memory.BuildContextRequest{
 			Tags:              messageTags,
-			TokenBudget:       50000,
-			MinImportance:     0.0,
+			TokenBudget:       tokenBudget,
+			MinImportance:     minImportance,
 			IncludeAlwaysLoad: true,
-			ExcludeTags:       []string{}, // could add "test" unless user asks for it
+			ExcludeTags:       []string{"session-summary"}, // these are noise
 		}
-		
+
 		memories, tokensUsed, err := e.MemStore.BuildContext(req)
 		if err != nil {
 			Log.Warn("failed to build context from memory: %v", err)
 			return nil
 		}
-		
-		Log.Info("context: %d memories, %d tokens", len(memories), tokensUsed)
-		
+
+		Log.Info("context: %d memories, %d tokens (min_importance=%.1f, budget=%d)", len(memories), tokensUsed, minImportance, tokenBudget)
+
 		// Convert memories to named blocks
 		blocks := make([]sessionMod.NamedBlock, len(memories))
 		for i, m := range memories {
 			blocks[i] = sessionMod.NamedBlock{ID: m.ID, Text: m.Content}
 		}
-		
+
 		if e.workspace != nil {
 			// If workspace has edits, use those instead
 			if wsBlocks, err := e.workspace.ReadSystem(); err == nil && wsBlocks != nil {
@@ -375,7 +399,7 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 			// Write current prompt to workspace for editing before next turn
 			e.workspace.WriteSystem(blocks)
 		}
-		
+
 		return blocks
 	}
 	
@@ -455,22 +479,6 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			e.TurnCounter++
 			sessionMod.WritePromptBreakdown(e.Session.FilePath(), e.Session.SessionID(), e.TurnCounter, params, e.lastNamedBlocks)
 		}
-		hooks.OnResponse = func(resp *anthropic.Message) {
-			stopReason := string(resp.StopReason)
-			toolCalls := 0
-			for _, block := range resp.Content {
-				if block.Type == "tool_use" {
-					toolCalls++
-				}
-			}
-			e.Session.EndTurn(
-				int(resp.Usage.InputTokens),
-				int(resp.Usage.OutputTokens),
-				toolCalls,
-				stopReason,
-				"",
-			)
-		}
 		hooks.OnThinking = func(text string) {
 			if logHooks.OnThinking != nil {
 				logHooks.OnThinking(text)
@@ -493,6 +501,38 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			}
 			if origToolResult != nil {
 				origToolResult(toolID, name, output, isError)
+			}
+			// Track errors for adaptive context escalation
+			if isError {
+				e.consecutiveErrors++
+				e.lastTurnHadError = true
+			}
+		}
+		hooks.OnResponse = func(resp *anthropic.Message) {
+			// End turn tracking
+			stopReason := string(resp.StopReason)
+			toolCalls := 0
+			for _, block := range resp.Content {
+				if block.Type == "tool_use" {
+					toolCalls++
+				}
+			}
+			e.Session.EndTurn(
+				int(resp.Usage.InputTokens),
+				int(resp.Usage.OutputTokens),
+				toolCalls,
+				stopReason,
+				"",
+			)
+
+			// Adaptive context: reset error tracking if no errors this turn
+			if !e.lastTurnHadError {
+				e.consecutiveErrors = 0
+			}
+			e.lastTurnHadError = false
+
+			if logHooks.OnResponse != nil {
+				logHooks.OnResponse(resp)
 			}
 		}
 	}
