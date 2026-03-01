@@ -134,7 +134,7 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 		params := anthropic.MessageNewParams{
 			Model:     anthropic.Model(model),
 			Messages:  *messages,
-			MaxTokens: 8192,
+			MaxTokens: 16384,
 		}
 
 		if len(a.systemBlocks) > 0 {
@@ -206,8 +206,8 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 		// Append assistant message
 		*messages = append(*messages, resp.ToParam())
 
-		// If stop reason is "end", extract text and return
-		if resp.StopReason == anthropic.StopReasonEndTurn {
+		// If stop reason is "end" or "max_tokens", extract text and return
+		if resp.StopReason == anthropic.StopReasonEndTurn || resp.StopReason == anthropic.StopReasonMaxTokens {
 			for _, block := range resp.Content {
 				if block.Type == "text" {
 					result.Text += block.Text
