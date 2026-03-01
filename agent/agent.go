@@ -37,6 +37,10 @@ type Hooks struct {
 	OnThinking   func(text string)                                           // called when thinking blocks are received
 	OnToolCall   func(toolID, name string, input []byte)
 	OnToolResult func(toolID, name, output string, isError bool)
+	// PostToolResult is called after a tool result is collected. If it returns
+	// a non-empty string, that string is appended as an extra user text block
+	// in the same turn (useful for build/test feedback injection).
+	PostToolResult func(toolID, name, output string, isError bool) string
 }
 
 // Agent runs the conversation loop with Claude.
@@ -219,6 +223,7 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 		// If stop reason is "tool_use", execute tools and continue
 		if resp.StopReason == anthropic.StopReasonToolUse {
 			var toolResults []anthropic.ContentBlockParamUnion
+			var postInjections []string
 
 			for _, block := range resp.Content {
 				if block.Type != "tool_use" {
@@ -261,8 +266,20 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 				toolResults = append(toolResults, anthropic.NewToolResultBlock(
 					block.ID, output, false,
 				))
+
+				// Post-tool-result hook: inject build/test feedback
+				if a.hooks != nil && a.hooks.PostToolResult != nil {
+					if injection := a.hooks.PostToolResult(block.ID, block.Name, output, false); injection != "" {
+						postInjections = append(postInjections, injection)
+					}
+				}
 			}
 
+			if len(postInjections) > 0 {
+				toolResults = append(toolResults, anthropic.NewTextBlock(
+					"[system: post-write hook]\n"+strings.Join(postInjections, "\n"),
+				))
+			}
 			*messages = append(*messages, anthropic.NewUserMessage(toolResults...))
 			continue
 		}

@@ -72,6 +72,7 @@ type Engine struct {
 	lastTurnHadError   bool
 	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
 	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
+	postWriteHook   *PostWriteHook                // runs build/test after file writes
 }
 
 // NewEngine creates and fully initializes an Engine: context, memory, tools, session, hooks.
@@ -102,7 +103,8 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		display:     cfg.Display,
 		thinkingBud: cfg.Thinking,
 		stashCfg:    stashCfg,
-		extractCfg:  extractCfg,
+		extractCfg:    extractCfg,
+		postWriteHook: NewPostWriteHook(repoRoot),
 	}
 
 	// Load agent config
@@ -600,6 +602,13 @@ func (e *Engine) buildHooks() *agent.Hooks {
 				// Clean up cache entry
 				delete(e.toolInputsCache, toolID)
 			}
+		}
+		// Post-write hook: run build/test after file writes, inject errors
+		hooks.PostToolResult = func(toolID, name, output string, isError bool) string {
+			if isError || e.postWriteHook == nil {
+				return ""
+			}
+			return e.postWriteHook.OnToolResult(name)
 		}
 		hooks.OnResponse = func(resp *anthropic.Message) {
 			// End turn tracking
