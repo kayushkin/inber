@@ -339,24 +339,48 @@ func (e *Engine) buildTools() []agent.Tool {
 	return result
 }
 
-// contextBudget returns adaptive MinImportance and TokenBudget based on how
-// the session is going. Start lean, escalate when struggling.
+// contextBudget returns the token budget for memory context loading.
+// MinImportance is always 0 — ranking + budget controls what loads, not a hard cutoff.
+// Budget starts minimal and escalates only when the agent is struggling.
 func (e *Engine) contextBudget(userMessage string) (minImportance float64, tokenBudget int) {
 	msgTokens := inbercontext.EstimateTokens(userMessage)
 
+	// Base budget: just AlwaysLoad memories (identity/soul/user/AGENTS.md)
+	// ~2-3K tokens typically
+	baseBudget := 4000
+
 	switch {
+	case e.TurnCounter == 0:
+		// First turn — absolute minimum, just get started
+		return 0, baseBudget
+
+	case e.consecutiveErrors >= 5:
+		// Deeply stuck — throw everything relevant at it
+		return 0, 50000
+
 	case e.consecutiveErrors >= 3:
-		// Stuck in a loop — pull in broad context to unstick
-		return 0.3, 40000
+		// Stuck in a loop — significantly more context
+		return 0, 35000
+
 	case e.consecutiveErrors >= 1 || e.lastTurnHadError:
-		// Hit an error — load more to help recover
-		return 0.5, 25000
-	case msgTokens > 500:
-		// Complex/long user message — give it more context
-		return 0.6, 20000
+		// Hit an error — bump context to help recover
+		return 0, 20000
+
+	case msgTokens > 1000:
+		// Very long/complex user message
+		return 0, 15000
+
+	case msgTokens > 300:
+		// Moderate complexity
+		return 0, 10000
+
+	case e.TurnCounter > 15:
+		// Long session — might need more context to stay coherent
+		return 0, 8000
+
 	default:
-		// Normal turn — stay lean (identity + always_load + high-importance only)
-		return 0.8, 12000
+		// Normal turn — lean context, let ranking pick the best matches
+		return 0, 6000
 	}
 }
 
