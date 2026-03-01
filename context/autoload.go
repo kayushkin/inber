@@ -36,8 +36,8 @@ func DefaultAutoLoadConfig(rootDir string) AutoLoadConfig {
 }
 
 // AutoLoad builds initial context chunks for the agent
-// Returns a populated store with identity and recent files.
-// Note: Repo map is now available via the repo_map tool instead of auto-loading.
+// Returns a populated store with identity only.
+// Note: Repo map and recent files are now available via tools (repo_map, recent_files) instead of auto-loading.
 func AutoLoad(cfg AutoLoadConfig) (*Store, error) {
 	store := NewStore()
 	
@@ -46,24 +46,13 @@ func AutoLoad(cfg AutoLoadConfig) (*Store, error) {
 		return nil, fmt.Errorf("failed to load identity: %w", err)
 	}
 	
-	// 2. Load recent files as stubs (lazy-loadable)
-	if err := LoadRecentlyModifiedAsStubs(store, cfg.RootDir, cfg.RecencyWindow); err != nil {
-		return nil, fmt.Errorf("failed to load recent files: %w", err)
-	}
-	
-	// 3. Memory usage instructions
-	// NOTE: only loaded here as a fallback — engine.go should call
-	// loadMemoryInstructions only if memory tools are actually available.
-	// Telling the agent to use tools that don't exist causes errors.
+	// 2. Memory usage instructions (if memory tools are available)
+	// NOTE: Only load if memory tools are actually registered
+	// Telling the agent to use tools that don't exist causes errors
 	loadMemoryInstructions(store)
 	
-	// 3. Find recently modified files
-	if cfg.RecencyWindow > 0 {
-		if err := loadRecentFiles(store, cfg); err != nil {
-			// Don't fail if recency detection fails, just log a warning
-			fmt.Fprintf(os.Stderr, "warning: failed to detect recent files: %v\n", err)
-		}
-	}
+	// 3. Tool awareness - let agent know about repo_map and recent_files tools
+	loadToolAwareness(store)
 	
 	return store, nil
 }
@@ -141,6 +130,33 @@ Guidelines:
 - Save user preferences when explicitly stated
 - Don't save trivial or temporary information
 - Review and forget outdated memories when you notice them`
+
+// loadToolAwareness adds a context chunk explaining available code introspection tools
+func loadToolAwareness(store *Store) {
+	toolInfo := `You have code introspection tools available:
+- repo_map(path, format): Generate a structural map of the codebase (packages, functions, types)
+  - path: Subdirectory to map (optional, defaults to entire repo)
+  - format: "compact" (default, abbreviated) or "full" (complete signatures)
+  - Use this to understand project structure without reading full files
+  
+- recent_files(since, include_content): List recently modified files with metadata
+  - since: Time window like "2h", "1d", "7d" (default: "24h")
+  - include_content: true/false (default: false, metadata only)
+  - Use this to see what's been actively worked on
+
+Guidelines:
+- Call repo_map when you need to understand code structure or find files
+- Call recent_files when user asks about recent changes or active development
+- Use read_file for full content after you've identified relevant files via these tools
+`
+
+	store.Add(Chunk{
+		ID:     "tool-awareness",
+		Text:   toolInfo,
+		Tags:   []string{"identity", "always", "tools"},
+		Source: "system",
+	})
+}
 
 // loadMemoryInstructions adds a context chunk with memory usage guidelines.
 func loadMemoryInstructions(store *Store) {

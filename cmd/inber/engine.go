@@ -219,6 +219,34 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	// Tools
 	if !cfg.NoTools {
 		e.agentTools = e.buildTools()
+		
+		// Load tool registry into memory so agent knows what tools are available
+		if e.MemStore != nil {
+			toolMetas := make([]memory.ToolMetadata, 0, len(e.agentTools))
+			for _, t := range e.agentTools {
+				category := "general"
+				if strings.HasPrefix(t.Name, "read_") || strings.HasPrefix(t.Name, "write_") || 
+				   strings.HasPrefix(t.Name, "edit_") || strings.HasPrefix(t.Name, "list_") {
+					category = "filesystem"
+				} else if t.Name == "repo_map" || t.Name == "recent_files" {
+					category = "code-introspection"
+				} else if strings.HasPrefix(t.Name, "memory_") {
+					category = "memory"
+				} else if t.Name == "shell" {
+					category = "execution"
+				}
+				
+				toolMetas = append(toolMetas, memory.ToolMetadata{
+					Name:        t.Name,
+					Description: t.Description,
+					Category:    category,
+				})
+			}
+			
+			if err := e.MemStore.LoadToolRegistry(toolMetas); err != nil {
+				Log.Warn("failed to load tool registry: %v", err)
+			}
+		}
 	}
 
 	// Store system override for raw/override modes
@@ -259,13 +287,17 @@ func (e *Engine) buildTools() []agent.Tool {
 
 	if e.AgentConfig != nil && len(e.AgentConfig.Tools) > 0 {
 		for _, toolName := range e.AgentConfig.Tools {
-			// Handle repo_map tool specially
+			// Handle special tools that need configuration
 			if toolName == "repo_map" {
 				ignorePatterns := []string{
 					"*.log", "*.tmp", ".git/*", "vendor/*",
 					"node_modules/*", ".openclaw/*", "logs/*",
 				}
 				result = append(result, tools.RepoMap(e.repoRoot, ignorePatterns))
+				continue
+			}
+			if toolName == "recent_files" {
+				result = append(result, tools.RecentFiles(e.repoRoot))
 				continue
 			}
 			
@@ -293,12 +325,13 @@ func (e *Engine) buildTools() []agent.Tool {
 		if e.MemStore != nil {
 			result = append(result, memory.AllMemoryTools(e.MemStore)...)
 		}
-		// Add repo_map tool by default
+		// Add code introspection tools by default
 		ignorePatterns := []string{
 			"*.log", "*.tmp", ".git/*", "vendor/*",
 			"node_modules/*", ".openclaw/*", "logs/*",
 		}
 		result = append(result, tools.RepoMap(e.repoRoot, ignorePatterns))
+		result = append(result, tools.RecentFiles(e.repoRoot))
 	}
 
 	return result

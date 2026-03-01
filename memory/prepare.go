@@ -43,7 +43,11 @@ func (s *Store) PrepareSession(cfg PrepareSessionConfig) error {
 		return fmt.Errorf("failed to load memory instructions: %w", err)
 	}
 
-	// 3. Load recent files (ephemeral, TTL-based)
+	// 3. Load tool registry (permanent, always-load)
+	// Note: This will be populated later by engine after tools are built
+	// For now, just ensure the structure is ready
+
+	// 4. Load recent files (ephemeral, TTL-based)
 	if cfg.RecencyWindow > 0 {
 		if err := s.loadRecentFiles(cfg); err != nil {
 			// Don't fail if recency detection fails

@@ -1,0 +1,144 @@
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                     INBER CONTEXT ARCHITECTURE                    │
+│                   (Context-Memory-Tool Hybrid)                    │
+└──────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                         1. STATIC MEMORY                            │
+│                      (Persists across sessions)                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ✓ Identity / System Prompt      (AlwaysLoad: true)               │
+│     "You are Claxon, a coding assistant..."                        │
+│                                                                     │
+│  ✓ User Preferences              (Importance: 0.8)                │
+│     "User's favorite color is blue"                                │
+│                                                                     │
+│  ✓ Learned Facts / Decisions     (Importance: 0.6-0.9)           │
+│     "kayushkin.com uses nginx reverse proxy"                       │
+│     "Deployment script is update.sh"                               │
+│                                                                     │
+│  ✓ Session Summaries             (Importance: 0.5-0.7)           │
+│     "Previous session: Built context improvements..."              │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+                                   ↓
+                          Loaded at session start
+                                   ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                     2. EPHEMERAL METADATA                           │
+│                  (Short-lived, expires in minutes/hours)            │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ⏱ Tool Usage Summaries          (ExpiresAt: +1h)                 │
+│     "Repo has 12 packages: agent, context, memory..."              │
+│     "5 files changed in last 2h: builder.go, agent.go..."         │
+│                                                                     │
+│  ⏱ Cached Tool Results           (ExpiresAt: +30m)                │
+│     "Agent package structure: Run(), New(), struct Agent{}"        │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+                                   ↑
+                         Saved after tool calls
+                                   ↑
+┌─────────────────────────────────────────────────────────────────────┐
+│                       3. DYNAMIC TOOLS                              │
+│                    (Generate content on-demand)                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  🔧 repo_map(path, format)                                         │
+│     → Generates fresh codebase structure                           │
+│     → Compact format (49% smaller)                                 │
+│     → Parameterized: just one package or entire repo               │
+│                                                                     │
+│  🔧 recent_files(since, include_content)                           │
+│     → Lists files modified in time window                          │
+│     → Returns metadata (lines, score) or full content              │
+│     → Always current, never stale                                  │
+│                                                                     │
+│  🔧 search_code(query, file_pattern)                               │
+│     → Searches codebase for patterns                               │
+│     → Grep-based or AST search                                     │
+│                                                                     │
+│  🔧 file_metadata(path)                                            │
+│     → Size, modification time, git history, dependencies           │
+│     → Importance score (recency, frequency, centrality)            │
+│                                                                     │
+│  🔧 read_file(path)         [Already exists]                       │
+│     → Full file content on-demand                                  │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│                        DECISION MATRIX                            │
+├──────────────────┬──────────────┬──────────────┬─────────────────┤
+│ Type             │ Memory?      │ Tool?        │ Example         │
+├──────────────────┼──────────────┼──────────────┼─────────────────┤
+│ Identity         │ ✅ AlwaysLoad│ ❌           │ System prompt   │
+│ Preferences      │ ✅ Static    │ ❌           │ Favorite color  │
+│ Decisions        │ ✅ Static    │ ❌           │ Nginx config    │
+│ Session summary  │ ✅ Static    │ ❌           │ Previous work   │
+│ Repo map         │ ❌           │ ✅ On-demand │ repo_map()      │
+│ Recent files     │ ❌           │ ✅ On-demand │ recent_files()  │
+│ File content     │ ❌           │ ✅ Exists    │ read_file()     │
+│ Code search      │ ❌           │ ✅ On-demand │ search_code()   │
+│ Tool summaries   │ ✅ Ephemeral │ ❌           │ "Repo has 12…"  │
+└──────────────────┴──────────────┴──────────────┴─────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│                      EXAMPLE WORKFLOW                             │
+└──────────────────────────────────────────────────────────────────┘
+
+Turn 1: "What files changed recently?"
+  ↓
+  Load: Identity (memory) + Tool registry (memory)
+  ↓
+  Agent: <thinking>Use recent_files tool</thinking>
+  ↓
+  Tool call: recent_files(since="24h", include_content=false)
+  ↓
+  Result: "5 files: builder.go (score: 0.85), ..."
+  ↓
+  Save metadata: Memory{Content: "5 files changed...", ExpiresAt: +10m}
+  ↓
+  Agent: "5 files were modified in the last 24 hours..."
+
+Turn 2: "Show me the agent package structure"
+  ↓
+  Load: Identity + Tools + Recent files summary (from Turn 1)
+  ↓
+  Agent: <thinking>Use repo_map for just agent/</thinking>
+  ↓
+  Tool call: repo_map(path="agent/", format="compact")
+  ↓
+  Result: "pkg agent\n*Agent.Run(...)\ntype Agent struct{...}"
+  ↓
+  Save summary: Memory{Content: "Agent package has Run(), New()...", ExpiresAt: +1h}
+  ↓
+  Agent: "The agent package contains..."
+
+Turn 3: "What's in agent.go?"
+  ↓
+  Load: Identity + Tools + Repo structure summary (from Turn 2)
+  ↓
+  Agent: <thinking>Have summary but user wants details</thinking>
+  ↓
+  Tool call: read_file(path="agent/agent.go")
+  ↓
+  Result: [full file content]
+  ↓
+  Agent: "Here's agent.go: [shows content]"
+
+┌──────────────────────────────────────────────────────────────────┐
+│                           BENEFITS                                │
+└──────────────────────────────────────────────────────────────────┘
+
+✅ Always fresh data        Repo map reflects current code
+✅ On-demand generation     Only generate when needed
+✅ Parameterized queries    repo_map(path="agent/")
+✅ Smaller memory DB        Metadata only, not full content
+✅ Token efficient          Summary vs full content
+✅ Clear separation         Memory = knowledge, Tools = capabilities
+✅ Cacheable results        Save summaries as ephemeral memories
+```
