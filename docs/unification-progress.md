@@ -3,7 +3,7 @@
 ## Goal
 Merge `context.Store` (in-memory, per-session chunks) with `memory.Store` (SQLite, persistent memories) into a single unified system where memory becomes the source of truth for all context.
 
-## Status: Step 1 Complete ✅
+## Status: Step 2 Complete ✅
 
 ### Step 1: Add Memory Fields (DONE)
 
@@ -36,6 +36,55 @@ type Memory struct {
 - Verified AlwaysLoad, ExpiresAt, Tokens persist correctly
 
 **Commit:** `187ce8b` - "Add context unification fields to Memory"
+
+---
+
+### Step 2: Load Identity & Recent Files into Memory (DONE)
+
+**Created `memory.PrepareSession()`:**
+```go
+func (s *Store) PrepareSession(cfg PrepareSessionConfig) error
+```
+
+**Loads into memory:**
+1. **Identity** - Agent identity/system prompt
+   - AlwaysLoad: true
+   - Importance: 1.0
+   - Tags: ["identity", "always-load"]
+   - Never expires
+
+2. **Memory instructions** - How to use memory tools
+   - AlwaysLoad: true
+   - Importance: 0.9
+   - Tags: ["instructions", "memory", "always-load"]
+   - Never expires
+
+3. **Recent files** - Lightweight file references
+   - Content: "Recently modified (2h ago): path/to/file"
+   - Importance: 0.5-0.7 (based on recency)
+   - Tags: ["recent", "file:path", "ext:.go"]
+   - ExpiresAt: 10 minutes (configurable)
+
+**PrepareSessionConfig:**
+- `RootDir` - repository root
+- `IdentityFile` / `IdentityText` - identity source
+- `RecencyWindow` - how far back to look (default: 24h)
+- `RecentFilesTTL` - how long file refs live (default: 10min)
+
+**Recent file importance scoring:**
+- Modified < 1h ago: importance 0.7
+- Modified < 6h ago: importance 0.6
+- Else: importance 0.5
+
+**Tests:**
+- Created `memory/prepare_test.go` with 6 test cases
+- Verified identity loading (from text and file)
+- Verified memory instructions loaded
+- Verified recent files have correct TTL and importance
+- Verified old files (>24h) excluded
+- All tests pass ✅
+
+**Commit:** `1c206a7` - "Step 2: Add PrepareSession to load identity + recent files into memory"
 
 ---
 
