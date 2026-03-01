@@ -5,9 +5,22 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
+
+// isContextLengthError checks if an API error is due to exceeding the model's context window.
+func isContextLengthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "prompt is too long") ||
+		strings.Contains(msg, "context_length_exceeded") ||
+		strings.Contains(msg, "maximum context length") ||
+		strings.Contains(msg, "too many tokens")
+}
 
 // Tool defines a tool the agent can use.
 type Tool struct {
@@ -159,7 +172,18 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 
 		resp, err := a.client.Messages.New(ctx, params)
 		if err != nil {
-			return result, fmt.Errorf("api call failed: %w", err)
+			// If we hit a context length error, try pruning and retry once
+			if a.BeforeRequest != nil && a.contextWindow > 0 && isContextLengthError(err) {
+				pruned := a.BeforeRequest(*messages, a.contextWindow/2) // aggressive budget
+				if len(pruned) < len(*messages) {
+					*messages = pruned
+					params.Messages = *messages
+					resp, err = a.client.Messages.New(ctx, params)
+				}
+			}
+			if err != nil {
+				return result, fmt.Errorf("api call failed: %w", err)
+			}
 		}
 
 		result.InputTokens += int(resp.Usage.InputTokens)
