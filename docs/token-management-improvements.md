@@ -88,39 +88,17 @@ if e.TurnCounter > 0 && e.TurnCounter % 10 == 0 {
 
 ---
 
-### 3. **No Turn-Level Budget Adjustment** ⚠️
+### 3. **~~No Turn-Level Budget Adjustment~~** ❌ REJECTED
 
-Simple turns get the same budget as complex ones:
-- "yes" → 6000 token budget (waste)
-- "Implement X with Y and Z" → 6000 tokens (might need more)
+**DECISION:** Simple turns (greetings, "yes", "ok") should NOT get reduced context.
 
-**Solution:** Detect simple responses
-```go
-func isSimpleTurn(userMessage string) bool {
-    msg := strings.ToLower(strings.TrimSpace(userMessage))
-    
-    // One word responses
-    if len(strings.Fields(msg)) <= 3 {
-        return true
-    }
-    
-    // Common simple patterns
-    simple := []string{"yes", "no", "ok", "thanks", "done", "continue", "go ahead"}
-    for _, s := range simple {
-        if msg == s {
-            return true
-        }
-    }
-    
-    return false
-}
+**Reasoning:**
+- Simple messages often have deep implications/subtext
+- Greetings are relationship-building, need personality
+- Saving 3K on occasional "hello" is trivial
+- **Priority is saving 10K+ per turn on LARGE sessions**, not micro-optimizing greetings
 
-// In contextBudget():
-case isSimpleTurn(userMessage):
-    return 0, 3000 // Minimal - just recent context
-```
-
-**Savings:** 50% on simple turns (common in long sessions)
+**Focus instead:** Conversation summarization + sliding window for long sessions
 
 ---
 
