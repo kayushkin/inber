@@ -360,7 +360,7 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 	// Fetch all non-forgotten, non-expired memories
 	now := time.Now()
 	sqlQuery := `
-	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding, always_load, expires_at, tokens
+	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding, always_load, expires_at, tokens, ref_type, ref_target, is_lazy
 	FROM memories
 	WHERE importance > 0
 	  AND (expires_at IS NULL OR expires_at > ?)
@@ -380,7 +380,7 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 
 	for rows.Next() {
 		var m Memory
-		var summary, originalID sql.NullString
+		var summary, originalID, refTarget sql.NullString
 		var embJSON []byte
 		var lastAccessed, createdAt int64
 		var expiresAt sql.NullInt64
@@ -389,6 +389,7 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 			&m.ID, &m.Content, &summary, &originalID,
 			&m.Importance, &m.AccessCount, &lastAccessed, &createdAt, &m.Source, &embJSON,
 			&m.AlwaysLoad, &expiresAt, &m.Tokens,
+			&m.RefType, &refTarget, &m.IsLazy,
 		)
 		if err != nil {
 			continue
@@ -396,6 +397,7 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 
 		m.Summary = summary.String
 		m.OriginalID = originalID.String
+		m.RefTarget = refTarget.String
 		m.LastAccessed = time.Unix(lastAccessed, 0)
 		m.CreatedAt = time.Unix(createdAt, 0)
 		if expiresAt.Valid {
@@ -514,7 +516,7 @@ func (s *Store) DecayImportance() error {
 func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
 	now := time.Now()
 	query := `
-	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding, always_load, expires_at, tokens
+	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding, always_load, expires_at, tokens, ref_type, ref_target, is_lazy
 	FROM memories
 	WHERE importance >= ?
 	  AND (expires_at IS NULL OR expires_at > ?)
@@ -532,7 +534,7 @@ func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
 	
 	for rows.Next() {
 		var m Memory
-		var summary, originalID sql.NullString
+		var summary, originalID, refTarget sql.NullString
 		var embJSON []byte
 		var lastAccessed, createdAt int64
 		var expiresAt sql.NullInt64
@@ -541,6 +543,7 @@ func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
 			&m.ID, &m.Content, &summary, &originalID,
 			&m.Importance, &m.AccessCount, &lastAccessed, &createdAt, &m.Source, &embJSON,
 			&m.AlwaysLoad, &expiresAt, &m.Tokens,
+			&m.RefType, &refTarget, &m.IsLazy,
 		)
 		if err != nil {
 			continue
@@ -548,6 +551,7 @@ func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
 
 		m.Summary = summary.String
 		m.OriginalID = originalID.String
+		m.RefTarget = refTarget.String
 		m.LastAccessed = time.Unix(lastAccessed, 0)
 		m.CreatedAt = time.Unix(createdAt, 0)
 		if expiresAt.Valid {

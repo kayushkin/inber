@@ -70,6 +70,8 @@ type Engine struct {
 	extractCfg      ExtractionConfig
 	consecutiveErrors  int  // track consecutive tool errors for context escalation
 	lastTurnHadError   bool
+	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
+	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
 }
 
 // NewEngine creates and fully initializes an Engine: context, memory, tools, session, hooks.
@@ -161,6 +163,11 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		// Count memories for logging
 		recentMems, _ := ms.ListRecent(100, 0.0)
 		fmt.Fprintf(os.Stderr, " done (%d memories)\n", len(recentMems))
+
+		// Initialize auto-reference manager for creating references after tool calls
+		autoRefConfig := memory.DefaultAutoReferenceConfig()
+		e.autoRefMgr = memory.NewAutoReferenceManager(ms, repoRoot, autoRefConfig)
+		e.toolInputsCache = make(map[string]string)
 
 		// Keep a minimal context store for backward compatibility
 		// (some tools might still use it)
@@ -558,6 +565,11 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			}
 		}
 		hooks.OnToolCall = func(toolID, name string, input []byte) {
+			// Cache tool input for auto-reference creation
+			if e.autoRefMgr != nil && e.toolInputsCache != nil {
+				e.toolInputsCache[toolID] = string(input)
+			}
+			
 			if logHooks.OnToolCall != nil {
 				logHooks.OnToolCall(toolID, name, input)
 			}
@@ -576,6 +588,17 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			if isError {
 				e.consecutiveErrors++
 				e.lastTurnHadError = true
+			}
+			
+			// Auto-create references for successful tool calls
+			if !isError && e.autoRefMgr != nil && e.toolInputsCache != nil {
+				inputJSON := e.toolInputsCache[toolID]
+				if err := e.autoRefMgr.OnToolResult(toolID, name, inputJSON, output); err != nil {
+					// Log but don't fail the turn
+					fmt.Fprintf(os.Stderr, "warning: failed to auto-create reference for %s: %v\n", name, err)
+				}
+				// Clean up cache entry
+				delete(e.toolInputsCache, toolID)
 			}
 		}
 		hooks.OnResponse = func(resp *anthropic.Message) {
