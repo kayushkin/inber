@@ -485,12 +485,19 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 		// The estimator undercounts 3-4x, so be very conservative.
 		maxMessages := cfg.KeepRecentTurns * 2 // e.g. 70 for default
 		if len(messages) > maxMessages {
-			dropped := len(messages) - maxMessages
-			Log.Warn("hard-dropping %d old messages (%d → %d)", dropped, len(messages), maxMessages)
-			messages = messages[dropped:]
-			// Ensure first message is a user message (API requirement)
-			for len(messages) > 0 && messages[0].Role != anthropic.MessageParamRoleUser {
-				messages = messages[1:]
+			dropTo := len(messages) - maxMessages
+			// Find a clean cut point: a user message with no tool_result blocks.
+			// This ensures we don't orphan tool_results from their tool_use.
+			for dropTo < len(messages) {
+				msg := messages[dropTo]
+				if msg.Role == anthropic.MessageParamRoleUser && !hasToolResult(msg) {
+					break
+				}
+				dropTo++
+			}
+			if dropTo < len(messages) && dropTo > 0 {
+				Log.Warn("hard-dropping %d old messages (%d → %d)", dropTo, len(messages), len(messages)-dropTo)
+				messages = messages[dropTo:]
 			}
 		}
 
@@ -499,6 +506,16 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 
 	e.Agent = a
 	return a
+}
+
+// hasToolResult checks if a message contains any tool_result content blocks.
+func hasToolResult(msg anthropic.MessageParam) bool {
+	for _, block := range msg.Content {
+		if block.OfToolResult != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // buildHooks creates hooks that combine logging and display.
