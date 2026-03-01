@@ -2,6 +2,7 @@ package context
 
 import (
 	"sort"
+	"strings"
 )
 
 // Builder assembles context from a store based on tags and token budget
@@ -21,10 +22,13 @@ func NewBuilder(store *Store, tokenBudget int) *Builder {
 // Build assembles an ordered list of chunks that fit within the token budget
 // Priority:
 // 1. Always-include chunks ("identity", "always" tags)
-// 2. Tag-matched chunks (size-aware)
+// 2. Tag-matched chunks (size-aware, with minimum relevance threshold)
 // 3. Recent conversation chunks
 func (b *Builder) Build(messageTags []string) []Chunk {
 	allChunks := b.store.ListAll()
+	
+	// Deduplicate chunks by content hash
+	allChunks = deduplicateChunks(allChunks)
 	
 	var alwaysInclude []Chunk
 	var tagMatched []Chunk
@@ -141,4 +145,73 @@ func countMatchingTags(chunkTags []string, messageTagSet map[string]bool) int {
 		}
 	}
 	return count
+}
+
+// deduplicateChunks removes duplicate chunks based on ID + content similarity
+func deduplicateChunks(chunks []Chunk) []Chunk {
+	if len(chunks) == 0 {
+		return chunks
+	}
+	
+	seenIDs := make(map[string]bool)
+	seenContent := make(map[string]bool)
+	var result []Chunk
+	
+	for _, chunk := range chunks {
+		// Skip if we've seen this exact ID before (strict duplicate)
+		if seenIDs[chunk.ID] {
+			continue
+		}
+		
+		// For content deduplication, only check long chunks (> 100 chars)
+		// Short chunks like "package main" are too common to deduplicate
+		if len(chunk.Text) > 100 {
+			// Check for near-duplicates (chunks that are very similar)
+			isDuplicate := false
+			for existing := range seenContent {
+				if areSimilar(chunk.Text, existing) {
+					isDuplicate = true
+					break
+				}
+			}
+			
+			if isDuplicate {
+				continue
+			}
+			
+			seenContent[chunk.Text] = true
+		}
+		
+		seenIDs[chunk.ID] = true
+		result = append(result, chunk)
+	}
+	
+	return result
+}
+
+// areSimilar checks if two texts are similar enough to be considered duplicates
+func areSimilar(text1, text2 string) bool {
+	// Exact match
+	if text1 == text2 {
+		return true
+	}
+	
+	// Length-based quick filter
+	len1, len2 := len(text1), len(text2)
+	if len1 == 0 || len2 == 0 {
+		return false
+	}
+	
+	// If lengths are very different, not similar
+	ratio := float64(len1) / float64(len2)
+	if ratio < 0.8 || ratio > 1.2 {
+		return false
+	}
+	
+	// Check if one is a substring of the other (with some tolerance)
+	if len1 < len2 {
+		return strings.Contains(text2, text1)
+	} else {
+		return strings.Contains(text1, text2)
+	}
 }

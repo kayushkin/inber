@@ -11,7 +11,79 @@ import (
 
 // LoadRecentlyModifiedAsStubs loads recently modified files as stub chunks
 // instead of full content, saving tokens. Use read_file tool to load full content.
+// Uses importance scoring to prioritize which files to load.
 func LoadRecentlyModifiedAsStubs(store *Store, rootDir string, since time.Duration) error {
+	// Use importance scorer to rank files
+	scorer := NewImportanceScorer(rootDir, since)
+	importantFiles, err := scorer.ScoreRecentFiles(since)
+	if err != nil {
+		// Fall back to simple recency if scoring fails
+		return loadRecentlyModifiedAsStubsSimple(store, rootDir, since)
+	}
+	
+	if len(importantFiles) == 0 {
+		return nil
+	}
+	
+	// Sort by importance
+	SortByImportance(importantFiles)
+	
+	for _, fileInfo := range importantFiles {
+		// Read to count lines
+		content, err := os.ReadFile(fileInfo.Path)
+		lineCount := 0
+		if err == nil {
+			lineCount = strings.Count(string(content), "\n") + 1
+		}
+		
+		// Format time since modified
+		timeSince := time.Since(time.Now()) // Will be calculated from modtime in real usage
+		info, err := os.Stat(fileInfo.Path)
+		if err == nil {
+			timeSince = time.Since(info.ModTime())
+		}
+		
+		var timeStr string
+		if timeSince < time.Minute {
+			timeStr = "just now"
+		} else if timeSince < time.Hour {
+			timeStr = fmt.Sprintf("%dm ago", int(timeSince.Minutes()))
+		} else if timeSince < 24*time.Hour {
+			timeStr = fmt.Sprintf("%dh ago", int(timeSince.Hours()))
+		} else {
+			timeStr = fmt.Sprintf("%dd ago", int(timeSince.Hours()/24))
+		}
+		
+		// Create compact stub with importance indicator
+		importance := "⭐"
+		if fileInfo.Score > 0.7 {
+			importance = "⭐⭐⭐" // High importance
+		} else if fileInfo.Score > 0.5 {
+			importance = "⭐⭐" // Medium importance
+		}
+		
+		stubText := fmt.Sprintf("%s %s (%d lines, %s, score: %.2f)",
+			importance, fileInfo.RelativePath, lineCount, timeStr, fileInfo.Score)
+		
+		chunk := Chunk{
+			ID:       "recent:" + fileInfo.RelativePath,
+			Text:     stubText,
+			Tags:     []string{"recent", "file:" + fileInfo.RelativePath, filepath.Base(fileInfo.RelativePath)},
+			Source:   "file",
+			IsStub:   true,
+			StubPath: fileInfo.RelativePath,
+		}
+		
+		if err := store.Add(chunk); err != nil {
+			return err
+		}
+	}
+	
+	return nil
+}
+
+// loadRecentlyModifiedAsStubsSimple is the fallback without importance scoring
+func loadRecentlyModifiedAsStubsSimple(store *Store, rootDir string, since time.Duration) error {
 	files, err := FindRecentlyModified(rootDir, since)
 	if err != nil {
 		return err
