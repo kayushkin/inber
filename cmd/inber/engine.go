@@ -67,7 +67,7 @@ type Engine struct {
 	thinkingBud     int64
 	lastNamedBlocks []sessionMod.NamedBlock
 	stashCfg        StashConfig
-	extractCfg         ExtractionConfig
+	extractCfg      ExtractionConfig
 	consecutiveErrors  int  // track consecutive tool errors for context escalation
 	lastTurnHadError   bool
 }
@@ -158,7 +158,6 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		if err := ms.PrepareSession(prepCfg); err != nil {
 			Log.Warn("failed to prepare session: %v", err)
 		}
-		
 		// Count memories for logging
 		recentMems, _ := ms.ListRecent(100, 0.0)
 		fmt.Fprintf(os.Stderr, " done (%d memories)\n", len(recentMems))
@@ -438,13 +437,7 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 	}
 
 	if e.workspace != nil {
-		// If workspace has edits, use those instead
-		if wsBlocks, err := e.workspace.ReadSystem(); err == nil && wsBlocks != nil {
-			Log.Info("using edited prompt from %s (%d blocks)", e.workspace.Dir, len(wsBlocks))
-			blocks = wsBlocks
-		}
-
-		// Write current prompt to workspace for editing before next turn
+		// Write for inspection only — no auto-load (same as memory path above)
 		e.workspace.WriteSystem(blocks)
 	}
 
@@ -617,6 +610,7 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	e.Messages = append(e.Messages, anthropic.NewUserMessage(anthropic.NewTextBlock(processedInput)))
 
+	// Apply conversation window (keep recent turns, summarize old ones)
 	// Prune conversation if needed (keep last 35 turns)
 	e.pruneIfNeeded()
 
