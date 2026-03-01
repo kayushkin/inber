@@ -46,7 +46,15 @@ func AutoLoad(cfg AutoLoadConfig) (*Store, error) {
 		return nil, fmt.Errorf("failed to load identity: %w", err)
 	}
 	
-	// 2. Memory usage instructions (always loaded; tools may or may not be present)
+	// 2. Load recent files as stubs (lazy-loadable)
+	if err := LoadRecentlyModifiedAsStubs(store, cfg.RootDir, cfg.RecencyWindow); err != nil {
+		return nil, fmt.Errorf("failed to load recent files: %w", err)
+	}
+	
+	// 3. Memory usage instructions
+	// NOTE: only loaded here as a fallback — engine.go should call
+	// loadMemoryInstructions only if memory tools are actually available.
+	// Telling the agent to use tools that don't exist causes errors.
 	loadMemoryInstructions(store)
 	
 	// 3. Find recently modified files
@@ -151,6 +159,9 @@ func LoadProjectContext(store *Store, rootDir string) error {
 		Path string
 		Tags []string
 	}{
+		{".inber/identity.md", []string{"identity", "always", "system"}},
+		{".inber/soul.md", []string{"identity", "always", "system"}},
+		{".inber/user.md", []string{"identity", "always", "system"}},
 		{".openclaw/AGENTS.md", []string{"agents", "architecture", "always", "docs"}},
 		{".openclaw/TOOLS.md", []string{"tools", "setup", "docs"}},
 		{".inber/project.md", []string{"project", "always", "config", "deploy", "tests"}},

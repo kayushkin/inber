@@ -19,7 +19,7 @@ type RepoMapEntry struct {
 }
 
 // BuildRepoMap generates a structural summary of the codebase
-// For Go files: function signatures, types, structs, interfaces
+// For Go files: function signatures, types, structs, interfaces (in compact format)
 // For non-Go files: just filename and size
 func BuildRepoMap(rootDir string, ignorePatterns []string) (string, error) {
 	var entries []RepoMapEntry
@@ -48,16 +48,27 @@ func BuildRepoMap(rootDir string, ignorePatterns []string) (string, error) {
 			return nil
 		}
 		
-		// Process Go files with AST parsing
+		// Process Go files with AST parsing (using compact format)
 		if strings.HasSuffix(path, ".go") {
-			summary, err := parseGoFile(path, relPath)
+			summary, err := parseGoFileCompact(path, relPath)
 			if err != nil {
-				// If parsing fails, still include the file name
-				entries = append(entries, RepoMapEntry{
-					FilePath: relPath,
-					Content:  fmt.Sprintf("// Parse error: %v", err),
-					IsGoFile: true,
-				})
+				// If parsing fails, try regular parser, then fall back to error
+				summary, err2 := parseGoFile(path, relPath)
+				if err2 != nil {
+					entries = append(entries, RepoMapEntry{
+						FilePath: relPath,
+						Content:  fmt.Sprintf("// Parse error: %v", err),
+						IsGoFile: true,
+					})
+					return nil
+				}
+				if summary != "" {
+					entries = append(entries, RepoMapEntry{
+						FilePath: relPath,
+						Content:  summary,
+						IsGoFile: true,
+					})
+				}
 				return nil
 			}
 			if summary != "" {

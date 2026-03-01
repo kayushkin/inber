@@ -614,13 +614,20 @@ func estimateMessageTokens(msg anthropic.MessageParam) int {
 	return inbercontext.EstimateTokens(content)
 }
 
-// ShouldPrune determines if conversation should be pruned based on current size
+// ShouldPrune determines if conversation should be pruned based on current size.
+// Triggers on EITHER message count exceeding KeepRecentTurns OR token budget exceeded.
 func ShouldPrune(messages []anthropic.MessageParam, cfg PruneConfig) bool {
+	// Message count check — prune if we have too many messages regardless of
+	// token estimate (the estimator is known to undercount by 3-4x)
+	if len(messages) > cfg.KeepRecentTurns*2 {
+		return true
+	}
+
 	if len(messages) <= cfg.KeepRecentTurns {
 		return false
 	}
 
-	// Also check token count
+	// Token budget check for borderline cases
 	totalTokens := 0
 	for _, msg := range messages {
 		totalTokens += estimateMessageTokens(msg)

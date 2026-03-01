@@ -48,18 +48,18 @@ func main() {
 		t.Fatalf("BuildRepoMap failed: %v", err)
 	}
 	
-	// Verify it contains expected elements
+	// Verify it contains expected elements (compact format)
 	expected := []string{
-		"package main",
+		"pkg main", // compact format uses "pkg" not "package"
 		"type User struct",
-		"func (u *User) Greet()",
-		"func main()",
+		"*User.Greet", // compact format: Receiver.MethodName
+		"main()", // function signature
 		"README.md",
 	}
 	
 	for _, exp := range expected {
 		if !strings.Contains(repoMap, exp) {
-			t.Errorf("repo map missing expected content: %s", exp)
+			t.Errorf("repo map missing expected content: %s\nGot:\n%s", exp, repoMap)
 		}
 	}
 }

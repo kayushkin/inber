@@ -15,6 +15,8 @@ type Chunk struct {
 	Source    string     // "user", "assistant", "tool-result", "memory", "system"
 	CreatedAt time.Time
 	ExpiresAt *time.Time // optional TTL
+	IsStub    bool       // if true, this is a lazy-loadable reference, not full content
+	StubPath  string     // file path for lazy loading (if IsStub=true)
 }
 
 // Store is a thread-safe in-memory chunk store

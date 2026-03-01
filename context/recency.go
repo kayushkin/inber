@@ -9,6 +9,60 @@ import (
 	"time"
 )
 
+// LoadRecentlyModifiedAsStubs loads recently modified files as stub chunks
+// instead of full content, saving tokens. Use read_file tool to load full content.
+func LoadRecentlyModifiedAsStubs(store *Store, rootDir string, since time.Duration) error {
+	files, err := FindRecentlyModified(rootDir, since)
+	if err != nil {
+		return err
+	}
+	
+	if len(files) == 0 {
+		return nil
+	}
+	
+	for _, file := range files {
+		// Read to count lines
+		content, err := os.ReadFile(file.Path)
+		lineCount := 0
+		if err == nil {
+			lineCount = strings.Count(string(content), "\n") + 1
+		}
+		
+		// Format time since modified
+		timeSince := time.Since(file.ModTime)
+		var timeStr string
+		if timeSince < time.Minute {
+			timeStr = "just now"
+		} else if timeSince < time.Hour {
+			timeStr = fmt.Sprintf("%dm ago", int(timeSince.Minutes()))
+		} else if timeSince < 24*time.Hour {
+			timeStr = fmt.Sprintf("%dh ago", int(timeSince.Hours()))
+		} else {
+			timeStr = fmt.Sprintf("%dd ago", int(timeSince.Hours()/24))
+		}
+		
+		// Create compact stub
+		stubText := fmt.Sprintf("%s (%d lines, %s)",
+			file.RelativePath, lineCount, timeStr)
+		
+		chunk := Chunk{
+			ID:       "recent:" + file.RelativePath,
+			Text:     stubText,
+			Tags:     []string{"recent", "file:" + file.RelativePath, filepath.Base(file.RelativePath)},
+			Source:   "file",
+			IsStub:   true,
+			StubPath: file.RelativePath,
+		}
+		
+		if err := store.Add(chunk); err != nil {
+			return err
+		}
+	}
+	
+	return nil
+}
+
 // RecentFile represents a file that was recently modified
 type RecentFile struct {
 	Path         string
