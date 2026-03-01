@@ -3,7 +3,7 @@
 ## Goal
 Merge `context.Store` (in-memory, per-session chunks) with `memory.Store` (SQLite, persistent memories) into a single unified system where memory becomes the source of truth for all context.
 
-## Status: Step 3 Complete ✅
+## Status: Step 4 Complete ✅ - SYSTEM NOW LIVE!
 
 ### Step 1: Add Memory Fields (DONE)
 
@@ -183,40 +183,71 @@ Replace in `cmd/inber/engine.go`:
 }
 ```
 
-### Step 4: Update Engine to Use Memory-Backed Context
+---
 
-Replace in `cmd/inber/engine.go`:
+### Step 4: Update Engine to Use Memory-Backed Context (DONE)
 
-```go
-// OLD:
-store := context.NewStore()
-context.AutoLoad(cfg)
-chunks := builder.Build(tags)
+**MAJOR MILESTONE: The system is now live and using memory-backed context!**
 
-// NEW:
-memories := memStore.BuildContext(BuildContextRequest{
-    Tags: messageTags,
-    TokenBudget: 32000,
-    MinImportance: 0.4,
-    IncludeAlwaysLoad: true,
-})
-```
+**Engine changes:**
+- Replaced `context.AutoLoad()` with `memory.PrepareSession()`
+- `BuildSystemPrompt()` now uses `memory.BuildContext()` 
+- Falls back to old context.Store if memory unavailable (backward compat)
+- Logging now shows "done (N memories)" instead of "done (N chunks)"
 
-### Step 5: Remove Repo Map from Autoload
+**Migration support:**
+- Added `runMigrations()` to handle existing databases
+- Automatically adds new columns to old DBs: `always_load`, `expires_at`, `tokens`
+- Schema creation split: base table first, migrations add new columns
+- Prevents "no such column" errors on upgrade
+
+**How it works:**
+1. **Session start:** `PrepareSession()` loads identity + memory instructions + recent files
+2. **Per message:** `BuildContext()` queries memories matching message tags
+3. **Priority:** AlwaysLoad > tag matches > importance > recency
+4. **Budget:** Respects 50k token limit, stops when budget hit
+5. **Output:** Returns `[]Memory` converted to `[]NamedBlock` for system prompt
+
+**Testing:**
+- ✅ Fresh install works
+- ✅ Existing database migration succeeds
+- ✅ Recent files detection works
+- ✅ Memory recall works (tested: "what is my name?")
+- ✅ Git recent files: "what files have I been working on?" works perfectly
+- ✅ All tests pass
+
+**Commit:** `5a7141b` - "Step 4: Wire memory-backed context into engine"
+
+---
+
+### Step 5: Remove Repo Map from Autoload (ALREADY DONE)
 
 **Status:** Repo map is already available as a tool via `tools.RepoMap()` ✅
 
-- Don't load repo map into memory
-- Don't generate it at session start
-- Model calls `repo_map` tool when needed
+- ✅ Don't load repo map into memory
+- ✅ Don't generate it at session start  
+- ✅ Model calls `repo_map` tool when needed
 
-### Step 6: Deprecate context.Store
+This was already the design - repo maps are generated fresh on demand via the tool.
 
-Once memory-backed context is working:
-- Remove `context/store.go`
-- Move `context/builder.go` → `memory/builder.go` (or delete entirely)
-- Keep `context/repomap.go` for the tool
-- Keep `context/files.go`, `context/recency.go` for data loading
+---
+
+### Step 6: Deprecate context.Store (OPTIONAL - NOT URGENT)
+
+**Status:** Can be done later as cleanup
+
+The old `context/` package is still around for backward compatibility:
+- `context/store.go` - still exists but not used in main path
+- `context/builder.go` - not used (replaced by `memory/builder.go`)
+- `context/repomap.go` - still needed for the `repo_map` tool
+- `context/files.go`, `context/recency.go` - still used by `memory.PrepareSession()`
+
+**Cleanup options:**
+1. Leave it - it's not hurting anything, provides fallback
+2. Remove unused files (store.go, builder.go) but keep loaders
+3. Move loaders into memory/ package for full unification
+
+**Recommendation:** Leave it for now. Focus on new features. Clean up later if needed.
 
 ---
 
