@@ -36,6 +36,12 @@ type Agent struct {
 	agentName      string
 	sessionID      string
 	thinkingBudget int64 // 0 = disabled, >0 = budget tokens for extended thinking
+	contextWindow  int   // max context tokens for the model (0 = no guard)
+
+	// BeforeRequest is called before each API call with a mutable reference to
+	// the messages slice. Use it to prune/compact if the conversation is too large.
+	// Return the (possibly pruned) messages. Called after OnRequest hook.
+	BeforeRequest func(messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam
 }
 
 // New creates an agent with the given system prompt.
@@ -63,6 +69,17 @@ func (a *Agent) SetHooks(h *Hooks) {
 // Budget must be >= 1024. Set to 0 to disable.
 func (a *Agent) SetThinking(budgetTokens int64) {
 	a.thinkingBudget = budgetTokens
+}
+
+// SetContextWindow sets the model's context window size for overflow protection.
+func (a *Agent) SetContextWindow(tokens int) {
+	a.contextWindow = tokens
+}
+
+// SetBeforeRequest sets a callback invoked before each API call to allow
+// pruning messages if they're approaching the context window limit.
+func (a *Agent) SetBeforeRequest(fn func(messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam) {
+	a.BeforeRequest = fn
 }
 
 // AddTool registers a tool the agent can call.
@@ -124,6 +141,15 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 				OfEnabled: &anthropic.ThinkingConfigEnabledParam{
 					BudgetTokens: a.thinkingBudget,
 				},
+			}
+		}
+
+		// Guard against context overflow: let caller prune if needed
+		if a.BeforeRequest != nil && a.contextWindow > 0 {
+			pruned := a.BeforeRequest(*messages, a.contextWindow)
+			if len(pruned) < len(*messages) {
+				*messages = pruned
+				params.Messages = *messages
 			}
 		}
 

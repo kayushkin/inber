@@ -444,6 +444,32 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 		a.SetThinking(e.thinkingBud)
 	}
 	a.SetHooks(e.buildHooks())
+
+	// Set context window guard — auto-prune before API calls that would overflow
+	modelInfo, ok := agent.Models[e.Model]
+	if ok {
+		a.SetContextWindow(modelInfo.ContextWindow)
+	} else {
+		a.SetContextWindow(200000) // safe default
+	}
+	a.SetBeforeRequest(func(messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam {
+		cfg := e.pruneConfig()
+		// Use a tighter budget than the full context window to leave room for
+		// system prompt + tool defs + output tokens
+		cfg.TokenBudget = contextWindow / 2 // conservative — estimator undercounts 3-4x
+		if !ShouldPrune(messages, cfg) {
+			return messages
+		}
+		Log.Warn("context approaching limit (%d messages), emergency pruning", len(messages))
+		pruned, result, err := PruneConversation(context.Background(), messages, e.MemStore, "", cfg)
+		if err != nil {
+			Log.Warn("emergency prune failed: %v", err)
+			return messages
+		}
+		Log.Info("emergency pruned: %d tokens freed, %d memories saved", result.TokensFreed, result.MemoriesSaved)
+		return pruned
+	})
+
 	e.Agent = a
 	return a
 }
@@ -669,15 +695,17 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 }
 
 // pruneIfNeeded checks if conversation should be pruned and does so if necessary.
-func (e *Engine) pruneIfNeeded() {
-	// Use role-based config if agent config available
-	var cfg PruneConfig
+// pruneConfig returns the appropriate PruneConfig for this engine's agent role.
+func (e *Engine) pruneConfig() PruneConfig {
 	if e.AgentConfig != nil && e.AgentConfig.Role != "" {
-		cfg = PruneConfigForRole(e.AgentConfig.Role)
-	} else {
-		cfg = DefaultPruneConfig()
+		return PruneConfigForRole(e.AgentConfig.Role)
 	}
-	
+	return DefaultPruneConfig()
+}
+
+func (e *Engine) pruneIfNeeded() {
+	cfg := e.pruneConfig()
+
 	if !ShouldPrune(e.Messages, cfg) {
 		return
 	}
