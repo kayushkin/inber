@@ -468,20 +468,33 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	}
 	a.SetBeforeRequest(func(messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam {
 		cfg := e.pruneConfig()
-		// Use a tighter budget than the full context window to leave room for
-		// system prompt + tool defs + output tokens
-		cfg.TokenBudget = contextWindow / 2 // conservative — estimator undercounts 3-4x
-		if !ShouldPrune(messages, cfg) {
-			return messages
+		cfg.TokenBudget = contextWindow / 2
+
+		// First pass: truncate old tool results/assistant text
+		if ShouldPrune(messages, cfg) {
+			Log.Warn("context approaching limit (%d messages), pruning", len(messages))
+			pruned, result, err := PruneConversation(context.Background(), messages, e.MemStore, "", cfg)
+			if err == nil {
+				Log.Info("pruned: %d tokens freed", result.TokensFreed)
+				messages = pruned
+			}
 		}
-		Log.Warn("context approaching limit (%d messages), emergency pruning", len(messages))
-		pruned, result, err := PruneConversation(context.Background(), messages, e.MemStore, "", cfg)
-		if err != nil {
-			Log.Warn("emergency prune failed: %v", err)
-			return messages
+
+		// Second pass: if still too many messages, hard-drop old ones.
+		// Keep only the last N messages to fit within context window.
+		// The estimator undercounts 3-4x, so be very conservative.
+		maxMessages := cfg.KeepRecentTurns * 2 // e.g. 70 for default
+		if len(messages) > maxMessages {
+			dropped := len(messages) - maxMessages
+			Log.Warn("hard-dropping %d old messages (%d → %d)", dropped, len(messages), maxMessages)
+			messages = messages[dropped:]
+			// Ensure first message is a user message (API requirement)
+			for len(messages) > 0 && messages[0].Role != anthropic.MessageParamRoleUser {
+				messages = messages[1:]
+			}
 		}
-		Log.Info("emergency pruned: %d tokens freed, %d memories saved", result.TokensFreed, result.MemoriesSaved)
-		return pruned
+
+		return messages
 	})
 
 	e.Agent = a
