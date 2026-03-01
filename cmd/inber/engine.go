@@ -414,13 +414,10 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 		}
 
 		if e.workspace != nil {
-			// If workspace has edits, use those instead
-			if wsBlocks, err := e.workspace.ReadSystem(); err == nil && wsBlocks != nil {
-				Log.Info("using edited prompt from %s (%d blocks)", e.workspace.Dir, len(wsBlocks))
-				blocks = wsBlocks
-			}
-
-			// Write current prompt to workspace for editing before next turn
+			// Write current prompt to workspace for inspection/editing.
+			// NOTE: We no longer auto-load from workspace — it was causing stale
+			// cached prompts (100+ blocks) to override the adaptive context system.
+			// If manual editing is needed, add an explicit --edit-prompt flag.
 			e.workspace.WriteSystem(blocks)
 		}
 
