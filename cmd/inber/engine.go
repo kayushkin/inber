@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/google/uuid"
@@ -131,34 +132,38 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	// Context & memory
 	if cfg.SystemOverride == "" && !cfg.Raw {
 		Log.Infof("loading context...")
-		contextCfg := inbercontext.DefaultAutoLoadConfig(repoRoot)
-		if identityText == "" {
-			identityText = "You are a helpful coding assistant. You have access to shell, file reading/writing/editing, and directory listing tools. Use them to help the user."
-		}
-		contextCfg.IdentityText = identityText
-
-		cs, err := inbercontext.AutoLoad(contextCfg)
-		if err != nil {
-			Log.Warn("context auto-load failed: %v", err)
-			cs = inbercontext.NewStore()
-		}
-		if err := inbercontext.LoadProjectContext(cs, repoRoot); err != nil {
-			Log.Warn("failed to load project context: %v", err)
-		}
-		e.ContextStore = cs
-		// Append to the "loading context..." line (no newline from Infof)
-		fmt.Fprintf(os.Stderr, " done (%d chunks)\n", cs.Count())
-
-		// Memory
+		
+		// Memory store
 		ms, err := memory.OpenOrCreate(repoRoot)
 		if err != nil {
-			Log.Warn("memory disabled: %v", err)
-		} else {
-			e.MemStore = ms
-			if err := memory.LoadIntoContext(ms, cs, 10, 0.6); err != nil {
-				Log.Warn("failed to load memories: %v", err)
-			}
+			return nil, fmt.Errorf("failed to open memory store: %w", err)
 		}
+		e.MemStore = ms
+
+		// Prepare session: load identity + recent files into memory
+		if identityText == "" {
+			identityText = "You are Claxon, a coding assistant. Use your tools to help the user. See .inber/identity.md, .inber/soul.md, and .inber/user.md for full context."
+		}
+		
+		prepCfg := memory.PrepareSessionConfig{
+			RootDir:        repoRoot,
+			IdentityText:   identityText,
+			AgentName:      e.AgentName,
+			RecencyWindow:  24 * time.Hour,
+			RecentFilesTTL: 10 * time.Minute,
+		}
+		
+		if err := ms.PrepareSession(prepCfg); err != nil {
+			Log.Warn("failed to prepare session: %v", err)
+		}
+		
+		// Count memories for logging
+		recentMems, _ := ms.ListRecent(100, 0.0)
+		fmt.Fprintf(os.Stderr, " done (%d memories)\n", len(recentMems))
+
+		// Keep a minimal context store for backward compatibility
+		// (some tools might still use it)
+		e.ContextStore = inbercontext.NewStore()
 	} else if cfg.Raw && identityText == "" {
 		identityText = "You are a helpful assistant."
 	}
@@ -301,6 +306,47 @@ func (e *Engine) buildTools() []agent.Tool {
 
 // BuildSystemPrompt builds a context-aware system prompt as individual named blocks.
 func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
+	// Use memory-backed context if available
+	if e.MemStore != nil {
+		messageTags := inbercontext.AutoTag(userMessage, "user")
+		
+		req := memory.BuildContextRequest{
+			Tags:              messageTags,
+			TokenBudget:       50000,
+			MinImportance:     0.0,
+			IncludeAlwaysLoad: true,
+			ExcludeTags:       []string{}, // could add "test" unless user asks for it
+		}
+		
+		memories, tokensUsed, err := e.MemStore.BuildContext(req)
+		if err != nil {
+			Log.Warn("failed to build context from memory: %v", err)
+			return nil
+		}
+		
+		Log.Info("context: %d memories, %d tokens", len(memories), tokensUsed)
+		
+		// Convert memories to named blocks
+		blocks := make([]sessionMod.NamedBlock, len(memories))
+		for i, m := range memories {
+			blocks[i] = sessionMod.NamedBlock{ID: m.ID, Text: m.Content}
+		}
+		
+		if e.workspace != nil {
+			// If workspace has edits, use those instead
+			if wsBlocks, err := e.workspace.ReadSystem(); err == nil && wsBlocks != nil {
+				Log.Info("using edited prompt from %s (%d blocks)", e.workspace.Dir, len(wsBlocks))
+				blocks = wsBlocks
+			}
+
+			// Write current prompt to workspace for editing before next turn
+			e.workspace.WriteSystem(blocks)
+		}
+		
+		return blocks
+	}
+	
+	// Fallback to old context store if memory not available
 	if e.ContextStore == nil {
 		return nil
 	}

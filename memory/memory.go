@@ -46,6 +46,8 @@ func NewStore(dbPath string) (*Store, error) {
 	}
 
 	// Create normalized schema
+	// Note: We only create the table and basic indexes here
+	// Migrations will add new columns to existing tables
 	schema := `
 	CREATE TABLE IF NOT EXISTS memories (
 		id TEXT PRIMARY KEY,
@@ -57,17 +59,12 @@ func NewStore(dbPath string) (*Store, error) {
 		last_accessed INTEGER NOT NULL,
 		created_at INTEGER NOT NULL,
 		source TEXT NOT NULL,
-		embedding BLOB,
-		always_load INTEGER NOT NULL DEFAULT 0,
-		expires_at INTEGER,
-		tokens INTEGER NOT NULL DEFAULT 0
+		embedding BLOB
 	);
 	CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance);
 	CREATE INDEX IF NOT EXISTS idx_last_accessed ON memories(last_accessed);
 	CREATE INDEX IF NOT EXISTS idx_created_at ON memories(created_at);
 	CREATE INDEX IF NOT EXISTS idx_source ON memories(source);
-	CREATE INDEX IF NOT EXISTS idx_always_load ON memories(always_load);
-	CREATE INDEX IF NOT EXISTS idx_expires_at ON memories(expires_at);
 
 	CREATE TABLE IF NOT EXISTS memory_tags (
 		memory_id TEXT NOT NULL,
@@ -117,10 +114,63 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
+	// Run migrations for existing databases
+	if err := runMigrations(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("run migrations: %w", err)
+	}
+
 	return &Store{
 		db:       db,
 		embedder: NewEmbedder(),
 	}, nil
+}
+
+// runMigrations applies schema migrations to existing databases
+func runMigrations(db *sql.DB) error {
+	// Check if always_load column exists
+	var hasAlwaysLoad bool
+	
+	// Query all columns
+	rows, err := db.Query("PRAGMA table_info(memories)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	
+	var cid int
+	var name, typ string
+	var notnull, pk int
+	var dflt sql.NullString
+	
+	for rows.Next() {
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			continue
+		}
+		if name == "always_load" {
+			hasAlwaysLoad = true
+		}
+	}
+	
+	// Add missing columns if needed
+	if !hasAlwaysLoad {
+		migrations := []string{
+			"ALTER TABLE memories ADD COLUMN always_load INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE memories ADD COLUMN expires_at INTEGER",
+			"ALTER TABLE memories ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0",
+			"CREATE INDEX IF NOT EXISTS idx_always_load ON memories(always_load)",
+			"CREATE INDEX IF NOT EXISTS idx_expires_at ON memories(expires_at)",
+		}
+		
+		for _, migration := range migrations {
+			if _, err := db.Exec(migration); err != nil {
+				// Ignore errors for already-existing columns/indexes
+				continue
+			}
+		}
+	}
+	
+	return nil
 }
 
 // Close closes the database connection.
