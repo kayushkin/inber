@@ -25,6 +25,11 @@ type Memory struct {
 	CreatedAt    time.Time // when it was stored
 	Source       string    // "user", "agent", "reflection", "compaction", "system"
 	Embedding    []float64 // vector for semantic search
+	
+	// New fields for context unification
+	AlwaysLoad   bool       // if true, always include in context (e.g., identity)
+	ExpiresAt    *time.Time // optional expiration (for ephemeral content like recent files)
+	Tokens       int        // pre-computed token count for budget management
 }
 
 // Store handles persistent memory storage via SQLite.
@@ -52,12 +57,17 @@ func NewStore(dbPath string) (*Store, error) {
 		last_accessed INTEGER NOT NULL,
 		created_at INTEGER NOT NULL,
 		source TEXT NOT NULL,
-		embedding BLOB
+		embedding BLOB,
+		always_load INTEGER NOT NULL DEFAULT 0,
+		expires_at INTEGER,
+		tokens INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance);
 	CREATE INDEX IF NOT EXISTS idx_last_accessed ON memories(last_accessed);
 	CREATE INDEX IF NOT EXISTS idx_created_at ON memories(created_at);
 	CREATE INDEX IF NOT EXISTS idx_source ON memories(source);
+	CREATE INDEX IF NOT EXISTS idx_always_load ON memories(always_load);
+	CREATE INDEX IF NOT EXISTS idx_expires_at ON memories(expires_at);
 
 	CREATE TABLE IF NOT EXISTS memory_tags (
 		memory_id TEXT NOT NULL,
@@ -149,15 +159,21 @@ func (s *Store) Save(m Memory) error {
 	}
 	defer tx.Rollback()
 
+	// Auto-compute tokens if not set
+	if m.Tokens == 0 && m.Content != "" {
+		m.Tokens = len(m.Content) / 4 // rough estimate: 4 chars per token
+	}
+
 	// Insert memory
 	query := `
-	INSERT INTO memories (id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO memories (id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding, always_load, expires_at, tokens)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = tx.Exec(query,
 		m.ID, m.Content, nullString(m.Summary), nullString(m.OriginalID),
 		m.Importance, m.AccessCount,
 		m.LastAccessed.Unix(), m.CreatedAt.Unix(), m.Source, embJSON,
+		m.AlwaysLoad, nullInt64Ptr(m.ExpiresAt), m.Tokens,
 	)
 	if err != nil {
 		return fmt.Errorf("insert memory: %w", err)
@@ -185,7 +201,7 @@ func (s *Store) Save(m Memory) error {
 func (s *Store) Get(id string) (*Memory, error) {
 	// Support prefix matching (e.g., first 8 chars of UUID)
 	query := `
-	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding
+	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding, always_load, expires_at, tokens
 	FROM memories
 	WHERE id = ? OR id LIKE ?
 	`
@@ -195,10 +211,12 @@ func (s *Store) Get(id string) (*Memory, error) {
 	var summary, originalID sql.NullString
 	var embJSON []byte
 	var lastAccessed, createdAt int64
+	var expiresAt sql.NullInt64
 
 	err := row.Scan(
 		&m.ID, &m.Content, &summary, &originalID,
 		&m.Importance, &m.AccessCount, &lastAccessed, &createdAt, &m.Source, &embJSON,
+		&m.AlwaysLoad, &expiresAt, &m.Tokens,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("memory not found: %s", id)
@@ -211,6 +229,10 @@ func (s *Store) Get(id string) (*Memory, error) {
 	m.OriginalID = originalID.String
 	m.LastAccessed = time.Unix(lastAccessed, 0)
 	m.CreatedAt = time.Unix(createdAt, 0)
+	if expiresAt.Valid {
+		exp := time.Unix(expiresAt.Int64, 0)
+		m.ExpiresAt = &exp
+	}
 
 	if err := json.Unmarshal(embJSON, &m.Embedding); err != nil {
 		return nil, fmt.Errorf("unmarshal embedding: %w", err)
@@ -264,19 +286,20 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 	// Generate query embedding
 	queryEmb := s.embedder.Embed(query)
 
-	// Fetch all non-forgotten memories
+	// Fetch all non-forgotten, non-expired memories
+	now := time.Now()
 	sqlQuery := `
-	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding
+	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding, always_load, expires_at, tokens
 	FROM memories
 	WHERE importance > 0
+	  AND (expires_at IS NULL OR expires_at > ?)
 	`
-	rows, err := s.db.Query(sqlQuery)
+	rows, err := s.db.Query(sqlQuery, now.Unix())
 	if err != nil {
 		return nil, fmt.Errorf("query memories: %w", err)
 	}
 	defer rows.Close()
 
-	now := time.Now()
 	type scored struct {
 		memory Memory
 		score  float64
@@ -289,10 +312,12 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 		var summary, originalID sql.NullString
 		var embJSON []byte
 		var lastAccessed, createdAt int64
+		var expiresAt sql.NullInt64
 
 		err := rows.Scan(
 			&m.ID, &m.Content, &summary, &originalID,
 			&m.Importance, &m.AccessCount, &lastAccessed, &createdAt, &m.Source, &embJSON,
+			&m.AlwaysLoad, &expiresAt, &m.Tokens,
 		)
 		if err != nil {
 			continue
@@ -302,6 +327,10 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 		m.OriginalID = originalID.String
 		m.LastAccessed = time.Unix(lastAccessed, 0)
 		m.CreatedAt = time.Unix(createdAt, 0)
+		if expiresAt.Valid {
+			exp := time.Unix(expiresAt.Int64, 0)
+			m.ExpiresAt = &exp
+		}
 
 		if err := json.Unmarshal(embJSON, &m.Embedding); err != nil {
 			continue
@@ -412,14 +441,16 @@ func (s *Store) DecayImportance() error {
 
 // ListRecent returns the N most recently created memories with importance > threshold.
 func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
+	now := time.Now()
 	query := `
-	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding
+	SELECT id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding, always_load, expires_at, tokens
 	FROM memories
 	WHERE importance >= ?
+	  AND (expires_at IS NULL OR expires_at > ?)
 	ORDER BY created_at DESC
 	LIMIT ?
 	`
-	rows, err := s.db.Query(query, minImportance, limit)
+	rows, err := s.db.Query(query, minImportance, now.Unix(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("query recent: %w", err)
 	}
@@ -433,10 +464,12 @@ func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
 		var summary, originalID sql.NullString
 		var embJSON []byte
 		var lastAccessed, createdAt int64
+		var expiresAt sql.NullInt64
 
 		err := rows.Scan(
 			&m.ID, &m.Content, &summary, &originalID,
 			&m.Importance, &m.AccessCount, &lastAccessed, &createdAt, &m.Source, &embJSON,
+			&m.AlwaysLoad, &expiresAt, &m.Tokens,
 		)
 		if err != nil {
 			continue
@@ -446,6 +479,10 @@ func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
 		m.OriginalID = originalID.String
 		m.LastAccessed = time.Unix(lastAccessed, 0)
 		m.CreatedAt = time.Unix(createdAt, 0)
+		if expiresAt.Valid {
+			exp := time.Unix(expiresAt.Int64, 0)
+			m.ExpiresAt = &exp
+		}
 
 		if err := json.Unmarshal(embJSON, &m.Embedding); err != nil {
 			continue
@@ -730,6 +767,13 @@ func (s *Store) TrackMemoryUsage(memoryID, sessionID string, turnNumber int, usa
 // nullInt64 returns a sql.NullInt64 from a time.Time.
 func nullInt64(t time.Time) sql.NullInt64 {
 	if t.IsZero() {
+		return sql.NullInt64{Valid: false}
+	}
+	return sql.NullInt64{Int64: t.Unix(), Valid: true}
+}
+
+func nullInt64Ptr(t *time.Time) sql.NullInt64 {
+	if t == nil {
 		return sql.NullInt64{Valid: false}
 	}
 	return sql.NullInt64{Int64: t.Unix(), Valid: true}
