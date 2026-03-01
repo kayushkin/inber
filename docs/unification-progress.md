@@ -3,7 +3,7 @@
 ## Goal
 Merge `context.Store` (in-memory, per-session chunks) with `memory.Store` (SQLite, persistent memories) into a single unified system where memory becomes the source of truth for all context.
 
-## Status: Step 2 Complete ✅
+## Status: Step 3 Complete ✅
 
 ### Step 1: Add Memory Fields (DONE)
 
@@ -122,21 +122,62 @@ func PrepareSession(repoRoot string, memStore *memory.Store) {
 }
 ```
 
-### Step 3: Create BuildContext() Query
+---
 
-Add to `memory/memory.go`:
+### Step 3: Create BuildContext() Query (DONE)
 
+**Created `memory.BuildContext()`:**
 ```go
-type BuildContextRequest struct {
-    Tags            []string
-    TokenBudget     int
-    MinImportance   float64
-    ExcludeTags     []string
-    IncludeAlwaysLoad bool
-}
+func (s *Store) BuildContext(req BuildContextRequest) ([]Memory, int, error)
+```
 
-func (s *Store) BuildContext(req BuildContextRequest) ([]Memory, int) {
-    // Query memories matching tags, respecting budget
+**BuildContextRequest config:**
+- `Tags` - tags to match (from message/query)
+- `TokenBudget` - max tokens to include (default: 32000)
+- `MinImportance` - threshold filter (default: 0.0)
+- `ExcludeTags` - tags to exclude (e.g., "test", "archived")
+- `IncludeAlwaysLoad` - include always-load memories (default: true)
+- `MaxChunkSize` - skip memories larger than this (default: 0 = no limit)
+
+**Priority order:**
+1. AlwaysLoad memories (identity, instructions) - always first
+2. Tag-matched memories (more matches = higher priority)
+3. High importance memories
+4. Recently accessed memories
+
+**Score calculation:**
+- Base: importance (0-1)
+- Tag bonus: +0.3 per matching tag
+- Recency bonus: +0.2 if accessed <1 day, +0.1 if <7 days
+- Tie-breaker: smaller memories first (more likely to fit budget)
+
+**Features:**
+- Auto-excludes expired memories (WHERE expires_at > NOW())
+- Budget enforcement: stops when budget hit
+- AlwaysLoad memories can exceed budget (but still included)
+- Size-aware filtering via MaxChunkSize
+
+**Helper methods:**
+- `scanMemory()` - reusable SQL row scanner
+- `loadTags()` - loads tags for a memory ID
+- `calculateScore()` - computes relevance score
+
+**Tests:**
+- Created `memory/builder_test.go` with 6 test cases
+- Tag matching and priority ✅
+- Token budget enforcement ✅
+- Tag exclusion filtering ✅
+- Importance threshold ✅
+- AlwaysLoad priority ✅
+- MaxChunkSize filtering ✅
+
+**Commit:** `c9943b3` - "Step 3: Add BuildContext() for memory-backed prompt building"
+
+---
+
+### Step 4: Update Engine to Use Memory-Backed Context
+
+Replace in `cmd/inber/engine.go`:
     // Priority: AlwaysLoad > match_count > importance
     // Track running token total, stop when budget hit
 }
