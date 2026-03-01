@@ -6,6 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
+	github.com/kayushkin/agentkit v0.0.0-20260301000152-f583ad0a0625
 	github.com/kayushkin/aiauth v0.0.0-20260226191106-26d44eea610e
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/spf13/cobra v1.10.2
