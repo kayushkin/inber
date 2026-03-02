@@ -2,7 +2,29 @@
 
 ## Overview
 
-The session logger now records all context management operations (summarization, pruning, stashing, and compaction) to the session JSONL file. This provides full visibility into how the conversation is being optimized over time.
+The session logger records all context management operations (summarization, pruning, stashing, and compaction) to the session JSONL file. This provides full visibility into how the conversation is being optimized over time.
+
+## Prompt Breakdown Files
+
+Each session generates detailed prompt breakdowns in `logs/{agent}/{session_id}/prompts/`:
+
+- `system.md` - Index of all system prompt blocks with token counts
+- `system-01-identity.md` - Agent identity block
+- `system-02-memory-instructions.md` - Memory tool usage instructions
+- `system-03-tool-registry.md` - List of available tools
+- `system-04-{memory_id}.md` - Context memories (auto-selected per turn)
+- `tools.md` - Tool definitions with schemas
+- `turn-N.md` - Messages sent on turn N with token summary
+
+**Memory blocks** show importance and tags in filenames:
+- `system-04-8c21c4d1 (0.5, tags: preference,user).md`
+- Importance scale: 0.0-1.0 (0.5+ is kept across sessions)
+- Tags: categorize content (preference, decision, code-introspection, etc.)
+
+**Token budgets:**
+- AlwaysLoad memories (identity, tools): ~500 tokens
+- Auto-selected context: up to 50K tokens (adaptive per query)
+- MaxChunkSize: 3K tokens (larger memories skipped, use tools instead)
 
 ## Log Entry Types
 

@@ -229,6 +229,20 @@ func (s *Session) LogToolCall(toolID, name string, input json.RawMessage) {
 	})
 }
 
+// TruncateToolResult truncates a tool result according to session config.
+// Returns truncated output, or empty string if no truncation needed.
+func (s *Session) TruncateToolResult(name, output string, isError bool) string {
+	s.mu.Lock()
+	cfg := s.truncateCfg
+	s.mu.Unlock()
+
+	result := TruncateToolResult(name, output, cfg)
+	if result.Truncated {
+		return result.Displayed
+	}
+	return "" // No modification needed
+}
+
 // LogToolResult logs a tool result with automatic truncation.
 func (s *Session) LogToolResult(toolID, name, output string, isError bool) {
 	s.mu.Lock()

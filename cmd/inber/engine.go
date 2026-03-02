@@ -437,7 +437,8 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 			TokenBudget:       tokenBudget,
 			MinImportance:     minImportance,
 			IncludeAlwaysLoad: true,
-			ExcludeTags:       []string{"session-summary"}, // these are noise
+			ExcludeTags:       []string{"session-summary", "repo-map", "code-introspection"}, // exclude noise and large generated content
+			MaxChunkSize:      3000, // Skip memories larger than 3K tokens (use repo_map tool instead)
 		}
 
 		memories, tokensUsed, err := e.MemStore.BuildContext(req)
@@ -448,10 +449,16 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 
 		Log.Info("context: %d memories, %d tokens (min_importance=%.1f, budget=%d)", len(memories), tokensUsed, minImportance, tokenBudget)
 
-		// Convert memories to named blocks
+		// Convert memories to named blocks with descriptive IDs
 		blocks := make([]sessionMod.NamedBlock, len(memories))
 		for i, m := range memories {
-			blocks[i] = sessionMod.NamedBlock{ID: m.ID, Text: m.Content}
+			// Create a descriptive ID from tags and importance
+			desc := fmt.Sprintf("%s (%.1f", m.ID[:8], m.Importance)
+			if len(m.Tags) > 0 {
+				desc += fmt.Sprintf(", tags: %s", strings.Join(m.Tags, ","))
+			}
+			desc += ")"
+			blocks[i] = sessionMod.NamedBlock{ID: desc, Text: m.Content}
 		}
 
 		if e.workspace != nil {
@@ -588,7 +595,7 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			if logHooks.OnRequest != nil {
 				logHooks.OnRequest(params)
 			}
-			e.TurnCounter++
+			// TurnCounter already incremented at start of RunTurn
 			sessionMod.WritePromptBreakdown(e.Session.FilePath(), e.Session.SessionID(), e.TurnCounter, params, e.lastNamedBlocks)
 		}
 		hooks.OnThinking = func(text string) {
@@ -632,9 +639,15 @@ func (e *Engine) buildHooks() *agent.Hooks {
 					// Log but don't fail the turn
 					fmt.Fprintf(os.Stderr, "warning: failed to auto-create reference for %s: %v\n", name, err)
 				}
-				// Clean up cache entry
-				delete(e.toolInputsCache, toolID)
+				// NOTE: Don't delete cache here - PostToolResult needs it too
 			}
+		}
+		// Truncate large outputs before adding to conversation
+		hooks.ModifyToolResult = func(toolID, name, output string, isError bool) string {
+			if e.Session != nil {
+				return e.Session.TruncateToolResult(name, output, isError)
+			}
+			return "" // return empty string = no modification
 		}
 		// Workflow hooks: auto-branch, auto-commit, auto-format, build/test
 		hooks.PostToolResult = func(toolID, name, output string, isError bool) string {
@@ -643,7 +656,12 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			}
 			// Get tool input from cache
 			toolInput := e.toolInputsCache[toolID]
-			return e.workflowHooks.OnToolResult(name, toolInput, output, isError)
+			result := e.workflowHooks.OnToolResult(name, toolInput, output, isError)
+			// Clean up cache entry now that both hooks have used it
+			if e.toolInputsCache != nil {
+				delete(e.toolInputsCache, toolID)
+			}
+			return result
 		}
 		hooks.OnResponse = func(resp *anthropic.Message) {
 			// End turn tracking
@@ -679,6 +697,10 @@ func (e *Engine) buildHooks() *agent.Hooks {
 
 // RunTurn sends a user message, rebuilds the system prompt, runs the agent, and returns the result.
 func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
+	// Increment and log turn number
+	e.TurnCounter++
+	Log.Info("━━━ Turn %d ━━━", e.TurnCounter)
+	
 	// Get session ID for tagging
 	sessionID := ""
 	if e.Session != nil {

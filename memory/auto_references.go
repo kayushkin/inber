@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 )
 
 // AutoReferenceConfig controls when to auto-create references after tool calls.
@@ -115,9 +114,9 @@ func (m *AutoReferenceManager) createFileReference(toolID, inputJSON string) err
 	summary := fmt.Sprintf("File %s (%d lines, read at %s)", 
 		relPath, lineCount, time.Now().Format("15:04"))
 	
-	// Create lazy reference
+	// Create lazy reference (upsert by file path to avoid duplicates)
 	mem := Memory{
-		ID:         uuid.New().String(),
+		ID:         "fileref:" + relPath, // Deterministic ID for upsert
 		Content:    "", // Empty - lazy loaded
 		Summary:    summary,
 		Tags:       []string{"file", "read-file", filepath.Base(filePath), filepath.Ext(filePath)},
@@ -126,8 +125,8 @@ func (m *AutoReferenceManager) createFileReference(toolID, inputJSON string) err
 		IsLazy:     true,
 		Importance: 0.4, // Medium-low importance
 		CreatedAt:  time.Now(),
-		Tokens:     int(info.Size() / 4), // Estimate: 4 bytes per token
-		Source:     "auto-reference", // Add source field
+		Tokens:     len(summary) / 3, // Tokens for the ref summary, not the file
+		Source:     "auto-reference",
 	}
 	
 	return m.store.Save(mem)
@@ -148,16 +147,16 @@ func (m *AutoReferenceManager) createRepoMapReference(toolID, output string) err
 		packageCount, time.Now().Format("15:04"))
 	
 	mem := Memory{
-		ID:         "repo-map-" + time.Now().Format("20060102-150405"),
-		Content:    output, // Store repo map content (not lazy - it's generated, not on disk)
+		ID:         "repo-map", // Single entry, upserted each time
+		Content:    output,
 		Summary:    summary,
 		Tags:       []string{"repo-map", "structure", "code-introspection"},
 		RefType:    "repo-map",
-		IsLazy:     false, // Content stored because there's no file to read from
-		Importance: 0.3,   // Low importance - refreshes frequently
+		IsLazy:     false,
+		Importance: 0.3,
 		ExpiresAt:  timePtr(time.Now().Add(m.config.ExpiresAfter)),
 		CreatedAt:  time.Now(),
-		Tokens:     len(output) / 4,
+		Tokens:     (len(output) + 2) / 3,
 		Source:     "auto-reference",
 	}
 	
@@ -177,7 +176,7 @@ func (m *AutoReferenceManager) createRecentFilesReference(toolID, output string)
 	summary := fmt.Sprintf("Recently modified files (%d files)", fileCount)
 	
 	mem := Memory{
-		ID:         "recent-files-" + time.Now().Format("20060102-150405"),
+		ID:         "recent-files", // Single entry, upserted
 		Content:    output,
 		Summary:    summary,
 		Tags:       []string{"recent-files", "code-introspection"},
@@ -186,7 +185,7 @@ func (m *AutoReferenceManager) createRecentFilesReference(toolID, output string)
 		Importance: 0.3,
 		ExpiresAt:  timePtr(time.Now().Add(m.config.ExpiresAfter)),
 		CreatedAt:  time.Now(),
-		Tokens:     len(output) / 4,
+		Tokens:     (len(output) + 2) / 3,
 		Source:     "auto-reference",
 	}
 	

@@ -37,6 +37,10 @@ type Hooks struct {
 	OnThinking   func(text string)                                           // called when thinking blocks are received
 	OnToolCall   func(toolID, name string, input []byte)
 	OnToolResult func(toolID, name, output string, isError bool)
+	// ModifyToolResult is called before a tool result is added to the conversation.
+	// If it returns a non-empty string, that string replaces the original output.
+	// Used for truncation, filtering, or transformation of large results.
+	ModifyToolResult func(toolID, name, output string, isError bool) string
 	// PostToolResult is called after a tool result is collected. If it returns
 	// a non-empty string, that string is appended as an extra user text block
 	// in the same turn (useful for build/test feedback injection).
@@ -242,8 +246,14 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 					if a.hooks != nil && a.hooks.OnToolResult != nil {
 						a.hooks.OnToolResult(block.ID, block.Name, errMsg, true)
 					}
+					finalErrMsg := errMsg
+					if a.hooks != nil && a.hooks.ModifyToolResult != nil {
+						if modified := a.hooks.ModifyToolResult(block.ID, block.Name, errMsg, true); modified != "" {
+							finalErrMsg = modified
+						}
+					}
 					toolResults = append(toolResults, anthropic.NewToolResultBlock(
-						block.ID, errMsg, true,
+						block.ID, finalErrMsg, true,
 					))
 					continue
 				}
@@ -254,8 +264,14 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 					if a.hooks != nil && a.hooks.OnToolResult != nil {
 						a.hooks.OnToolResult(block.ID, block.Name, errMsg, true)
 					}
+					finalErrMsg := errMsg
+					if a.hooks != nil && a.hooks.ModifyToolResult != nil {
+						if modified := a.hooks.ModifyToolResult(block.ID, block.Name, errMsg, true); modified != "" {
+							finalErrMsg = modified
+						}
+					}
 					toolResults = append(toolResults, anthropic.NewToolResultBlock(
-						block.ID, errMsg, true,
+						block.ID, finalErrMsg, true,
 					))
 					continue
 				}
@@ -263,8 +279,17 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 				if a.hooks != nil && a.hooks.OnToolResult != nil {
 					a.hooks.OnToolResult(block.ID, block.Name, output, false)
 				}
+
+				// Apply truncation/modification before adding to conversation
+				finalOutput := output
+				if a.hooks != nil && a.hooks.ModifyToolResult != nil {
+					if modified := a.hooks.ModifyToolResult(block.ID, block.Name, output, false); modified != "" {
+						finalOutput = modified
+					}
+				}
+
 				toolResults = append(toolResults, anthropic.NewToolResultBlock(
-					block.ID, output, false,
+					block.ID, finalOutput, false,
 				))
 
 				// Post-tool-result hook: inject build/test feedback
