@@ -7,23 +7,22 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
 )
 
 // AutoReferenceConfig controls when to auto-create references after tool calls.
 type AutoReferenceConfig struct {
 	// CreateOnReadFile creates file references after read_file tool calls
 	CreateOnReadFile bool
-	
+
 	// CreateOnRepoMap creates repo-map references after repo_map tool calls
 	CreateOnRepoMap bool
-	
+
 	// CreateOnRecent creates recent-files references after recent_files tool calls
 	CreateOnRecent bool
-	
+
 	// MinFileSize is the minimum file size (bytes) to create a reference for
 	MinFileSize int
-	
+
 	// ExpiresAfter is how long repo-map/recent-file references last
 	ExpiresAfter time.Duration
 }
@@ -43,7 +42,7 @@ func DefaultAutoReferenceConfig() AutoReferenceConfig {
 type AutoReferenceManager struct {
 	store  *Store
 	config AutoReferenceConfig
-	
+
 	// repoRoot is used to make file paths relative
 	repoRoot string
 }
@@ -86,49 +85,58 @@ func (m *AutoReferenceManager) createFileReference(toolID, inputJSON string) err
 	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
 		return fmt.Errorf("failed to parse read_file input: %w", err)
 	}
-	
+
 	filePath := input.Path
 	if filePath == "" {
 		return fmt.Errorf("no file path in read_file input")
 	}
-	
-	// Make path relative to repo root
+
+	// Make path relative to repo root for display
 	relPath, err := filepath.Rel(m.repoRoot, filePath)
 	if err != nil {
-		relPath = filePath // Use absolute if relative fails
+		relPath = filepath.Base(filePath) // Just use basename if relative fails
 	}
-	
+
+	// Make path absolute for lazy loading
+	absPath := filePath
+	if !filepath.IsAbs(absPath) {
+		absPath, err = filepath.Abs(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path for %s: %w", filePath, err)
+		}
+	}
+
 	// Check file size
-	info, err := os.Stat(filePath)
+	info, err := os.Stat(absPath)
 	if err != nil {
-		return fmt.Errorf("failed to stat file %s: %w", filePath, err)
+		return fmt.Errorf("failed to stat file %s: %w", absPath, err)
 	}
-	
+
 	if info.Size() < int64(m.config.MinFileSize) {
 		return nil // Too small to reference
 	}
-	
+
 	// Count lines for summary
-	lineCount := countLines(filePath)
-	
-	summary := fmt.Sprintf("File %s (%d lines, read at %s)", 
+	lineCount := countLines(absPath)
+
+	summary := fmt.Sprintf("File %s (%d lines, read at %s)",
 		relPath, lineCount, time.Now().Format("15:04"))
-	
+
 	// Create lazy reference (upsert by file path to avoid duplicates)
 	mem := Memory{
-		ID:         "fileref:" + relPath, // Deterministic ID for upsert
-		Content:    "", // Empty - lazy loaded
+		ID:         "fileref:" + relPath, // Deterministic ID for upsert (relative for readability)
+		Content:    "",                   // Empty - lazy loaded
 		Summary:    summary,
 		Tags:       []string{"file", "read-file", filepath.Base(filePath), filepath.Ext(filePath)},
 		RefType:    "file",
-		RefTarget:  relPath,
+		RefTarget:  absPath, // Store absolute path for lazy loading
 		IsLazy:     true,
 		Importance: 0.4, // Medium-low importance
 		CreatedAt:  time.Now(),
 		Tokens:     len(summary) / 3, // Tokens for the ref summary, not the file
 		Source:     "auto-reference",
 	}
-	
+
 	return m.store.Save(mem)
 }
 
@@ -137,15 +145,15 @@ func (m *AutoReferenceManager) createRepoMapReference(toolID, output string) err
 	lines := strings.Split(output, "\n")
 	packageCount := 0
 	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "pkg ") || 
-		   strings.HasPrefix(strings.TrimSpace(line), "package ") {
+		if strings.HasPrefix(strings.TrimSpace(line), "pkg ") ||
+			strings.HasPrefix(strings.TrimSpace(line), "package ") {
 			packageCount++
 		}
 	}
-	
-	summary := fmt.Sprintf("Repository structure (%d packages, generated %s)", 
+
+	summary := fmt.Sprintf("Repository structure (%d packages, generated %s)",
 		packageCount, time.Now().Format("15:04"))
-	
+
 	mem := Memory{
 		ID:         "repo-map", // Single entry, upserted each time
 		Content:    output,
@@ -159,7 +167,7 @@ func (m *AutoReferenceManager) createRepoMapReference(toolID, output string) err
 		Tokens:     (len(output) + 2) / 3,
 		Source:     "auto-reference",
 	}
-	
+
 	return m.store.Save(mem)
 }
 
@@ -172,9 +180,9 @@ func (m *AutoReferenceManager) createRecentFilesReference(toolID, output string)
 			fileCount++
 		}
 	}
-	
+
 	summary := fmt.Sprintf("Recently modified files (%d files)", fileCount)
-	
+
 	mem := Memory{
 		ID:         "recent-files", // Single entry, upserted
 		Content:    output,
@@ -188,7 +196,7 @@ func (m *AutoReferenceManager) createRecentFilesReference(toolID, output string)
 		Tokens:     (len(output) + 2) / 3,
 		Source:     "auto-reference",
 	}
-	
+
 	return m.store.Save(mem)
 }
 
@@ -203,12 +211,12 @@ func (m *AutoReferenceManager) CreateIdentityReferences(identityPath, soulPath, 
 		{soulPath, "soul", []string{"soul", "config", "always-load"}},
 		{userPath, "user", []string{"user", "config", "always-load"}},
 	}
-	
+
 	for _, ref := range refs {
 		if ref.path == "" || !fileExists(ref.path) {
 			continue
 		}
-		
+
 		// Make path relative to repo root
 		relPath := ref.path
 		if m.repoRoot != "" {
@@ -216,15 +224,15 @@ func (m *AutoReferenceManager) CreateIdentityReferences(identityPath, soulPath, 
 				relPath = rel
 			}
 		}
-		
+
 		info, err := os.Stat(ref.path)
 		if err != nil {
 			continue
 		}
-		
-		summary := fmt.Sprintf("%s config file (%s, %d bytes)", 
+
+		summary := fmt.Sprintf("%s config file (%s, %d bytes)",
 			strings.Title(ref.refType), relPath, info.Size())
-		
+
 		mem := Memory{
 			ID:         ref.refType + "-config",
 			Content:    "", // Lazy loaded
@@ -233,17 +241,17 @@ func (m *AutoReferenceManager) CreateIdentityReferences(identityPath, soulPath, 
 			RefType:    ref.refType,
 			RefTarget:  ref.path,
 			IsLazy:     true,
-			AlwaysLoad: true,  // Identity files always load
-			Importance: 1.0,   // Highest importance
+			AlwaysLoad: true, // Identity files always load
+			Importance: 1.0,  // Highest importance
 			CreatedAt:  time.Now(),
 			Tokens:     int(info.Size()) / 4,
 		}
-		
+
 		if err := m.store.Save(mem); err != nil {
 			return fmt.Errorf("failed to save %s reference: %w", ref.refType, err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -253,16 +261,16 @@ func (m *AutoReferenceManager) CreateFileReferenceFromPath(path string) error {
 	if !fileExists(path) {
 		return fmt.Errorf("file not found: %s", path)
 	}
-	
+
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
-	
+
 	if info.Size() < int64(m.config.MinFileSize) {
 		return nil // Too small to reference
 	}
-	
+
 	// Make path relative to repo root
 	relPath := path
 	if m.repoRoot != "" {
@@ -270,24 +278,24 @@ func (m *AutoReferenceManager) CreateFileReferenceFromPath(path string) error {
 			relPath = rel
 		}
 	}
-	
+
 	ext := filepath.Ext(path)
 	tags := []string{"file", "lazy-loaded"}
 	if ext != "" {
 		tags = append(tags, "ext:"+ext)
 	}
-	
+
 	// Detect file type
 	dir := filepath.Dir(relPath)
 	if strings.Contains(dir, "test") || strings.HasSuffix(path, "_test.go") {
 		tags = append(tags, "test")
 	}
-	
+
 	summary := fmt.Sprintf("%s (%d lines)", relPath, countLines(path))
-	
+
 	// Generate a stable ID from the file path
 	id := "file:" + strings.ReplaceAll(relPath, "/", ":")
-	
+
 	mem := Memory{
 		ID:         id,
 		Content:    "", // Lazy loaded
@@ -300,7 +308,7 @@ func (m *AutoReferenceManager) CreateFileReferenceFromPath(path string) error {
 		CreatedAt:  time.Now(),
 		Tokens:     int(info.Size()) / 4,
 	}
-	
+
 	return m.store.Save(mem)
 }
 
