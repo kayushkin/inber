@@ -160,6 +160,10 @@ func SummarizeConversation(
 		anthropic.NewTextBlock("Understood. I have the conversation context from the summary above. Continuing from where we left off."),
 	))
 	
+	// Strip orphaned tool_results from recent messages
+	// (tool_use was in summarized messages, tool_result is in kept messages)
+	recentMessages = stripOrphanedToolResults(recentMessages)
+
 	// Append recent messages, ensuring valid alternation
 	for _, msg := range recentMessages {
 		newMessages = append(newMessages, msg)
@@ -173,17 +177,75 @@ func SummarizeConversation(
 
 // findTurnBoundary finds the message index where we should split.
 // Counts N turns from the end, returns the index of where "old" messages end.
+// Ensures we don't split between a tool_use and its tool_result.
 func findTurnBoundary(messages []anthropic.MessageParam, keepTurns int) int {
 	turns := 0
+	splitAt := 0
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == anthropic.MessageParamRoleUser {
 			turns++
 			if turns >= keepTurns {
-				return i
+				splitAt = i
+				break
 			}
 		}
 	}
-	return 0
+
+	// Now verify: check if any message in the "keep" section (splitAt onward)
+	// has a tool_result whose tool_use is in the "old" section (before splitAt).
+	// If so, move the split point back to include the tool_use message.
+	for {
+		toolUseIDs := collectToolUseIDs(messages[:splitAt])
+		orphanedResults := findOrphanedToolResults(messages[splitAt:], toolUseIDs)
+		if len(orphanedResults) == 0 {
+			break
+		}
+		// Move split back — find the earliest tool_use that's needed
+		if splitAt <= 0 {
+			break
+		}
+		splitAt--
+		// Back up to the previous user message boundary
+		for splitAt > 0 && messages[splitAt].Role != anthropic.MessageParamRoleUser {
+			splitAt--
+		}
+	}
+
+	return splitAt
+}
+
+// collectToolUseIDs returns all tool_use IDs in the given messages
+func collectToolUseIDs(messages []anthropic.MessageParam) map[string]bool {
+	ids := make(map[string]bool)
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if block.OfToolUse != nil {
+				ids[block.OfToolUse.ID] = true
+			}
+		}
+	}
+	return ids
+}
+
+// findOrphanedToolResults checks if any tool_result in messages references
+// a tool_use ID that's NOT in the provided set (meaning the tool_use was removed)
+func findOrphanedToolResults(messages []anthropic.MessageParam, removedToolUseIDs map[string]bool) []string {
+	// First collect all tool_use IDs in these messages
+	localToolUseIDs := collectToolUseIDs(messages)
+
+	var orphaned []string
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if block.OfToolResult != nil {
+				id := block.OfToolResult.ToolUseID
+				// Orphaned if: the tool_use is in the removed set AND not in the local set
+				if removedToolUseIDs[id] && !localToolUseIDs[id] {
+					orphaned = append(orphaned, id)
+				}
+			}
+		}
+	}
+	return orphaned
 }
 
 // countTurns counts user messages (each = one turn)
@@ -387,6 +449,35 @@ func fixAlternation(messages []anthropic.MessageParam) []anthropic.MessageParam 
 	}
 
 	return fixed
+}
+
+// stripOrphanedToolResults removes tool_result blocks that don't have
+// a matching tool_use in the message set. This happens when summarization
+// removes messages containing tool_use but keeps the tool_result response.
+func stripOrphanedToolResults(messages []anthropic.MessageParam) []anthropic.MessageParam {
+	// Collect all tool_use IDs
+	toolUseIDs := collectToolUseIDs(messages)
+
+	var result []anthropic.MessageParam
+	for _, msg := range messages {
+		hasContent := false
+		var cleanedContent []anthropic.ContentBlockParamUnion
+		for _, block := range msg.Content {
+			if block.OfToolResult != nil {
+				if !toolUseIDs[block.OfToolResult.ToolUseID] {
+					// Orphaned — skip this block
+					continue
+				}
+			}
+			cleanedContent = append(cleanedContent, block)
+			hasContent = true
+		}
+		if hasContent {
+			msg.Content = cleanedContent
+			result = append(result, msg)
+		}
+	}
+	return result
 }
 
 // ConversationCheckpoint represents a saved conversation state

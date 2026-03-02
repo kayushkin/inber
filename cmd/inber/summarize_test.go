@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -139,6 +140,75 @@ func makeMessages(n int) []anthropic.MessageParam {
 		}
 	}
 	return msgs
+}
+
+func TestStripOrphanedToolResults(t *testing.T) {
+	// Simulate: assistant used tool in message 1, user has tool_result in message 2
+	msgs := []anthropic.MessageParam{
+		// No tool_use in these messages (it was in the summarized part)
+		{
+			Role: anthropic.MessageParamRoleUser,
+			Content: []anthropic.ContentBlockParamUnion{
+				{OfToolResult: &anthropic.ToolResultBlockParam{
+					ToolUseID: "orphaned-tool-id",
+				}},
+			},
+		},
+		anthropic.NewAssistantMessage(anthropic.NewTextBlock("ok got it")),
+		anthropic.NewUserMessage(anthropic.NewTextBlock("next question")),
+	}
+
+	stripped := stripOrphanedToolResults(msgs)
+	// The orphaned tool_result message should be removed (no content left)
+	// Remaining: assistant + user = 2 messages
+	if len(stripped) != 2 {
+		t.Errorf("expected 2 messages after stripping, got %d", len(stripped))
+	}
+}
+
+func TestFindTurnBoundaryWithToolUse(t *testing.T) {
+	// Build messages where tool_use and tool_result span the potential split point
+	msgs := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("old message 1")),
+		anthropic.NewAssistantMessage(anthropic.NewTextBlock("old response 1")),
+		anthropic.NewUserMessage(anthropic.NewTextBlock("old message 2")),
+		// Assistant uses a tool
+		{
+			Role: anthropic.MessageParamRoleAssistant,
+			Content: []anthropic.ContentBlockParamUnion{
+				{OfToolUse: &anthropic.ToolUseBlockParam{
+					ID:    "tool-123",
+					Name:  "read_file",
+					Input: json.RawMessage(`{}`),
+				}},
+			},
+		},
+		// User has tool result
+		{
+			Role: anthropic.MessageParamRoleUser,
+			Content: []anthropic.ContentBlockParamUnion{
+				{OfToolResult: &anthropic.ToolResultBlockParam{
+					ToolUseID: "tool-123",
+				}},
+			},
+		},
+		anthropic.NewAssistantMessage(anthropic.NewTextBlock("got the file")),
+		anthropic.NewUserMessage(anthropic.NewTextBlock("recent 1")),
+		anthropic.NewAssistantMessage(anthropic.NewTextBlock("recent response 1")),
+	}
+
+	// Keep 2 turns — naive split would be at index 4 (tool_result),
+	// orphaning it from tool_use at index 3
+	idx := findTurnBoundary(msgs, 2)
+
+	// The split should not orphan tool results
+	keptMessages := msgs[idx:]
+	toolUseIDs := collectToolUseIDs(keptMessages)
+	orphaned := findOrphanedToolResults(keptMessages, collectToolUseIDs(msgs[:idx]))
+	if len(orphaned) > 0 {
+		t.Errorf("found %d orphaned tool results at split index %d, tool_use IDs in kept: %v",
+			len(orphaned), idx, toolUseIDs)
+	}
 }
 
 // contains is declared in postwrite_test.go
