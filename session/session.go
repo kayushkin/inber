@@ -36,18 +36,20 @@ type Entry struct {
 
 // Session tracks and logs a conversation.
 type Session struct {
-	mu        sync.Mutex
-	file      *os.File
-	enc       *json.Encoder
-	start     time.Time
-	model     string
-	agentName string // agent name for multi-agent support
-	parentID  string // parent session ID (empty for root)
-	sessionID string // unique session ID
-	turn      int    // current API round-trip number
-	totalIn   int
-	totalOut  int
-	db        *DB    // session tracking DB (nil if unavailable)
+	mu           sync.Mutex
+	file         *os.File
+	enc          *json.Encoder
+	start        time.Time
+	model        string
+	agentName    string          // agent name for multi-agent support
+	parentID     string          // parent session ID (empty for root)
+	sessionID    string          // unique session ID
+	turn         int             // current API round-trip number
+	totalIn      int
+	totalOut     int
+	db           *DB             // session tracking DB (nil if unavailable)
+	truncateCfg  TruncateConfig  // truncation config for tool results
+	truncateRefs map[string]string // map of tool_id -> full output for references
 }
 
 // shortID generates a 4-character hex random string for session uniqueness.
@@ -91,13 +93,15 @@ func New(logsDir, model, agentName, parentID string) (*Session, error) {
 	}
 
 	s := &Session{
-		file:      f,
-		enc:       json.NewEncoder(f),
-		start:     now,
-		model:     model,
-		agentName: agentName,
-		parentID:  parentID,
-		sessionID: sessionID,
+		file:         f,
+		enc:          json.NewEncoder(f),
+		start:        now,
+		model:        model,
+		agentName:    agentName,
+		parentID:     parentID,
+		sessionID:    sessionID,
+		truncateCfg:  DefaultTruncateConfig(),
+		truncateRefs: make(map[string]string),
 	}
 
 	// Log session start
@@ -143,6 +147,21 @@ func (s *Session) AttachDB(db *DB, command string) {
 			LogFile:   s.FilePath(),
 		})
 	}
+}
+
+// SetTruncateConfig updates the truncation configuration.
+func (s *Session) SetTruncateConfig(cfg TruncateConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.truncateCfg = cfg
+}
+
+// GetFullToolResult retrieves the full (untruncated) output for a tool call.
+// Returns empty string if tool result wasn't truncated or doesn't exist.
+func (s *Session) GetFullToolResult(toolID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.truncateRefs[toolID]
 }
 
 // currentTurn returns the current turn number (0 before first request).
@@ -210,15 +229,29 @@ func (s *Session) LogToolCall(toolID, name string, input json.RawMessage) {
 	})
 }
 
-// LogToolResult logs a tool result.
+// LogToolResult logs a tool result with automatic truncation.
 func (s *Session) LogToolResult(toolID, name, output string, isError bool) {
+	s.mu.Lock()
+	cfg := s.truncateCfg
+	s.mu.Unlock()
+
+	// Truncate if needed
+	result := TruncateToolResult(name, output, cfg)
+	
+	// Store full output as reference if truncated
+	if result.Truncated {
+		s.mu.Lock()
+		s.truncateRefs[toolID] = output
+		s.mu.Unlock()
+	}
+
 	s.write(Entry{
 		Timestamp: time.Now(),
 		Turn:      s.currentTurn(),
 		Role:      "tool_result",
 		ToolID:    toolID,
 		ToolName:  name,
-		Content:   output,
+		Content:   result.Displayed,
 		IsError:   isError,
 	})
 }
@@ -269,6 +302,39 @@ func (s *Session) LogCompaction(original []string, newID string, tags []string) 
 		Timestamp: time.Now(),
 		Role:      "compaction",
 		Content:   fmt.Sprintf("compacted %d memories into %s", len(original), newID),
+		Request:   json.RawMessage(raw),
+	})
+}
+
+// LogSummarize logs a conversation summarization event.
+func (s *Session) LogSummarize(turns int, summaryTokens int, keptMessages int, memoryID string) {
+	data := map[string]interface{}{
+		"summarized_turns": turns,
+		"summary_tokens":   summaryTokens,
+		"kept_messages":    keptMessages,
+		"memory_id":        memoryID,
+	}
+	raw, _ := json.Marshal(data)
+	s.write(Entry{
+		Timestamp: time.Now(),
+		Role:      "summarize",
+		Content:   fmt.Sprintf("summarized %d turns → %d token summary (kept %d recent messages, memory: %s)", turns, summaryTokens, keptMessages, memoryID),
+		Request:   json.RawMessage(raw),
+	})
+}
+
+// LogStash logs a content stashing event.
+func (s *Session) LogStash(messageType string, blockCount int, tokens int) {
+	data := map[string]interface{}{
+		"message_type": messageType,
+		"block_count":  blockCount,
+		"tokens":       tokens,
+	}
+	raw, _ := json.Marshal(data)
+	s.write(Entry{
+		Timestamp: time.Now(),
+		Role:      "stash",
+		Content:   fmt.Sprintf("stashed %d large blocks from %s message (%d tokens)", blockCount, messageType, tokens),
 		Request:   json.RawMessage(raw),
 	})
 }
@@ -364,7 +430,9 @@ func (s *Session) appendTimelineEntry(turn, inTokens, outTokens, toolCalls int) 
 	// Reconstruct timeline events for this turn from the JSONL
 	events, startTime, err := ReconstructTimelineFromJSONL(s.file.Name())
 	if err != nil {
-		return // best-effort; don't crash on timeline failure
+		// Log error to stderr (won't crash session, but visible in terminal)
+		fmt.Fprintf(os.Stderr, "timeline generation failed (turn %d): %v\n", turn, err)
+		return
 	}
 
 	timelinePath := filepath.Join(filepath.Dir(s.file.Name()), "timeline.md")

@@ -85,6 +85,7 @@ func runChat(cmd *cobra.Command, args []string) {
 
 		DisplayResponse(result.Text)
 		DisplayStats(result, eng.Model)
+		DisplaySessionStats(eng.TurnCounter, eng.SessionInputTokens, eng.SessionOutputTokens, eng.SessionCost)
 
 		// Step mode
 		if chatStep {

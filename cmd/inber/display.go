@@ -294,14 +294,40 @@ func DisplayResponse(text string) {
 }
 
 // DisplayStats prints token usage and cost using the shared CalcCost from session package.
+// Now also displays cumulative session stats if engine is provided.
 func DisplayStats(result *agent.TurnResult, model string) {
-	ev := session.TimelineEvent{
-		Type:         "stats",
-		InputTokens:  result.InputTokens,
-		OutputTokens: result.OutputTokens,
-		ToolCalls:    result.ToolCalls,
-		Cost:         session.CalcCost(model, result.InputTokens, result.OutputTokens),
-		Model:        model,
+	cost := session.CalcCost(model, result.InputTokens, result.OutputTokens)
+	total := result.InputTokens + result.OutputTokens
+	
+	// Show prominent token summary
+	fmt.Printf("\n%s┌─ Turn Tokens ─────────────────%s\n", dim, reset)
+	fmt.Printf("%s│%s in=%s%d%s  out=%s%d%s  total=%s%d%s", 
+		dim, reset,
+		cyan, result.InputTokens, reset,
+		cyan, result.OutputTokens, reset,
+		bold+cyan, total, reset)
+	
+	if result.ToolCalls > 0 {
+		fmt.Printf("  tools=%s%d%s", yellow, result.ToolCalls, reset)
 	}
-	fmt.Println(session.FormatTerminalStats(ev))
+	
+	if cost > 0 {
+		fmt.Printf("  cost=%s$%.4f%s", green, cost, reset)
+	}
+	
+	fmt.Printf("\n%s└───────────────────────────────%s\n", dim, reset)
+}
+
+// DisplaySessionStats prints cumulative session token usage and cost.
+func DisplaySessionStats(turnNum, inputTokens, outputTokens int, cost float64) {
+	total := inputTokens + outputTokens
+	
+	fmt.Printf("%s│ Session (turn %d): in=%d out=%d total=%s%d%s cost=%s$%.4f%s%s\n", 
+		dim,
+		turnNum,
+		inputTokens,
+		outputTokens,
+		cyan, total, dim,
+		green, cost, dim,
+		reset)
 }

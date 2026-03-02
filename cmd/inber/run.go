@@ -101,8 +101,12 @@ func runRun(cmd *cobra.Command, args []string) {
 	// Print response to stdout — clean, no ANSI
 	fmt.Print(result.Text)
 
-	// Stats to stderr
+	// Stats to stderr - more prominent token logging
 	cost := session.CalcCost(eng.Model, result.InputTokens, result.OutputTokens)
-	fmt.Fprintf(os.Stderr, "\n[in=%d | out=%d | tools=%d | $%.4f]\n",
-		result.InputTokens, result.OutputTokens, result.ToolCalls, cost)
+	total := result.InputTokens + result.OutputTokens
+	fmt.Fprintf(os.Stderr, "\n┌─ Tokens ──────────────────────\n")
+	fmt.Fprintf(os.Stderr, "│ in=%d  out=%d  total=%d  tools=%d\n", 
+		result.InputTokens, result.OutputTokens, total, result.ToolCalls)
+	fmt.Fprintf(os.Stderr, "│ cost=$%.4f\n", cost)
+	fmt.Fprintf(os.Stderr, "└───────────────────────────────\n")
 }

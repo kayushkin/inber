@@ -73,6 +73,11 @@ type Engine struct {
 	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
 	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
 	postWriteHook   *PostWriteHook                // runs build/test after file writes
+	
+	// Session-level token tracking (exported for display)
+	SessionInputTokens  int
+	SessionOutputTokens int
+	SessionCost         float64
 }
 
 // NewEngine creates and fully initializes an Engine: context, memory, tools, session, hooks.
@@ -187,8 +192,8 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		e.workspace = ws
 		if !cfg.NewSession {
 			if msgs, err := ws.LoadMessages(); err == nil && len(msgs) > 0 {
-				e.Messages = msgs
-				Log.Info("resuming session (%d messages)", len(msgs))
+				e.Messages = repairDanglingToolUse(msgs)
+				Log.Info("resuming session (%d messages)", len(e.Messages))
 			}
 		} else {
 			ws.ClearMessages()
@@ -215,6 +220,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		if sdb != nil {
 			sess.AttachDB(sdb, cfg.CommandName)
 		}
+		
+		// Configure automatic truncation of large tool results
+		truncCfg := sessionMod.TruncateConfigForRole(e.AgentName)
+		sess.SetTruncateConfig(truncCfg)
 	}
 
 	// API client (via aiauth with auto-refresh)
@@ -666,6 +675,10 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 					totalStashed += s.Tokens
 				}
 				Log.Info("stashed %d large blocks from user message (%d tokens)", len(stashed), totalStashed)
+				
+				if e.Session != nil {
+					e.Session.LogStash("user", len(stashed), totalStashed)
+				}
 			}
 		}
 	}
@@ -744,6 +757,10 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 									totalStashed += s.Tokens
 								}
 								Log.Info("stashed %d large blocks from assistant response (%d tokens)", len(stashed), totalStashed)
+								
+								if e.Session != nil {
+									e.Session.LogStash("assistant", len(stashed), totalStashed)
+								}
 							} else {
 								modifiedContent = append(modifiedContent, block)
 							}
@@ -768,6 +785,11 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	
 	// Checkpoint if needed (every 20 turns)
 	e.checkpointIfNeeded()
+	
+	// Track cumulative session tokens
+	e.SessionInputTokens += result.InputTokens
+	e.SessionOutputTokens += result.OutputTokens
+	e.SessionCost += sessionMod.CalcCost(e.Model, result.InputTokens, result.OutputTokens)
 
 	return result, nil
 }
@@ -816,6 +838,10 @@ func (e *Engine) summarizeIfNeeded() {
 		e.Messages = summarized
 		Log.Info("summarized %d turns → %d token summary (kept %d recent messages, memory: %s)",
 			result.SummarizedTurns, result.SummaryTokens, result.KeptMessages, result.MemoryID)
+		
+		if e.Session != nil {
+			e.Session.LogSummarize(result.SummarizedTurns, result.SummaryTokens, result.KeptMessages, result.MemoryID)
+		}
 	}
 }
 
