@@ -146,6 +146,7 @@ func ReconstructTimelineFromJSONL(logFilePath string) ([]TimelineEvent, time.Tim
 	var events []TimelineEvent
 	var startTime time.Time
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB lines
 	turnToolCount := make(map[int]int) // turn -> tool count
 
 	for scanner.Scan() {
