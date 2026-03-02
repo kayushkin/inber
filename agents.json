@@ -1,197 +1,197 @@
 {
-  "default": "task-manager",
-  "agents": {
-    "task-manager": {
-      "name": "task-manager",
-      "role": "orchestrator — primary task dispatcher",
-      "model": "claude-sonnet-4-5",
-      "thinking": 2048,
-      "tools": [
-        "spawn_agent",
-        "check_spawns",
-        "read_file",
-        "write_file",
-        "edit_file",
-        "list_files",
-        "memory_search",
-        "memory_save",
-        "memory_expand",
-        "memory_forget"
-      ],
-      "context": {
-        "tags": [
-          "identity",
-          "coordination",
-          "planning"
-        ],
-        "budget": 40000
-      }
-    },
-    "fionn": {
-      "name": "fionn",
-      "role": "coder — code implementation specialist",
-      "model": "claude-sonnet-4-5",
-      "thinking": 0,
-      "tools": [
-        "shell",
-        "read_file",
-        "write_file",
-        "edit_file",
-        "list_files",
-        "memory_search",
-        "memory_save",
-        "memory_expand",
-        "memory_forget"
-      ],
-      "context": {
-        "tags": [
-          "code",
-          "errors",
-          "tests",
-          "debugging",
-          "project"
-        ],
-        "budget": 50000
-      }
-    },
-    "scathach": {
-      "name": "scathach",
-      "role": "tester — testing and validation specialist",
-      "model": "claude-sonnet-4-5",
-      "thinking": 0,
-      "tools": [
-        "shell",
-        "read_file",
-        "list_files",
-        "memory_search"
-      ],
-      "context": {
-        "tags": [
-          "code",
-          "tests",
-          "validation",
-          "project"
-        ],
-        "budget": 40000
-      }
-    },
-    "oisin": {
-      "name": "oisin",
-      "role": "courier — deployment and git workflow specialist",
-      "model": "claude-sonnet-4-5",
-      "thinking": 0,
-      "tools": [
-        "shell",
-        "read_file",
-        "list_files",
-        "memory_search",
-        "memory_save"
-      ],
-      "context": {
-        "tags": [
-          "deployment",
-          "git",
-          "project",
-          "verification"
-        ],
-        "budget": 30000
-      }
-    },
-    "bran": {
-      "name": "bran",
-      "role": "orchestrator — software development pipeline coordinator",
-      "model": "claude-sonnet-4-5",
-      "thinking": 2048,
-      "tools": [
-        "spawn_agent",
-        "check_spawns",
-        "read_file",
-        "list_files",
-        "memory_search",
-        "memory_save"
-      ],
-      "context": {
-        "tags": [
-          "identity",
-          "coordination",
-          "pipeline",
-          "project"
-        ],
-        "budget": 30000
-      }
-    },
-    "researcher": {
-      "name": "researcher",
-      "role": "research and analysis specialist",
-      "model": "claude-sonnet-4-5",
-      "thinking": 0,
-      "tools": [
-        "read_file",
-        "list_files",
-        "memory_search",
-        "memory_expand"
-      ],
-      "context": {
-        "tags": [
-          "research",
-          "data",
-          "analysis",
-          "documentation"
-        ],
-        "budget": 30000
-      }
-    },
-    "orchestrator": {
-      "name": "orchestrator",
-      "role": "orchestrator — task delegation manager",
-      "model": "claude-sonnet-4-5",
-      "thinking": 2048,
-      "tools": [
-        "spawn_agent",
-        "check_spawns",
-        "read_file",
-        "list_files",
-        "memory_search",
-        "memory_save"
-      ],
-      "context": {
-        "tags": [
-          "identity",
-          "delegation",
-          "orchestration"
-        ],
-        "budget": 20000
-      }
-    },
-    "party": {
-      "name": "party",
-      "role": "inber-party fullstack developer — RPG UI for agent visualization",
-      "model": "claude-opus-4-6",
-      "thinking": 0,
-      "tools": [
-        "shell",
-        "read_file",
-        "write_file",
-        "edit_file",
-        "list_files",
-        "memory_search",
-        "memory_save",
-        "memory_expand",
-        "memory_forget"
-      ],
-      "context": {
-        "tags": [
-          "code",
-          "frontend",
-          "backend",
-          "react",
-          "go",
-          "postgres",
-          "inber-party",
-          "project"
-        ],
-        "budget": 50000
-      }
+    "default": "task-manager",
+    "agents": {
+        "task-manager": {
+            "name": "task-manager",
+            "role": "orchestrator \u2014 primary task dispatcher",
+            "model": "claude-opus-4-6",
+            "thinking": 2048,
+            "tools": [
+                "spawn_agent",
+                "check_spawns",
+                "read_file",
+                "write_file",
+                "edit_file",
+                "list_files",
+                "memory_search",
+                "memory_save",
+                "memory_expand",
+                "memory_forget"
+            ],
+            "context": {
+                "tags": [
+                    "identity",
+                    "coordination",
+                    "planning"
+                ],
+                "budget": 40000
+            }
+        },
+        "fionn": {
+            "name": "fionn",
+            "role": "coder \u2014 code implementation specialist",
+            "model": "claude-sonnet-4-5",
+            "thinking": 0,
+            "tools": [
+                "shell",
+                "read_file",
+                "write_file",
+                "edit_file",
+                "list_files",
+                "memory_search",
+                "memory_save",
+                "memory_expand",
+                "memory_forget"
+            ],
+            "context": {
+                "tags": [
+                    "code",
+                    "errors",
+                    "tests",
+                    "debugging",
+                    "project"
+                ],
+                "budget": 50000
+            }
+        },
+        "scathach": {
+            "name": "scathach",
+            "role": "tester \u2014 testing and validation specialist",
+            "model": "claude-sonnet-4-5",
+            "thinking": 0,
+            "tools": [
+                "shell",
+                "read_file",
+                "list_files",
+                "memory_search"
+            ],
+            "context": {
+                "tags": [
+                    "code",
+                    "tests",
+                    "validation",
+                    "project"
+                ],
+                "budget": 40000
+            }
+        },
+        "oisin": {
+            "name": "oisin",
+            "role": "courier \u2014 deployment and git workflow specialist",
+            "model": "claude-sonnet-4-5",
+            "thinking": 0,
+            "tools": [
+                "shell",
+                "read_file",
+                "list_files",
+                "memory_search",
+                "memory_save"
+            ],
+            "context": {
+                "tags": [
+                    "deployment",
+                    "git",
+                    "project",
+                    "verification"
+                ],
+                "budget": 30000
+            }
+        },
+        "bran": {
+            "name": "bran",
+            "role": "orchestrator \u2014 software development pipeline coordinator",
+            "model": "claude-sonnet-4-5",
+            "thinking": 2048,
+            "tools": [
+                "spawn_agent",
+                "check_spawns",
+                "read_file",
+                "list_files",
+                "memory_search",
+                "memory_save"
+            ],
+            "context": {
+                "tags": [
+                    "identity",
+                    "coordination",
+                    "pipeline",
+                    "project"
+                ],
+                "budget": 30000
+            }
+        },
+        "researcher": {
+            "name": "researcher",
+            "role": "research and analysis specialist",
+            "model": "claude-sonnet-4-5",
+            "thinking": 0,
+            "tools": [
+                "read_file",
+                "list_files",
+                "memory_search",
+                "memory_expand"
+            ],
+            "context": {
+                "tags": [
+                    "research",
+                    "data",
+                    "analysis",
+                    "documentation"
+                ],
+                "budget": 30000
+            }
+        },
+        "orchestrator": {
+            "name": "orchestrator",
+            "role": "orchestrator \u2014 task delegation manager",
+            "model": "claude-sonnet-4-5",
+            "thinking": 2048,
+            "tools": [
+                "spawn_agent",
+                "check_spawns",
+                "read_file",
+                "list_files",
+                "memory_search",
+                "memory_save"
+            ],
+            "context": {
+                "tags": [
+                    "identity",
+                    "delegation",
+                    "orchestration"
+                ],
+                "budget": 20000
+            }
+        },
+        "party": {
+            "name": "party",
+            "role": "inber-party fullstack developer \u2014 RPG UI for agent visualization",
+            "model": "claude-opus-4-6",
+            "thinking": 0,
+            "tools": [
+                "shell",
+                "read_file",
+                "write_file",
+                "edit_file",
+                "list_files",
+                "memory_search",
+                "memory_save",
+                "memory_expand",
+                "memory_forget"
+            ],
+            "context": {
+                "tags": [
+                    "code",
+                    "frontend",
+                    "backend",
+                    "react",
+                    "go",
+                    "postgres",
+                    "inber-party",
+                    "project"
+                ],
+                "budget": 50000
+            }
+        }
     }
-  }
 }
