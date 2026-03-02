@@ -9,142 +9,16 @@ import (
 	"time"
 )
 
-// LoadRecentlyModifiedAsStubs loads recently modified files as stub chunks
-// instead of full content, saving tokens. Use read_file tool to load full content.
-// Uses importance scoring to prioritize which files to load.
-func LoadRecentlyModifiedAsStubs(store *Store, rootDir string, since time.Duration) error {
-	// Use importance scorer to rank files
-	scorer := NewImportanceScorer(rootDir, since)
-	importantFiles, err := scorer.ScoreRecentFiles(since)
-	if err != nil {
-		// Fall back to simple recency if scoring fails
-		return loadRecentlyModifiedAsStubsSimple(store, rootDir, since)
-	}
-	
-	if len(importantFiles) == 0 {
-		return nil
-	}
-	
-	// Sort by importance
-	SortByImportance(importantFiles)
-	
-	for _, fileInfo := range importantFiles {
-		// Read to count lines
-		content, err := os.ReadFile(fileInfo.Path)
-		lineCount := 0
-		if err == nil {
-			lineCount = strings.Count(string(content), "\n") + 1
-		}
-		
-		// Format time since modified
-		timeSince := time.Since(time.Now()) // Will be calculated from modtime in real usage
-		info, err := os.Stat(fileInfo.Path)
-		if err == nil {
-			timeSince = time.Since(info.ModTime())
-		}
-		
-		var timeStr string
-		if timeSince < time.Minute {
-			timeStr = "just now"
-		} else if timeSince < time.Hour {
-			timeStr = fmt.Sprintf("%dm ago", int(timeSince.Minutes()))
-		} else if timeSince < 24*time.Hour {
-			timeStr = fmt.Sprintf("%dh ago", int(timeSince.Hours()))
-		} else {
-			timeStr = fmt.Sprintf("%dd ago", int(timeSince.Hours()/24))
-		}
-		
-		// Create compact stub with importance indicator
-		importance := "⭐"
-		if fileInfo.Score > 0.7 {
-			importance = "⭐⭐⭐" // High importance
-		} else if fileInfo.Score > 0.5 {
-			importance = "⭐⭐" // Medium importance
-		}
-		
-		stubText := fmt.Sprintf("%s %s (%d lines, %s, score: %.2f)",
-			importance, fileInfo.RelativePath, lineCount, timeStr, fileInfo.Score)
-		
-		chunk := Chunk{
-			ID:       "recent:" + fileInfo.RelativePath,
-			Text:     stubText,
-			Tags:     []string{"recent", "file:" + fileInfo.RelativePath, filepath.Base(fileInfo.RelativePath)},
-			Source:   "file",
-			IsStub:   true,
-			StubPath: fileInfo.RelativePath,
-		}
-		
-		if err := store.Add(chunk); err != nil {
-			return err
-		}
-	}
-	
-	return nil
-}
-
-// loadRecentlyModifiedAsStubsSimple is the fallback without importance scoring
-func loadRecentlyModifiedAsStubsSimple(store *Store, rootDir string, since time.Duration) error {
-	files, err := FindRecentlyModified(rootDir, since)
-	if err != nil {
-		return err
-	}
-	
-	if len(files) == 0 {
-		return nil
-	}
-	
-	for _, file := range files {
-		// Read to count lines
-		content, err := os.ReadFile(file.Path)
-		lineCount := 0
-		if err == nil {
-			lineCount = strings.Count(string(content), "\n") + 1
-		}
-		
-		// Format time since modified
-		timeSince := time.Since(file.ModTime)
-		var timeStr string
-		if timeSince < time.Minute {
-			timeStr = "just now"
-		} else if timeSince < time.Hour {
-			timeStr = fmt.Sprintf("%dm ago", int(timeSince.Minutes()))
-		} else if timeSince < 24*time.Hour {
-			timeStr = fmt.Sprintf("%dh ago", int(timeSince.Hours()))
-		} else {
-			timeStr = fmt.Sprintf("%dd ago", int(timeSince.Hours()/24))
-		}
-		
-		// Create compact stub
-		stubText := fmt.Sprintf("%s (%d lines, %s)",
-			file.RelativePath, lineCount, timeStr)
-		
-		chunk := Chunk{
-			ID:       "recent:" + file.RelativePath,
-			Text:     stubText,
-			Tags:     []string{"recent", "file:" + file.RelativePath, filepath.Base(file.RelativePath)},
-			Source:   "file",
-			IsStub:   true,
-			StubPath: file.RelativePath,
-		}
-		
-		if err := store.Add(chunk); err != nil {
-			return err
-		}
-	}
-	
-	return nil
-}
-
-// RecentFile represents a file that was recently modified
+// RecentFile represents a recently modified file
 type RecentFile struct {
-	Path         string
 	RelativePath string
+	AbsolutePath string
 	ModTime      time.Time
 	Source       string // "git" or "mtime"
 }
 
-// FindRecentlyModified finds files modified within the given duration
-// Tries git first, falls back to mtime if git is not available
+// FindRecentlyModified finds files modified within the given duration.
+// Tries git first, falls back to filesystem mtime.
 func FindRecentlyModified(rootDir string, since time.Duration) ([]RecentFile, error) {
 	// Try git first
 	gitFiles, err := findRecentlyModifiedGit(rootDir, since)
@@ -198,8 +72,8 @@ func findRecentlyModifiedGit(rootDir string, since time.Duration) ([]RecentFile,
 		// Only include if still within the time window
 		if time.Since(info.ModTime()) <= since {
 			results = append(results, RecentFile{
-				Path:         fullPath,
 				RelativePath: relPath,
+				AbsolutePath: fullPath,
 				ModTime:      info.ModTime(),
 				Source:       "git",
 			})
@@ -209,22 +83,21 @@ func findRecentlyModifiedGit(rootDir string, since time.Duration) ([]RecentFile,
 	return results, nil
 }
 
-// findRecentlyModifiedMtime walks the directory and checks modification times
+// findRecentlyModifiedMtime scans filesystem for recently modified files
 func findRecentlyModifiedMtime(rootDir string, since time.Duration) ([]RecentFile, error) {
 	cutoff := time.Now().Add(-since)
 	var results []RecentFile
 	
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			return nil // Skip errors
 		}
 		
 		// Skip directories
 		if info.IsDir() {
-			baseName := filepath.Base(path)
-			if baseName == ".git" || baseName == "node_modules" || 
-			   baseName == "vendor" || baseName == ".openclaw" ||
-			   baseName == "logs" {
+			// Skip common ignore patterns
+			base := filepath.Base(path)
+			if base == ".git" || base == "node_modules" || base == "vendor" || base == ".openclaw" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -232,10 +105,14 @@ func findRecentlyModifiedMtime(rootDir string, since time.Duration) ([]RecentFil
 		
 		// Check if modified recently
 		if info.ModTime().After(cutoff) {
-			relPath, _ := filepath.Rel(rootDir, path)
+			relPath, err := filepath.Rel(rootDir, path)
+			if err != nil {
+				relPath = path
+			}
+			
 			results = append(results, RecentFile{
-				Path:         path,
 				RelativePath: relPath,
+				AbsolutePath: path,
 				ModTime:      info.ModTime(),
 				Source:       "mtime",
 			})
@@ -247,7 +124,7 @@ func findRecentlyModifiedMtime(rootDir string, since time.Duration) ([]RecentFil
 	return results, err
 }
 
-// FormatRecentFiles formats recent files as a string summary
+// FormatRecentFiles formats recent files into a human-readable string
 func FormatRecentFiles(files []RecentFile) string {
 	if len(files) == 0 {
 		return "No recently modified files."
