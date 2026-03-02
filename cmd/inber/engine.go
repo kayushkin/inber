@@ -437,8 +437,10 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 			TokenBudget:       tokenBudget,
 			MinImportance:     minImportance,
 			IncludeAlwaysLoad: true,
-			ExcludeTags:       []string{"session-summary", "repo-map", "code-introspection"}, // exclude noise and large generated content
-			MaxChunkSize:      3000, // Skip memories larger than 3K tokens (use repo_map tool instead)
+			ExcludeTags:       []string{"session-summary", "repo-map", "code-introspection"},
+			MaxChunkSize:      5000,  // Hard skip memories above 5K tokens
+			TruncateThreshold: 500,   // Preview + expand hint for memories above 500 tokens
+			TruncatePreview:   300,   // ~100 token preview
 		}
 
 		memories, tokensUsed, err := e.MemStore.BuildContext(req)

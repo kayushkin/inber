@@ -13,6 +13,8 @@ type BuildContextRequest struct {
 	ExcludeTags       []string // Tags to exclude (e.g., "test", "archived")
 	IncludeAlwaysLoad bool     // Whether to include AlwaysLoad memories (default: true)
 	MaxChunkSize      int      // Skip memories larger than this (default: 0 = no limit)
+	TruncateThreshold int      // Truncate memories larger than this to a preview (default: 0 = no truncation)
+	TruncatePreview   int      // How many chars to keep in preview (default: 300)
 }
 
 // BuildContext retrieves memories suitable for including in a prompt.
@@ -105,6 +107,13 @@ func (s *Store) BuildContext(req BuildContextRequest) ([]Memory, int, error) {
 		return candidates[i].memory.Tokens < candidates[j].memory.Tokens
 	})
 
+	// Set truncation defaults
+	truncateThreshold := req.TruncateThreshold
+	truncatePreview := req.TruncatePreview
+	if truncatePreview <= 0 {
+		truncatePreview = 300 // ~100 tokens preview
+	}
+
 	// Build result list within budget
 	var result []Memory
 	tokensUsed := 0
@@ -112,11 +121,14 @@ func (s *Store) BuildContext(req BuildContextRequest) ([]Memory, int, error) {
 	for _, candidate := range candidates {
 		m := candidate.memory
 
+		// Auto-truncate large memories to preview + expand hint
+		if truncateThreshold > 0 && m.Tokens > truncateThreshold && !m.AlwaysLoad {
+			m = truncateMemoryToPreview(m, truncatePreview)
+		}
+
 		// Check budget
 		if tokensUsed+m.Tokens > req.TokenBudget {
-			// If it's an AlwaysLoad memory, we have a problem
 			if m.AlwaysLoad {
-				// Still include it but warn
 				result = append(result, m)
 				tokensUsed += m.Tokens
 			}
@@ -128,6 +140,52 @@ func (s *Store) BuildContext(req BuildContextRequest) ([]Memory, int, error) {
 	}
 
 	return result, tokensUsed, nil
+}
+
+// truncateMemoryToPreview replaces a large memory's content with a preview
+// and a hint to use memory_expand(id) for the full content.
+func truncateMemoryToPreview(m Memory, previewChars int) Memory {
+	content := m.Content
+	// Use summary if available and content is empty (lazy ref)
+	if content == "" && m.Summary != "" {
+		content = m.Summary
+	}
+	if len(content) <= previewChars {
+		return m // Already small enough
+	}
+
+	preview := content[:previewChars]
+	// Try to break at a word/line boundary
+	if lastNewline := lastIndexByte(preview, '\n'); lastNewline > previewChars/2 {
+		preview = preview[:lastNewline]
+	} else if lastSpace := lastIndexByte(preview, ' '); lastSpace > previewChars/2 {
+		preview = preview[:lastSpace]
+	}
+
+	m.Content = preview + "\n\n[... truncated — use memory_expand(\"" + m.ID + "\") for full content (" + itoa(m.Tokens) + " tokens)]"
+	m.Tokens = (len(m.Content) + 2) / 3
+	return m
+}
+
+func lastIndexByte(s string, c byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	s := ""
+	for n > 0 {
+		s = string(rune('0'+n%10)) + s
+		n /= 10
+	}
+	return s
 }
 
 // memoryWithScore pairs a memory with its relevance score

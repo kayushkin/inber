@@ -257,4 +257,50 @@ func TestBuildContext(t *testing.T) {
 			}
 		}
 	})
+
+	// Test 7: TruncateThreshold
+	t.Run("TruncateThreshold", func(t *testing.T) {
+		// Save a large memory
+		largeContent := ""
+		for i := 0; i < 200; i++ {
+			largeContent += "This is a line of content that makes this memory quite large. "
+		}
+		store.Save(Memory{
+			ID:         "large-truncatable",
+			Content:    largeContent,
+			Tags:       []string{"trunctest"},
+			Importance: 0.8,
+			Tokens:     (len(largeContent) + 2) / 3,
+		})
+
+		req := BuildContextRequest{
+			Tags:              []string{"trunctest"},
+			TokenBudget:       100000,
+			MinImportance:     0.0,
+			IncludeAlwaysLoad: false,
+			TruncateThreshold: 100,  // Truncate anything over 100 tokens
+			TruncatePreview:   200,  // 200 char preview
+		}
+
+		results, _, err := store.BuildContext(req)
+		if err != nil {
+			t.Fatalf("BuildContext failed: %v", err)
+		}
+
+		found := false
+		for _, m := range results {
+			if m.ID == "large-truncatable" {
+				found = true
+				if len(m.Content) > 500 {
+					t.Errorf("expected truncated content, got %d chars", len(m.Content))
+				}
+				if !contains(m.Content, "memory_expand") {
+					t.Error("truncated content should contain memory_expand hint")
+				}
+			}
+		}
+		if !found {
+			t.Error("large-truncatable memory not found in results")
+		}
+	})
 }
