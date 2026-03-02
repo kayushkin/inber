@@ -19,6 +19,7 @@ import (
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
 	"github.com/kayushkin/inber/tools"
+	modelstore "github.com/kayushkin/model-store"
 )
 
 // DisplayHooks configures how engine events are shown to the user.
@@ -250,12 +251,24 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 	}
 
-	// API client (via aiauth with auto-refresh)
+	// API client (via model-store or aiauth fallback)
 	aiauth.RegisterProvider(&providers.Anthropic{})
 	e.AuthStore = aiauth.DefaultStore()
-	client, err := e.AuthStore.AnthropicClient()
+	
+	modelClient, err := agent.NewModelClient(e.Model)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get Anthropic client: %w", err)
+		return nil, fmt.Errorf("failed to create model client: %w", err)
+	}
+	
+	// Update e.Model with the resolved model ID (in case it was an alias)
+	if modelClient.Model != nil {
+		e.Model = modelClient.Model.ID
+	}
+	
+	// For now, we only support Anthropic
+	client, err := modelClient.GetAnthropicClient()
+	if err != nil {
+		return nil, fmt.Errorf("non-Anthropic providers not yet supported: %w", err)
 	}
 	e.Client = client
 
@@ -847,6 +860,18 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	e.SessionInputTokens += result.InputTokens
 	e.SessionOutputTokens += result.OutputTokens
 	e.SessionCost += sessionMod.CalcCost(e.Model, result.InputTokens, result.OutputTokens)
+
+	// Track usage in model-store
+	if store, err := modelstore.Open(""); err == nil {
+		defer store.Close()
+		agentName := e.AgentName
+		if agentName == "" {
+			agentName = "inber"
+		}
+		if err := store.TrackUsage(agentName, e.Model, int64(result.InputTokens), int64(result.OutputTokens)); err != nil {
+			Log.Warn("failed to track usage in model-store: %v", err)
+		}
+	}
 
 	return result, nil
 }
