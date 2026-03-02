@@ -672,8 +672,9 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	e.Messages = append(e.Messages, anthropic.NewUserMessage(anthropic.NewTextBlock(processedInput)))
 
-	// Apply conversation window (keep recent turns, summarize old ones)
-	// Prune conversation if needed (keep last 35 turns)
+	// 1a. Summarize if conversation is very long (compress old turns into summary)
+	e.summarizeIfNeeded()
+	// 1b. Prune remaining conversation (truncate tool results, old messages)
 	e.pruneIfNeeded()
 
 	systemBlocks := e.BuildSystemPrompt(processedInput)
@@ -769,6 +770,53 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	e.checkpointIfNeeded()
 
 	return result, nil
+}
+
+// summarizeIfNeeded checks if the conversation is long enough to warrant
+// summarization. Summarization compresses old turns into a compact summary,
+// saves the full conversation to memory, and replaces old messages.
+// Runs before pruning — summarize first, then prune what remains.
+func (e *Engine) summarizeIfNeeded() {
+	role := RoleDefault
+	if e.AgentConfig != nil && e.AgentConfig.Role != "" {
+		role = AgentRole(strings.ToLower(e.AgentConfig.Role))
+	}
+	cfg := DefaultSummarizeConfig(role)
+
+	if !ShouldSummarize(e.Messages, cfg) {
+		return
+	}
+
+	sessionID := ""
+	if e.Session != nil {
+		sessionID = e.Session.SessionID()
+	}
+
+	model := e.Model
+	if model == "" {
+		model = "claude-sonnet-4-5-20250929"
+	}
+
+	summarized, result, err := SummarizeConversation(
+		context.Background(),
+		e.Client,
+		e.Messages,
+		e.MemStore,
+		sessionID,
+		cfg,
+		model,
+	)
+
+	if err != nil {
+		Log.Warn("summarization failed: %v", err)
+		return
+	}
+
+	if result.Summarized {
+		e.Messages = summarized
+		Log.Info("summarized %d turns → %d token summary (kept %d recent messages, memory: %s)",
+			result.SummarizedTurns, result.SummaryTokens, result.KeptMessages, result.MemoryID)
+	}
 }
 
 // pruneIfNeeded checks if conversation should be pruned and does so if necessary.
