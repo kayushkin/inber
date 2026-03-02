@@ -20,6 +20,7 @@ var (
 	runSystem   string
 	runNew      bool
 	runDetach   bool
+	feedURL     string
 	
 	// Auto-workflow flags (Phase 1)
 	runAutoBranch bool
@@ -59,9 +60,44 @@ func init() {
 	runCmd.Flags().BoolVar(&runAutoCommit, "auto-commit", true, "Auto-commit after successful writes")
 	runCmd.Flags().BoolVar(&runAutoFormat, "auto-format", true, "Auto-format code after writes")
 	runCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "Run in a one-off session without affecting the main session")
+	runCmd.Flags().StringVar(&feedURL, "feed", "", "Connect to sí feed WebSocket (e.g. ws://localhost:8091/feed)")
 }
 
 func runRun(cmd *cobra.Command, args []string) {
+	// Feed mode: connect to sí WebSocket and serve turns
+	if feedURL != "" {
+		eng, err := NewEngine(EngineConfig{
+			Model:       runModel,
+			Thinking:    runThinking,
+			AgentName:   runAgent,
+			Raw:         runRaw,
+			NoTools:     runNoTools,
+			SystemOverride: runSystem,
+			CommandName: "feed",
+			NewSession:  true,
+			Display: &DisplayHooks{
+				OnToolCall:   DisplayToolCall,
+				OnToolResult: DisplayToolResult,
+			},
+			AutoWorkflow: AutoWorkflowConfig{
+				AutoBranch: runAutoBranch,
+				AutoCommit: runAutoCommit,
+				AutoFormat: runAutoFormat,
+			},
+		})
+		if err != nil {
+			Log.Error("%v", err)
+			os.Exit(1)
+		}
+		defer eng.Close()
+
+		if err := RunFeed(feedURL, eng); err != nil {
+			Log.Error("feed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Get message from args or stdin
 	var input string
 	if len(args) > 0 {
