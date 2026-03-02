@@ -217,7 +217,7 @@ func (s *Store) Save(m Memory) error {
 
 	// Auto-compute tokens if not set
 	if m.Tokens == 0 && m.Content != "" {
-		m.Tokens = len(m.Content) / 4 // rough estimate: 4 chars per token
+		m.Tokens = (len(m.Content) + 2) / 3 // ~3 chars per token
 	}
 	
 	// Set default ref_type if empty
@@ -225,10 +225,23 @@ func (s *Store) Save(m Memory) error {
 		m.RefType = "memory"
 	}
 
-	// Insert memory
+	// Upsert memory (insert or update on conflict)
 	query := `
 	INSERT INTO memories (id, content, summary, original_id, importance, access_count, last_accessed, created_at, source, embedding, always_load, expires_at, tokens, ref_type, ref_target, is_lazy)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		content = excluded.content,
+		summary = excluded.summary,
+		importance = excluded.importance,
+		last_accessed = excluded.last_accessed,
+		source = excluded.source,
+		embedding = excluded.embedding,
+		always_load = excluded.always_load,
+		expires_at = excluded.expires_at,
+		tokens = excluded.tokens,
+		ref_type = excluded.ref_type,
+		ref_target = excluded.ref_target,
+		is_lazy = excluded.is_lazy
 	`
 	_, err = tx.Exec(query,
 		m.ID, m.Content, nullString(m.Summary), nullString(m.OriginalID),
@@ -241,7 +254,10 @@ func (s *Store) Save(m Memory) error {
 		return fmt.Errorf("insert memory: %w", err)
 	}
 
-	// Insert tags
+	// Replace tags (delete old, insert new)
+	if _, err := tx.Exec("DELETE FROM memory_tags WHERE memory_id = ?", m.ID); err != nil {
+		return fmt.Errorf("delete old tags: %w", err)
+	}
 	if len(m.Tags) > 0 {
 		tagStmt, err := tx.Prepare("INSERT INTO memory_tags (memory_id, tag) VALUES (?, ?)")
 		if err != nil {

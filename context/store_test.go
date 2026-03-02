@@ -210,9 +210,9 @@ func TestEstimateTokens(t *testing.T) {
 		expect int
 	}{
 		{"", 0},
-		{"test", 1},       // 4 chars = 1 token
-		{"hello world", 2}, // 11 chars = 2.75 → 2 tokens
-		{"this is a longer sentence with more words", 10}, // 43 chars = 10.75 → 10 tokens
+		{"test", 2},        // 4 chars / 3 ≈ 2 tokens
+		{"hello world", 4}, // 11 chars / 3 ≈ 4 tokens
+		{"this is a longer sentence with more words", 14}, // 41 chars → (41+2)/3 = 14 tokens
 	}
 	
 	for _, tt := range tests {

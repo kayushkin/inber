@@ -128,7 +128,7 @@ func TestUnifiedFields(t *testing.T) {
 			t.Fatalf("failed to retrieve memory: %v", err)
 		}
 
-		expectedTokens := len(mem.Content) / 4
+		expectedTokens := (len(mem.Content) + 2) / 3
 		if retrieved.Tokens != expectedTokens {
 			t.Errorf("expected Tokens=%d, got %d", expectedTokens, retrieved.Tokens)
 		}
