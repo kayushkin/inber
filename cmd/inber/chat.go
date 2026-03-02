@@ -18,6 +18,11 @@ var (
 	chatThinking int64
 	chatAgent    string
 	chatStep     bool
+	
+	// Auto-workflow flags (Phase 1)
+	chatAutoBranch bool
+	chatAutoCommit bool
+	chatAutoFormat bool
 )
 
 var chatCmd = &cobra.Command{
@@ -32,6 +37,11 @@ func init() {
 	chatCmd.Flags().Int64VarP(&chatThinking, "thinking", "t", 0, "Enable extended thinking with token budget (0=disabled)")
 	chatCmd.Flags().StringVarP(&chatAgent, "agent", "a", "", "Agent name to load from registry")
 	chatCmd.Flags().BoolVarP(&chatStep, "step", "s", false, "Enable step mode (pause after each model turn)")
+	
+	// Auto-workflow flags (defaults to true for all Phase 1 features)
+	chatCmd.Flags().BoolVar(&chatAutoBranch, "auto-branch", true, "Auto-create session branch")
+	chatCmd.Flags().BoolVar(&chatAutoCommit, "auto-commit", true, "Auto-commit after successful writes")
+	chatCmd.Flags().BoolVar(&chatAutoFormat, "auto-format", true, "Auto-format code after writes")
 }
 
 func runChat(cmd *cobra.Command, args []string) {
@@ -44,6 +54,11 @@ func runChat(cmd *cobra.Command, args []string) {
 			OnThinking:   DisplayThinking,
 			OnToolCall:   DisplayToolCall,
 			OnToolResult: DisplayToolResult,
+		},
+		AutoWorkflow: AutoWorkflowConfig{
+			AutoBranch: chatAutoBranch,
+			AutoCommit: chatAutoCommit,
+			AutoFormat: chatAutoFormat,
 		},
 	})
 	if err != nil {

@@ -43,6 +43,7 @@ type EngineConfig struct {
 	Display        *DisplayHooks
 	StashConfig    *StashConfig      // Large message stashing config (nil = use defaults)
 	ExtractConfig  *ExtractionConfig // Background extraction config (nil = use defaults)
+	AutoWorkflow   AutoWorkflowConfig // Auto-branch, auto-commit, auto-format (Phase 1)
 }
 
 // Engine encapsulates the shared setup and execution logic for chat and run.
@@ -72,7 +73,7 @@ type Engine struct {
 	lastTurnHadError   bool
 	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
 	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
-	postWriteHook   *PostWriteHook                // runs build/test after file writes
+	workflowHooks   *WorkflowHooks                // auto-branch, auto-commit, auto-format, build/test
 	
 	// Session-level token tracking (exported for display)
 	SessionInputTokens  int
@@ -109,7 +110,6 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		thinkingBud: cfg.Thinking,
 		stashCfg:    stashCfg,
 		extractCfg:    extractCfg,
-		postWriteHook: NewPostWriteHook(repoRoot),
 	}
 
 	// Load agent config
@@ -192,7 +192,17 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		e.workspace = ws
 		if !cfg.NewSession {
 			if msgs, err := ws.LoadMessages(); err == nil && len(msgs) > 0 {
-				e.Messages = repairDanglingToolUse(msgs)
+				repaired := repairDanglingToolUse(msgs)
+				repaired = repairAlternation(repaired)
+				e.Messages = repaired
+				// Save repaired messages back so we don't re-repair every time
+				if lastRepairCount > 0 || len(repaired) != len(msgs) {
+					if data, err := json.Marshal(repaired); err == nil {
+						ws.SaveMessages(data)
+						Log.Info("repaired session messages (%d tool calls, %d→%d messages)",
+							lastRepairCount, len(msgs), len(repaired))
+					}
+				}
 				Log.Info("resuming session (%d messages)", len(e.Messages))
 			}
 		} else {
@@ -224,6 +234,20 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		// Configure automatic truncation of large tool results
 		truncCfg := sessionMod.TruncateConfigForRole(e.AgentName)
 		sess.SetTruncateConfig(truncCfg)
+		
+		// Initialize workflow automation (auto-branch, auto-commit, auto-format)
+		workflowCfg := cfg.AutoWorkflow
+		if workflowCfg == (AutoWorkflowConfig{}) {
+			workflowCfg = DefaultAutoWorkflowConfig()
+		}
+		e.workflowHooks = NewWorkflowHooks(repoRoot, sess.SessionID(), e.AgentName, workflowCfg)
+		
+		// Initialize session branch
+		if msg, err := e.workflowHooks.InitSession(); err != nil {
+			Log.Warn("failed to init session branch: %v", err)
+		} else if msg != "" {
+			Log.Info(msg)
+		}
 	}
 
 	// API client (via aiauth with auto-refresh)
@@ -612,12 +636,14 @@ func (e *Engine) buildHooks() *agent.Hooks {
 				delete(e.toolInputsCache, toolID)
 			}
 		}
-		// Post-write hook: run build/test after file writes, inject errors
+		// Workflow hooks: auto-branch, auto-commit, auto-format, build/test
 		hooks.PostToolResult = func(toolID, name, output string, isError bool) string {
-			if isError || e.postWriteHook == nil {
+			if isError || e.workflowHooks == nil {
 				return ""
 			}
-			return e.postWriteHook.OnToolResult(name)
+			// Get tool input from cache
+			toolInput := e.toolInputsCache[toolID]
+			return e.workflowHooks.OnToolResult(name, toolInput, output, isError)
 		}
 		hooks.OnResponse = func(resp *anthropic.Message) {
 			// End turn tracking
@@ -946,6 +972,13 @@ func (e *Engine) LogAssistant(result *agent.TurnResult) {
 
 // Close saves session summary, closes memory store, and unregisters the active session.
 func (e *Engine) Close() {
+	// Show workflow summary (auto-branch, commits made)
+	if e.workflowHooks != nil {
+		if summary := e.workflowHooks.FinishSession(); summary != "" {
+			fmt.Fprintln(os.Stderr, "\n"+summary)
+		}
+	}
+
 	// Auto-save session summary to memory
 	if e.MemStore != nil && len(e.Messages) > 0 {
 		saveSessionSummary(e.MemStore, e.Messages, e.AgentName)

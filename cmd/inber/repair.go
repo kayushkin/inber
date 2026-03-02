@@ -11,7 +11,11 @@ import (
 //
 // Fix: append a synthetic tool_result with an error message for each
 // dangling tool_use.
+// repairCount tracks how many repairs were made in the last call
+var lastRepairCount int
+
 func repairDanglingToolUse(messages []anthropic.MessageParam) []anthropic.MessageParam {
+	lastRepairCount = 0
 	if len(messages) == 0 {
 		return messages
 	}
@@ -92,14 +96,51 @@ func repairDanglingToolUse(messages []anthropic.MessageParam) []anthropic.Messag
 
 	// Second pass: fix cases where next user message exists but is missing
 	// some tool_results (partial interruption)
-	repaired = repairMissingToolResults(repaired)
+	repaired, extraRepairs := repairMissingToolResults(repaired)
+	repairsNeeded += extraRepairs
 
+	lastRepairCount = repairsNeeded
 	return repaired
+}
+
+// repairAlternation fixes consecutive messages with the same role.
+// Merges consecutive user messages and inserts placeholder assistant
+// messages between consecutive assistant messages.
+func repairAlternation(messages []anthropic.MessageParam) []anthropic.MessageParam {
+	if len(messages) <= 1 {
+		return messages
+	}
+
+	var fixed []anthropic.MessageParam
+	fixed = append(fixed, messages[0])
+
+	for i := 1; i < len(messages); i++ {
+		prev := fixed[len(fixed)-1]
+		curr := messages[i]
+
+		if prev.Role == curr.Role {
+			if curr.Role == anthropic.MessageParamRoleUser {
+				// Merge consecutive user messages
+				fixed[len(fixed)-1].Content = append(fixed[len(fixed)-1].Content, curr.Content...)
+			} else {
+				// Insert placeholder user message between consecutive assistant messages
+				fixed = append(fixed, anthropic.NewUserMessage(
+					anthropic.NewTextBlock("[continued]"),
+				))
+				fixed = append(fixed, curr)
+			}
+		} else {
+			fixed = append(fixed, curr)
+		}
+	}
+
+	return fixed
 }
 
 // repairMissingToolResults adds missing tool_result blocks to user messages
 // that follow assistant messages with tool_use.
-func repairMissingToolResults(messages []anthropic.MessageParam) []anthropic.MessageParam {
+func repairMissingToolResults(messages []anthropic.MessageParam) ([]anthropic.MessageParam, int) {
+	repairs := 0
 	for i := 0; i < len(messages)-1; i++ {
 		if messages[i].Role != anthropic.MessageParamRoleAssistant {
 			continue
@@ -139,7 +180,8 @@ func repairMissingToolResults(messages []anthropic.MessageParam) []anthropic.Mes
 					},
 				},
 			})
+			repairs++
 		}
 	}
-	return messages
+	return messages, repairs
 }

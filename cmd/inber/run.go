@@ -18,8 +18,13 @@ var (
 	runRaw      bool
 	runNoTools  bool
 	runSystem   string
-	runNew    bool
-	runDetach bool
+	runNew      bool
+	runDetach   bool
+	
+	// Auto-workflow flags (Phase 1)
+	runAutoBranch bool
+	runAutoCommit bool
+	runAutoFormat bool
 )
 
 var runCmd = &cobra.Command{
@@ -48,6 +53,11 @@ func init() {
 	runCmd.Flags().BoolVar(&runNoTools, "no-tools", false, "Disable all tools")
 	runCmd.Flags().StringVar(&runSystem, "system", "", "Override system prompt")
 	runCmd.Flags().BoolVarP(&runNew, "new", "n", false, "Start a new session instead of continuing the default")
+	
+	// Auto-workflow flags (defaults to true for all Phase 1 features)
+	runCmd.Flags().BoolVar(&runAutoBranch, "auto-branch", true, "Auto-create session branch")
+	runCmd.Flags().BoolVar(&runAutoCommit, "auto-commit", true, "Auto-commit after successful writes")
+	runCmd.Flags().BoolVar(&runAutoFormat, "auto-format", true, "Auto-format code after writes")
 	runCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "Run in a one-off session without affecting the main session")
 }
 
@@ -84,6 +94,11 @@ func runRun(cmd *cobra.Command, args []string) {
 		Display: &DisplayHooks{
 			OnToolCall:   DisplayToolCall,
 			OnToolResult: DisplayToolResult,
+		},
+		AutoWorkflow: AutoWorkflowConfig{
+			AutoBranch: runAutoBranch,
+			AutoCommit: runAutoCommit,
+			AutoFormat: runAutoFormat,
 		},
 	})
 	if err != nil {
