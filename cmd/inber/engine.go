@@ -708,7 +708,7 @@ func (e *Engine) buildHooks() *agent.Hooks {
 func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	// Increment and log turn number
 	e.TurnCounter++
-	Log.Info("━━━ Turn %d ━━━", e.TurnCounter)
+	fmt.Fprintf(os.Stderr, "\n%s━━━ Turn %d ━━━%s\n", cyan+bold, e.TurnCounter, reset)
 	
 	// Get session ID for tagging
 	sessionID := ""
