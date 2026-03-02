@@ -452,15 +452,22 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 		Log.Info("context: %d memories, %d tokens (min_importance=%.1f, budget=%d)", len(memories), tokensUsed, minImportance, tokenBudget)
 
 		// Convert memories to named blocks with descriptive IDs
-		blocks := make([]sessionMod.NamedBlock, len(memories))
-		for i, m := range memories {
-			// Create a descriptive ID from tags and importance
+		var blocks []sessionMod.NamedBlock
+		for _, m := range memories {
+			// Use content, fall back to summary
+			text := m.Content
+			if text == "" {
+				text = m.Summary
+			}
+			if text == "" {
+				continue // Skip empty memories entirely
+			}
 			desc := fmt.Sprintf("%s (%.1f", m.ID[:8], m.Importance)
 			if len(m.Tags) > 0 {
 				desc += fmt.Sprintf(", tags: %s", strings.Join(m.Tags, ","))
 			}
 			desc += ")"
-			blocks[i] = sessionMod.NamedBlock{ID: desc, Text: m.Content}
+			blocks = append(blocks, sessionMod.NamedBlock{ID: desc, Text: text})
 		}
 
 		if e.workspace != nil {
