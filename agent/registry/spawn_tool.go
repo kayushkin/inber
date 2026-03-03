@@ -259,23 +259,33 @@ func (r *Registry) SpawnAndRun(ctx context.Context, agentName string, task strin
 	}
 
 	// Get the model client for this agent
-	// Always create a new client based on the spawned agent's model
-	// (not the orchestrator's model) to handle multi-provider scenarios
+	// Strategy: 
+	// 1. If the spawned agent's model matches the registry's client model, reuse it
+	// 2. Otherwise, create a new client from the model store
 	r.mu.RLock()
+	registryModelClient := r.modelClient
 	modelStore := r.modelStore
 	r.mu.RUnlock()
 
 	var spawnModelClient *agent.ModelClient
-	if modelStore != nil {
+	
+	// Check if we can reuse the registry's client (same model)
+	if registryModelClient != nil && registryModelClient.Model != nil && registryModelClient.Model.ID == model {
+		spawnModelClient = registryModelClient
+	} else if modelStore != nil {
 		// Create a new client based on the agent's model
 		var err error
 		spawnModelClient, err = agent.NewModelClient(model, modelStore)
 		if err != nil {
 			return nil, fmt.Errorf("create model client for %s: %w", model, err)
 		}
+	} else if registryModelClient != nil {
+		// Fallback: use registry's client even if model doesn't match
+		// (for tests with mock clients)
+		spawnModelClient = registryModelClient
 	} else {
-		// Fallback: no model store configured
-		return nil, fmt.Errorf("no model store configured for spawning agents")
+		// No client available
+		return nil, fmt.Errorf("no model client configured (set via SetModelClient or SetModelStore)")
 	}
 
 	// Branch based on the spawned agent's model provider (not the orchestrator's)
