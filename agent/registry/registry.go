@@ -9,6 +9,7 @@ import (
 	"github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/memory"
 	"github.com/kayushkin/inber/session"
+	modelstore "github.com/kayushkin/model-store"
 )
 
 // Registry manages multiple agents with isolated sessions and contexts
@@ -16,6 +17,7 @@ type Registry struct {
 	mu            sync.RWMutex
 	client        *anthropic.Client
 	modelClient   *agent.ModelClient // unified client (Anthropic or OpenAI)
+	modelStore    *modelstore.Store  // model store for creating per-agent clients
 	logsDir       string
 	default_      string
 	configs       map[string]*AgentConfig
@@ -93,6 +95,13 @@ func (r *Registry) SetModelClient(mc *agent.ModelClient) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.modelClient = mc
+}
+
+// SetModelStore sets the model store for creating per-agent model clients
+func (r *Registry) SetModelStore(store *modelstore.Store) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.modelStore = store
 }
 
 // SetOpenClawConfig configures OpenClaw gateway for sub-agent delegation

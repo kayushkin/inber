@@ -258,14 +258,37 @@ func (r *Registry) SpawnAndRun(ctx context.Context, agentName string, task strin
 		anthropic.NewUserMessage(anthropic.NewTextBlock(task)),
 	}
 
-	// Branch based on whether we have a model client (OpenAI vs Anthropic)
-	if r.modelClient != nil && r.modelClient.IsOpenAI() {
-		// Use OpenAI-compatible path
-		return r.spawnAndRunOpenAI(ctx, cfg, systemBlocks, model, &messages)
+	// Get the model client for this agent
+	// First try to use the registry's existing client if available
+	r.mu.RLock()
+	registryModelClient := r.modelClient
+	r.mu.RUnlock()
+
+	var spawnModelClient *agent.ModelClient
+	if registryModelClient != nil {
+		// Use the registry's client (may be OpenAI or Anthropic)
+		spawnModelClient = registryModelClient
+	} else if r.modelStore != nil {
+		// Create a new client based on the agent's model
+		var err error
+		spawnModelClient, err = agent.NewModelClient(model, r.modelStore)
+		if err != nil {
+			return nil, fmt.Errorf("create model client for %s: %w", model, err)
+		}
+	} else {
+		// Fallback: no client configured
+		return nil, fmt.Errorf("no model client configured (set via SetModelClient or SetModelStore)")
 	}
 
-	// Use Anthropic path (original implementation)
-	a := agent.NewWithSystemBlocks(r.client, systemBlocks)
+	// Branch based on the spawned agent's model provider (not the orchestrator's)
+	if spawnModelClient.IsOpenAI() {
+		// Use OpenAI-compatible path
+		return r.spawnAndRunOpenAIWithClient(ctx, cfg, systemBlocks, spawnModelClient, &messages)
+	}
+
+	// Use Anthropic path
+	anthropicClient, _ := spawnModelClient.GetAnthropicClient()
+	a := agent.NewWithSystemBlocks(anthropicClient, systemBlocks)
 
 	// Add tools
 	for _, toolName := range cfg.Tools {
@@ -290,6 +313,7 @@ func (r *Registry) SpawnAndRun(ctx context.Context, agentName string, task strin
 }
 
 // spawnAndRunOpenAI runs a spawned agent using an OpenAI-compatible API.
+// DEPRECATED: Use spawnAndRunOpenAIWithClient instead.
 func (r *Registry) spawnAndRunOpenAI(ctx context.Context, cfg *AgentConfig, systemBlocks []anthropic.TextBlockParam, model string, messages *[]anthropic.MessageParam) (*agent.TurnResult, error) {
 	result := &agent.TurnResult{}
 
@@ -297,6 +321,25 @@ func (r *Registry) spawnAndRunOpenAI(ctx context.Context, cfg *AgentConfig, syst
 	if err != nil {
 		return nil, err
 	}
+
+	return r.runOpenAIHelper(ctx, cfg, systemBlocks, client, messages, result)
+}
+
+// spawnAndRunOpenAIWithClient runs a spawned agent using the provided ModelClient.
+// This is used when each spawned agent may have a different model provider.
+func (r *Registry) spawnAndRunOpenAIWithClient(ctx context.Context, cfg *AgentConfig, systemBlocks []anthropic.TextBlockParam, modelClient *agent.ModelClient, messages *[]anthropic.MessageParam) (*agent.TurnResult, error) {
+	result := &agent.TurnResult{}
+
+	client, err := modelClient.GetOpenAIClient()
+	if err != nil {
+		return nil, fmt.Errorf("get openai client: %w", err)
+	}
+
+	return r.runOpenAIHelper(ctx, cfg, systemBlocks, client, messages, result)
+}
+
+// runOpenAIHelper contains the shared OpenAI agent loop logic.
+func (r *Registry) runOpenAIHelper(ctx context.Context, cfg *AgentConfig, systemBlocks []anthropic.TextBlockParam, client *agent.OpenAIClient, messages *[]anthropic.MessageParam, result *agent.TurnResult) (*agent.TurnResult, error) {
 
 	// Build tool map and convert tools to OpenAI format
 	var agentTools []agent.Tool
