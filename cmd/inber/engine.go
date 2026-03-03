@@ -76,6 +76,7 @@ type Engine struct {
 	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
 	workflowHooks   *WorkflowHooks                // auto-branch, auto-commit, auto-format, build/test
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
+	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
 	
 	// Session-level token tracking (exported for display)
 	SessionInputTokens  int
@@ -281,12 +282,13 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		e.Model = modelClient.Model.ID
 	}
 	
-	// For now, we only support Anthropic
-	client, err := modelClient.GetAnthropicClient()
-	if err != nil {
-		return nil, fmt.Errorf("non-Anthropic providers not yet supported: %w", err)
+	// Store the model client for later use in RunTurn
+	e.modelClient = modelClient
+	
+	// For Anthropic, set the client field (for backward compatibility)
+	if modelClient.AnthropicClient != nil {
+		e.Client = modelClient.AnthropicClient
 	}
-	e.Client = client
 
 	// Tools
 	if !cfg.NoTools {
@@ -778,9 +780,18 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	systemBlocks := e.BuildSystemPrompt(processedInput)
 	e.lastNamedBlocks = systemBlocks
-	e.buildAgent(systemBlocks)
-
-	result, err := e.Agent.Run(context.Background(), e.Model, &e.Messages)
+	
+	var result *agent.TurnResult
+	var err error
+	
+	// Branch based on provider type
+	if e.modelClient != nil && e.modelClient.IsOpenAI() {
+		result, err = e.runOpenAITurn(context.Background(), systemBlocks)
+	} else {
+		e.buildAgent(systemBlocks)
+		result, err = e.Agent.Run(context.Background(), e.Model, &e.Messages)
+	}
+	
 	if err != nil {
 		return nil, err
 	}
@@ -889,6 +900,223 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	}
 
 	return result, nil
+}
+
+// runOpenAITurn executes a turn using an OpenAI-compatible API.
+func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.NamedBlock) (*agent.TurnResult, error) {
+	result := &agent.TurnResult{}
+	
+	client, err := e.modelClient.GetOpenAIClient()
+	if err != nil {
+		return nil, err
+	}
+	
+	// Build tool map for execution
+	toolMap := make(map[string]agent.Tool)
+	for _, t := range e.agentTools {
+		toolMap[t.Name] = t
+	}
+	
+	// Convert tools to OpenAI format
+	openAITools := agent.ConvertAnthropicToolsToOpenAI(e.agentTools)
+	
+	// Build system message from blocks
+	var systemParts []string
+	for _, block := range systemBlocks {
+		systemParts = append(systemParts, block.Text)
+	}
+	systemMessage := strings.Join(systemParts, "\n\n")
+	
+	// Tool call loop
+	for {
+		// Convert messages to OpenAI format
+		oaiMessages := agent.ConvertAnthropicMessagesToOpenAI(e.Messages)
+		
+		// Prepend system message
+		if systemMessage != "" {
+			oaiMessages = append([]agent.OpenAIMessage{
+				{Role: "system", Content: systemMessage},
+			}, oaiMessages...)
+		}
+		
+		// Build request
+		req := agent.OpenAIRequest{
+			Model:     client.Model,
+			Messages:  oaiMessages,
+			MaxTokens: 16384,
+		}
+		
+		if len(openAITools) > 0 {
+			req.Tools = openAITools
+		}
+		
+		// Make API call
+		resp, err := client.ChatCompletion(ctx, req)
+		if err != nil {
+			return result, fmt.Errorf("OpenAI API call failed: %w", err)
+		}
+		
+		// Convert response to Anthropic format for compatibility
+		anthropicResp := agent.ConvertOpenAIResponseToAnthropic(resp)
+		
+		result.InputTokens += int(anthropicResp.Usage.InputTokens)
+		result.OutputTokens += int(anthropicResp.Usage.OutputTokens)
+		
+		// Log response
+		if e.Session != nil {
+			stopReason := string(anthropicResp.StopReason)
+			toolCalls := 0
+			for _, block := range anthropicResp.Content {
+				if block.Type == "tool_use" {
+					toolCalls++
+				}
+			}
+			e.Session.EndTurn(
+				int(anthropicResp.Usage.InputTokens),
+				int(anthropicResp.Usage.OutputTokens),
+				toolCalls,
+				stopReason,
+				"",
+			)
+		}
+		
+		// Append assistant message
+		e.Messages = append(e.Messages, anthropicResp.ToParam())
+		
+		// Check stop reason
+		if anthropicResp.StopReason == anthropic.StopReasonEndTurn || 
+		   anthropicResp.StopReason == anthropic.StopReasonMaxTokens {
+			// Extract text and return
+			for _, block := range anthropicResp.Content {
+				if block.Type == "text" {
+					result.Text += block.Text
+				}
+			}
+			return result, nil
+		}
+		
+		// Handle tool calls
+		if anthropicResp.StopReason == anthropic.StopReasonToolUse {
+			var toolResults []anthropic.ContentBlockParamUnion
+			var postInjections []string
+			
+			for _, block := range anthropicResp.Content {
+				if block.Type != "tool_use" {
+					continue
+				}
+				
+				result.ToolCalls++
+				
+				// Log tool call
+				if e.display != nil && e.display.OnToolCall != nil {
+					e.display.OnToolCall(block.Name, string(block.Input))
+				}
+				if e.Session != nil {
+					e.Session.LogToolCall(block.ID, block.Name, block.Input)
+				}
+				
+				// Cache tool input for hooks
+				if e.toolInputsCache != nil {
+					e.toolInputsCache[block.ID] = string(block.Input)
+				}
+				
+				// Execute tool
+				tool, ok := toolMap[block.Name]
+				if !ok {
+					errMsg := fmt.Sprintf("error: unknown tool %q", block.Name)
+					
+					// Log error
+					if e.display != nil && e.display.OnToolResult != nil {
+						e.display.OnToolResult(block.Name, errMsg, true)
+					}
+					if e.Session != nil {
+						e.Session.LogToolResult(block.ID, block.Name, errMsg, true)
+					}
+					
+					toolResults = append(toolResults, anthropic.NewToolResultBlock(
+						block.ID, errMsg, true,
+					))
+					continue
+				}
+				
+				output, err := tool.Run(ctx, string(block.Input))
+				if err != nil {
+					errMsg := fmt.Sprintf("error: %s", err)
+					
+					// Log error
+					if e.display != nil && e.display.OnToolResult != nil {
+						e.display.OnToolResult(block.Name, errMsg, true)
+					}
+					if e.Session != nil {
+						e.Session.LogToolResult(block.ID, block.Name, errMsg, true)
+					}
+					
+					e.consecutiveErrors++
+					e.lastTurnHadError = true
+					
+					toolResults = append(toolResults, anthropic.NewToolResultBlock(
+						block.ID, errMsg, true,
+					))
+					continue
+				}
+				
+				// Log success
+				if e.display != nil && e.display.OnToolResult != nil {
+					e.display.OnToolResult(block.Name, output, false)
+				}
+				if e.Session != nil {
+					e.Session.LogToolResult(block.ID, block.Name, output, false)
+				}
+				
+				// Apply truncation if needed
+				finalOutput := output
+				if e.Session != nil {
+					truncated := e.Session.TruncateToolResult(block.Name, output, false)
+					if truncated != "" {
+						finalOutput = truncated
+					}
+				}
+				
+				toolResults = append(toolResults, anthropic.NewToolResultBlock(
+					block.ID, finalOutput, false,
+				))
+				
+				// Auto-reference creation
+				if e.autoRefMgr != nil && e.toolInputsCache != nil {
+					inputJSON := e.toolInputsCache[block.ID]
+					if err := e.autoRefMgr.OnToolResult(block.ID, block.Name, inputJSON, output); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: failed to auto-create reference for %s: %v\n", block.Name, err)
+					}
+				}
+				
+				// Workflow hooks
+				if e.workflowHooks != nil {
+					toolInput := e.toolInputsCache[block.ID]
+					if injection := e.workflowHooks.OnToolResult(block.Name, toolInput, output, false); injection != "" {
+						postInjections = append(postInjections, injection)
+					}
+				}
+				
+				// Clean up cache
+				if e.toolInputsCache != nil {
+					delete(e.toolInputsCache, block.ID)
+				}
+			}
+			
+			// Add post-injection feedback
+			if len(postInjections) > 0 {
+				toolResults = append(toolResults, anthropic.NewTextBlock(
+					"[system: post-write hook]\n"+strings.Join(postInjections, "\n"),
+				))
+			}
+			
+			e.Messages = append(e.Messages, anthropic.NewUserMessage(toolResults...))
+			continue
+		}
+		
+		// Unexpected stop reason
+		return result, fmt.Errorf("unexpected stop reason: %s", anthropicResp.StopReason)
+	}
 }
 
 // summarizeIfNeeded checks if the conversation is long enough to warrant

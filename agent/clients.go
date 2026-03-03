@@ -12,9 +12,10 @@ import (
 
 // ModelClient wraps different provider clients with a unified interface.
 type ModelClient struct {
-	Provider       string
-	Model          *modelstore.Model
+	Provider        string
+	Model           *modelstore.Model
 	AnthropicClient *anthropic.Client
+	OpenAIClient    *OpenAIClient
 }
 
 // NewModelClient creates a client for any provider using model-store.
@@ -63,12 +64,16 @@ func newClientFromModelStore(creds *modelstore.Credentials, model *modelstore.Mo
 		return mc, nil
 
 	case "openai", "google", "openrouter", "ollama":
-		// TODO: Implement OpenAI-compatible client
-		// For now, return error indicating unsupported
-		return nil, fmt.Errorf("provider %s not yet implemented (OpenAI-compatible coming soon)", creds.Provider)
+		// OpenAI-compatible providers
+		client := NewOpenAIClient(creds.BaseURL, creds.APIKey, model.ID)
+		mc.OpenAIClient = client
+		return mc, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported provider: %s", creds.Provider)
+		// Catch-all: assume OpenAI-compatible for unknown providers
+		client := NewOpenAIClient(creds.BaseURL, creds.APIKey, model.ID)
+		mc.OpenAIClient = client
+		return mc, nil
 	}
 }
 
@@ -107,4 +112,17 @@ func (mc *ModelClient) GetAnthropicClient() (*anthropic.Client, error) {
 		return nil, fmt.Errorf("not an Anthropic client")
 	}
 	return mc.AnthropicClient, nil
+}
+
+// GetOpenAIClient returns the OpenAI client or error if not OpenAI-compatible provider.
+func (mc *ModelClient) GetOpenAIClient() (*OpenAIClient, error) {
+	if mc.OpenAIClient == nil {
+		return nil, fmt.Errorf("not an OpenAI-compatible client")
+	}
+	return mc.OpenAIClient, nil
+}
+
+// IsOpenAI returns true if this client uses OpenAI-compatible API.
+func (mc *ModelClient) IsOpenAI() bool {
+	return mc.OpenAIClient != nil
 }
