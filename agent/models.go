@@ -103,4 +103,4 @@ var Models = map[string]ModelInfo{
 }
 
 // DefaultModel is the model used when none is specified.
-const DefaultModel = "claude-sonnet-4-5-20250929"
+const DefaultModel = "glm-5"
