@@ -301,6 +301,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			e.agentRegistry = reg
 			// Set model client for OpenAI-compatible providers
 			reg.SetModelClient(modelClient)
+			// Set model store for creating per-agent model clients
+			if e.modelStore != nil {
+				reg.SetModelStore(e.modelStore)
+			}
 			// Set memory store for memory tools in spawned agents
 			if e.MemStore != nil {
 				reg.SetMemoryStore(e.MemStore)

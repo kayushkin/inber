@@ -259,25 +259,23 @@ func (r *Registry) SpawnAndRun(ctx context.Context, agentName string, task strin
 	}
 
 	// Get the model client for this agent
-	// First try to use the registry's existing client if available
+	// Always create a new client based on the spawned agent's model
+	// (not the orchestrator's model) to handle multi-provider scenarios
 	r.mu.RLock()
-	registryModelClient := r.modelClient
+	modelStore := r.modelStore
 	r.mu.RUnlock()
 
 	var spawnModelClient *agent.ModelClient
-	if registryModelClient != nil {
-		// Use the registry's client (may be OpenAI or Anthropic)
-		spawnModelClient = registryModelClient
-	} else if r.modelStore != nil {
+	if modelStore != nil {
 		// Create a new client based on the agent's model
 		var err error
-		spawnModelClient, err = agent.NewModelClient(model, r.modelStore)
+		spawnModelClient, err = agent.NewModelClient(model, modelStore)
 		if err != nil {
 			return nil, fmt.Errorf("create model client for %s: %w", model, err)
 		}
 	} else {
-		// Fallback: no client configured
-		return nil, fmt.Errorf("no model client configured (set via SetModelClient or SetModelStore)")
+		// Fallback: no model store configured
+		return nil, fmt.Errorf("no model store configured for spawning agents")
 	}
 
 	// Branch based on the spawned agent's model provider (not the orchestrator's)

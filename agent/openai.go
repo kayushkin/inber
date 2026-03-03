@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	
+	"time"
+
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
@@ -25,7 +26,9 @@ func NewOpenAIClient(baseURL, apiKey, model string) *OpenAIClient {
 		BaseURL: baseURL,
 		APIKey:  apiKey,
 		Model:   model,
-		client:  http.DefaultClient,
+		client: &http.Client{
+			Timeout: 120 * time.Second, // Prevent infinite hangs
+		},
 	}
 }
 
