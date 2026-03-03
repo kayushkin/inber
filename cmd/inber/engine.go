@@ -276,6 +276,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create model client: %w", err)
 	}
+	Log.Info("model: %s (provider=%s, openai=%v)", e.Model, modelClient.Provider, modelClient.IsOpenAI())
 	
 	// Update e.Model with the resolved model ID (in case it was an alias)
 	if modelClient.Model != nil {
