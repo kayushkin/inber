@@ -75,6 +75,7 @@ type Engine struct {
 	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
 	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
 	workflowHooks   *WorkflowHooks                // auto-branch, auto-commit, auto-format, build/test
+	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
 	
 	// Session-level token tracking (exported for display)
 	SessionInputTokens  int
@@ -255,7 +256,22 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	aiauth.RegisterProvider(&providers.Anthropic{})
 	e.AuthStore = aiauth.DefaultStore()
 	
-	modelClient, err := agent.NewModelClient(e.Model)
+	// Open model-store once for the lifetime of the engine
+	store, err := modelstore.Open("")
+	if err == nil {
+		e.modelStore = store
+		// Seed if empty (one-time init)
+		providers, _ := store.Providers()
+		if len(providers) == 0 {
+			if err := store.Seed(); err != nil {
+				Log.Warn("failed to seed model-store: %v", err)
+			}
+		}
+	} else {
+		Log.Warn("model-store unavailable: %v", err)
+	}
+	
+	modelClient, err := agent.NewModelClient(e.Model, e.modelStore)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create model client: %w", err)
 	}
@@ -861,14 +877,13 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	e.SessionOutputTokens += result.OutputTokens
 	e.SessionCost += sessionMod.CalcCost(e.Model, result.InputTokens, result.OutputTokens)
 
-	// Track usage in model-store
-	if store, err := modelstore.Open(""); err == nil {
-		defer store.Close()
+	// Track usage in model-store (using already-open handle)
+	if e.modelStore != nil {
 		agentName := e.AgentName
 		if agentName == "" {
 			agentName = "inber"
 		}
-		if err := store.TrackUsage(agentName, e.Model, int64(result.InputTokens), int64(result.OutputTokens)); err != nil {
+		if err := e.modelStore.TrackUsage(agentName, e.Model, int64(result.InputTokens), int64(result.OutputTokens)); err != nil {
 			Log.Warn("failed to track usage in model-store: %v", err)
 		}
 	}
@@ -1050,6 +1065,10 @@ func (e *Engine) Close() {
 
 	if e.SessionDB != nil {
 		e.SessionDB.Close()
+	}
+
+	if e.modelStore != nil {
+		e.modelStore.Close()
 	}
 }
 

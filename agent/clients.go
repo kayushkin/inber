@@ -15,29 +15,14 @@ type ModelClient struct {
 	Provider       string
 	Model          *modelstore.Model
 	AnthropicClient *anthropic.Client
-	// For OpenAI-compatible providers (OpenAI, Google, OpenRouter, Ollama)
-	// We'll use anthropic-sdk-go's client with a different base URL
-	// since the task says to use OpenAI-compatible API pattern
-	BaseClient     interface{} // Will be extended later for non-Anthropic
 }
 
 // NewModelClient creates a client for any provider using model-store.
 // Falls back to direct Anthropic client if model-store is not available.
-func NewModelClient(modelIDOrAlias string) (*ModelClient, error) {
-	// Try model-store first
-	store, err := modelstore.Open("")
-	if err == nil {
-		defer store.Close()
-		
-		// Seed if empty (first run)
-		providers, _ := store.Providers()
-		if len(providers) == 0 {
-			if err := store.Seed(); err != nil {
-				// Failed to seed, fall through to fallback
-				return newAnthropicFallbackClient(modelIDOrAlias)
-			}
-		}
-		
+// store parameter can be nil, in which case it falls back to direct auth.
+func NewModelClient(modelIDOrAlias string, store *modelstore.Store) (*ModelClient, error) {
+	// Try model-store first (if provided and seeded)
+	if store != nil {
 		// Try to resolve model (to get model ID from alias)
 		model, err := store.ResolveModel(modelIDOrAlias)
 		if err == nil {
@@ -47,9 +32,9 @@ func NewModelClient(modelIDOrAlias string) (*ModelClient, error) {
 				// Have both model and credentials from store
 				return newClientFromModelStore(creds, model)
 			}
-			// No credentials in store, but we have the resolved model ID
-			// Fall back to aiauth/env with the resolved model ID
-			return newAnthropicFallbackClientWithModel(model.ID, model)
+			// No credentials in store, fall back to aiauth/env
+			// Use the resolved model ID from store
+			return newAnthropicFallbackClient(model.ID)
 		}
 		// Model not found in store, fall through to fallback
 		// (This is expected for direct model IDs that aren't in the catalog)
@@ -89,32 +74,6 @@ func newClientFromModelStore(creds *modelstore.Credentials, model *modelstore.Mo
 
 // newAnthropicFallbackClient creates an Anthropic client using the old auth methods.
 func newAnthropicFallbackClient(modelID string) (*ModelClient, error) {
-	// Find model info from built-in registry
-	modelInfo, ok := Models[modelID]
-	if !ok {
-		modelInfo = ModelInfo{
-			ID:              modelID,
-			ContextWindow:   200000,
-			InputCostPer1M:  3.00,
-			OutputCostPer1M: 15.00,
-		}
-	}
-
-	// Convert to model-store format for consistency
-	model := &modelstore.Model{
-		ID:         modelInfo.ID,
-		Provider:   "anthropic",
-		Name:       modelInfo.ID,
-		MaxTokens:  modelInfo.ContextWindow,
-		InputCost:  modelInfo.InputCostPer1M,
-		OutputCost: modelInfo.OutputCostPer1M,
-	}
-
-	return newAnthropicFallbackClientWithModel(modelInfo.ID, model)
-}
-
-// newAnthropicFallbackClientWithModel creates an Anthropic client with a pre-resolved model.
-func newAnthropicFallbackClientWithModel(modelID string, model *modelstore.Model) (*ModelClient, error) {
 	// Use aiauth as primary method
 	authStore := aiauth.DefaultStore()
 	client, err := authStore.AnthropicClient()
@@ -126,6 +85,13 @@ func newAnthropicFallbackClientWithModel(modelID string, model *modelstore.Model
 		}
 		c := anthropic.NewClient(option.WithAPIKey(apiKey))
 		client = &c
+	}
+
+	// Build minimal model info (no unnecessary conversion)
+	model := &modelstore.Model{
+		ID:       modelID,
+		Provider: "anthropic",
+		Name:     modelID,
 	}
 
 	return &ModelClient{
