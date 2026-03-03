@@ -1,0 +1,22 @@
+{
+    "default": "task-manager",
+    "agents": {
+        "task-manager": {
+            "name": "task-manager",
+            "role": "orchestrator",
+            "model": "claude-opus-4-6",
+            "thinking": 2048,
+            "tools": [
+                "spawn_agent",
+                "check_spawns",
+                "read_file",
+                "write_file"
+            ]
+        }
+    },
+    "openclaw": {
+        "url": "ws://localhost:18789/ws",
+        "token": "YOUR_OPENCLAW_GATEWAY_TOKEN",
+        "agents": ["kayushkin", "downloadstack", "claxon-android", "inber-party"]
+    }
+}

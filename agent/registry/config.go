@@ -25,16 +25,25 @@ type ContextConfig struct {
 	InheritParent bool    `json:"inherit_parent"` // inherit parent's context
 }
 
+// OpenClawConfig defines OpenClaw gateway configuration
+type OpenClawConfig struct {
+	URL    string   `json:"url"`    // WebSocket URL (e.g., ws://localhost:18789/ws)
+	Token  string   `json:"token"`  // Auth token
+	Agents []string `json:"agents"` // Agent names that route to OpenClaw
+}
+
 // agentsFile is the JSON config file structure
 type agentsFile struct {
-	Default string                     `json:"default"` // default agent name
-	Agents  map[string]*AgentConfig    `json:"agents"`
+	Default  string                     `json:"default"`  // default agent name
+	Agents   map[string]*AgentConfig    `json:"agents"`
+	OpenClaw *OpenClawConfig            `json:"openclaw,omitempty"` // OpenClaw gateway config
 }
 
 // RegistryConfig holds the loaded configuration including default agent
 type RegistryConfig struct {
-	Default string
-	Agents  map[string]*AgentConfig
+	Default  string
+	Agents   map[string]*AgentConfig
+	OpenClaw *OpenClawConfig
 }
 
 // LoadConfig loads an agent config from JSON + markdown files
@@ -87,8 +96,9 @@ func LoadConfig(configPath, identityDir string) (*RegistryConfig, error) {
 	}
 
 	return &RegistryConfig{
-		Default: defaultAgent,
-		Agents:  af.Agents,
+		Default:  defaultAgent,
+		Agents:   af.Agents,
+		OpenClaw: af.OpenClaw,
 	}, nil
 }
 

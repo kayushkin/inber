@@ -13,17 +13,20 @@ import (
 
 // Registry manages multiple agents with isolated sessions and contexts
 type Registry struct {
-	mu           sync.RWMutex
-	client       *anthropic.Client
-	modelClient  *agent.ModelClient // unified client (Anthropic or OpenAI)
-	logsDir      string
-	default_     string
-	configs      map[string]*AgentConfig
-	agents       map[string]*agent.Agent
-	contexts     map[string]*context.Store
-	sessions     map[string]*session.Session
-	tools        *ToolRegistry
-	spawnManager *SpawnManager
+	mu            sync.RWMutex
+	client        *anthropic.Client
+	modelClient   *agent.ModelClient // unified client (Anthropic or OpenAI)
+	logsDir       string
+	default_      string
+	configs       map[string]*AgentConfig
+	agents        map[string]*agent.Agent
+	contexts      map[string]*context.Store
+	sessions      map[string]*session.Session
+	tools         *ToolRegistry
+	spawnManager  *SpawnManager
+	openclawURL   string   // OpenClaw gateway URL
+	openclawToken string   // OpenClaw auth token
+	openclawAgents []string // Agents that route to OpenClaw
 }
 
 // New creates a registry and loads agent configs from the given directory
@@ -43,6 +46,13 @@ func New(client *anthropic.Client, configDir, logsDir string) (*Registry, error)
 		sessions:     make(map[string]*session.Session),
 		tools:        NewToolRegistry(),
 		spawnManager: NewSpawnManager(logsDir),
+	}
+
+	// Apply OpenClaw configuration if present
+	if cfg.OpenClaw != nil {
+		r.openclawURL = cfg.OpenClaw.URL
+		r.openclawToken = cfg.OpenClaw.Token
+		r.openclawAgents = cfg.OpenClaw.Agents
 	}
 
 	// Register spawn_agent tool (requires registry reference)
@@ -83,6 +93,15 @@ func (r *Registry) SetModelClient(mc *agent.ModelClient) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.modelClient = mc
+}
+
+// SetOpenClawConfig configures OpenClaw gateway for sub-agent delegation
+func (r *Registry) SetOpenClawConfig(url, token string, agents []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.openclawURL = url
+	r.openclawToken = token
+	r.openclawAgents = agents
 }
 
 // GetConfig returns the config for the named agent
