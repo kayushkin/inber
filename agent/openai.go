@@ -25,7 +25,7 @@ func NewOpenAIClient(baseURL, apiKey, model string) *OpenAIClient {
 		BaseURL: baseURL,
 		APIKey:  apiKey,
 		Model:   model,
-		client:  &http.Client{},
+		client:  http.DefaultClient,
 	}
 }
 
