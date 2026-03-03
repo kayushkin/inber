@@ -216,12 +216,6 @@ func (r *Registry) SpawnAndRun(ctx context.Context, agentName string, task strin
 		return nil, fmt.Errorf("agent config: %w", err)
 	}
 
-	// Create fresh agent instance
-	a, err := r.createAgent(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("create agent: %w", err)
-	}
-
 	// Get or create context for this agent
 	contextStore, err := r.GetContext(agentName)
 	if err != nil {
@@ -231,9 +225,28 @@ func (r *Registry) SpawnAndRun(ctx context.Context, agentName string, task strin
 	// Build system prompt from context
 	// For sub-agents, we use a simpler context (just identity + project context)
 	systemBlocks := r.buildSubAgentSystem(contextStore, cfg)
-	a = agent.NewWithSystemBlocks(r.client, systemBlocks)
 
-	// Re-add tools (they don't carry over from createAgent's returned instance)
+	// Determine model to use
+	model := cfg.Model
+	if model == "" {
+		model = agent.DefaultModel
+	}
+
+	// Create message history with the task
+	messages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock(task)),
+	}
+
+	// Branch based on whether we have a model client (OpenAI vs Anthropic)
+	if r.modelClient != nil && r.modelClient.IsOpenAI() {
+		// Use OpenAI-compatible path
+		return r.spawnAndRunOpenAI(ctx, cfg, systemBlocks, model, &messages)
+	}
+
+	// Use Anthropic path (original implementation)
+	a := agent.NewWithSystemBlocks(r.client, systemBlocks)
+
+	// Add tools
 	for _, toolName := range cfg.Tools {
 		tool, err := r.tools.Get(toolName)
 		if err != nil {
@@ -247,23 +260,137 @@ func (r *Registry) SpawnAndRun(ctx context.Context, agentName string, task strin
 		a.SetThinking(cfg.Thinking)
 	}
 
-	// Create message history with the task
-	messages := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock(task)),
-	}
-
-	// Run the agent
-	model := cfg.Model
-	if model == "" {
-		model = agent.DefaultModel
-	}
-
 	result, err := a.Run(ctx, model, &messages)
 	if err != nil {
 		return nil, fmt.Errorf("agent run failed: %w", err)
 	}
 
 	return result, nil
+}
+
+// spawnAndRunOpenAI runs a spawned agent using an OpenAI-compatible API.
+func (r *Registry) spawnAndRunOpenAI(ctx context.Context, cfg *AgentConfig, systemBlocks []anthropic.TextBlockParam, model string, messages *[]anthropic.MessageParam) (*agent.TurnResult, error) {
+	result := &agent.TurnResult{}
+
+	client, err := r.modelClient.GetOpenAIClient()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build tool map and convert tools to OpenAI format
+	var agentTools []agent.Tool
+	toolMap := make(map[string]agent.Tool)
+	
+	for _, toolName := range cfg.Tools {
+		tool, err := r.tools.Get(toolName)
+		if err != nil {
+			continue
+		}
+		agentTools = append(agentTools, tool)
+		toolMap[tool.Name] = tool
+	}
+
+	openAITools := agent.ConvertAnthropicToolsToOpenAI(agentTools)
+
+	// Build system message from blocks
+	var systemParts []string
+	for _, block := range systemBlocks {
+		systemParts = append(systemParts, block.Text)
+	}
+	systemMessage := strings.Join(systemParts, "\n\n")
+
+	// Tool call loop
+	for {
+		// Convert messages to OpenAI format
+		oaiMessages := agent.ConvertAnthropicMessagesToOpenAI(*messages)
+
+		// Prepend system message
+		if systemMessage != "" {
+			oaiMessages = append([]agent.OpenAIMessage{
+				{Role: "system", Content: systemMessage},
+			}, oaiMessages...)
+		}
+
+		// Build request
+		req := agent.OpenAIRequest{
+			Model:     client.Model,
+			Messages:  oaiMessages,
+			MaxTokens: 16384,
+		}
+
+		if len(openAITools) > 0 {
+			req.Tools = openAITools
+		}
+
+		// Make API call
+		resp, err := client.ChatCompletion(ctx, req)
+		if err != nil {
+			return result, fmt.Errorf("OpenAI API call failed: %w", err)
+		}
+
+		// Convert response to Anthropic format for compatibility
+		anthropicResp := agent.ConvertOpenAIResponseToAnthropic(resp)
+
+		result.InputTokens += int(anthropicResp.Usage.InputTokens)
+		result.OutputTokens += int(anthropicResp.Usage.OutputTokens)
+
+		// Append assistant message
+		*messages = append(*messages, anthropicResp.ToParam())
+
+		// Check stop reason
+		if anthropicResp.StopReason == anthropic.StopReasonEndTurn ||
+			anthropicResp.StopReason == anthropic.StopReasonMaxTokens {
+			// Extract text and return
+			for _, block := range anthropicResp.Content {
+				if block.Type == "text" {
+					result.Text += block.Text
+				}
+			}
+			return result, nil
+		}
+
+		// Handle tool calls
+		if anthropicResp.StopReason == anthropic.StopReasonToolUse {
+			var toolResults []anthropic.ContentBlockParamUnion
+
+			for _, block := range anthropicResp.Content {
+				if block.Type != "tool_use" {
+					continue
+				}
+
+				result.ToolCalls++
+
+				// Execute tool
+				tool, ok := toolMap[block.Name]
+				if !ok {
+					errMsg := fmt.Sprintf("error: unknown tool %q", block.Name)
+					toolResults = append(toolResults, anthropic.NewToolResultBlock(
+						block.ID, errMsg, true,
+					))
+					continue
+				}
+
+				output, err := tool.Run(ctx, string(block.Input))
+				if err != nil {
+					errMsg := fmt.Sprintf("error: %s", err)
+					toolResults = append(toolResults, anthropic.NewToolResultBlock(
+						block.ID, errMsg, true,
+					))
+					continue
+				}
+
+				toolResults = append(toolResults, anthropic.NewToolResultBlock(
+					block.ID, output, false,
+				))
+			}
+
+			*messages = append(*messages, anthropic.NewUserMessage(toolResults...))
+			continue
+		}
+
+		// Unexpected stop reason
+		return result, fmt.Errorf("unexpected stop reason: %s", anthropicResp.StopReason)
+	}
 }
 
 // buildSubAgentSystem creates a minimal system prompt for spawned agents.

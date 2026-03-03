@@ -15,6 +15,7 @@ import (
 type Registry struct {
 	mu           sync.RWMutex
 	client       *anthropic.Client
+	modelClient  *agent.ModelClient // unified client (Anthropic or OpenAI)
 	logsDir      string
 	default_     string
 	configs      map[string]*AgentConfig
@@ -75,6 +76,13 @@ func (r *Registry) SetMemoryStore(store *memory.Store) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools.RegisterMemoryTools(store)
+}
+
+// SetModelClient sets the unified model client (Anthropic or OpenAI)
+func (r *Registry) SetModelClient(mc *agent.ModelClient) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.modelClient = mc
 }
 
 // GetConfig returns the config for the named agent
