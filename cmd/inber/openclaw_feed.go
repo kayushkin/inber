@@ -175,10 +175,10 @@ func (o *OpenClawSubagent) connect(ctx context.Context) (*websocket.Conn, error)
 			"minProtocol": 3,
 			"maxProtocol": 3,
 			"client": map[string]interface{}{
-				"id":       "inber-orchestrator",
+				"id":       "openclaw-control-ui",
 				"version":  "1.0.0",
 				"platform": "go",
-				"mode":     "webchat",
+				"mode":     "cli",
 			},
 			"role":   "operator",
 			"scopes": []string{"operator.admin", "operator.read", "operator.write"},

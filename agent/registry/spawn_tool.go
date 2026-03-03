@@ -25,15 +25,31 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 		Wait    bool   `json:"wait"`    // if true, block until completion
 	}
 
+	// Build agent list for description
+	r.mu.RLock()
+	localAgents := make([]string, 0, len(r.configs))
+	for name := range r.configs {
+		localAgents = append(localAgents, name)
+	}
+	openclawAgents := r.openclawAgents
+	r.mu.RUnlock()
+
+	// Build description
+	desc := "Spawn a sub-agent to complete a task. BY DEFAULT this is ASYNC (returns immediately with task ID). Use wait:true to block until completion.\n\n"
+	desc += "Available local agents: " + strings.Join(localAgents, ", ") + "\n"
+	if len(openclawAgents) > 0 {
+		desc += "OpenClaw agents (remote): " + strings.Join(openclawAgents, ", ")
+	}
+
 	return agent.Tool{
 		Name:        "spawn_agent",
-		Description: "Spawn a sub-agent to complete a task. BY DEFAULT this is ASYNC (returns immediately with task ID). Use wait:true to block until completion. Use this to delegate work to specialists: fionn (coding), scathach (testing), oisin (deployment), etc.",
+		Description: desc,
 		InputSchema: anthropic.ToolInputSchemaParam{
 			Required: []string{"agent", "task"},
 			Properties: map[string]any{
 				"agent": map[string]any{
 					"type":        "string",
-					"description": "Agent name to spawn (fionn, scathach, oisin, etc)",
+					"description": "Agent name to spawn",
 				},
 				"task": map[string]any{
 					"type":        "string",
@@ -645,10 +661,10 @@ func (o *openClawSubagentImpl) connect(ctx context.Context) (*websocket.Conn, er
 			"minProtocol": 3,
 			"maxProtocol": 3,
 			"client": map[string]interface{}{
-				"id":       "inber-orchestrator",
+				"id":       "openclaw-control-ui",
 				"version":  "1.0.0",
 				"platform": "go",
-				"mode":     "webchat",
+				"mode":     "cli",
 			},
 			"role":   "operator",
 			"scopes": []string{"operator.admin", "operator.read", "operator.write"},
