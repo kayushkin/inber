@@ -16,7 +16,7 @@
     },
     "openclaw": {
         "url": "ws://localhost:18789/ws",
-        "token": "YOUR_OPENCLAW_GATEWAY_TOKEN",
+        "token": "YOUR_NEW_TOKEN_HERE",
         "agents": ["kayushkin", "downloadstack", "claxon-android", "inber-party"]
     }
 }
