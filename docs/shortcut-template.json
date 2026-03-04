@@ -1,0 +1,36 @@
+{
+  "shortcut_name": "Ask OpenClaw",
+  "description": "Send a message to an OpenClaw agent via hooks API",
+  "actions": [
+    {
+      "type": "ask",
+      "prompt": "What do you need?",
+      "input_type": "text",
+      "variable": "UserInput"
+    },
+    {
+      "type": "http_request",
+      "url": "http://localhost:18789/hooks/agent",
+      "method": "POST",
+      "headers": {
+        "Authorization": "Bearer inber-ios-hooks-2026",
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "message": "{{UserInput}}",
+        "agentId": "inber",
+        "wakeMode": "now"
+      },
+      "variable": "Response"
+    },
+    {
+      "type": "show_result",
+      "content": "{{Response}}"
+    }
+  ],
+  "notes": {
+    "network": "Use 192.168.x.x:18789 for LAN access, or Tailscale IP for remote",
+    "agents": ["main", "inber", "kayushkin", "downloadstack", "claxon-android", "inber-party"],
+    "test_command": "./test-ios-hooks.sh localhost:18789 inber-ios-hooks-2026"
+  }
+}
