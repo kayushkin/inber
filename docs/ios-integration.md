@@ -182,9 +182,9 @@ hooks:
 
 - [x] OpenClaw has hooks API
 - [x] OpenClaw can spawn inber agents
-- [ ] Document the exact Shortcuts configuration
-- [ ] Create a "Ask Inber" shortcut template
-- [ ] Test end-to-end: Shortcut → OpenClaw → inber
+- [x] Document the exact Shortcuts configuration (see ios-quickref.md and ios-shortcuts-guide.md)
+- [x] Create a "Ask Inber" shortcut template (see shortcut-template.json)
+- [x] Test end-to-end: Shortcut → OpenClaw → inber (verified via test-ios-hooks.sh)
 
 ### Phase 2: Direct HTTP API (Optional)
 
