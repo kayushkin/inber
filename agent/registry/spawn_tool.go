@@ -661,10 +661,10 @@ func (o *openClawSubagentImpl) connect(ctx context.Context) (*websocket.Conn, er
 			"minProtocol": 3,
 			"maxProtocol": 3,
 			"client": map[string]interface{}{
-				"id":       "openclaw-control-ui",
+				"id":       "cli",
 				"version":  "1.0.0",
 				"platform": "go",
-				"mode":     "cli",
+				"mode":     "operator",
 			},
 			"role":   "operator",
 			"scopes": []string{"operator.admin", "operator.read", "operator.write"},
