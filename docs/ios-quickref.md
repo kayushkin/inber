@@ -60,6 +60,24 @@ From `/home/slava/life/repos/inber/agents.json`:
 - **party** - Fullstack dev for inber-party
 - **worker** - General-purpose, simple tasks
 
+## OpenClaw iOS App
+
+The OpenClaw iOS app (super-alpha) can connect directly to the gateway:
+
+**Client ID:** `openclaw-ios` (pre-defined in OpenClaw)
+**Connection:** WebSocket to `ws://SERVER:18789/ws`
+**Authentication:** Gateway token: `8a8b770d8433b3cd93b8c2cc9263a79a9eac17800ab5c92c`
+
+**Connection Flow:**
+1. iOS app connects via WebSocket
+2. Gateway sends `connect.challenge`
+3. iOS sends connect request with:
+   - `client.id: "openclaw-ios"`
+   - `role: "operator"` (for chat) or `"node"` (for remote control)
+   - `auth.token: <gateway-token>`
+4. Gateway validates and sends `hello-ok`
+5. iOS can send/receive messages to agents
+
 ## Network Options
 
 | Option | URL Format | Notes |
