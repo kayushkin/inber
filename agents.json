@@ -1,15 +1,24 @@
 {
   "default": "claxon",
   "tiers": {
-    "high": ["claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5"],
-    "low": ["glm-5", "glm-4.7", "glm-4.6", "claude-3-5-haiku-20241022"],
-    "delay": 4,
+    "high": [
+      "claude-opus-4-6",
+      "claude-opus-4-5",
+      "claude-sonnet-4-5"
+    ],
+    "low": [
+      "glm-5",
+      "glm-4.7",
+      "glm-4.6",
+      "claude-3-5-haiku-20241022"
+    ],
+    "delay": 8,
     "grace": 8
   },
   "agents": {
     "claxon": {
       "name": "Claxon",
-      "role": "main orchestrator — the one who's actually here 🦀",
+      "role": "main orchestrator \u2014 the one who's actually here \ud83e\udd80",
       "model": "claude-opus-4-6",
       "thinking": 2048,
       "tools": [
@@ -28,13 +37,18 @@
         "recent_files"
       ],
       "context": {
-        "tags": ["identity", "coordination", "planning", "code"],
+        "tags": [
+          "identity",
+          "coordination",
+          "planning",
+          "code"
+        ],
         "budget": 50000
       }
     },
     "bran": {
       "name": "Bran",
-      "role": "secondary orchestrator — complex multi-agent campaigns",
+      "role": "secondary orchestrator \u2014 complex multi-agent campaigns",
       "model": "claude-sonnet-4-5",
       "thinking": 2048,
       "tools": [
@@ -50,14 +64,18 @@
         "memory_forget"
       ],
       "context": {
-        "tags": ["identity", "coordination", "planning"],
+        "tags": [
+          "identity",
+          "coordination",
+          "planning"
+        ],
         "budget": 40000
       }
     },
     "fionn": {
       "name": "Fionn",
       "project": "inber",
-      "role": "inber framework — the wise one who builds the foundation",
+      "role": "inber framework \u2014 the wise one who builds the foundation",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -71,14 +89,19 @@
         "memory_forget"
       ],
       "context": {
-        "tags": ["code", "go", "inber", "project"],
+        "tags": [
+          "code",
+          "go",
+          "inber",
+          "project"
+        ],
         "budget": 50000
       }
     },
     "brigid": {
       "name": "Brigid",
       "project": "kayushkin.com",
-      "role": "kayushkin.com — the smith-poet, beauty and function",
+      "role": "kayushkin.com \u2014 the smith-poet, beauty and function",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -92,14 +115,21 @@
         "memory_forget"
       ],
       "context": {
-        "tags": ["code", "go", "react", "frontend", "kayushkin", "project"],
+        "tags": [
+          "code",
+          "go",
+          "react",
+          "frontend",
+          "kayushkin",
+          "project"
+        ],
         "budget": 50000
       }
     },
     "oisin": {
-      "name": "Oisín",
+      "name": "Ois\u00edn",
       "project": "si",
-      "role": "si comms layer — the messenger between worlds",
+      "role": "si comms layer \u2014 the messenger between worlds",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -113,14 +143,21 @@
         "memory_forget"
       ],
       "context": {
-        "tags": ["code", "go", "si", "discord", "websocket", "project"],
+        "tags": [
+          "code",
+          "go",
+          "si",
+          "discord",
+          "websocket",
+          "project"
+        ],
         "budget": 50000
       }
     },
     "manannan": {
-      "name": "Manannán",
+      "name": "Manann\u00e1n",
       "project": "downloadstack",
-      "role": "downloadstack — the sea god gathering treasures",
+      "role": "downloadstack \u2014 the sea god gathering treasures",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -134,14 +171,20 @@
         "memory_forget"
       ],
       "context": {
-        "tags": ["code", "go", "downloadstack", "media", "project"],
+        "tags": [
+          "code",
+          "go",
+          "downloadstack",
+          "media",
+          "project"
+        ],
         "budget": 50000
       }
     },
     "ogma": {
       "name": "Ogma",
       "project": "logstack",
-      "role": "logstack — the scribe, nothing forgotten",
+      "role": "logstack \u2014 the scribe, nothing forgotten",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -155,14 +198,20 @@
         "memory_forget"
       ],
       "context": {
-        "tags": ["code", "go", "logstack", "logging", "project"],
+        "tags": [
+          "code",
+          "go",
+          "logstack",
+          "logging",
+          "project"
+        ],
         "budget": 50000
       }
     },
     "scathach": {
-      "name": "Scáthach",
+      "name": "Sc\u00e1thach",
       "project": "claxon-android",
-      "role": "claxon android — shadow warrior of mobile",
+      "role": "claxon android \u2014 shadow warrior of mobile",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -176,18 +225,15 @@
         "memory_forget"
       ],
       "context": {
-        "tags": ["code", "kotlin", "android", "claxon", "project"],
+        "tags": [
+          "code",
+          "kotlin",
+          "android",
+          "claxon",
+          "project"
+        ],
         "budget": 50000
       }
     }
-  },
-  "openclaw": {
-    "url": "ws://localhost:18789/ws",
-    "token": "8a8b770d8433b3cd93b8c2cc9263a79a9eac17800ab5c92c",
-    "agents": [
-      "brigid",
-      "manannan",
-      "scathach"
-    ]
   }
 }
