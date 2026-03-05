@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	inbercontext "github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/memory"
 	"github.com/kayushkin/inber/tools"
 )
@@ -167,47 +166,4 @@ func TestSessionSummaryEmptyMessages(t *testing.T) {
 	saveSessionSummary(store, []anthropic.MessageParam{}, "test-agent")
 }
 
-func TestMemoryInstructionsInContext(t *testing.T) {
-	dir := setupTestRepo(t)
-
-	cfg := inbercontext.DefaultAutoLoadConfig(dir)
-	cfg.IdentityText = "You are a test agent."
-
-	store, err := inbercontext.AutoLoad(cfg)
-	if err != nil {
-		t.Fatalf("AutoLoad failed: %v", err)
-	}
-
-	chunk, ok := store.Get("memory-instructions")
-	if !ok {
-		t.Fatal("memory-instructions chunk not found")
-	}
-
-	if !strings.Contains(chunk.Text, "memory_search") {
-		t.Error("memory instructions missing memory_search")
-	}
-	if !strings.Contains(chunk.Text, "memory_save") {
-		t.Error("memory instructions missing memory_save")
-	}
-	if !strings.Contains(chunk.Text, "memory_forget") {
-		t.Error("memory instructions missing memory_forget")
-	}
-
-	// Verify tags
-	hasIdentity := false
-	hasAlways := false
-	for _, tag := range chunk.Tags {
-		if tag == "identity" {
-			hasIdentity = true
-		}
-		if tag == "always" {
-			hasAlways = true
-		}
-	}
-	if !hasIdentity {
-		t.Error("memory-instructions missing 'identity' tag")
-	}
-	if !hasAlways {
-		t.Error("memory-instructions missing 'always' tag")
-	}
-}
+// TestMemoryInstructionsInContext removed — tested old context.AutoLoad path

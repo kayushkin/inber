@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -868,4 +869,23 @@ func nullInt64Ptr(t *time.Time) sql.NullInt64 {
 		return sql.NullInt64{Valid: false}
 	}
 	return sql.NullInt64{Int64: t.Unix(), Valid: true}
+}
+
+// loadLazyContent loads content for lazy-loaded references from their source.
+func (s *Store) loadLazyContent(m *Memory) error {
+	switch m.RefType {
+	case "file", "identity":
+		if m.RefTarget == "" {
+			return fmt.Errorf("%s reference missing ref_target path", m.RefType)
+		}
+		data, err := os.ReadFile(m.RefTarget)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", m.RefTarget, err)
+		}
+		m.Content = string(data)
+		m.Tokens = len(m.Content) / 4
+		return nil
+	default:
+		return nil // content already in DB
+	}
 }
