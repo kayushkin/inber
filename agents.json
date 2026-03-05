@@ -1,9 +1,9 @@
 {
-  "default": "task-manager",
+  "default": "bran",
   "agents": {
-    "task-manager": {
-      "name": "task-manager",
-      "role": "orchestrator — dispatches to project agents",
+    "bran": {
+      "name": "Bran",
+      "role": "orchestrator — the voyager who sees all paths and dispatches wisely",
       "model": "claude-opus-4-6",
       "thinking": 2048,
       "tools": [
@@ -23,9 +23,10 @@
         "budget": 40000
       }
     },
-    "inber": {
-      "name": "inber",
-      "role": "inber framework developer",
+    "fionn": {
+      "name": "Fionn",
+      "project": "inber",
+      "role": "inber framework — the wise one who builds the foundation everything else stands on",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -43,9 +44,10 @@
         "budget": 50000
       }
     },
-    "kayushkin": {
-      "name": "kayushkin",
-      "role": "kayushkin.com fullstack developer",
+    "brigid": {
+      "name": "Brigid",
+      "project": "kayushkin.com",
+      "role": "kayushkin.com — the smith-poet who forges both beauty and function",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -63,9 +65,10 @@
         "budget": 50000
       }
     },
-    "si": {
-      "name": "si",
-      "role": "si communications layer developer",
+    "oisin": {
+      "name": "Oisín",
+      "project": "si",
+      "role": "si comms layer — the messenger who walks between worlds",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -83,9 +86,10 @@
         "budget": 50000
       }
     },
-    "downloadstack": {
-      "name": "downloadstack",
-      "role": "downloadstack media downloader developer",
+    "manannan": {
+      "name": "Manannán",
+      "project": "downloadstack",
+      "role": "downloadstack — the sea god who gathers treasures from distant shores",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -103,9 +107,10 @@
         "budget": 50000
       }
     },
-    "logstack": {
-      "name": "logstack",
-      "role": "logstack logging service developer",
+    "ogma": {
+      "name": "Ogma",
+      "project": "logstack",
+      "role": "logstack — the scribe who records all that passes, nothing forgotten",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -123,9 +128,10 @@
         "budget": 50000
       }
     },
-    "claxon-android": {
-      "name": "claxon-android",
-      "role": "claxon android app developer",
+    "scathach": {
+      "name": "Scáthach",
+      "project": "claxon-android",
+      "role": "claxon android — the warrior who trains in the shadow realm of mobile",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -148,9 +154,9 @@
     "url": "ws://localhost:18789/ws",
     "token": "8a8b770d8433b3cd93b8c2cc9263a79a9eac17800ab5c92c",
     "agents": [
-      "kayushkin",
-      "downloadstack",
-      "claxon-android"
+      "brigid",
+      "manannan",
+      "scathach"
     ]
   }
 }
