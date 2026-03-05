@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
@@ -15,6 +16,28 @@ import (
 
 // RunTurn sends a user message, rebuilds the system prompt, runs the agent, and returns the result.
 func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
+	// Inject completed spawn results into the input
+	if e.agentRegistry != nil {
+		if completed := e.agentRegistry.DrainPending(); len(completed) > 0 {
+			var injections []string
+			for _, spawn := range completed {
+				status := "✅ completed"
+				detail := spawn.Result
+				if spawn.Status == "failed" {
+					status = "❌ failed"
+					detail = spawn.Error
+				}
+				injections = append(injections, fmt.Sprintf(
+					"[Sub-agent %s %s] (task: %s, %v)\n%s",
+					spawn.Agent, status, spawn.Task,
+					spawn.CompletedAt.Sub(spawn.StartedAt).Round(time.Second),
+					detail,
+				))
+			}
+			input = input + "\n\n---\n" + strings.Join(injections, "\n\n")
+		}
+	}
+
 	// Increment and log turn number
 	e.TurnCounter++
 	fmt.Fprintf(os.Stderr, "\n%s━━━ Turn %d ━━━%s\n", cyan+bold, e.TurnCounter, reset)

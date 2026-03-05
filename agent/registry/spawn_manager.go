@@ -14,9 +14,12 @@ import (
 
 // SpawnManager tracks running sub-agents and their results
 type SpawnManager struct {
-	mu        sync.RWMutex
-	spawns    map[string]*SpawnedAgent
+	mu         sync.RWMutex
+	spawns     map[string]*SpawnedAgent
 	resultsDir string
+	onComplete func(*SpawnedAgent)    // called when a spawn finishes
+	pending    []*SpawnedAgent         // completed spawns not yet seen by orchestrator
+	pendingMu  sync.Mutex
 }
 
 // SpawnedAgent represents a running or completed sub-agent task
@@ -110,6 +113,11 @@ func (sm *SpawnManager) runAgent(
 	
 	// Write final result to disk
 	sm.writeResult(spawn)
+
+	// Notify completion
+	if sm.onComplete != nil {
+		sm.onComplete(spawn)
+	}
 }
 
 // GetStatus returns the status of a spawned agent
@@ -196,6 +204,35 @@ func (sm *SpawnManager) WaitForCompletion(taskID string, pollInterval time.Durat
 		
 		time.Sleep(pollInterval)
 	}
+}
+
+// SetOnComplete sets a callback that fires when any spawn finishes.
+// The callback runs in the spawn's goroutine — keep it fast.
+func (sm *SpawnManager) SetOnComplete(fn func(*SpawnedAgent)) {
+	sm.onComplete = fn
+}
+
+// EnablePendingQueue enables queuing completed spawns for DrainPending.
+// Call this to have the orchestrator auto-inject results on the next turn.
+func (sm *SpawnManager) EnablePendingQueue() {
+	sm.onComplete = func(spawn *SpawnedAgent) {
+		sm.pendingMu.Lock()
+		sm.pending = append(sm.pending, spawn)
+		sm.pendingMu.Unlock()
+	}
+}
+
+// DrainPending returns and clears all completed spawns since last drain.
+// The orchestrator calls this at the start of each turn to inject results.
+func (sm *SpawnManager) DrainPending() []*SpawnedAgent {
+	sm.pendingMu.Lock()
+	defer sm.pendingMu.Unlock()
+	if len(sm.pending) == 0 {
+		return nil
+	}
+	result := sm.pending
+	sm.pending = nil
+	return result
 }
 
 // CleanupCompleted removes completed spawns from memory (but keeps disk records)

@@ -219,6 +219,16 @@ func (r *Registry) CloseAll() {
 	r.sessions = make(map[string]*session.Session)
 }
 
+// EnablePendingQueue enables queuing spawn completions for DrainPending.
+func (r *Registry) EnablePendingQueue() {
+	r.spawnManager.EnablePendingQueue()
+}
+
+// DrainPending returns completed spawns since last drain.
+func (r *Registry) DrainPending() []*SpawnedAgent {
+	return r.spawnManager.DrainPending()
+}
+
 // createAgent creates an agent instance from config
 func (r *Registry) createAgent(cfg *AgentConfig) (*agent.Agent, error) {
 	a := agent.New(r.client, cfg.System)
