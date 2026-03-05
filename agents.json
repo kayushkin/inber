@@ -1,5 +1,5 @@
 {
-  "default": "bran",
+  "default": "claxon",
   "tiers": {
     "high": ["claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5"],
     "low": ["glm-5", "glm-4.7", "glm-4.6", "claude-3-5-haiku-20241022"],
@@ -7,10 +7,35 @@
     "grace": 8
   },
   "agents": {
+    "claxon": {
+      "name": "Claxon",
+      "role": "main orchestrator — the one who's actually here 🦀",
+      "model": "claude-opus-4-6",
+      "thinking": 2048,
+      "tools": [
+        "shell",
+        "spawn_agent",
+        "check_spawns",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_files",
+        "memory_search",
+        "memory_save",
+        "memory_expand",
+        "memory_forget",
+        "repo_map",
+        "recent_files"
+      ],
+      "context": {
+        "tags": ["identity", "coordination", "planning", "code"],
+        "budget": 50000
+      }
+    },
     "bran": {
       "name": "Bran",
-      "role": "orchestrator — the voyager who sees all paths and dispatches wisely",
-      "model": "claude-opus-4-6",
+      "role": "secondary orchestrator — complex multi-agent campaigns",
+      "model": "claude-sonnet-4-5",
       "thinking": 2048,
       "tools": [
         "spawn_agent",
@@ -32,7 +57,7 @@
     "fionn": {
       "name": "Fionn",
       "project": "inber",
-      "role": "inber framework — the wise one who builds the foundation everything else stands on",
+      "role": "inber framework — the wise one who builds the foundation",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -53,7 +78,7 @@
     "brigid": {
       "name": "Brigid",
       "project": "kayushkin.com",
-      "role": "kayushkin.com — the smith-poet who forges both beauty and function",
+      "role": "kayushkin.com — the smith-poet, beauty and function",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -74,7 +99,7 @@
     "oisin": {
       "name": "Oisín",
       "project": "si",
-      "role": "si comms layer — the messenger who walks between worlds",
+      "role": "si comms layer — the messenger between worlds",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -95,7 +120,7 @@
     "manannan": {
       "name": "Manannán",
       "project": "downloadstack",
-      "role": "downloadstack — the sea god who gathers treasures from distant shores",
+      "role": "downloadstack — the sea god gathering treasures",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -116,7 +141,7 @@
     "ogma": {
       "name": "Ogma",
       "project": "logstack",
-      "role": "logstack — the scribe who records all that passes, nothing forgotten",
+      "role": "logstack — the scribe, nothing forgotten",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -137,7 +162,7 @@
     "scathach": {
       "name": "Scáthach",
       "project": "claxon-android",
-      "role": "claxon android — the warrior who trains in the shadow realm of mobile",
+      "role": "claxon android — shadow warrior of mobile",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",

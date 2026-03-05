@@ -195,7 +195,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 		// Prepare session: load identity + recent files into memory
 		if identityText == "" {
-			identityText = "You are Claxon, a coding assistant. Use your tools to help the user. See .inber/identity.md, .inber/soul.md, and .inber/user.md for full context."
+			identityText = "You are Claxon 🦀, the main orchestrator agent. Casual, direct, not flowery. You have shell access, file tools, memory, and can spawn project agents. Get to the point."
 		}
 		
 		prepCfg := memory.PrepareSessionConfig{
