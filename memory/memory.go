@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -888,4 +889,18 @@ func (s *Store) loadLazyContent(m *Memory) error {
 	default:
 		return nil // content already in DB
 	}
+}
+
+// DefaultMemoryPath returns the default path for the memory database.
+func DefaultMemoryPath(rootDir string) string {
+	return filepath.Join(rootDir, ".inber", "memory.db")
+}
+
+// OpenOrCreate opens an existing memory store or creates a new one at the default path.
+func OpenOrCreate(rootDir string) (*Store, error) {
+	dbPath := DefaultMemoryPath(rootDir)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		return nil, fmt.Errorf("create memory directory: %w", err)
+	}
+	return NewStore(dbPath)
 }
