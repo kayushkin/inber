@@ -75,15 +75,38 @@ func LoadConfig(configPath, identityDir string) (*RegistryConfig, error) {
 		return nil, fmt.Errorf("no agents defined in %s", configPath)
 	}
 
+	// Load shared context files (_principles.md, _values.md, _user.md)
+	var sharedContext string
+	for _, shared := range []string{"_principles.md", "_values.md", "_user.md"} {
+		data, err := os.ReadFile(filepath.Join(identityDir, shared))
+		if err == nil {
+			sharedContext += string(data) + "\n\n"
+		}
+		// Missing shared files are not errors — they're optional
+	}
+
 	// Load identity (system prompt) from markdown files
+	// Supports two layouts:
+	//   agents/<name>.md           (flat, legacy)
+	//   agents/<name>/soul.md      (directory, preferred)
 	for name, cfg := range af.Agents {
-		mdPath := filepath.Join(identityDir, name+".md")
-		identityData, err := os.ReadFile(mdPath)
+		var identityData []byte
+		var err error
+
+		// Try directory layout first: agents/<name>/soul.md
+		dirPath := filepath.Join(identityDir, name, "soul.md")
+		identityData, err = os.ReadFile(dirPath)
 		if err != nil {
-			return nil, fmt.Errorf("read identity for %s: %w", name, err)
+			// Fall back to flat layout: agents/<name>.md
+			flatPath := filepath.Join(identityDir, name+".md")
+			identityData, err = os.ReadFile(flatPath)
+			if err != nil {
+				return nil, fmt.Errorf("read identity for %s: no soul.md or %s.md found in %s", name, name, identityDir)
+			}
 		}
 
-		cfg.System = string(identityData)
+		// Combine: shared context + agent soul
+		cfg.System = sharedContext + string(identityData)
 
 		// Validate required fields
 		if cfg.Name == "" {
