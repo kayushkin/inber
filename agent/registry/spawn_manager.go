@@ -6,7 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+<<<<<<< Updated upstream
+=======
+	"strings"
+>>>>>>> Stashed changes
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,7 +53,13 @@ func NewSpawnManager(logsDir string) *SpawnManager {
 	}
 }
 
+<<<<<<< Updated upstream
 // SpawnAsync launches a sub-agent in the background and returns immediately
+=======
+// SpawnAsync launches a sub-agent as a fully detached shell process.
+// The shell script captures output and writes the result JSON itself,
+// so it works even if the parent Go process exits immediately.
+>>>>>>> Stashed changes
 func (sm *SpawnManager) SpawnAsync(
 	ctx context.Context,
 	registry *Registry,
@@ -75,10 +86,83 @@ func (sm *SpawnManager) SpawnAsync(
 	
 	// Write initial status to disk
 	sm.writeResult(spawn)
+<<<<<<< Updated upstream
 	
 	// Launch goroutine with background context so spawn survives parent exit
 	go sm.runAgent(context.Background(), registry, spawn, timeout)
 	
+=======
+
+	inberBin, err := os.Executable()
+	if err != nil {
+		inberBin = "inber"
+	}
+
+	lowerAgent := strings.ToLower(agentName)
+	resultPath := filepath.Join(sm.resultsDir, taskID+".json")
+	taskFile := resultPath + ".task"
+
+	// Write task to file to avoid shell escaping issues
+	if err := os.WriteFile(taskFile, []byte(task), 0644); err != nil {
+		sm.failSpawn(spawn, fmt.Sprintf("write task file: %v", err))
+		return taskID, nil
+	}
+
+	// Build a self-contained shell script that:
+	// 1. Runs inber with the task as stdin
+	// 2. Captures stdout and stderr
+	// 3. Writes the result JSON file
+	// 4. Cleans up temp files
+	timeoutSec := int(timeout.Seconds())
+	startedAt := spawn.StartedAt.Format(time.RFC3339Nano)
+
+	script := fmt.Sprintf(
+		`cd %q && timeout %d %q run --agent %q --detach --raw < %q > /tmp/spawn-%s.out 2>/tmp/spawn-%s.err; `+
+			`EXIT=$?; `+
+			`OUTPUT=$(cat /tmp/spawn-%s.out 2>/dev/null); `+
+			`ERR=$(cat /tmp/spawn-%s.err 2>/dev/null); `+
+			`if [ $EXIT -eq 0 ] && [ -n "$OUTPUT" ]; then STATUS=completed; else STATUS=failed; fi; `+
+			`python3 -c "
+import json, sys, datetime
+result = {
+    'id': '%s',
+    'agent': '%s',
+    'task': open('%s').read(),
+    'started_at': '%s',
+    'completed_at': datetime.datetime.utcnow().isoformat() + 'Z',
+    'status': '$STATUS',
+    'result': open('/tmp/spawn-%s.out').read().strip() if '$STATUS' == 'completed' else '',
+    'error': open('/tmp/spawn-%s.err').read().strip() if '$STATUS' == 'failed' else ''
+}
+with open('%s', 'w') as f:
+    json.dump(result, f, indent=2)
+" 2>/dev/null; `+
+			`rm -f %q /tmp/spawn-%s.out /tmp/spawn-%s.err`,
+		sm.repoRoot, timeoutSec, inberBin, lowerAgent, taskFile, taskID, taskID,
+		taskID, taskID,
+		taskID, agentName, taskFile, startedAt,
+		taskID, taskID, resultPath,
+		taskFile, taskID, taskID,
+	)
+
+	cmd := exec.Command("nohup", "sh", "-c", script)
+	cmd.Dir = sm.repoRoot
+	cmd.Env = os.Environ()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		sm.failSpawn(spawn, fmt.Sprintf("start: %v", err))
+		os.Remove(taskFile)
+		return taskID, nil
+	}
+
+	// Release — don't wait
+	go cmd.Wait()
+
+>>>>>>> Stashed changes
 	return taskID, nil
 }
 
@@ -118,17 +202,42 @@ func (sm *SpawnManager) runAgent(
 	if sm.onComplete != nil {
 		sm.onComplete(spawn)
 	}
+<<<<<<< Updated upstream
+=======
+
+	return taskID, nil
+}
+
+// failSpawn marks a spawn as failed and writes the result
+func (sm *SpawnManager) failSpawn(spawn *SpawnedAgent, errMsg string) {
+	sm.mu.Lock()
+	spawn.Status = "failed"
+	spawn.Error = errMsg
+	spawn.CompletedAt = time.Now()
+	sm.mu.Unlock()
+	sm.writeResult(spawn)
+>>>>>>> Stashed changes
 }
 
 // GetStatus returns the status of a spawned agent
 func (sm *SpawnManager) GetStatus(taskID string) (*SpawnedAgent, error) {
+	// Always check disk first (child process may have updated it)
+	diskSpawn, diskErr := sm.loadResult(taskID)
+	if diskErr == nil {
+		return diskSpawn, nil
+	}
+
 	sm.mu.RLock()
 	spawn, ok := sm.spawns[taskID]
 	sm.mu.RUnlock()
 	
 	if !ok {
+<<<<<<< Updated upstream
 		// Try loading from disk
 		return sm.loadResult(taskID)
+=======
+		return nil, fmt.Errorf("task %s not found", taskID)
+>>>>>>> Stashed changes
 	}
 	
 	// Return a copy to avoid race conditions
