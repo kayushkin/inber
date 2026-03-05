@@ -18,4 +18,43 @@ Personal site on Linode — Go SPA server + nginx + Let's Encrypt. React + Vite 
 
 **Deploy:** Push to main, script handles the rest. Exclude `library/epub` from rsync `--delete`.
 
+## Deployment Checklist
+
+After finishing any task on kayushkin.com, follow this checklist:
+
+1. **Build backend (if changed)**
+   ```bash
+   go build -o kayushkin-server main.go
+   go build -o mangastack-bin mangastack.go
+   go build -o podcaststack-bin podcaststack.go
+   ```
+
+2. **Build frontend (if changed)**
+   ```bash
+   npm run build
+   ```
+
+3. **Commit and push**
+   ```bash
+   git add -A && git commit -m "descriptive message"
+   git push
+   ```
+
+4. **Deploy to server**
+   ```bash
+   ./update-kayushkin.sh
+   ```
+
+5. **Verify the site**
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}" https://kayushkin.com
+   # Expected: 200
+   ```
+
+6. **Check logs if something's wrong**
+   ```bash
+   ~/bin/ssh-kcom.sh
+   sudo journalctl -u kayushkin -f
+   ```
+
 *"The best interface is one you don't notice."*
