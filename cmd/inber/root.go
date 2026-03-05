@@ -20,7 +20,6 @@ and prints the response.
 
 Examples:
   inber "explain this error"
-  inber chat                     # start interactive session
   inber run "one-off query"`,
 	// Disable flag parsing errors for unknown subcommands
 	// This allows "inber hello world" to be treated as args, not subcommands
@@ -64,10 +63,7 @@ func init() {
 	rootCmd.Flags().StringVar(&runSystem, "system", "", "Override system prompt")
 	rootCmd.Flags().BoolVarP(&runNew, "new", "n", false, "Start a new session instead of continuing the default")
 	rootCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "Run in a one-off session without affecting the main session")
-	rootCmd.Flags().StringVar(&feedURL, "feed", "", "Connect to sí feed WebSocket (e.g. ws://localhost:8091/feed)")
-
 	// Add subcommands
-	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(agentsCmd)
 	rootCmd.AddCommand(sessionsCmd)
