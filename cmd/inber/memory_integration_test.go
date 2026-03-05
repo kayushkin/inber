@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/engine"
 	"github.com/kayushkin/inber/memory"
 	"github.com/kayushkin/inber/tools"
 )
@@ -108,7 +109,7 @@ func TestSessionSummaryAutoSave(t *testing.T) {
 		anthropic.NewUserMessage(anthropic.NewTextBlock("Great, also add connection pooling")),
 	}
 
-	saveSessionSummary(store, messages, "test-agent")
+	engine.SaveSessionSummary(store, messages, "test-agent")
 
 	// Verify it was saved
 	results, err := store.Search("refactor database", 5)
@@ -162,8 +163,8 @@ func TestSessionSummaryEmptyMessages(t *testing.T) {
 	defer store.Close()
 
 	// Should not panic with empty messages
-	saveSessionSummary(store, nil, "test-agent")
-	saveSessionSummary(store, []anthropic.MessageParam{}, "test-agent")
+	engine.SaveSessionSummary(store, nil, "test-agent")
+	engine.SaveSessionSummary(store, []anthropic.MessageParam{}, "test-agent")
 }
 
 // TestMemoryInstructionsInContext removed — tested old context.AutoLoad path

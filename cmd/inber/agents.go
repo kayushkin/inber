@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kayushkin/inber/agent/registry"
+	"github.com/kayushkin/inber/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +36,7 @@ func init() {
 }
 
 func runAgentsList(cmd *cobra.Command, args []string) {
-	repoRoot, _ := FindRepoRoot()
+	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -45,7 +46,7 @@ func runAgentsList(cmd *cobra.Command, args []string) {
 		filepath.Join(repoRoot, "agents"),
 	)
 	if err != nil {
-		Log.Error("loading agents: %v", err)
+		engine.Log.Error("loading agents: %v", err)
 		os.Exit(1)
 	}
 
@@ -56,7 +57,7 @@ func runAgentsList(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("Configured agents (%d):\n\n", len(cfg.Agents))
 	if cfg.Default != "" {
-		fmt.Printf("  Default: %s%s%s\n\n", bold+blue, cfg.Default, reset)
+		fmt.Printf("  Default: %s%s%s\n\n", engine.Bold+engine.Blue, cfg.Default, engine.Reset)
 	}
 	for name, agentCfg := range cfg.Agents {
 		model := agentCfg.Model
@@ -69,16 +70,16 @@ func runAgentsList(cmd *cobra.Command, args []string) {
 		}
 		defaultMarker := ""
 		if name == cfg.Default {
-			defaultMarker = " " + green + "*" + reset
+			defaultMarker = " " + engine.Green + "*" + engine.Reset
 		}
-		fmt.Printf("  %s%-20s%s%s  model: %-25s  %s\n", bold, name, reset, defaultMarker, model, tools)
+		fmt.Printf("  %s%-20s%s%s  model: %-25s  %s\n", engine.Bold, name, engine.Reset, defaultMarker, model, tools)
 	}
 }
 
 func runAgentsShow(cmd *cobra.Command, args []string) {
 	agentName := args[0]
 	
-	repoRoot, _ := FindRepoRoot()
+	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -88,19 +89,19 @@ func runAgentsShow(cmd *cobra.Command, args []string) {
 		filepath.Join(repoRoot, "agents"),
 	)
 	if err != nil {
-		Log.Error("loading agents: %v", err)
+		engine.Log.Error("loading agents: %v", err)
 		os.Exit(1)
 	}
 
 	agentCfg, ok := registryCfg.Agents[agentName]
 	if !ok {
-		Log.Error("agent not found: %s", agentName)
+		engine.Log.Error("agent not found: %s", agentName)
 		os.Exit(1)
 	}
 
-	fmt.Printf("%s%s%s", bold+blue, agentCfg.Name, reset)
+	fmt.Printf("%s%s%s", engine.Bold+engine.Blue, agentCfg.Name, engine.Reset)
 	if agentName == registryCfg.Default {
-		fmt.Printf(" %s(default)%s", green, reset)
+		fmt.Printf(" %s(default)%s", engine.Green, engine.Reset)
 	}
 	fmt.Println()
 	
@@ -116,7 +117,7 @@ func runAgentsShow(cmd *cobra.Command, args []string) {
 		fmt.Printf("Thinking: %d tokens\n", agentCfg.Thinking)
 	}
 	
-	fmt.Printf("\nIdentity:\n%s\n", dim+"---"+reset)
+	fmt.Printf("\nIdentity:\n%s\n", engine.Dim+"---"+engine.Reset)
 	fmt.Println(agentCfg.System)
-	fmt.Printf("%s\n", dim+"---"+reset)
+	fmt.Printf("%s\n", engine.Dim+"---"+engine.Reset)
 }

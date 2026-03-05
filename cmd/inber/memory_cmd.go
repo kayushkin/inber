@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kayushkin/inber/memory"
+	"github.com/kayushkin/inber/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -108,14 +109,14 @@ func init() {
 }
 
 func getMemoryStore() *memory.Store {
-	repoRoot, _ := FindRepoRoot()
+	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
 
 	store, err := memory.OpenOrCreate(repoRoot)
 	if err != nil {
-		Log.Error("opening memory store: %v", err)
+		engine.Log.Error("opening memory store: %v", err)
 		os.Exit(1)
 	}
 	return store
@@ -128,7 +129,7 @@ func runMemorySearch(cmd *cobra.Command, args []string) {
 
 	results, err := store.Search(query, memorySearchLimit)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -140,10 +141,10 @@ func runMemorySearch(cmd *cobra.Command, args []string) {
 	fmt.Printf("Found %d memories:\n\n", len(results))
 	for i, m := range results {
 		tags := strings.Join(m.Tags, ", ")
-		fmt.Printf("%s%d. [%s]%s\n", bold, i+1, m.ID[:8], reset)
+		fmt.Printf("%s%d. [%s]%s\n", engine.Bold, i+1, m.ID[:8], engine.Reset)
 		fmt.Printf("   Source: %s | Importance: %.2f | Accessed: %d times\n", m.Source, m.Importance, m.AccessCount)
 		fmt.Printf("   Tags: %s\n", tags)
-		fmt.Printf("   %s%s%s\n\n", dim, truncateText(m.Content, 200), reset)
+		fmt.Printf("   %s%s%s\n\n", engine.Dim, truncateText(m.Content, 200), engine.Reset)
 	}
 }
 
@@ -153,7 +154,7 @@ func runMemoryList(cmd *cobra.Command, args []string) {
 
 	results, err := store.ListRecent(memoryListLimit, memoryListMin)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -165,9 +166,9 @@ func runMemoryList(cmd *cobra.Command, args []string) {
 	fmt.Printf("Recent memories (%d):\n\n", len(results))
 	for i, m := range results {
 		tags := strings.Join(m.Tags, ", ")
-		fmt.Printf("%s%d. [%s]%s  %s\n", bold, i+1, m.ID[:8], reset, m.CreatedAt.Format("2006-01-02"))
+		fmt.Printf("%s%d. [%s]%s  %s\n", engine.Bold, i+1, m.ID[:8], engine.Reset, m.CreatedAt.Format("2006-01-02"))
 		fmt.Printf("   Importance: %.2f | Tags: %s\n", m.Importance, tags)
-		fmt.Printf("   %s%s%s\n\n", dim, truncateText(m.Content, 150), reset)
+		fmt.Printf("   %s%s%s\n\n", engine.Dim, truncateText(m.Content, 150), engine.Reset)
 	}
 }
 
@@ -178,12 +179,12 @@ func runMemoryShow(cmd *cobra.Command, args []string) {
 
 	m, err := store.Get(id)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
 	tags := strings.Join(m.Tags, ", ")
-	fmt.Printf("%sMemory: %s%s\n", bold+blue, m.ID, reset)
+	fmt.Printf("%sMemory: %s%s\n", engine.Bold+engine.Blue, m.ID, engine.Reset)
 	fmt.Printf("Created: %s\n", m.CreatedAt.Format("2006-01-02 15:04:05"))
 	fmt.Printf("Last accessed: %s\n", m.LastAccessed.Format("2006-01-02 15:04:05"))
 	fmt.Printf("Access count: %d\n", m.AccessCount)
@@ -195,9 +196,9 @@ func runMemoryShow(cmd *cobra.Command, args []string) {
 		fmt.Printf("Original memory: %s\n", m.OriginalID)
 	}
 	
-	fmt.Printf("\nContent:\n%s\n", dim+"---"+reset)
+	fmt.Printf("\nContent:\n%s\n", engine.Dim+"---"+engine.Reset)
 	fmt.Println(m.Content)
-	fmt.Printf("%s\n", dim+"---"+reset)
+	fmt.Printf("%s\n", engine.Dim+"---"+engine.Reset)
 }
 
 func runMemorySave(cmd *cobra.Command, args []string) {
@@ -214,7 +215,7 @@ func runMemorySave(cmd *cobra.Command, args []string) {
 	}
 
 	if err := store.Save(m); err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -227,7 +228,7 @@ func runMemoryForget(cmd *cobra.Command, args []string) {
 	defer store.Close()
 
 	if err := store.Forget(id); err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -241,7 +242,7 @@ func runMemoryStats(cmd *cobra.Command, args []string) {
 	// Get all memories
 	all, err := store.ListRecent(10000, 0)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -268,7 +269,7 @@ func runMemoryStats(cmd *cobra.Command, args []string) {
 
 	avgImportance := totalImportance / float64(len(all))
 
-	fmt.Printf("%sMemory Statistics%s\n\n", bold+blue, reset)
+	fmt.Printf("%sMemory Statistics%s\n\n", engine.Bold+engine.Blue, engine.Reset)
 	fmt.Printf("Total memories: %d\n", len(all))
 	fmt.Printf("Average importance: %.2f\n\n", avgImportance)
 
@@ -318,13 +319,13 @@ func runMemoryCompact(cmd *cobra.Command, args []string) {
 
 	age, err := time.ParseDuration(memoryCompactAge)
 	if err != nil {
-		Log.Error("invalid age duration: %v", err)
+		engine.Log.Error("invalid age duration: %v", err)
 		os.Exit(1)
 	}
 
 	results, err := store.Compact(age, memoryCompactMinAccess)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -336,7 +337,7 @@ func runMemoryCompact(cmd *cobra.Command, args []string) {
 	fmt.Printf("Compacted %d groups:\n\n", len(results))
 	for _, r := range results {
 		fmt.Printf("  %s%s%s ← %d memories (tags: %s)\n",
-			bold, r.NewID, reset, r.Count, strings.Join(r.Tags, ", "))
+			engine.Bold, r.NewID, engine.Reset, r.Count, strings.Join(r.Tags, ", "))
 	}
 }
 
@@ -347,7 +348,7 @@ func runMemoryPrune(cmd *cobra.Command, args []string) {
 	// Show memories that would be affected by compaction (low importance)
 	all, err := store.ListRecent(1000, 0)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -366,7 +367,7 @@ func runMemoryPrune(cmd *cobra.Command, args []string) {
 	fmt.Printf("Found %d prunable memories:\n\n", len(prunable))
 	for _, m := range prunable {
 		fmt.Printf("  [%s] imp=%.2f access=%d %s%s%s\n",
-			m.ID[:8], m.Importance, m.AccessCount, dim, truncateText(m.Content, 60), reset)
+			m.ID[:8], m.Importance, m.AccessCount, engine.Dim, truncateText(m.Content, 60), engine.Reset)
 	}
 
 	if memoryPruneDryRun {
@@ -386,7 +387,7 @@ func runMemoryDecay(cmd *cobra.Command, args []string) {
 	defer store.Close()
 
 	if err := store.DecayImportance(); err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 

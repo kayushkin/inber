@@ -7,6 +7,7 @@ import (
 
 	"github.com/kayushkin/aiauth"
 	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -43,14 +44,14 @@ func init() {
 }
 
 func runConfigShow(cmd *cobra.Command, args []string) {
-	fmt.Printf("%sConfiguration:%s\n\n", bold+blue, reset)
+	fmt.Printf("%sConfiguration:%s\n\n", engine.Bold+engine.Blue, engine.Reset)
 	
 	store := aiauth.DefaultStore()
 	key, keyErr := store.AnthropicKey()
 	if keyErr == nil && key != "" {
 		fmt.Printf("ANTHROPIC_API_KEY: %s\n", aiauth.MaskKey(key))
 	} else {
-		fmt.Printf("%sANTHROPIC_API_KEY: not set%s\n", red, reset)
+		fmt.Printf("%sANTHROPIC_API_KEY: not set%s\n", engine.Red, engine.Reset)
 	}
 	
 	// Show config file locations
@@ -60,13 +61,13 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 		if _, err := os.Stat(userConfigPath); err == nil {
 			fmt.Printf("User config: %s\n", userConfigPath)
 		} else {
-			fmt.Printf("User config: %snot found%s (run 'inber config user' to create)\n", dim, reset)
+			fmt.Printf("User config: %snot found%s (run 'inber config user' to create)\n", engine.Dim, engine.Reset)
 		}
 	}
 	
-	repoRoot, err := FindRepoRoot()
+	repoRoot, err := engine.FindRepoRoot()
 	if err != nil {
-		fmt.Printf("\nRepo root: %s(not in a git repository)%s\n", dim, reset)
+		fmt.Printf("\nRepo root: %s(not in a git repository)%s\n", engine.Dim, engine.Reset)
 	} else {
 		fmt.Printf("\nRepo root: %s\n", repoRoot)
 		
@@ -75,7 +76,7 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 		if _, err := os.Stat(agentsPath); err == nil {
 			fmt.Printf("Agents config: %s\n", agentsPath)
 		} else {
-			fmt.Printf("Agents config: %snot found%s\n", dim, reset)
+			fmt.Printf("Agents config: %snot found%s\n", engine.Dim, engine.Reset)
 		}
 		
 		// Check for .inber directory
@@ -83,7 +84,7 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 		if info, err := os.Stat(inberDir); err == nil && info.IsDir() {
 			fmt.Printf("Data directory: %s\n", inberDir)
 		} else {
-			fmt.Printf("Data directory: %snot initialized%s\n", dim, reset)
+			fmt.Printf("Data directory: %snot initialized%s\n", engine.Dim, engine.Reset)
 		}
 	}
 	
@@ -91,16 +92,16 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 }
 
 func runConfigInit(cmd *cobra.Command, args []string) {
-	repoRoot, err := FindRepoRoot()
+	repoRoot, err := engine.FindRepoRoot()
 	if err != nil {
-		Log.Error("not in a git repository")
+		engine.Log.Error("not in a git repository")
 		os.Exit(1)
 	}
 
 	// Create .inber directory
 	inberDir := filepath.Join(repoRoot, ".inber")
 	if err := os.MkdirAll(inberDir, 0755); err != nil {
-		Log.Error("creating .inber: %v", err)
+		engine.Log.Error("creating .inber: %v", err)
 		os.Exit(1)
 	}
 
@@ -119,7 +120,7 @@ func runConfigInit(cmd *cobra.Command, args []string) {
 }
 `
 		if err := os.WriteFile(agentsPath, []byte(example), 0644); err != nil {
-			Log.Error("creating agents.json: %v", err)
+			engine.Log.Error("creating agents.json: %v", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Created %s\n", agentsPath)
@@ -128,7 +129,7 @@ func runConfigInit(cmd *cobra.Command, args []string) {
 	// Create agents directory
 	agentsDir := filepath.Join(repoRoot, "agents")
 	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		Log.Error("creating agents/: %v", err)
+		engine.Log.Error("creating agents/: %v", err)
 		os.Exit(1)
 	}
 
@@ -145,7 +146,7 @@ You are a helpful coding assistant with access to tools for:
 Use these tools to help the user accomplish their tasks.
 `
 		if err := os.WriteFile(defaultIdentity, []byte(identity), 0644); err != nil {
-			Log.Error("creating default.md: %v", err)
+			engine.Log.Error("creating default.md: %v", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Created %s\n", defaultIdentity)
@@ -158,7 +159,7 @@ Use these tools to help the user accomplish their tasks.
 ANTHROPIC_API_KEY=your-key-here
 `
 		if err := os.WriteFile(envPath, []byte(env), 0644); err != nil {
-			Log.Error("creating .env: %v", err)
+			engine.Log.Error("creating .env: %v", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Created %s (remember to add your API key)\n", envPath)
@@ -170,13 +171,13 @@ ANTHROPIC_API_KEY=your-key-here
 func runConfigUser(cmd *cobra.Command, args []string) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		Log.Error("could not determine home directory: %v", err)
+		engine.Log.Error("could not determine home directory: %v", err)
 		os.Exit(1)
 	}
 
 	configDir := filepath.Join(homeDir, ".config", "inber")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		Log.Error("creating config directory: %v", err)
+		engine.Log.Error("creating config directory: %v", err)
 		os.Exit(1)
 	}
 
@@ -202,14 +203,14 @@ func runConfigUser(cmd *cobra.Command, args []string) {
 	}
 
 	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil { // 0600 = user read/write only
-		Log.Error("creating config file: %v", err)
+		engine.Log.Error("creating config file: %v", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n%sUser config created at:%s %s\n", green, reset, envPath)
+	fmt.Printf("\n%sUser config created at:%s %s\n", engine.Green, engine.Reset, envPath)
 	if apiKey == "" {
-		fmt.Printf("\n%sRemember to edit the file and add your API key!%s\n", yellow, reset)
+		fmt.Printf("\n%sRemember to edit the file and add your API key!%s\n", engine.Yellow, engine.Reset)
 	} else {
-		fmt.Printf("\n%sAPI key saved. You can now use inber from any directory.%s\n", green, reset)
+		fmt.Printf("\n%sAPI key saved. You can now use inber from any directory.%s\n", engine.Green, engine.Reset)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/engine"
 	"github.com/kayushkin/inber/session"
 	"github.com/spf13/cobra"
 )
@@ -69,19 +70,19 @@ func runRun(cmd *cobra.Command, args []string) {
 	} else {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
-			Log.Error("reading stdin: %v", err)
+			engine.Log.Error("reading stdin: %v", err)
 			os.Exit(1)
 		}
 		input = strings.TrimSpace(string(data))
 	}
 
 	if input == "" {
-		Log.Error("no message provided")
-		Log.Plain("usage: inber run \"your message\" or echo \"message\" | inber run")
+		engine.Log.Error("no message provided")
+		engine.Log.Plain("usage: inber run \"your message\" or echo \"message\" | inber run")
 		os.Exit(1)
 	}
 
-	eng, err := NewEngine(EngineConfig{
+	eng, err := engine.NewEngine(engine.EngineConfig{
 		Model:          runModel,
 		Thinking:       runThinking,
 		AgentName:      runAgent,
@@ -91,25 +92,25 @@ func runRun(cmd *cobra.Command, args []string) {
 		CommandName:    "run",
 		NewSession:     runNew,
 		Detach:         runDetach,
-		Display: &DisplayHooks{
-			OnToolCall:   DisplayToolCall,
-			OnToolResult: DisplayToolResult,
+		Display: &engine.DisplayHooks{
+			OnToolCall:   engine.DisplayToolCall,
+			OnToolResult: engine.DisplayToolResult,
 		},
-		AutoWorkflow: AutoWorkflowConfig{
+		AutoWorkflow: engine.AutoWorkflowConfig{
 			AutoBranch: runAutoBranch,
 			AutoCommit: runAutoCommit,
 			AutoFormat: runAutoFormat,
 		},
 	})
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 	defer eng.Close()
 
 	result, err := eng.RunTurn(input)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 

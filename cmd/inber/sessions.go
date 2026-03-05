@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kayushkin/inber/session"
+	"github.com/kayushkin/inber/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -80,7 +81,7 @@ func init() {
 }
 
 func runSessionsList(cmd *cobra.Command, args []string) {
-	repoRoot, _ := FindRepoRoot()
+	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -158,7 +159,7 @@ func runSessionsList(cmd *cobra.Command, args []string) {
 		}
 		fmt.Printf("  %s  %s%-8s%s%s\n",
 			s.StartTime.Format("2006-01-02 15:04:05"),
-			dim, s.ID, reset, agentLabel)
+			engine.Dim, s.ID, engine.Reset, agentLabel)
 	}
 }
 
@@ -186,7 +187,7 @@ func findSessionFile(logsDir, sessionID string) string {
 func runSessionsShow(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 	
-	repoRoot, _ := FindRepoRoot()
+	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -195,14 +196,14 @@ func runSessionsShow(cmd *cobra.Command, args []string) {
 	logFile := findSessionFile(logsDir, sessionID)
 
 	if logFile == "" {
-		Log.Error("session not found: %s", sessionID)
+		engine.Log.Error("session not found: %s", sessionID)
 		os.Exit(1)
 	}
 
 	// Read and display
 	data, err := os.ReadFile(logFile)
 	if err != nil {
-		Log.Error("reading session: %v", err)
+		engine.Log.Error("reading session: %v", err)
 		os.Exit(1)
 	}
 
@@ -219,20 +220,20 @@ func runSessionsShow(cmd *cobra.Command, args []string) {
 
 		switch entry.Role {
 		case "user":
-			fmt.Printf("\n%s> %s%s\n", bold+green, reset, entry.Content)
+			fmt.Printf("\n%s> %s%s\n", engine.Bold+engine.Green, engine.Reset, entry.Content)
 		
 		case "assistant":
-			fmt.Printf("\n%s%s\n", dim, entry.Content)
+			fmt.Printf("\n%s%s\n", engine.Dim, entry.Content)
 		
 		case "tool_call":
-			fmt.Printf("\n%s[tool: %s]%s\n", yellow, entry.ToolName, reset)
-			fmt.Printf("%s%s%s\n", dim, string(entry.ToolInput), reset)
+			fmt.Printf("\n%s[tool: %s]%s\n", engine.Yellow, entry.ToolName, engine.Reset)
+			fmt.Printf("%s%s%s\n", engine.Dim, string(entry.ToolInput), engine.Reset)
 		
 		case "tool_result":
-			fmt.Printf("%s→ %s%s\n", dim, entry.Content, reset)
+			fmt.Printf("%s→ %s%s\n", engine.Dim, entry.Content, engine.Reset)
 		
 		case "thinking":
-			fmt.Printf("\n%s[thinking]%s\n%s\n", magenta, reset, entry.Content)
+			fmt.Printf("\n%s[thinking]%s\n%s\n", engine.Magenta, engine.Reset, entry.Content)
 		}
 	}
 	fmt.Println()
@@ -241,7 +242,7 @@ func runSessionsShow(cmd *cobra.Command, args []string) {
 func runSessionsContext(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 	
-	repoRoot, _ := FindRepoRoot()
+	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -250,14 +251,14 @@ func runSessionsContext(cmd *cobra.Command, args []string) {
 	logFile := findSessionFile(logsDir, sessionID)
 
 	if logFile == "" {
-		Log.Error("session not found: %s", sessionID)
+		engine.Log.Error("session not found: %s", sessionID)
 		os.Exit(1)
 	}
 
 	// Read and find request with system prompt
 	data, err := os.ReadFile(logFile)
 	if err != nil {
-		Log.Error("reading session: %v", err)
+		engine.Log.Error("reading session: %v", err)
 		os.Exit(1)
 	}
 
@@ -290,7 +291,7 @@ func runSessionsContext(cmd *cobra.Command, args []string) {
 func runSessionsPrompts(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 
-	repoRoot, _ := FindRepoRoot()
+	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -298,7 +299,7 @@ func runSessionsPrompts(cmd *cobra.Command, args []string) {
 	logsDir := filepath.Join(repoRoot, "logs")
 	files, err := session.ListPromptBreakdowns(logsDir, sessionID)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -318,7 +319,7 @@ func runSessionsPrompt(cmd *cobra.Command, args []string) {
 	turn := 0
 	fmt.Sscanf(args[1], "%d", &turn)
 
-	repoRoot, _ := FindRepoRoot()
+	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -326,7 +327,7 @@ func runSessionsPrompt(cmd *cobra.Command, args []string) {
 	logsDir := filepath.Join(repoRoot, "logs")
 	content, err := session.ReadPromptBreakdown(logsDir, sessionID, turn)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -336,7 +337,7 @@ func runSessionsPrompt(cmd *cobra.Command, args []string) {
 func runSessionsTimeline(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 
-	repoRoot, _ := FindRepoRoot()
+	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -344,7 +345,7 @@ func runSessionsTimeline(cmd *cobra.Command, args []string) {
 	logsDir := filepath.Join(repoRoot, "logs")
 	content, err := session.ReadTimelineFromJSONL(logsDir, sessionID)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -352,21 +353,21 @@ func runSessionsTimeline(cmd *cobra.Command, args []string) {
 }
 
 func runSessionsActive(cmd *cobra.Command, args []string) {
-	repoRoot, _ := FindRepoRoot()
+	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
 
 	sdb, err := session.OpenDB(repoRoot)
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 	defer sdb.Close()
 
 	active, err := sdb.ListActive()
 	if err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 
@@ -379,9 +380,9 @@ func runSessionsActive(cmd *cobra.Command, args []string) {
 	for _, s := range active {
 		duration := s.Duration.Truncate(time.Second)
 		fmt.Printf("  %sPID %d%s  %s  %s%-8s%s  agent=%s  turns=%d  $%.4f  (%s)\n",
-			bold, s.PID, reset,
+			engine.Bold, s.PID, engine.Reset,
 			s.Command,
-			dim, s.ID, reset,
+			engine.Dim, s.ID, engine.Reset,
 			s.Agent,
 			s.Turns,
 			s.TotalCost,

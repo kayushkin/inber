@@ -1,4 +1,4 @@
-package main
+package engine
 
 import (
 	"context"
@@ -167,7 +167,7 @@ func (e *Engine) Close() {
 	}
 
 	if e.MemStore != nil && len(e.Messages) > 0 {
-		saveSessionSummary(e.MemStore, e.Messages, e.AgentName)
+		SaveSessionSummary(e.MemStore, e.Messages, e.AgentName)
 	}
 
 	if e.MemStore != nil {
@@ -184,8 +184,8 @@ func (e *Engine) Close() {
 	}
 }
 
-// saveSessionSummary generates a brief session summary and saves it to memory.
-func saveSessionSummary(store *memory.Store, messages []anthropic.MessageParam, agentName string) {
+// SaveSessionSummary generates a brief session summary and saves it to memory.
+func SaveSessionSummary(store *memory.Store, messages []anthropic.MessageParam, agentName string) {
 	var parts []string
 	for _, msg := range messages {
 		role := string(msg.Role)

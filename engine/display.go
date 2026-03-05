@@ -1,4 +1,4 @@
-package main
+package engine
 
 import (
 	"encoding/json"
@@ -11,16 +11,30 @@ import (
 
 // ANSI color helpers
 const (
-	reset   = "\033[0m"
-	dim     = "\033[2m"
-	bold    = "\033[1m"
-	italic  = "\033[3m"
-	cyan    = "\033[36m"
-	magenta = "\033[35m"
-	yellow  = "\033[33m"
-	green   = "\033[32m"
-	red     = "\033[31m"
-	blue    = "\033[34m"
+	Reset   = "\033[0m"
+	Dim     = "\033[2m"
+	Bold    = "\033[1m"
+	Italic  = "\033[3m"
+	Cyan    = "\033[36m"
+	Magenta = "\033[35m"
+	Yellow  = "\033[33m"
+	Green   = "\033[32m"
+	Red     = "\033[31m"
+	Blue    = "\033[34m"
+)
+
+// Keep lowercase aliases for internal use
+const (
+	reset   = Reset
+	dim     = Dim
+	bold    = Bold
+	italic  = Italic
+	cyan    = Cyan
+	magenta = Magenta
+	yellow  = Yellow
+	green   = Green
+	red     = Red
+	blue    = Blue
 )
 
 // DisplayToolCall prints a tool call to the terminal with inline payload.

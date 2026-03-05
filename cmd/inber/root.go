@@ -6,6 +6,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -34,7 +35,7 @@ Examples:
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		Log.Error("%v", err)
+		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 }

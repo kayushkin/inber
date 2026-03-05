@@ -10,6 +10,7 @@ import (
 	"time"
 
 	inbercontext "github.com/kayushkin/inber/context"
+	"github.com/kayushkin/inber/engine"
 	"github.com/kayushkin/inber/memory"
 	"github.com/kayushkin/inber/session"
 )
@@ -66,7 +67,7 @@ func TestFindRepoRoot(t *testing.T) {
 	defer os.Chdir(orig)
 
 	os.Chdir(subdir)
-	root, err := FindRepoRoot()
+	root, err := engine.FindRepoRoot()
 	if err != nil {
 		t.Fatalf("FindRepoRoot failed: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestFindRepoRoot_NotInRepo(t *testing.T) {
 	defer os.Chdir(orig)
 
 	os.Chdir(dir)
-	_, err := FindRepoRoot()
+	_, err := engine.FindRepoRoot()
 	if err == nil {
 		t.Error("expected error when not in a git repository")
 	}
@@ -568,7 +569,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 		Tokens: 20,
 	})
 
-	eng := &Engine{ContextStore: store}
+	eng := &engine.Engine{ContextStore: store}
 	blocks := eng.BuildSystemPrompt("hello")
 	found := false
 	for _, b := range blocks {
