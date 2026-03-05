@@ -3,7 +3,7 @@
     "agents": {
         "task-manager": {
             "name": "task-manager",
-            "role": "orchestrator",
+            "role": "orchestrator — dispatches to project agents",
             "model": "claude-opus-4-6",
             "thinking": 2048,
             "tools": [
@@ -17,6 +17,6 @@
     "openclaw": {
         "url": "ws://localhost:18789/ws",
         "token": "YOUR_OPENCLAW_GATEWAY_TOKEN",
-        "agents": ["kayushkin", "downloadstack", "claxon-android", "inber-party"]
+        "agents": ["my-project-1", "my-project-2"]
     }
 }

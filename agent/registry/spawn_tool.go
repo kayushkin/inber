@@ -27,13 +27,13 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 
 	return agent.Tool{
 		Name:        "spawn_agent",
-		Description: "Spawn a sub-agent to complete a task. BY DEFAULT this is ASYNC (returns immediately with task ID). Use wait:true to block until completion. Use this to delegate work to specialists: fionn (coding), scathach (testing), oisin (deployment), etc.",
+		Description: "Spawn a sub-agent to complete a task. BY DEFAULT this is ASYNC (returns immediately with task ID). Use wait:true to block until completion. Use this to delegate work to project-specific agents.",
 		InputSchema: anthropic.ToolInputSchemaParam{
 			Required: []string{"agent", "task"},
 			Properties: map[string]any{
 				"agent": map[string]any{
 					"type":        "string",
-					"description": "Agent name to spawn (fionn, scathach, oisin, etc)",
+					"description": "Agent name to spawn (must match a configured agent)",
 				},
 				"task": map[string]any{
 					"type":        "string",
