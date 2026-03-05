@@ -10,6 +10,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 	inbercontext "github.com/kayushkin/inber/context"
+	"github.com/kayushkin/model-store"
 )
 
 func TestSpawnAndRun_OpenAI(t *testing.T) {
@@ -80,8 +81,19 @@ func TestSpawnAndRun_OpenAI(t *testing.T) {
 	modelClient := &agent.ModelClient{
 		Provider:     "openai",
 		OpenAIClient: openAIClient,
+		Model: &modelstore.Model{
+			ID:      "gpt-4",
+			Provider: "openai",
+		},
 	}
 	reg.SetModelClient(modelClient)
+
+	// Create a temporary model store for testing
+	tmpStore, err := modelstore.Open(t.TempDir() + "/models.db")
+	if err != nil {
+		t.Fatalf("failed to create model store: %v", err)
+	}
+	reg.SetModelStore(tmpStore)
 
 	// Create context store
 	reg.contexts = make(map[string]*inbercontext.Store)
@@ -218,8 +230,19 @@ func TestSpawnAndRun_OpenAI_WithToolCalls(t *testing.T) {
 	modelClient := &agent.ModelClient{
 		Provider:     "openai",
 		OpenAIClient: openAIClient,
+		Model: &modelstore.Model{
+			ID:      "gpt-4",
+			Provider: "openai",
+		},
 	}
 	reg.SetModelClient(modelClient)
+
+	// Create a temporary model store for testing
+	tmpStore, err := modelstore.Open(t.TempDir() + "/models.db")
+	if err != nil {
+		t.Fatalf("failed to create model store: %v", err)
+	}
+	reg.SetModelStore(tmpStore)
 
 	reg.contexts = make(map[string]*inbercontext.Store)
 	reg.contexts["test-agent"] = inbercontext.NewStore()

@@ -77,6 +77,7 @@ type Engine struct {
 	workflowHooks   *WorkflowHooks                // auto-branch, auto-commit, auto-format, build/test
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
+	agentRegistry   *registry.Registry            // agent registry for spawn tools
 	
 	// Session-level token tracking (exported for display)
 	SessionInputTokens  int
@@ -291,6 +292,27 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		e.Client = modelClient.AnthropicClient
 	}
 
+	// Create agent registry if spawn tools are needed
+	if e.AgentConfig != nil && e.needsSpawnTools(e.AgentConfig.Tools) {
+		reg, err := registry.New(e.Client, filepath.Join(repoRoot, "agents"), filepath.Join(repoRoot, "logs"))
+		if err != nil {
+			Log.Warn("failed to create agent registry: %v", err)
+		} else {
+			e.agentRegistry = reg
+			// Set model client for OpenAI-compatible providers
+			reg.SetModelClient(modelClient)
+			// Set model store for creating per-agent model clients
+			if e.modelStore != nil {
+				reg.SetModelStore(e.modelStore)
+			}
+			// Set memory store for memory tools in spawned agents
+			if e.MemStore != nil {
+				reg.SetMemoryStore(e.MemStore)
+			}
+			Log.Info("agent registry enabled for spawn tools")
+		}
+	}
+
 	// Tools
 	if !cfg.NoTools {
 		e.agentTools = e.buildTools()
@@ -376,6 +398,18 @@ func (e *Engine) buildTools() []agent.Tool {
 				continue
 			}
 			
+			// Handle spawn tools (requires registry)
+			if toolName == "spawn_agent" || toolName == "check_spawns" {
+				if e.agentRegistry != nil {
+					if toolName == "spawn_agent" {
+						result = append(result, e.agentRegistry.SpawnAgentTool())
+					} else {
+						result = append(result, e.agentRegistry.CheckSpawnsTool())
+					}
+				}
+				continue
+			}
+			
 			for _, t := range tools.All() {
 				if t.Name == toolName {
 					result = append(result, t)
@@ -410,6 +444,16 @@ func (e *Engine) buildTools() []agent.Tool {
 	}
 
 	return result
+}
+
+// needsSpawnTools checks if the tool list includes spawn_agent or check_spawns
+func (e *Engine) needsSpawnTools(tools []string) bool {
+	for _, t := range tools {
+		if t == "spawn_agent" || t == "check_spawns" {
+			return true
+		}
+	}
+	return false
 }
 
 // contextBudget returns the token budget for memory context loading.
@@ -792,7 +836,7 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 		e.buildAgent(systemBlocks)
 		result, err = e.Agent.Run(context.Background(), e.Model, &e.Messages)
 	}
-	
+
 	if err != nil {
 		return nil, err
 	}
