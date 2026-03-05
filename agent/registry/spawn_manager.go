@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +20,7 @@ type SpawnManager struct {
 	mu         sync.RWMutex
 	spawns     map[string]*SpawnedAgent
 	resultsDir string
+	repoRoot   string
 	onComplete func(*SpawnedAgent)    // called when a spawn finishes
 	pending    []*SpawnedAgent         // completed spawns not yet seen by orchestrator
 	pendingMu  sync.Mutex
@@ -41,14 +45,19 @@ type SpawnedAgent struct {
 func NewSpawnManager(logsDir string) *SpawnManager {
 	resultsDir := filepath.Join(logsDir, "_spawns")
 	os.MkdirAll(resultsDir, 0755)
-	
+
+	// Derive repoRoot from logsDir (logs/ is inside the repo)
+	repoRoot := filepath.Dir(logsDir)
+
 	return &SpawnManager{
 		spawns:     make(map[string]*SpawnedAgent),
 		resultsDir: resultsDir,
+		repoRoot:   repoRoot,
 	}
 }
 
-// SpawnAsync launches a sub-agent in the background and returns immediately
+// SpawnAsync launches a sub-agent as a separate process and returns immediately.
+// The child process survives parent exit and writes results to disk.
 func (sm *SpawnManager) SpawnAsync(
 	ctx context.Context,
 	registry *Registry,
@@ -58,7 +67,7 @@ func (sm *SpawnManager) SpawnAsync(
 ) (string, error) {
 	// Generate unique task ID
 	taskID := uuid.New().String()[:8]
-	
+
 	// Create spawn record
 	spawn := &SpawnedAgent{
 		ID:        taskID,
@@ -67,36 +76,144 @@ func (sm *SpawnManager) SpawnAsync(
 		StartedAt: time.Now(),
 		Status:    "running",
 	}
-	
+
 	// Register spawn
 	sm.mu.Lock()
 	sm.spawns[taskID] = spawn
 	sm.mu.Unlock()
-	
+
 	// Write initial status to disk
 	sm.writeResult(spawn)
-	
-	// Launch goroutine with background context so spawn survives parent exit
-	go sm.runAgent(context.Background(), registry, spawn, timeout)
-	
+
+	// Find inber binary
+	inberBin, err := os.Executable()
+	if err != nil {
+		inberBin = "inber" // fallback to PATH
+	}
+
+	// Launch child process: inber run --agent <name> --detach --raw < task
+	args := []string{"run", "--agent", agentName, "--detach", "--raw"}
+	cmd := exec.Command(inberBin, args...)
+	cmd.Dir = sm.repoRoot
+	cmd.Env = os.Environ()
+
+	// Pipe task as stdin
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		spawn.Status = "failed"
+		spawn.Error = fmt.Sprintf("stdin pipe: %v", err)
+		spawn.CompletedAt = time.Now()
+		sm.writeResult(spawn)
+		return taskID, nil // return taskID so caller can check status
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		spawn.Status = "failed"
+		spawn.Error = fmt.Sprintf("stdout pipe: %v", err)
+		spawn.CompletedAt = time.Now()
+		sm.writeResult(spawn)
+		return taskID, nil
+	}
+
+	stderr, _ := cmd.StderrPipe()
+
+	if err := cmd.Start(); err != nil {
+		spawn.Status = "failed"
+		spawn.Error = fmt.Sprintf("start: %v", err)
+		spawn.CompletedAt = time.Now()
+		sm.writeResult(spawn)
+		return taskID, nil
+	}
+
+	// Write task and close stdin
+	go func() {
+		io.WriteString(stdin, task)
+		stdin.Close()
+	}()
+
+	// Monitor in background goroutine (reads output, waits for exit, updates JSON)
+	go sm.monitorProcess(cmd, stdout, stderr, spawn, timeout)
+
 	return taskID, nil
 }
 
-// runAgent executes the sub-agent and writes the result
-func (sm *SpawnManager) runAgent(
-	ctx context.Context,
-	registry *Registry,
+// monitorProcess waits for a spawned process to complete and updates the result file.
+func (sm *SpawnManager) monitorProcess(
+	cmd *exec.Cmd,
+	stdout, stderr io.ReadCloser,
 	spawn *SpawnedAgent,
 	timeout time.Duration,
 ) {
-	// Create context with timeout
+	// Set up kill timer
+	timer := time.AfterFunc(timeout, func() {
+		cmd.Process.Kill()
+	})
+	defer timer.Stop()
+
+	// Read stdout
+	outData, _ := io.ReadAll(stdout)
+	errData, _ := io.ReadAll(stderr)
+	waitErr := cmd.Wait()
+
+	// Update spawn record
+	sm.mu.Lock()
+	spawn.CompletedAt = time.Now()
+
+	responseText := strings.TrimSpace(string(outData))
+
+	if waitErr != nil && responseText == "" {
+		spawn.Status = "failed"
+		errMsg := waitErr.Error()
+		if len(errData) > 0 {
+			errMsg = strings.TrimSpace(string(errData))
+		}
+		spawn.Error = errMsg
+	} else {
+		spawn.Status = "completed"
+		spawn.Result = responseText
+	}
+	sm.mu.Unlock()
+
+	// Write final result to disk
+	sm.writeResult(spawn)
+
+	// Notify completion
+	if sm.onComplete != nil {
+		sm.onComplete(spawn)
+	}
+}
+
+// SpawnSync launches a sub-agent in-process and blocks until completion.
+func (sm *SpawnManager) SpawnSync(
+	ctx context.Context,
+	registry *Registry,
+	agentName string,
+	task string,
+	timeout time.Duration,
+) (string, error) {
+	taskID := uuid.New().String()[:8]
+
+	spawn := &SpawnedAgent{
+		ID:        taskID,
+		Agent:     agentName,
+		Task:      task,
+		StartedAt: time.Now(),
+		Status:    "running",
+	}
+
+	sm.mu.Lock()
+	sm.spawns[taskID] = spawn
+	sm.mu.Unlock()
+
+	sm.writeResult(spawn)
+
+	// Run in-process with timeout
 	taskCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	
-	// Run the agent
+
 	result, err := registry.SpawnAndRun(taskCtx, spawn.Agent, spawn.Task)
-	
-	// Update spawn record
+
 	sm.mu.Lock()
 	spawn.CompletedAt = time.Now()
 	if err != nil {
@@ -110,14 +227,14 @@ func (sm *SpawnManager) runAgent(
 		spawn.ToolCalls = result.ToolCalls
 	}
 	sm.mu.Unlock()
-	
-	// Write final result to disk
+
 	sm.writeResult(spawn)
 
-	// Notify completion
 	if sm.onComplete != nil {
 		sm.onComplete(spawn)
 	}
+
+	return taskID, nil
 }
 
 // GetStatus returns the status of a spawned agent

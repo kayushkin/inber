@@ -79,16 +79,15 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 					in.Agent, taskID, truncate(in.Task, 100)), nil
 			}
 
-			// Sync mode (wait:true): block until completion
-			taskID, err := r.spawnManager.SpawnAsync(ctx, r, in.Agent, in.Task, timeout)
+			// Sync mode (wait:true): run in-process and block until completion
+			taskID, err := r.spawnManager.SpawnSync(ctx, r, in.Agent, in.Task, timeout)
 			if err != nil {
 				return "", fmt.Errorf("spawn failed: %w", err)
 			}
 
-			// Wait for completion
-			result, err := r.spawnManager.WaitForCompletion(taskID, 500*time.Millisecond, timeout)
+			result, err := r.spawnManager.GetStatus(taskID)
 			if err != nil {
-				return "", fmt.Errorf("wait failed: %w", err)
+				return "", fmt.Errorf("get result: %w", err)
 			}
 
 			if result.Status == "failed" {
