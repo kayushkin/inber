@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -78,7 +79,19 @@ func newClientFromModelStore(creds *modelstore.Credentials, model *modelstore.Mo
 }
 
 // newAnthropicFallbackClient creates an Anthropic client using the old auth methods.
+// Returns error if modelID appears to be for a different provider (e.g., glm-*).
 func newAnthropicFallbackClient(modelID string) (*ModelClient, error) {
+	// Detect non-Anthropic models and return clear error
+	if strings.HasPrefix(modelID, "glm-") || strings.HasPrefix(modelID, "zai/") {
+		return nil, fmt.Errorf("model %s requires zhipu/zai provider (not configured)", modelID)
+	}
+	if strings.HasPrefix(modelID, "gpt-") || strings.HasPrefix(modelID, "o1-") || strings.HasPrefix(modelID, "o3-") {
+		return nil, fmt.Errorf("model %s requires openai provider (not configured)", modelID)
+	}
+	if strings.HasPrefix(modelID, "gemini-") {
+		return nil, fmt.Errorf("model %s requires google provider (not configured)", modelID)
+	}
+
 	// Use aiauth as primary method
 	authStore := aiauth.DefaultStore()
 	client, err := authStore.AnthropicClient()
