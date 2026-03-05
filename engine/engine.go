@@ -126,27 +126,32 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		extractCfg:    extractCfg,
 	}
 
-	// Load agent config
+	// Load agent config — resolve agent name from flag, config default, or fallback
+	agentName := cfg.AgentName
 	var identityText string
-	if cfg.AgentName != "" {
-		registryCfg, err := registry.LoadConfig(
-			filepath.Join(repoRoot, "agents.json"),
-			filepath.Join(repoRoot, "agents"),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("error loading agents: %w", err)
-		}
 
-		ac, ok := registryCfg.Agents[cfg.AgentName]
+	// Always try to load registry config for tiers and default agent
+	registryCfg, registryErr := registry.LoadConfig(
+		filepath.Join(repoRoot, "agents.json"),
+		filepath.Join(repoRoot, "agents"),
+	)
+
+	// If no agent specified, use the default from agents.json
+	if agentName == "" && registryErr == nil && registryCfg.Default != "" {
+		agentName = registryCfg.Default
+	}
+
+	if agentName != "" && registryErr == nil {
+		ac, ok := registryCfg.Agents[agentName]
 		if !ok {
-			return nil, fmt.Errorf("agent not found: %s", cfg.AgentName)
+			return nil, fmt.Errorf("agent not found: %s", agentName)
 		}
 		e.AgentConfig = ac
 		if ac.Model != "" {
 			e.Model = ac.Model
 		}
 		identityText = ac.System
-		e.AgentName = cfg.AgentName
+		e.AgentName = agentName
 
 		// Load default tiers from config (CLI flags override)
 		if cfg.Tiers == nil && registryCfg.Tiers != nil {
@@ -158,26 +163,20 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 				Grace: time.Duration(t.Grace) * time.Second,
 			}
 		}
-	} else {
+	} else if agentName == "" {
 		e.AgentName = cfg.CommandName
 		if e.AgentName == "" {
 			e.AgentName = "default"
 		}
 
 		// Still try to load tiers from config even without a named agent
-		if cfg.Tiers == nil {
-			registryCfg, err := registry.LoadConfig(
-				filepath.Join(repoRoot, "agents.json"),
-				filepath.Join(repoRoot, "agents"),
-			)
-			if err == nil && registryCfg.Tiers != nil {
-				t := registryCfg.Tiers
-				cfg.Tiers = &ModelTiers{
-					High:  t.High,
-					Low:   t.Low,
-					Delay: time.Duration(t.Delay) * time.Second,
-					Grace: time.Duration(t.Grace) * time.Second,
-				}
+		if cfg.Tiers == nil && registryErr == nil && registryCfg.Tiers != nil {
+			t := registryCfg.Tiers
+			cfg.Tiers = &ModelTiers{
+				High:  t.High,
+				Low:   t.Low,
+				Delay: time.Duration(t.Delay) * time.Second,
+				Grace: time.Duration(t.Grace) * time.Second,
 			}
 		}
 	}
