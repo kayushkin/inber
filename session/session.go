@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
+	logstackclient "github.com/kayushkin/logstack/client"
+	logstackmodels "github.com/kayushkin/logstack/models"
 )
 
 // Entry is a single log line in the session JSONL file.
@@ -34,6 +37,53 @@ type Entry struct {
 	Request      json.RawMessage `json:"request,omitempty"`       // full API request payload
 }
 
+// toLogstackEntry converts a session Entry to a logstack LogEntry.
+func (e Entry) toLogstackEntry(agentName, sessionID string) logstackmodels.LogEntry {
+	// Map session role to logstack type
+	entryType := logstackmodels.TypeMessage
+	switch e.Role {
+	case "tool_call":
+		entryType = logstackmodels.TypeToolCall
+	case "tool_result":
+		entryType = logstackmodels.TypeToolResult
+	case "system":
+		entryType = logstackmodels.TypeLifecycle
+	}
+
+	// Map to logstack level
+	level := logstackmodels.LevelInfo
+	if e.IsError {
+		level = logstackmodels.LevelError
+	}
+
+	// Build content - include tool info for tool entries
+	content := e.Content
+	if e.Role == "tool_call" {
+		content = string(e.ToolInput)
+	}
+
+	return logstackmodels.LogEntry{
+		Timestamp:   e.Timestamp,
+		Source:      "inber",
+		Agent:       agentName,
+		SessionID:   sessionID,
+		Model:       e.Model,
+		Level:       level,
+		Type:        entryType,
+		Content:     content,
+		TokensIn:    e.InputTokens,
+		TokensOut:   e.OutputTokens,
+		Metadata: map[string]interface{}{
+			"turn":      e.Turn,
+			"role":      e.Role,
+			"tool_name": e.ToolName,
+			"tool_id":   e.ToolID,
+			"cost_usd":  e.TotalCost,
+			"is_error":  e.IsError,
+		},
+	}
+}
+
 // Session tracks and logs a conversation.
 type Session struct {
 	mu           sync.Mutex
@@ -50,6 +100,7 @@ type Session struct {
 	db           *DB             // session tracking DB (nil if unavailable)
 	truncateCfg  TruncateConfig  // truncation config for tool results
 	truncateRefs map[string]string // map of tool_id -> full output for references
+	logstack     *logstackclient.Client // optional logstack client for centralized logging
 }
 
 // shortID generates a 4-character hex random string for session uniqueness.
@@ -102,6 +153,11 @@ func New(logsDir, model, agentName, parentID string) (*Session, error) {
 		sessionID:    sessionID,
 		truncateCfg:  DefaultTruncateConfig(),
 		truncateRefs: make(map[string]string),
+	}
+
+	// Initialize logstack client if URL is configured
+	if url := os.Getenv("LOGSTACK_URL"); url != "" {
+		s.logstack = logstackclient.New(url)
 	}
 
 	// Log session start
@@ -425,6 +481,16 @@ func (s *Session) write(e Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.enc.Encode(e) // best-effort; don't crash on log failure
+
+	// Send copy to logstack if available (async, best-effort)
+	if s.logstack != nil {
+		go func() {
+			entry := e.toLogstackEntry(s.agentName, s.sessionID)
+			if err := s.logstack.Log(entry); err != nil {
+				log.Printf("[logstack] failed to log: %v", err)
+			}
+		}()
+	}
 }
 
 func (s *Session) cost() float64 {

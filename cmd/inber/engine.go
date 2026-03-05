@@ -836,7 +836,7 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 		e.buildAgent(systemBlocks)
 		result, err = e.Agent.Run(context.Background(), e.Model, &e.Messages)
 	}
-	
+
 	if err != nil {
 		return nil, err
 	}
