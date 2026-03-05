@@ -16,10 +16,11 @@ type WorkflowHooks struct {
 	projectType string // "go", "node", "rust", ""
 
 	// Config flags
-	autoBranch bool
-	autoCommit bool
-	autoFormat bool
-	smartTests bool
+	autoBranch     bool
+	autoCommit     bool
+	autoFormat     bool
+	smartTests     bool
+	verifyDeployed bool
 
 	// State
 	sessionBranch string
@@ -31,13 +32,14 @@ type WorkflowHooks struct {
 // NewWorkflowHooks creates workflow automation for a session.
 func NewWorkflowHooks(repoRoot, sessionID, agentName string, cfg AutoWorkflowConfig) *WorkflowHooks {
 	h := &WorkflowHooks{
-		repoRoot:   repoRoot,
-		sessionID:  sessionID,
-		agentName:  agentName,
-		autoBranch: cfg.AutoBranch,
-		autoCommit: cfg.AutoCommit,
-		autoFormat: cfg.AutoFormat,
-		smartTests: cfg.SmartTests,
+		repoRoot:       repoRoot,
+		sessionID:      sessionID,
+		agentName:      agentName,
+		autoBranch:     cfg.AutoBranch,
+		autoCommit:     cfg.AutoCommit,
+		autoFormat:     cfg.AutoFormat,
+		smartTests:     cfg.SmartTests,
+		verifyDeployed: cfg.VerifyDeployed,
 	}
 	h.detectProject()
 	return h
@@ -367,20 +369,112 @@ func plural(n int) string {
 	return "s"
 }
 
+// VerifyDeployment checks if changes are pushed and deployed, returns issues if any.
+// Returns: (issuesFound, description)
+func (h *WorkflowHooks) VerifyDeployment() (bool, string) {
+	if !h.verifyDeployed {
+		return false, ""
+	}
+
+	// No files changed? Nothing to verify.
+	if len(h.changedFiles) == 0 {
+		return false, ""
+	}
+
+	var issues []string
+
+	// Check 1: Are there uncommitted changes?
+	status, err := h.git("status", "--porcelain")
+	if err == nil && status != "" {
+		issues = append(issues, fmt.Sprintf("Uncommitted changes:\n%s", status))
+	}
+
+	// Check 2: Are committed changes pushed?
+	// Compare local branch with remote tracking branch
+	currentBranch, err := h.git("rev-parse", "--abbrev-ref", "HEAD")
+	if err == nil && currentBranch != "" {
+		// Check if we're ahead of remote
+		ahead, err := h.git("rev-list", "--count", "@{u}..")
+		if err == nil && ahead != "" && ahead != "0" {
+			issues = append(issues, fmt.Sprintf("Branch '%s' has %s unpushed commits", currentBranch, ahead))
+		}
+	}
+
+	// Check 3: Is there a deployment script? Has it been run?
+	// Common patterns: update.sh, deploy.sh, Makefile with deploy target
+	deployScript := ""
+	for _, candidate := range []string{"update.sh", "deploy.sh", "scripts/deploy.sh"} {
+		fullPath := filepath.Join(h.repoRoot, candidate)
+		if _, err := os.Stat(fullPath); err == nil {
+			deployScript = candidate
+			break
+		}
+	}
+
+	// Check for systemd services (common for Go projects)
+	serviceName := ""
+	if h.projectType == "go" {
+		// Try to detect service name from go.mod
+		modPath := filepath.Join(h.repoRoot, "go.mod")
+		if content, err := os.ReadFile(modPath); err == nil {
+			lines := strings.Split(string(content), "\n")
+			if len(lines) > 0 {
+				// First line: "module github.com/user/project"
+				parts := strings.Fields(lines[0])
+				if len(parts) >= 2 {
+					modulePath := parts[1]
+					projectName := filepath.Base(modulePath)
+					serviceName = projectName
+				}
+			}
+		}
+	}
+
+	var deploymentChecks []string
+	if deployScript != "" {
+		deploymentChecks = append(deploymentChecks, fmt.Sprintf("Deployment script found: %s", deployScript))
+	}
+	if serviceName != "" {
+		// Check if service is running
+		cmd := exec.Command("systemctl", "is-active", serviceName)
+		if err := cmd.Run(); err != nil {
+			deploymentChecks = append(deploymentChecks, fmt.Sprintf("Service '%s' is not active", serviceName))
+		}
+	}
+
+	if len(deploymentChecks) > 0 {
+		issues = append(issues, strings.Join(deploymentChecks, "\n"))
+	}
+
+	if len(issues) == 0 {
+		return false, ""
+	}
+
+	description := fmt.Sprintf("Deployment verification found issues:\n\n%s\n\n"+
+		"Changed files in this session:\n%s",
+		strings.Join(issues, "\n\n"),
+		strings.Join(h.changedFiles, "\n"),
+	)
+
+	return true, description
+}
+
 // AutoWorkflowConfig controls which auto-workflows are enabled.
 type AutoWorkflowConfig struct {
-	AutoBranch bool // Create branch per session
-	AutoCommit bool // Commit after every write
-	AutoFormat bool // Run formatter on write
-	SmartTests bool // Only run relevant tests
+	AutoBranch     bool // Create branch per session
+	AutoCommit     bool // Commit after every write
+	AutoFormat     bool // Run formatter on write
+	SmartTests     bool // Only run relevant tests
+	VerifyDeployed bool // Check push/deploy status at session end
 }
 
 // DefaultAutoWorkflowConfig returns safe defaults.
 func DefaultAutoWorkflowConfig() AutoWorkflowConfig {
 	return AutoWorkflowConfig{
-		AutoBranch: true,
-		AutoCommit: true,
-		AutoFormat: true,
-		SmartTests: false,
+		AutoBranch:     true,
+		AutoCommit:     true,
+		AutoFormat:     true,
+		SmartTests:     false,
+		VerifyDeployed: false, // opt-in for now
 	}
 }

@@ -21,30 +21,34 @@ type SpawnManager struct {
 	spawns     map[string]*SpawnedAgent
 	resultsDir string
 	repoRoot   string
-	onComplete func(*SpawnedAgent)
-	pending    []*SpawnedAgent
+	onComplete func(*SpawnedAgent)    // called when a spawn finishes
+	pending    []*SpawnedAgent         // completed spawns not yet seen by orchestrator
 	pendingMu  sync.Mutex
 }
 
 // SpawnedAgent represents a running or completed sub-agent task
 type SpawnedAgent struct {
-	ID           string    `json:"id"`
-	Agent        string    `json:"agent"`
-	Task         string    `json:"task"`
-	StartedAt    time.Time `json:"started_at"`
-	CompletedAt  time.Time `json:"completed_at,omitempty"`
-	Status       string    `json:"status"`
-	Result       string    `json:"result,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	InputTokens  int       `json:"input_tokens,omitempty"`
-	OutputTokens int       `json:"output_tokens,omitempty"`
-	ToolCalls    int       `json:"tool_calls,omitempty"`
+	ID          string    `json:"id"`
+	Agent       string    `json:"agent"`
+	Task        string    `json:"task"`
+	StartedAt   time.Time `json:"started_at"`
+	CompletedAt time.Time `json:"completed_at,omitempty"`
+	Status      string    `json:"status"` // running, completed, failed
+	Result      string    `json:"result,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	InputTokens int       `json:"input_tokens,omitempty"`
+	OutputTokens int      `json:"output_tokens,omitempty"`
+	ToolCalls   int       `json:"tool_calls,omitempty"`
 }
 
+// NewSpawnManager creates a manager for tracking spawned agents
 func NewSpawnManager(logsDir string) *SpawnManager {
 	resultsDir := filepath.Join(logsDir, "_spawns")
 	os.MkdirAll(resultsDir, 0755)
-	repoRoot := filepath.Dir(logsDir)
+
+	// Find repo root (where inber binary runs from)
+	repoRoot, _ := os.Getwd()
+
 	return &SpawnManager{
 		spawns:     make(map[string]*SpawnedAgent),
 		resultsDir: resultsDir,
@@ -62,14 +66,24 @@ func (sm *SpawnManager) SpawnAsync(
 	task string,
 	timeout time.Duration,
 ) (string, error) {
+	// Generate unique task ID
 	taskID := uuid.New().String()[:8]
+
+	// Create spawn record
 	spawn := &SpawnedAgent{
-		ID: taskID, Agent: agentName, Task: task,
-		StartedAt: time.Now(), Status: "running",
+		ID:        taskID,
+		Agent:     agentName,
+		Task:      task,
+		StartedAt: time.Now(),
+		Status:    "running",
 	}
+
+	// Register spawn
 	sm.mu.Lock()
 	sm.spawns[taskID] = spawn
 	sm.mu.Unlock()
+
+	// Write initial status to disk
 	sm.writeResult(spawn)
 
 	inberBin, err := os.Executable()
@@ -81,11 +95,17 @@ func (sm *SpawnManager) SpawnAsync(
 	resultPath := filepath.Join(sm.resultsDir, taskID+".json")
 	taskFile := resultPath + ".task"
 
+	// Write task to file to avoid shell escaping issues
 	if err := os.WriteFile(taskFile, []byte(task), 0644); err != nil {
 		sm.failSpawn(spawn, fmt.Sprintf("write task file: %v", err))
 		return taskID, nil
 	}
 
+	// Build a self-contained shell script that:
+	// 1. Runs inber with the task as stdin
+	// 2. Captures stdout and stderr
+	// 3. Writes the result JSON file
+	// 4. Cleans up temp files
 	timeoutSec := int(timeout.Seconds())
 	startedAt := spawn.StartedAt.Format(time.RFC3339Nano)
 
@@ -95,19 +115,21 @@ func (sm *SpawnManager) SpawnAsync(
 			`OUTPUT=$(cat /tmp/spawn-%s.out 2>/dev/null); `+
 			`ERR=$(cat /tmp/spawn-%s.err 2>/dev/null); `+
 			`if [ $EXIT -eq 0 ] && [ -n "$OUTPUT" ]; then STATUS=completed; else STATUS=failed; fi; `+
-			`python3 -c "`+
-			`import json, sys, datetime; `+
-			`result = {`+
-			`'id': '%s', 'agent': '%s', `+
-			`'task': open('%s').read(), `+
-			`'started_at': '%s', `+
-			`'completed_at': datetime.datetime.utcnow().isoformat() + 'Z', `+
-			`'status': '$STATUS', `+
-			`'result': open('/tmp/spawn-%s.out').read().strip() if '$STATUS' == 'completed' else '', `+
-			`'error': open('/tmp/spawn-%s.err').read().strip() if '$STATUS' == 'failed' else '' `+
-			`}; `+
-			`json.dump(result, open('%s', 'w'), indent=2)`+
-			`" 2>/dev/null; `+
+			`python3 -c "
+import json, sys, datetime
+result = {
+    'id': '%s',
+    'agent': '%s',
+    'task': open('%s').read(),
+    'started_at': '%s',
+    'completed_at': datetime.datetime.utcnow().isoformat() + 'Z',
+    'status': '$STATUS',
+    'result': open('/tmp/spawn-%s.out').read().strip() if '$STATUS' == 'completed' else '',
+    'error': open('/tmp/spawn-%s.err').read().strip() if '$STATUS' == 'failed' else ''
+}
+with open('%s', 'w') as f:
+    json.dump(result, f, indent=2)
+" 2>/dev/null; `+
 			`rm -f %q /tmp/spawn-%s.out /tmp/spawn-%s.err`,
 		sm.repoRoot, timeoutSec, inberBin, lowerAgent, taskFile, taskID, taskID,
 		taskID, taskID,
@@ -130,54 +152,29 @@ func (sm *SpawnManager) SpawnAsync(
 		return taskID, nil
 	}
 
+	// Release — don't wait
 	go cmd.Wait()
+
 	return taskID, nil
 }
 
-// SpawnSync runs a sub-agent in-process and blocks until completion.
+// SpawnSync launches a sub-agent and blocks until completion (for wait:true mode)
 func (sm *SpawnManager) SpawnSync(
 	ctx context.Context,
 	registry *Registry,
 	agentName string,
 	task string,
 	timeout time.Duration,
-) (string, error) {
-	taskID := uuid.New().String()[:8]
-	spawn := &SpawnedAgent{
-		ID: taskID, Agent: agentName, Task: task,
-		StartedAt: time.Now(), Status: "running",
-	}
-	sm.mu.Lock()
-	sm.spawns[taskID] = spawn
-	sm.mu.Unlock()
-	sm.writeResult(spawn)
-
-	taskCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	result, err := registry.SpawnAndRun(taskCtx, spawn.Agent, spawn.Task)
-
-	sm.mu.Lock()
-	spawn.CompletedAt = time.Now()
+) (*SpawnedAgent, error) {
+	taskID, err := sm.SpawnAsync(ctx, registry, agentName, task, timeout)
 	if err != nil {
-		spawn.Status = "failed"
-		spawn.Error = err.Error()
-	} else {
-		spawn.Status = "completed"
-		spawn.Result = result.Text
-		spawn.InputTokens = result.InputTokens
-		spawn.OutputTokens = result.OutputTokens
-		spawn.ToolCalls = result.ToolCalls
+		return nil, err
 	}
-	sm.mu.Unlock()
-	sm.writeResult(spawn)
 
-	if sm.onComplete != nil {
-		sm.onComplete(spawn)
-	}
-	return taskID, nil
+	return sm.WaitForCompletion(taskID, 2*time.Second, timeout)
 }
 
+// failSpawn marks a spawn as failed and writes the result
 func (sm *SpawnManager) failSpawn(spawn *SpawnedAgent, errMsg string) {
 	sm.mu.Lock()
 	spawn.Status = "failed"
@@ -187,101 +184,140 @@ func (sm *SpawnManager) failSpawn(spawn *SpawnedAgent, errMsg string) {
 	sm.writeResult(spawn)
 }
 
+// GetStatus returns the status of a spawned agent
 func (sm *SpawnManager) GetStatus(taskID string) (*SpawnedAgent, error) {
-	// Check disk first (child process may have updated)
-	if s, err := sm.loadResult(taskID); err == nil {
-		return s, nil
+	// Always check disk first (child process may have updated it)
+	diskSpawn, diskErr := sm.loadResult(taskID)
+	if diskErr == nil {
+		return diskSpawn, nil
 	}
+
 	sm.mu.RLock()
 	spawn, ok := sm.spawns[taskID]
 	sm.mu.RUnlock()
+
 	if !ok {
 		return nil, fmt.Errorf("task %s not found", taskID)
 	}
+
+	// Return a copy to avoid race conditions
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	c := *spawn
-	return &c, nil
+	spawnCopy := *spawn
+	return &spawnCopy, nil
 }
 
+// ListSpawns returns all tracked spawns
 func (sm *SpawnManager) ListSpawns() []*SpawnedAgent {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	out := make([]*SpawnedAgent, 0, len(sm.spawns))
-	for _, s := range sm.spawns {
-		c := *s
-		out = append(out, &c)
+
+	spawns := make([]*SpawnedAgent, 0, len(sm.spawns))
+	for _, spawn := range sm.spawns {
+		spawnCopy := *spawn
+		spawns = append(spawns, &spawnCopy)
 	}
-	return out
+	return spawns
 }
 
+// writeResult writes spawn result to disk as JSON
 func (sm *SpawnManager) writeResult(spawn *SpawnedAgent) error {
-	p := filepath.Join(sm.resultsDir, spawn.ID+".json")
-	d, err := json.MarshalIndent(spawn, "", "  ")
+	resultPath := filepath.Join(sm.resultsDir, spawn.ID+".json")
+
+	data, err := json.MarshalIndent(spawn, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal result: %w", err)
 	}
-	return os.WriteFile(p, d, 0644)
+
+	if err := os.WriteFile(resultPath, data, 0644); err != nil {
+		return fmt.Errorf("write result: %w", err)
+	}
+
+	return nil
 }
 
+// loadResult loads spawn result from disk
 func (sm *SpawnManager) loadResult(taskID string) (*SpawnedAgent, error) {
-	p := filepath.Join(sm.resultsDir, taskID+".json")
-	d, err := os.ReadFile(p)
+	resultPath := filepath.Join(sm.resultsDir, taskID+".json")
+
+	data, err := os.ReadFile(resultPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("task %s not found", taskID)
 	}
-	var s SpawnedAgent
-	if err := json.Unmarshal(d, &s); err != nil {
-		return nil, err
+
+	var spawn SpawnedAgent
+	if err := json.Unmarshal(data, &spawn); err != nil {
+		return nil, fmt.Errorf("parse result: %w", err)
 	}
-	return &s, nil
+
+	return &spawn, nil
 }
 
-func (sm *SpawnManager) WaitForCompletion(taskID string, pollInterval, timeout time.Duration) (*SpawnedAgent, error) {
+// WaitForCompletion blocks until a spawned agent completes or times out
+func (sm *SpawnManager) WaitForCompletion(taskID string, pollInterval time.Duration, timeout time.Duration) (*SpawnedAgent, error) {
 	deadline := time.Now().Add(timeout)
+
 	for {
-		s, err := sm.GetStatus(taskID)
+		spawn, err := sm.GetStatus(taskID)
 		if err != nil {
 			return nil, err
 		}
-		if s.Status != "running" {
-			return s, nil
+
+		if spawn.Status != "running" {
+			return spawn, nil
 		}
+
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("timeout waiting for task %s", taskID)
 		}
+
 		time.Sleep(pollInterval)
 	}
 }
 
-func (sm *SpawnManager) SetOnComplete(fn func(*SpawnedAgent)) { sm.onComplete = fn }
+// SetOnComplete sets a callback that fires when any spawn finishes.
+// The callback runs in the spawn's goroutine — keep it fast.
+func (sm *SpawnManager) SetOnComplete(fn func(*SpawnedAgent)) {
+	sm.onComplete = fn
+}
 
+// EnablePendingQueue enables queuing completed spawns for DrainPending.
+// Call this to have the orchestrator auto-inject results on the next turn.
 func (sm *SpawnManager) EnablePendingQueue() {
 	sm.onComplete = func(spawn *SpawnedAgent) {
 		sm.pendingMu.Lock()
-		defer sm.pendingMu.Unlock()
 		sm.pending = append(sm.pending, spawn)
+		sm.pendingMu.Unlock()
 	}
 }
 
+// DrainPending returns and clears all completed spawns since last drain.
+// The orchestrator calls this at the start of each turn to inject results.
 func (sm *SpawnManager) DrainPending() []*SpawnedAgent {
 	sm.pendingMu.Lock()
 	defer sm.pendingMu.Unlock()
-	r := sm.pending
+	if len(sm.pending) == 0 {
+		return nil
+	}
+	result := sm.pending
 	sm.pending = nil
-	return r
+	return result
 }
 
+// CleanupCompleted removes completed spawns from memory (but keeps disk records)
 func (sm *SpawnManager) CleanupCompleted(olderThan time.Duration) int {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
 	cutoff := time.Now().Add(-olderThan)
-	n := 0
-	for id, s := range sm.spawns {
-		if s.Status != "running" && s.CompletedAt.Before(cutoff) {
+	cleaned := 0
+
+	for id, spawn := range sm.spawns {
+		if spawn.Status != "running" && spawn.CompletedAt.Before(cutoff) {
 			delete(sm.spawns, id)
-			n++
+			cleaned++
 		}
 	}
-	return n
+
+	return cleaned
 }
