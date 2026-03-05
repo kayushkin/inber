@@ -59,6 +59,8 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	systemBlocks := e.BuildSystemPrompt(processedInput)
 	e.lastNamedBlocks = systemBlocks
 	
+	// Auto-select tier based on turn count and error state
+	e.autoTier()
 	models := e.activeModels()
 
 	var result *agent.TurnResult

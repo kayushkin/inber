@@ -394,7 +394,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		if e.tiers.Grace == 0 {
 			e.tiers.Grace = 8 * time.Second
 		}
-		e.activeTier = "high" // start on high tier (first turn is usually planning)
+		e.activeTier = TierHigh // autoTier() will manage this per-turn
 	}
 
 	return e, nil
