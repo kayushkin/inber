@@ -147,10 +147,38 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 		identityText = ac.System
 		e.AgentName = cfg.AgentName
+
+		// Load default tiers from config (CLI flags override)
+		if cfg.Tiers == nil && registryCfg.Tiers != nil {
+			t := registryCfg.Tiers
+			cfg.Tiers = &ModelTiers{
+				High:  t.High,
+				Low:   t.Low,
+				Delay: time.Duration(t.Delay) * time.Second,
+				Grace: time.Duration(t.Grace) * time.Second,
+			}
+		}
 	} else {
 		e.AgentName = cfg.CommandName
 		if e.AgentName == "" {
 			e.AgentName = "default"
+		}
+
+		// Still try to load tiers from config even without a named agent
+		if cfg.Tiers == nil {
+			registryCfg, err := registry.LoadConfig(
+				filepath.Join(repoRoot, "agents.json"),
+				filepath.Join(repoRoot, "agents"),
+			)
+			if err == nil && registryCfg.Tiers != nil {
+				t := registryCfg.Tiers
+				cfg.Tiers = &ModelTiers{
+					High:  t.High,
+					Low:   t.Low,
+					Delay: time.Duration(t.Delay) * time.Second,
+					Grace: time.Duration(t.Grace) * time.Second,
+				}
+			}
 		}
 	}
 
