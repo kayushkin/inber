@@ -72,6 +72,8 @@ func (e *Engine) autoTier() {
 
 // activeModels returns the model list for the current tier.
 // Falls back to the single e.Model if no tiers configured.
+// High tier automatically appends the last model from Low tier as a
+// final fallback (e.g. glm5) if not already present.
 func (e *Engine) activeModels() []string {
 	if e.tiers == nil {
 		return []string{e.Model}
@@ -79,7 +81,15 @@ func (e *Engine) activeModels() []string {
 	switch e.activeTier {
 	case TierHigh:
 		if len(e.tiers.High) > 0 {
-			return e.tiers.High
+			models := e.tiers.High
+			// Append best low-tier model as last-resort fallback
+			if len(e.tiers.Low) > 0 {
+				fallback := e.tiers.Low[0]
+				if models[len(models)-1] != fallback {
+					models = append(append([]string{}, models...), fallback)
+				}
+			}
+			return models
 		}
 	case TierLow:
 		if len(e.tiers.Low) > 0 {
