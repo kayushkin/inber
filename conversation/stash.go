@@ -1,7 +1,8 @@
-package main
+package conversation
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 
@@ -173,7 +174,7 @@ func DetectAndStashLargeBlocks(
 		if tokens >= cfg.MinBlockSize {
 			result, err := StashLargeContent(codeContent, sessionID, memStore, cfg)
 			if err != nil {
-				Log.Warn("failed to stash code block: %v", err)
+				log.Printf("[warn] " +"failed to stash code block: %v", err)
 				continue
 			}
 			if result != nil {
@@ -196,7 +197,7 @@ func DetectAndStashLargeBlocks(
 			if paraTokens >= cfg.MinBlockSize {
 				result, err := StashLargeContent(para, sessionID, memStore, cfg)
 				if err != nil {
-					Log.Warn("failed to stash paragraph: %v", err)
+					log.Printf("[warn] " +"failed to stash paragraph: %v", err)
 					rebuiltText = append(rebuiltText, para)
 					continue
 				}
@@ -220,7 +221,7 @@ func DetectAndStashLargeBlocks(
 		if totalTokens >= cfg.UserMessageThreshold {
 			result, err := StashLargeContent(modifiedText, sessionID, memStore, cfg)
 			if err != nil {
-				Log.Warn("failed to stash entire large message: %v", err)
+				log.Printf("[warn] " +"failed to stash entire large message: %v", err)
 			} else if result != nil {
 				stashed = append(stashed, *result)
 				modifiedText = result.Summary

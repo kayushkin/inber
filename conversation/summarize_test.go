@@ -1,11 +1,16 @@
-package main
+package conversation
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
+
+func contains(s, sub string) bool {
+	return strings.Contains(s, sub)
+}
 
 func TestShouldSummarize(t *testing.T) {
 	cfg := DefaultSummarizeConfig(RoleDefault)

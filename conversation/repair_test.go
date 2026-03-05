@@ -1,4 +1,4 @@
-package main
+package conversation
 
 import (
 	"encoding/json"
@@ -23,7 +23,7 @@ func TestRepairDanglingToolUse_LastMessage(t *testing.T) {
 		},
 	}
 
-	repaired := repairDanglingToolUse(msgs)
+	repaired := RepairDanglingToolUse(msgs)
 
 	// Should have 3 messages: user, assistant, synthetic user with tool_result
 	if len(repaired) != 3 {
@@ -76,7 +76,7 @@ func TestRepairDanglingToolUse_MissingInNextMessage(t *testing.T) {
 		},
 	}
 
-	repaired := repairDanglingToolUse(msgs)
+	repaired := RepairDanglingToolUse(msgs)
 
 	// Should still be 3 messages, but last user message should now have 2 tool_results
 	if len(repaired) != 3 {
@@ -103,7 +103,7 @@ func TestRepairDanglingToolUse_NoRepairNeeded(t *testing.T) {
 		anthropic.NewUserMessage(anthropic.NewTextBlock("bye")),
 	}
 
-	repaired := repairDanglingToolUse(msgs)
+	repaired := RepairDanglingToolUse(msgs)
 	if len(repaired) != 3 {
 		t.Errorf("expected 3 messages, got %d", len(repaired))
 	}

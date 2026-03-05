@@ -1,4 +1,4 @@
-package main
+package conversation
 
 import (
 	"github.com/anthropics/anthropic-sdk-go"
@@ -12,10 +12,10 @@ import (
 // Fix: append a synthetic tool_result with an error message for each
 // dangling tool_use.
 // repairCount tracks how many repairs were made in the last call
-var lastRepairCount int
+var LastRepairCount int
 
-func repairDanglingToolUse(messages []anthropic.MessageParam) []anthropic.MessageParam {
-	lastRepairCount = 0
+func RepairDanglingToolUse(messages []anthropic.MessageParam) []anthropic.MessageParam {
+	LastRepairCount = 0
 	if len(messages) == 0 {
 		return messages
 	}
@@ -96,17 +96,17 @@ func repairDanglingToolUse(messages []anthropic.MessageParam) []anthropic.Messag
 
 	// Second pass: fix cases where next user message exists but is missing
 	// some tool_results (partial interruption)
-	repaired, extraRepairs := repairMissingToolResults(repaired)
+	repaired, extraRepairs := RepairMissingToolResults(repaired)
 	repairsNeeded += extraRepairs
 
-	lastRepairCount = repairsNeeded
+	LastRepairCount = repairsNeeded
 	return repaired
 }
 
 // repairAlternation fixes consecutive messages with the same role.
 // Merges consecutive user messages and inserts placeholder assistant
 // messages between consecutive assistant messages.
-func repairAlternation(messages []anthropic.MessageParam) []anthropic.MessageParam {
+func RepairAlternation(messages []anthropic.MessageParam) []anthropic.MessageParam {
 	if len(messages) <= 1 {
 		return messages
 	}
@@ -139,7 +139,7 @@ func repairAlternation(messages []anthropic.MessageParam) []anthropic.MessagePar
 
 // repairMissingToolResults adds missing tool_result blocks to user messages
 // that follow assistant messages with tool_use.
-func repairMissingToolResults(messages []anthropic.MessageParam) ([]anthropic.MessageParam, int) {
+func RepairMissingToolResults(messages []anthropic.MessageParam) ([]anthropic.MessageParam, int) {
 	repairs := 0
 	for i := 0; i < len(messages)-1; i++ {
 		if messages[i].Role != anthropic.MessageParamRoleAssistant {

@@ -1,9 +1,10 @@
-package main
+package conversation
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -99,14 +100,11 @@ func BackgroundExtractMemories(
 	sessionID string,
 	memStore *memory.Store,
 	cfg ExtractionConfig,
-	logger *Logger,
 ) {
 	// Defer recovery to prevent goroutine panics from crashing the app
 	defer func() {
 		if r := recover(); r != nil {
-			if logger != nil {
-				logger.Warn("memory extraction panic: %v", r)
-			}
+							log.Printf("[warn] " +"memory extraction panic: %v", r)
 		}
 	}()
 
@@ -163,9 +161,7 @@ func BackgroundExtractMemories(
 	})
 
 	if err != nil {
-		if logger != nil {
-			logger.Warn("memory extraction API call failed: %v", err)
-		}
+					log.Printf("[warn] " +"memory extraction API call failed: %v", err)
 		return
 	}
 
@@ -192,9 +188,7 @@ func BackgroundExtractMemories(
 	responseText = strings.TrimSpace(responseText)
 
 	if err := json.Unmarshal([]byte(responseText), &extracted); err != nil {
-		if logger != nil {
-			logger.Warn("memory extraction JSON parse failed: %v", err)
-		}
+					log.Printf("[warn] " +"memory extraction JSON parse failed: %v", err)
 		return
 	}
 
@@ -250,9 +244,7 @@ func BackgroundExtractMemories(
 		}
 
 		if err := memStore.Save(mem); err != nil {
-			if logger != nil {
-				logger.Warn("failed to save extracted memory: %v", err)
-			}
+							log.Printf("[warn] " +"failed to save extracted memory: %v", err)
 			continue
 		}
 
@@ -260,8 +252,8 @@ func BackgroundExtractMemories(
 	}
 
 	// Log extraction results
-	if logger != nil && saved > 0 {
-		logger.Info("extracted %d memories from last exchange (%d duplicates skipped)", saved, duplicates)
+	if saved > 0 {
+		log.Printf("[info] extracted %d memories from last exchange (%d duplicates skipped)", saved, duplicates)
 	}
 }
 

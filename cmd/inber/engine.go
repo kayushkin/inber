@@ -16,6 +16,7 @@ import (
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 	inbercontext "github.com/kayushkin/inber/context"
+	"github.com/kayushkin/inber/conversation"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
 	"github.com/kayushkin/inber/tools"
@@ -42,8 +43,8 @@ type EngineConfig struct {
 	NewSession     bool   // start fresh instead of continuing default session
 	Detach         bool   // one-off session, don't save to workspace
 	Display        *DisplayHooks
-	StashConfig    *StashConfig      // Large message stashing config (nil = use defaults)
-	ExtractConfig  *ExtractionConfig // Background extraction config (nil = use defaults)
+	StashConfig    *conversation.StashConfig      // Large message stashing config (nil = use defaults)
+	ExtractConfig  *conversation.ExtractionConfig // Background extraction config (nil = use defaults)
 	AutoWorkflow   AutoWorkflowConfig // Auto-branch, auto-commit, auto-format (Phase 1)
 }
 
@@ -68,8 +69,8 @@ type Engine struct {
 	workspace       *sessionMod.Workspace
 	thinkingBud     int64
 	lastNamedBlocks []sessionMod.NamedBlock
-	stashCfg        StashConfig
-	extractCfg      ExtractionConfig
+	stashCfg        conversation.StashConfig
+	extractCfg      conversation.ExtractionConfig
 	consecutiveErrors  int  // track consecutive tool errors for context escalation
 	lastTurnHadError   bool
 	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
@@ -97,12 +98,12 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	}
 
 	// Initialize configs with defaults if not provided
-	stashCfg := DefaultStashConfig()
+	stashCfg := conversation.DefaultStashConfig()
 	if cfg.StashConfig != nil {
 		stashCfg = *cfg.StashConfig
 	}
 
-	extractCfg := DefaultExtractionConfig()
+	extractCfg := conversation.DefaultExtractionConfig()
 	if cfg.ExtractConfig != nil {
 		extractCfg = *cfg.ExtractConfig
 	}
@@ -196,15 +197,15 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		e.workspace = ws
 		if !cfg.NewSession {
 			if msgs, err := ws.LoadMessages(); err == nil && len(msgs) > 0 {
-				repaired := repairDanglingToolUse(msgs)
-				repaired = repairAlternation(repaired)
+				repaired := conversation.RepairDanglingToolUse(msgs)
+				repaired = conversation.RepairAlternation(repaired)
 				e.Messages = repaired
 				// Save repaired messages back so we don't re-repair every time
-				if lastRepairCount > 0 || len(repaired) != len(msgs) {
+				if conversation.LastRepairCount > 0 || len(repaired) != len(msgs) {
 					if data, err := json.Marshal(repaired); err == nil {
 						ws.SaveMessages(data)
 						Log.Info("repaired session messages (%d tool calls, %d→%d messages)",
-							lastRepairCount, len(msgs), len(repaired))
+							conversation.LastRepairCount, len(msgs), len(repaired))
 					}
 				}
 				Log.Info("resuming session (%d messages)", len(e.Messages))
@@ -605,9 +606,9 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 		cfg.TokenBudget = contextWindow / 2
 
 		// First pass: truncate old tool results/assistant text
-		if ShouldPrune(messages, cfg) {
+		if conversation.ShouldPrune(messages, cfg) {
 			Log.Warn("context approaching limit (%d messages), pruning", len(messages))
-			pruned, result, err := PruneConversation(context.Background(), messages, e.MemStore, "", cfg)
+			pruned, result, err := conversation.PruneConversation(context.Background(), messages, e.MemStore, "", cfg)
 			if err == nil {
 				Log.Info("pruned: %d tokens freed", result.TokensFreed)
 				messages = pruned
@@ -798,7 +799,7 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	if e.stashCfg.Enabled && e.MemStore != nil {
 		tokens := inbercontext.EstimateTokens(input)
 		if tokens > e.stashCfg.UserMessageThreshold {
-			modifiedInput, stashed, err := DetectAndStashLargeBlocks(input, sessionID, e.MemStore, e.stashCfg)
+			modifiedInput, stashed, err := conversation.DetectAndStashLargeBlocks(input, sessionID, e.MemStore, e.stashCfg)
 			if err != nil {
 				Log.Warn("failed to stash large user message: %v", err)
 			} else if len(stashed) > 0 {
@@ -849,10 +850,10 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	if e.extractCfg.Enabled && e.MemStore != nil {
 		// Note: we don't have detailed tool call info in TurnResult,
 		// but extraction will work without it
-		var toolCalls []ToolCallSummary
+		var toolCalls []conversation.ToolCallSummary
 		
 		// Launch extraction in background goroutine
-		go BackgroundExtractMemories(
+		go conversation.BackgroundExtractMemories(
 			context.Background(),
 			e.Client,
 			input, // Original user input (not stashed version)
@@ -861,7 +862,6 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 			sessionID,
 			e.MemStore,
 			e.extractCfg,
-			&Log,
 		)
 	}
 
@@ -885,7 +885,7 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 						textTokens := inbercontext.EstimateTokens(text)
 						
 						if textTokens > e.stashCfg.MinBlockSize {
-							modifiedText, stashed, err := DetectAndStashLargeBlocks(text, sessionID, e.MemStore, e.stashCfg)
+							modifiedText, stashed, err := conversation.DetectAndStashLargeBlocks(text, sessionID, e.MemStore, e.stashCfg)
 							if err != nil {
 								Log.Warn("failed to stash assistant response: %v", err)
 								modifiedContent = append(modifiedContent, block)
@@ -1169,13 +1169,13 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 // saves the full conversation to memory, and replaces old messages.
 // Runs before pruning — summarize first, then prune what remains.
 func (e *Engine) summarizeIfNeeded() {
-	role := RoleDefault
+	role := conversation.RoleDefault
 	if e.AgentConfig != nil && e.AgentConfig.Role != "" {
-		role = AgentRole(strings.ToLower(e.AgentConfig.Role))
+		role = conversation.AgentRole(strings.ToLower(e.AgentConfig.Role))
 	}
-	cfg := DefaultSummarizeConfig(role)
+	cfg := conversation.DefaultSummarizeConfig(role)
 
-	if !ShouldSummarize(e.Messages, cfg) {
+	if !conversation.ShouldSummarize(e.Messages, cfg) {
 		return
 	}
 
@@ -1189,7 +1189,7 @@ func (e *Engine) summarizeIfNeeded() {
 		model = "claude-sonnet-4-5-20250929"
 	}
 
-	summarized, result, err := SummarizeConversation(
+	summarized, result, err := conversation.SummarizeConversation(
 		context.Background(),
 		e.Client,
 		e.Messages,
@@ -1216,18 +1216,18 @@ func (e *Engine) summarizeIfNeeded() {
 }
 
 // pruneIfNeeded checks if conversation should be pruned and does so if necessary.
-// pruneConfig returns the appropriate PruneConfig for this engine's agent role.
-func (e *Engine) pruneConfig() PruneConfig {
+// pruneConfig returns the appropriate conversation.PruneConfig for this engine's agent role.
+func (e *Engine) pruneConfig() conversation.PruneConfig {
 	if e.AgentConfig != nil && e.AgentConfig.Role != "" {
-		return PruneConfigForRole(e.AgentConfig.Role)
+		return conversation.PruneConfigForRole(e.AgentConfig.Role)
 	}
-	return DefaultPruneConfig()
+	return conversation.DefaultPruneConfig()
 }
 
 func (e *Engine) pruneIfNeeded() {
 	cfg := e.pruneConfig()
 
-	if !ShouldPrune(e.Messages, cfg) {
+	if !conversation.ShouldPrune(e.Messages, cfg) {
 		return
 	}
 
@@ -1236,7 +1236,7 @@ func (e *Engine) pruneIfNeeded() {
 		sessionID = e.Session.SessionID()
 	}
 
-	pruned, result, err := PruneConversation(
+	pruned, result, err := conversation.PruneConversation(
 		context.Background(),
 		e.Messages,
 		e.MemStore,
