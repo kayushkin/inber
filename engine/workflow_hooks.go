@@ -10,33 +10,34 @@ import (
 
 // WorkflowHooks orchestrates auto-branch, auto-commit, auto-format, and auto-test.
 type WorkflowHooks struct {
-	repoRoot       string
-	sessionID      string
-	agentName      string
-	projectType    string // "go", "node", "rust", ""
-	
+	repoRoot    string
+	sessionID   string
+	agentName   string
+	projectType string // "go", "node", "rust", ""
+
 	// Config flags
-	autoBranch     bool
-	autoCommit     bool
-	autoFormat     bool
-	smartTests     bool
-	
+	autoBranch bool
+	autoCommit bool
+	autoFormat bool
+	smartTests bool
+
 	// State
-	sessionBranch  string
-	lastError      string // for deduplication
-	changedFiles   []string
+	sessionBranch string
+	originalBranch string
+	lastError     string // for deduplication
+	changedFiles  []string
 }
 
 // NewWorkflowHooks creates workflow automation for a session.
 func NewWorkflowHooks(repoRoot, sessionID, agentName string, cfg AutoWorkflowConfig) *WorkflowHooks {
 	h := &WorkflowHooks{
-		repoRoot:    repoRoot,
-		sessionID:   sessionID,
-		agentName:   agentName,
-		autoBranch:  cfg.AutoBranch,
-		autoCommit:  cfg.AutoCommit,
-		autoFormat:  cfg.AutoFormat,
-		smartTests:  cfg.SmartTests,
+		repoRoot:   repoRoot,
+		sessionID:  sessionID,
+		agentName:  agentName,
+		autoBranch: cfg.AutoBranch,
+		autoCommit: cfg.AutoCommit,
+		autoFormat: cfg.AutoFormat,
+		smartTests: cfg.SmartTests,
 	}
 	h.detectProject()
 	return h
@@ -58,94 +59,150 @@ func (h *WorkflowHooks) detectProject() {
 	h.projectType = ""
 }
 
-// InitSession sets up the session branch and returns info message.
+// git runs a git command and returns combined output. Never panics.
+func (h *WorkflowHooks) git(args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", h.repoRoot}, args...)...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// InitSession sets up the session branch. Handles dirty worktrees,
+// detached HEAD, merge conflicts, and other git weirdness gracefully.
+// Returns (info message, injection for model to see, error).
 func (h *WorkflowHooks) InitSession() (string, error) {
 	if !h.autoBranch {
 		return "", nil
 	}
-	
-	// Create branch name: inber/<agent>-<session-id>
+
+	// Remember where we started
+	currentBranch, err := h.git("rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		// Not a git repo or broken state — disable branching silently
+		Log.Warn("auto-branch: not a git repo or broken state, disabling: %s", currentBranch)
+		h.autoBranch = false
+		return "", nil
+	}
+	h.originalBranch = currentBranch
+
+	// Target branch name
 	shortID := h.sessionID
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
 	}
 	branchName := fmt.Sprintf("inber/%s-%s", h.agentName, shortID)
 	h.sessionBranch = branchName
-	
-	// Check if branch already exists (resume case)
-	cmd := exec.Command("git", "-C", h.repoRoot, "rev-parse", "--verify", branchName)
-	if cmd.Run() == nil {
-		// Branch exists, check it out
-		cmd = exec.Command("git", "-C", h.repoRoot, "checkout", branchName)
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("failed to checkout branch %s: %w", branchName, err)
+
+	// Check for uncommitted changes
+	status, _ := h.git("status", "--porcelain")
+	hasChanges := status != ""
+
+	// If dirty worktree, stash before switching
+	if hasChanges {
+		Log.Info("auto-branch: stashing uncommitted changes before switching")
+		out, err := h.git("stash", "push", "-m", fmt.Sprintf("inber-auto-stash-%s", shortID))
+		if err != nil {
+			// Stash failed — work with what we have
+			Log.Warn("auto-branch: stash failed (%s), trying branch switch anyway", out)
+		}
+	}
+
+	// Try to switch to branch (existing or new)
+	if out, err := h.git("rev-parse", "--verify", branchName); err == nil {
+		_ = out
+		// Branch exists — resume
+		out, err := h.git("checkout", branchName)
+		if err != nil {
+			return h.recoverBranch(branchName, hasChanges, fmt.Sprintf("checkout failed: %s", out))
+		}
+		if hasChanges {
+			h.git("stash", "pop") // best effort
 		}
 		return fmt.Sprintf("Resumed session branch: %s", branchName), nil
 	}
-	
+
 	// Create new branch
-	cmd = exec.Command("git", "-C", h.repoRoot, "checkout", "-b", branchName)
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("failed to create branch %s: %w", branchName, err)
+	out, err := h.git("checkout", "-b", branchName)
+	if err != nil {
+		return h.recoverBranch(branchName, hasChanges, fmt.Sprintf("create branch failed: %s", out))
 	}
-	
+
+	if hasChanges {
+		h.git("stash", "pop") // best effort
+	}
 	return fmt.Sprintf("Created session branch: %s", branchName), nil
 }
 
+// recoverBranch handles git failures during branch setup.
+// Tries to get back to a working state and disables auto-branching.
+func (h *WorkflowHooks) recoverBranch(branchName string, hadStash bool, reason string) (string, error) {
+	Log.Warn("auto-branch: %s — recovering", reason)
+
+	// Try to get back to original branch
+	if h.originalBranch != "" {
+		h.git("checkout", h.originalBranch)
+	}
+
+	// Pop stash if we stashed
+	if hadStash {
+		h.git("stash", "pop")
+	}
+
+	// Disable auto-branch for this session
+	h.autoBranch = false
+	h.sessionBranch = ""
+
+	// Don't fail the session — just warn
+	return fmt.Sprintf("⚠️ auto-branch disabled: %s (continuing on %s)", reason, h.originalBranch), nil
+}
+
 // OnToolResult runs after a tool completes.
-// Returns a message to inject into conversation (e.g., build errors).
+// Returns a message to inject into conversation (e.g., build errors, git issues).
 func (h *WorkflowHooks) OnToolResult(toolName, toolInput, output string, isError bool) string {
 	if isError {
-		return "" // Don't process failed tool calls
+		return ""
 	}
-	
+
 	// Only process file write tools
 	if toolName != "write_file" && toolName != "edit_file" {
 		return ""
 	}
-	
-	// Extract file path from tool input
+
 	filePath := h.extractFilePath(toolName, toolInput)
 	if filePath == "" {
 		return ""
 	}
-	
-	// Track changed files
+
 	h.changedFiles = append(h.changedFiles, filePath)
-	
+
 	var messages []string
-	
+
 	// 1. Auto-format
 	if h.autoFormat {
-		h.formatFile(filePath)
+		if msg := h.formatFile(filePath); msg != "" {
+			messages = append(messages, msg)
+		}
 	}
-	
+
 	// 2. Auto-build/test
 	if h.projectType != "" {
 		if msg := h.buildAndTest(filePath); msg != "" {
 			messages = append(messages, msg)
 		}
 	}
-	
-	// 3. Auto-commit
+
+	// 3. Auto-commit (only if build/test passed)
 	if h.autoCommit && len(messages) == 0 {
-		// Only commit if build/test passed
 		if msg := h.commitFile(toolName, filePath); msg != "" {
-			// Silent on success, only show errors
-			if strings.Contains(msg, "error") || strings.Contains(msg, "failed") {
-				messages = append(messages, msg)
-			}
+			messages = append(messages, msg)
 		}
 	}
-	
+
 	return strings.Join(messages, "\n")
 }
 
 func (h *WorkflowHooks) extractFilePath(toolName, input string) string {
-	// Parse JSON input to extract "path" field
-	// Simple heuristic: look for "path":"..."
 	if idx := strings.Index(input, `"path"`); idx != -1 {
-		rest := input[idx+7:] // skip `"path":`
+		rest := input[idx+7:]
 		if idx2 := strings.Index(rest, `"`); idx2 != -1 {
 			rest = rest[idx2+1:]
 			if idx3 := strings.Index(rest, `"`); idx3 != -1 {
@@ -156,17 +213,26 @@ func (h *WorkflowHooks) extractFilePath(toolName, input string) string {
 	return ""
 }
 
-func (h *WorkflowHooks) formatFile(filePath string) {
+func (h *WorkflowHooks) formatFile(filePath string) string {
 	absPath := filepath.Join(h.repoRoot, filePath)
-	
+
+	var cmd *exec.Cmd
 	switch h.projectType {
 	case "go":
-		exec.Command("gofmt", "-w", absPath).Run()
+		cmd = exec.Command("gofmt", "-w", absPath)
 	case "node":
-		exec.Command("npx", "prettier", "--write", absPath).Run()
+		cmd = exec.Command("npx", "prettier", "--write", absPath)
 	case "rust":
-		exec.Command("rustfmt", absPath).Run()
+		cmd = exec.Command("rustfmt", absPath)
+	default:
+		return ""
 	}
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("⚠️ format failed for %s:\n%s", filePath, strings.TrimSpace(string(out)))
+	}
+	return ""
 }
 
 func (h *WorkflowHooks) buildAndTest(filePath string) string {
@@ -183,41 +249,37 @@ func (h *WorkflowHooks) buildAndTest(filePath string) string {
 }
 
 func (h *WorkflowHooks) buildAndTestGo(filePath string) string {
-	// Build
 	cmd := exec.Command("go", "build", "./...")
 	cmd.Dir = h.repoRoot
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return h.dedup(compactGoError("build", string(output)))
 	}
-	
-	// Test (smart selection if enabled)
+
 	testCmd := []string{"test"}
 	if h.smartTests && strings.HasSuffix(filePath, ".go") {
-		// Test only the package containing this file
 		pkg := "./" + filepath.Dir(filePath)
 		testCmd = append(testCmd, pkg)
 	} else {
 		testCmd = append(testCmd, "./...")
 	}
-	
+
 	cmd = exec.Command("go", testCmd...)
 	cmd.Dir = h.repoRoot
 	output, err = cmd.CombinedOutput()
 	if err != nil {
 		return h.dedup(compactGoError("test", string(output)))
 	}
-	
-	return "" // Success (silent)
+
+	return ""
 }
 
 func (h *WorkflowHooks) buildAndTestNode() string {
-	// npm test or yarn test
 	cmd := exec.Command("npm", "test")
 	cmd.Dir = h.repoRoot
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return h.dedup(fmt.Sprintf("⚠️ npm test failed:\n%s", string(output)))
+		return h.dedup(fmt.Sprintf("⚠️ npm test failed:\n%s", strings.TrimSpace(string(output))))
 	}
 	return ""
 }
@@ -227,7 +289,7 @@ func (h *WorkflowHooks) buildAndTestRust() string {
 	cmd.Dir = h.repoRoot
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return h.dedup(fmt.Sprintf("⚠️ cargo test failed:\n%s", string(output)))
+		return h.dedup(fmt.Sprintf("⚠️ cargo test failed:\n%s", strings.TrimSpace(string(output))))
 	}
 	return ""
 }
@@ -241,44 +303,53 @@ func (h *WorkflowHooks) dedup(msg string) string {
 }
 
 func (h *WorkflowHooks) commitFile(toolName, filePath string) string {
-	// Generate smart commit message
 	var msg string
 	if toolName == "write_file" {
 		msg = fmt.Sprintf("Create %s", filepath.Base(filePath))
 	} else {
 		msg = fmt.Sprintf("Update %s", filepath.Base(filePath))
 	}
-	
+
 	// Stage file
-	cmd := exec.Command("git", "-C", h.repoRoot, "add", filePath)
-	if err := cmd.Run(); err != nil {
-		return fmt.Sprintf("warning: failed to stage %s: %v", filePath, err)
+	out, err := h.git("add", filePath)
+	if err != nil {
+		return fmt.Sprintf("⚠️ git add failed for %s:\n%s\nFix this before continuing.", filePath, out)
 	}
-	
+
+	// Check if there's actually something to commit
+	out, _ = h.git("diff", "--cached", "--quiet")
+	if out == "" {
+		// diff --cached --quiet exits 0 if nothing staged
+		// But we need to check the exit code, which we lost. Just try commit.
+	}
+
 	// Commit
-	cmd = exec.Command("git", "-C", h.repoRoot, "commit", "-m", msg)
-	if err := cmd.Run(); err != nil {
-		// Check if it's just "nothing to commit"
-		if strings.Contains(err.Error(), "nothing to commit") {
-			return "" // Silent
+	out, err = h.git("commit", "-m", msg)
+	if err != nil {
+		outStr := strings.TrimSpace(out)
+		// "nothing to commit" is fine
+		if strings.Contains(outStr, "nothing to commit") ||
+			strings.Contains(outStr, "no changes added") {
+			return ""
 		}
-		return fmt.Sprintf("warning: failed to commit %s: %v", filePath, err)
+		// Actual git error — surface it to the model
+		return fmt.Sprintf("⚠️ git commit failed:\n%s\nFix this git issue before continuing.", outStr)
 	}
-	
-	return "" // Success (silent)
+
+	return ""
 }
 
-// FinishSession returns a summary message for the user.
+// FinishSession returns a summary. Tries to return to original branch.
 func (h *WorkflowHooks) FinishSession() string {
 	if !h.autoBranch || h.sessionBranch == "" {
 		return ""
 	}
-	
+
 	fileCount := len(h.changedFiles)
 	if fileCount == 0 {
 		return fmt.Sprintf("Session branch: %s (no changes)", h.sessionBranch)
 	}
-	
+
 	return fmt.Sprintf(`Session complete (%d file%s changed).
 Branch: %s
 Merge with: git merge --squash %s`,
@@ -307,9 +378,9 @@ type AutoWorkflowConfig struct {
 // DefaultAutoWorkflowConfig returns safe defaults.
 func DefaultAutoWorkflowConfig() AutoWorkflowConfig {
 	return AutoWorkflowConfig{
-		AutoBranch: true,  // Safe and helpful
-		AutoCommit: true,  // Saves tokens
-		AutoFormat: true,  // Silent improvement
-		SmartTests: false, // Needs more testing
+		AutoBranch: true,
+		AutoCommit: true,
+		AutoFormat: true,
+		SmartTests: false,
 	}
 }
