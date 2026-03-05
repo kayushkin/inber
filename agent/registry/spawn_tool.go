@@ -79,15 +79,10 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 					in.Agent, taskID, truncate(in.Task, 100)), nil
 			}
 
-			// Sync mode (wait:true): run in-process and block until completion
-			taskID, err := r.spawnManager.SpawnSync(ctx, r, in.Agent, in.Task, timeout)
+			// Sync mode (wait:true): run and block until completion
+			result, err := r.spawnManager.SpawnSync(ctx, r, in.Agent, in.Task, timeout)
 			if err != nil {
 				return "", fmt.Errorf("spawn failed: %w", err)
-			}
-
-			result, err := r.spawnManager.GetStatus(taskID)
-			if err != nil {
-				return "", fmt.Errorf("get result: %w", err)
 			}
 
 			if result.Status == "failed" {
@@ -96,7 +91,7 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 
 			// Format result with metadata
 			response := fmt.Sprintf("✅ Agent: %s (task %s)\n\n%s\n\n[Tokens: in=%d out=%d | Tools: %d]",
-				in.Agent, taskID, result.Result, result.InputTokens, result.OutputTokens, result.ToolCalls)
+				in.Agent, result.ID, result.Result, result.InputTokens, result.OutputTokens, result.ToolCalls)
 
 			return response, nil
 		},
