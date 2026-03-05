@@ -76,8 +76,8 @@ func (sm *SpawnManager) SpawnAsync(
 	// Write initial status to disk
 	sm.writeResult(spawn)
 	
-	// Launch goroutine to run the agent
-	go sm.runAgent(ctx, registry, spawn, timeout)
+	// Launch goroutine with background context so spawn survives parent exit
+	go sm.runAgent(context.Background(), registry, spawn, timeout)
 	
 	return taskID, nil
 }
