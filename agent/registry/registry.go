@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -114,16 +115,23 @@ func (r *Registry) SetOpenClawConfig(url, token string, agents []string) {
 	r.openclawAgents = agents
 }
 
-// GetConfig returns the config for the named agent
+// GetConfig returns the config for the named agent (case-insensitive lookup)
 func (r *Registry) GetConfig(name string) (*AgentConfig, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	cfg, ok := r.configs[name]
-	if !ok {
-		return nil, fmt.Errorf("agent %q not found", name)
+	if ok {
+		return cfg, nil
 	}
-	return cfg, nil
+	// Case-insensitive fallback
+	lower := strings.ToLower(name)
+	for k, v := range r.configs {
+		if strings.ToLower(k) == lower {
+			return v, nil
+		}
+	}
+	return nil, fmt.Errorf("agent %q not found", name)
 }
 
 // Get returns an existing agent instance or creates one if not exists
