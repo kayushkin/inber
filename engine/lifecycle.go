@@ -166,6 +166,20 @@ func (e *Engine) Close() {
 		}
 	}
 
+	// Post-request verification: check if changes are pushed and deployed
+	if e.Client != nil && e.repoRoot != "" && len(e.Messages) > 0 {
+		var highTier []string
+		if e.tiers != nil {
+			highTier = e.tiers.High
+		}
+		verifier := NewPostRequestVerifier(e.repoRoot, e.Client, highTier)
+		if result, err := verifier.Verify(context.Background()); err == nil {
+			if output := result.Format(); output != "" {
+				fmt.Fprint(os.Stderr, output)
+			}
+		}
+	}
+
 	if e.MemStore != nil && len(e.Messages) > 0 {
 		SaveSessionSummary(e.MemStore, e.Messages, e.AgentName)
 	}

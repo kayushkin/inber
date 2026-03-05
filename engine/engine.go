@@ -83,6 +83,7 @@ type Engine struct {
 	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
 	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
 	workflowHooks   *WorkflowHooks                // auto-branch, auto-commit, auto-format, build/test
+	deployCheckCfg  DeployCheckConfig             // post-request deploy verification
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
 	agentRegistry   *registry.Registry            // agent registry for spawn tools
