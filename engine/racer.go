@@ -245,6 +245,14 @@ func raceAnthropicTurn(
 		blocks[len(blocks)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
 
+	// Filter out OpenAI-sourced tool_use/tool_result pairs to avoid ID confusion
+	originalLen := len(*messages)
+	*messages = agent.FilterMessagesForAnthropic(*messages)
+	if stats := agent.LastFilterStats(); stats.ToolUseFiltered > 0 || stats.ToolResultFiltered > 0 {
+		Log.Info("race: filtered %d tool_use, %d tool_result blocks from OpenAI provider (%d→%d messages)",
+			stats.ToolUseFiltered, stats.ToolResultFiltered, originalLen, len(*messages))
+	}
+
 	a := agent.NewWithSystemBlocks(mc.AnthropicClient, blocks)
 	for _, t := range tools {
 		a.AddTool(t)
