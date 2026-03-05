@@ -90,6 +90,7 @@ type Engine struct {
 	agentRegistry   *registry.Registry            // agent registry for spawn tools
 	tiers           *ModelTiers                   // model tiers config
 	activeTier      string                        // "high" or "low" — current tier
+	modelExplicitlySet bool                       // true if --model flag was used
 	
 	// Session-level token tracking (exported for display)
 	SessionInputTokens  int
@@ -120,12 +121,13 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	}
 
 	e := &Engine{
-		Model:       cfg.Model,
-		repoRoot:    repoRoot,
-		display:     cfg.Display,
-		thinkingBud: cfg.Thinking,
-		stashCfg:    stashCfg,
-		extractCfg:    extractCfg,
+		Model:              cfg.Model,
+		repoRoot:           repoRoot,
+		display:            cfg.Display,
+		thinkingBud:        cfg.Thinking,
+		stashCfg:           stashCfg,
+		extractCfg:         extractCfg,
+		modelExplicitlySet: cfg.ModelExplicitlySet,
 	}
 
 	// Load agent config — resolve agent name from flag, config default, or fallback

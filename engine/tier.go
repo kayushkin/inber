@@ -71,9 +71,16 @@ func (e *Engine) autoTier() {
 }
 
 // activeModels returns the model list for the current tier.
+// If the model was explicitly set via --model flag, skip tier racing
+// and use only that model.
 // High tier returns High + Low (low tier is the fallback chain).
 // Low tier returns just Low.
 func (e *Engine) activeModels() []string {
+	// If user explicitly set --model flag, use only that model
+	if e.modelExplicitlySet {
+		return []string{e.Model}
+	}
+
 	if e.tiers == nil {
 		return []string{e.Model}
 	}
