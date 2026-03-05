@@ -91,15 +91,16 @@ func runRun(cmd *cobra.Command, args []string) {
 	}
 
 	cfg := engine.EngineConfig{
-		Model:          runModel,
-		Thinking:       runThinking,
-		AgentName:      runAgent,
-		Raw:            runRaw,
-		NoTools:        runNoTools,
-		SystemOverride: runSystem,
-		CommandName:    "run",
-		NewSession:     runNew,
-		Detach:         runDetach,
+		Model:              runModel,
+		ModelExplicitlySet: cmd.Flags().Changed("model"),
+		Thinking:           runThinking,
+		AgentName:          runAgent,
+		Raw:                runRaw,
+		NoTools:            runNoTools,
+		SystemOverride:     runSystem,
+		CommandName:        "run",
+		NewSession:         runNew,
+		Detach:             runDetach,
 		Display: &engine.DisplayHooks{
 			OnToolCall:   engine.DisplayToolCall,
 			OnToolResult: engine.DisplayToolResult,

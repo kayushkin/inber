@@ -38,8 +38,9 @@ type ModelTiers struct {
 
 // EngineConfig configures the Engine.
 type EngineConfig struct {
-	Model          string
-	Thinking       int64
+	Model              string
+	ModelExplicitlySet bool // true if Model came from --model CLI flag (takes precedence over agent config)
+	Thinking           int64
 	AgentName      string // load from registry
 	Raw            bool   // skip context/memory
 	NoTools        bool
@@ -148,7 +149,8 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			return nil, fmt.Errorf("agent not found: %s", agentName)
 		}
 		e.AgentConfig = ac
-		if ac.Model != "" {
+		// Only use agent config model if user didn't explicitly set --model flag
+		if ac.Model != "" && !cfg.ModelExplicitlySet {
 			e.Model = ac.Model
 		}
 		identityText = ac.System
