@@ -180,10 +180,17 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 }
 
 // buildAgent creates a fresh Agent with current system prompt, tools, and hooks.
+// Automatically adds cache_control to system blocks for prompt caching.
 func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	systemBlocks := make([]anthropic.TextBlockParam, len(blocks))
 	for i, b := range blocks {
 		systemBlocks[i] = anthropic.TextBlockParam{Text: b.Text}
+	}
+	
+	// Enable prompt caching: add cache_control to last system block
+	// This caches the entire system prompt (all preceding blocks)
+	if len(systemBlocks) > 0 {
+		systemBlocks[len(systemBlocks)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
 	a := agent.NewWithSystemBlocks(e.Client, systemBlocks)
 	for _, t := range e.agentTools {

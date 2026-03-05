@@ -115,6 +115,9 @@ type TurnResult struct {
 	ToolCalls    int    // Total tool calls made during this turn
 	InputTokens  int
 	OutputTokens int
+	// Cache tokens (Anthropic prompt caching)
+	CacheCreationTokens int // tokens written to cache (first request)
+	CacheReadTokens     int // tokens read from cache (subsequent requests)
 }
 
 // Run sends a conversation to Claude and loops until it gets a final text
@@ -124,16 +127,21 @@ type TurnResult struct {
 func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.MessageParam) (*TurnResult, error) {
 	result := &TurnResult{}
 
-	// Build tool params
+	// Build tool params with cache control on last tool for prompt caching
 	var toolParams []anthropic.ToolUnionParam
 	toolMap := make(map[string]Tool)
-	for _, t := range a.tools {
+	for i, t := range a.tools {
+		tool := &anthropic.ToolParam{
+			Name:        t.Name,
+			Description: anthropic.String(t.Description),
+			InputSchema: t.InputSchema,
+		}
+		// Add cache control to the last tool definition
+		if i == len(a.tools)-1 {
+			tool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		}
 		toolParams = append(toolParams, anthropic.ToolUnionParam{
-			OfTool: &anthropic.ToolParam{
-				Name:        t.Name,
-				Description: anthropic.String(t.Description),
-				InputSchema: t.InputSchema,
-			},
+			OfTool: tool,
 		})
 		toolMap[t.Name] = t
 	}
@@ -196,6 +204,13 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 
 		result.InputTokens += int(resp.Usage.InputTokens)
 		result.OutputTokens += int(resp.Usage.OutputTokens)
+		// Cache tokens (prompt caching)
+		if resp.Usage.CacheCreationInputTokens > 0 {
+			result.CacheCreationTokens += int(resp.Usage.CacheCreationInputTokens)
+		}
+		if resp.Usage.CacheReadInputTokens > 0 {
+			result.CacheReadTokens += int(resp.Usage.CacheReadInputTokens)
+		}
 
 		if a.hooks != nil && a.hooks.OnResponse != nil {
 			a.hooks.OnResponse(resp)

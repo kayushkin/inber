@@ -239,6 +239,11 @@ func raceAnthropicTurn(
 	for i, b := range systemBlocks {
 		blocks[i] = anthropic.TextBlockParam{Text: b.Text}
 	}
+	
+	// Enable prompt caching: add cache_control to last system block
+	if len(blocks) > 0 {
+		blocks[len(blocks)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
+	}
 
 	a := agent.NewWithSystemBlocks(mc.AnthropicClient, blocks)
 	for _, t := range tools {

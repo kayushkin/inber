@@ -146,8 +146,13 @@ func runRun(cmd *cobra.Command, args []string) {
 	cost := session.CalcCost(eng.Model, result.InputTokens, result.OutputTokens)
 	total := result.InputTokens + result.OutputTokens
 	fmt.Fprintf(os.Stderr, "\n┌─ Tokens ──────────────────────\n")
-	fmt.Fprintf(os.Stderr, "│ in=%d  out=%d  total=%d  tools=%d\n", 
+	fmt.Fprintf(os.Stderr, "│ in=%d  out=%d  total=%d  tools=%d\n",
 		result.InputTokens, result.OutputTokens, total, result.ToolCalls)
+	// Show cache savings if any
+	if result.CacheReadTokens > 0 || result.CacheCreationTokens > 0 {
+		fmt.Fprintf(os.Stderr, "│ cache: %d read, %d created\n",
+			result.CacheReadTokens, result.CacheCreationTokens)
+	}
 	fmt.Fprintf(os.Stderr, "│ cost=$%.4f\n", cost)
 	fmt.Fprintf(os.Stderr, "└───────────────────────────────\n")
 }
