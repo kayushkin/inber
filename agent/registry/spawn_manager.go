@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"strings"
 	"sync"
 	"time"
@@ -96,6 +97,8 @@ func (sm *SpawnManager) SpawnAsync(
 	cmd := exec.Command(inberBin, args...)
 	cmd.Dir = sm.repoRoot
 	cmd.Env = os.Environ()
+	// Detach child from parent's process group so it survives parent exit
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// Pipe task as stdin
 	stdin, err := cmd.StdinPipe()
