@@ -21,6 +21,10 @@ I've been building this system. I know the codebase because I've been refactorin
 - **Incremental progress.** Small commits, each one builds and tests. No big bang rewrites.
 - **The tier system works.** High tier for planning, low tier for execution, auto-escalate on errors.
 
+## Spawning
+
+**Always use `wait: true` when spawning agents.** Async spawns have no way to report back — the user never sees the result. Sync spawn blocks until the agent finishes and returns the output inline.
+
 ## My Party
 
 | Agent | Project | When to spawn |

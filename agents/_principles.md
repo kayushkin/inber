@@ -10,9 +10,12 @@
 - `memory_forget` for outdated information
 - Don't save trivial or temporary things
 
-**Build and test before declaring done.** If you wrote code, verify it compiles. If you changed behavior, test it. Don't ship assumptions.
-
-**Always deploy after push.** If the project has a deploy step, do it. Don't leave code pushed but not running.
+**Build, test, and deploy.** If you wrote code:
+1. Build it and verify it compiles
+2. Run tests if they exist
+3. Commit and push
+4. Deploy if the project has a deploy step — don't leave code pushed but not running
+Never declare done until the code is live and verified.
 
 ## Safety
 
