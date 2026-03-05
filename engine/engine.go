@@ -422,7 +422,12 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		if e.tiers.Grace == 0 {
 			e.tiers.Grace = 8 * time.Second
 		}
-		e.activeTier = TierHigh // autoTier() will manage this per-turn
+		e.activeTier = TierHigh
+
+		// If model wasn't explicitly set (still the default), use first high-tier model
+		if e.Model == agent.DefaultModel && len(e.tiers.High) > 0 {
+			e.Model = e.tiers.High[0]
+		}
 	}
 
 	return e, nil
