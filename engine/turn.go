@@ -59,20 +59,48 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	systemBlocks := e.BuildSystemPrompt(processedInput)
 	e.lastNamedBlocks = systemBlocks
 	
+	models := e.activeModels()
+
 	var result *agent.TurnResult
+	var modelUsed string
 	var err error
-	
-	// Branch based on provider type
-	if e.modelClient != nil && e.modelClient.IsOpenAI() {
-		result, err = e.runOpenAITurn(context.Background(), systemBlocks)
+
+	if len(models) > 1 {
+		// Race multiple models with staggered starts
+		raceResult, raceErr := e.raceModels(systemBlocks, models)
+		if raceErr != nil {
+			return nil, raceErr
+		}
+		result = raceResult.TurnResult
+		modelUsed = raceResult.ModelUsed
+		if raceResult.Priority > 0 {
+			Log.Info("race winner: %s (priority %d, %v)", modelUsed, raceResult.Priority, raceResult.Latency)
+		}
 	} else {
-		e.buildAgent(systemBlocks)
-		result, err = e.Agent.Run(context.Background(), e.Model, &e.Messages)
+		// Single model — direct call
+		modelUsed = models[0]
+		e.Model = modelUsed
+
+		// Ensure we have the right client for this model
+		if e.modelClient == nil || e.Model != modelUsed {
+			mc, mcErr := agent.NewModelClient(modelUsed, e.modelStore)
+			if mcErr == nil {
+				e.modelClient = mc
+			}
+		}
+
+		if e.modelClient != nil && e.modelClient.IsOpenAI() {
+			result, err = e.runOpenAITurn(context.Background(), systemBlocks)
+		} else {
+			e.buildAgent(systemBlocks)
+			result, err = e.Agent.Run(context.Background(), e.Model, &e.Messages)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	if err != nil {
-		return nil, err
-	}
+	e.Model = modelUsed
 
 	if e.Session != nil {
 		e.Session.LogAssistant(result.Text, result.InputTokens, result.OutputTokens, result.ToolCalls)
@@ -105,7 +133,7 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	// Track cumulative session tokens
 	e.SessionInputTokens += result.InputTokens
 	e.SessionOutputTokens += result.OutputTokens
-	e.SessionCost += sessionMod.CalcCost(e.Model, result.InputTokens, result.OutputTokens)
+	e.SessionCost += sessionMod.CalcCost(modelUsed, result.InputTokens, result.OutputTokens)
 
 	// Track usage in model-store
 	if e.modelStore != nil {

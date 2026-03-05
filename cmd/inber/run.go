@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/engine"
@@ -28,9 +27,9 @@ var (
 	runAutoCommit bool
 	runAutoFormat bool
 
-	// Race mode
-	runRace      string // comma-separated model list
-	runRaceDelay int    // delay between launches in seconds
+	// Model tiers
+	runTierHigh string // comma-separated high-cost model list
+	runTierLow  string // comma-separated low-cost model list
 )
 
 var runCmd = &cobra.Command{
@@ -66,9 +65,9 @@ func init() {
 	runCmd.Flags().BoolVar(&runAutoFormat, "auto-format", true, "Auto-format code after writes")
 	runCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "Run in a one-off session without affecting the main session")
 
-	// Race mode
-	runCmd.Flags().StringVar(&runRace, "race", "", "Race multiple models (comma-separated, best first): opus46,sonnet46,glm5")
-	runCmd.Flags().IntVar(&runRaceDelay, "race-delay", 4, "Seconds between staggered model launches")
+	// Model tiers
+	runCmd.Flags().StringVar(&runTierHigh, "tier-high", "", "High-cost models for planning (comma-separated, best first)")
+	runCmd.Flags().StringVar(&runTierLow, "tier-low", "", "Low-cost models for routine tasks (comma-separated, best first)")
 }
 
 func runRun(cmd *cobra.Command, args []string) {
@@ -91,7 +90,7 @@ func runRun(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	eng, err := engine.NewEngine(engine.EngineConfig{
+	cfg := engine.EngineConfig{
 		Model:          runModel,
 		Thinking:       runThinking,
 		AgentName:      runAgent,
@@ -110,45 +109,29 @@ func runRun(cmd *cobra.Command, args []string) {
 			AutoCommit: runAutoCommit,
 			AutoFormat: runAutoFormat,
 		},
-	})
+	}
+
+	if runTierHigh != "" || runTierLow != "" {
+		tiers := &engine.ModelTiers{}
+		if runTierHigh != "" {
+			for _, m := range strings.Split(runTierHigh, ",") {
+				tiers.High = append(tiers.High, strings.TrimSpace(m))
+			}
+		}
+		if runTierLow != "" {
+			for _, m := range strings.Split(runTierLow, ",") {
+				tiers.Low = append(tiers.Low, strings.TrimSpace(m))
+			}
+		}
+		cfg.Tiers = tiers
+	}
+
+	eng, err := engine.NewEngine(cfg)
 	if err != nil {
 		engine.Log.Error("%v", err)
 		os.Exit(1)
 	}
 	defer eng.Close()
-
-	// Race mode: run multiple models with staggered starts
-	if runRace != "" {
-		models := strings.Split(runRace, ",")
-		for i := range models {
-			models[i] = strings.TrimSpace(models[i])
-		}
-
-		raceResult, err := eng.Race(input, engine.RaceConfig{
-			Models:  models,
-			Delay:   time.Duration(runRaceDelay) * time.Second,
-		})
-		if err != nil {
-			engine.Log.Error("%v", err)
-			os.Exit(1)
-		}
-
-		fmt.Print(raceResult.Text)
-
-		cost := session.CalcCost(raceResult.ModelUsed, raceResult.InputTokens, raceResult.OutputTokens)
-		total := raceResult.InputTokens + raceResult.OutputTokens
-		upgraded := ""
-		if raceResult.Upgraded {
-			upgraded = "  ↑upgraded"
-		}
-		fmt.Fprintf(os.Stderr, "\n┌─ Race ────────────────────────\n")
-		fmt.Fprintf(os.Stderr, "│ model=%s  priority=%d%s\n", raceResult.ModelUsed, raceResult.Priority, upgraded)
-		fmt.Fprintf(os.Stderr, "│ in=%d  out=%d  total=%d  tools=%d\n",
-			raceResult.InputTokens, raceResult.OutputTokens, total, raceResult.ToolCalls)
-		fmt.Fprintf(os.Stderr, "│ latency=%v  cost=$%.4f\n", raceResult.Latency.Round(time.Millisecond), cost)
-		fmt.Fprintf(os.Stderr, "└───────────────────────────────\n")
-		return
-	}
 
 	result, err := eng.RunTurn(input)
 	if err != nil {

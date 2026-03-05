@@ -64,6 +64,8 @@ func init() {
 	rootCmd.Flags().StringVar(&runSystem, "system", "", "Override system prompt")
 	rootCmd.Flags().BoolVarP(&runNew, "new", "n", false, "Start a new session instead of continuing the default")
 	rootCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "Run in a one-off session without affecting the main session")
+	rootCmd.Flags().StringVar(&runTierHigh, "tier-high", "", "High-cost models for planning (comma-separated)")
+	rootCmd.Flags().StringVar(&runTierLow, "tier-low", "", "Low-cost models for routine tasks (comma-separated)")
 	// Add subcommands
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(agentsCmd)

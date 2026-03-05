@@ -27,6 +27,15 @@ type DisplayHooks struct {
 	OnToolResult func(name string, output string, isError bool)
 }
 
+// ModelTiers defines model lists for different cost/complexity tiers.
+// When a tier has multiple models, they are raced with staggered starts.
+type ModelTiers struct {
+	High []string      // expensive models for planning/complex reasoning (e.g. opus46, opus45)
+	Low  []string      // cheap models for routine tasks (e.g. sonnet45, glm5, glm47)
+	Delay time.Duration // delay between staggered launches (default 4s)
+	Grace time.Duration // grace window to wait for better model after fallback responds (default 8s)
+}
+
 // EngineConfig configures the Engine.
 type EngineConfig struct {
 	Model          string
@@ -43,6 +52,7 @@ type EngineConfig struct {
 	StashConfig    *conversation.StashConfig      // Large message stashing config (nil = use defaults)
 	ExtractConfig  *conversation.ExtractionConfig // Background extraction config (nil = use defaults)
 	AutoWorkflow   AutoWorkflowConfig // Auto-branch, auto-commit, auto-format (Phase 1)
+	Tiers          *ModelTiers // model tiers for racing/fallback (nil = single model, no race)
 }
 
 // Engine encapsulates the shared setup and execution logic for chat and run.
@@ -76,6 +86,8 @@ type Engine struct {
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
 	agentRegistry   *registry.Registry            // agent registry for spawn tools
+	tiers           *ModelTiers                   // model tiers config
+	activeTier      string                        // "high" or "low" — current tier
 	
 	// Session-level token tracking (exported for display)
 	SessionInputTokens  int
@@ -371,6 +383,18 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			toolInfos[i] = sessionMod.ToolInfo{Name: t.Name, Description: t.Description}
 		}
 		e.workspace.WriteToolsList(toolInfos)
+	}
+
+	// Initialize model tiers
+	if cfg.Tiers != nil {
+		e.tiers = cfg.Tiers
+		if e.tiers.Delay == 0 {
+			e.tiers.Delay = 4 * time.Second
+		}
+		if e.tiers.Grace == 0 {
+			e.tiers.Grace = 8 * time.Second
+		}
+		e.activeTier = "high" // start on high tier (first turn is usually planning)
 	}
 
 	return e, nil

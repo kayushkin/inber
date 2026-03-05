@@ -12,20 +12,6 @@ import (
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
-// RaceConfig configures the model racing strategy.
-type RaceConfig struct {
-	// Models in priority order (best first). Each successive model is fired
-	// after Delay from the previous one if no result has arrived yet.
-	Models []string
-
-	// Delay between launching successive models. Default 4s.
-	Delay time.Duration
-
-	// GraceWindow is how long to wait for a higher-priority model after
-	// a lower-priority one responds. Default 8s.
-	GraceWindow time.Duration
-}
-
 // RaceResult is the outcome of a model race.
 type RaceResult struct {
 	*agent.TurnResult
@@ -48,7 +34,8 @@ type raceSignal struct {
 	index int
 }
 
-// Race runs multiple models with staggered starts, returning the best result.
+// raceModels runs multiple models with staggered starts, returning the best result.
+// Called internally by RunTurn when multiple models are in the active tier.
 //
 // Strategy:
 //  1. Fire models[0] immediately
@@ -56,45 +43,19 @@ type raceSignal struct {
 //  3. Continue staggering through the list
 //  4. When any model finishes, start grace window for a better one
 //  5. Return the best available result
-func (e *Engine) Race(input string, cfg RaceConfig) (*RaceResult, error) {
-	if len(cfg.Models) == 0 {
-		return nil, fmt.Errorf("no models configured for race")
-	}
-
-	// Single model — no race needed
-	if len(cfg.Models) == 1 {
-		e.Model = cfg.Models[0]
-		result, err := e.RunTurn(input)
-		if err != nil {
-			return nil, err
-		}
-		return &RaceResult{
-			TurnResult: result,
-			ModelUsed:  cfg.Models[0],
-		}, nil
-	}
-
-	if cfg.Delay == 0 {
-		cfg.Delay = 4 * time.Second
-	}
-	if cfg.GraceWindow == 0 {
-		cfg.GraceWindow = 8 * time.Second
+func (e *Engine) raceModels(systemBlocks []sessionMod.NamedBlock, models []string) (*RaceResult, error) {
+	delay := 4 * time.Second
+	grace := 8 * time.Second
+	if e.tiers != nil {
+		delay = e.tiers.Delay
+		grace = e.tiers.Grace
 	}
 
 	start := time.Now()
 
-	// Build system prompt once (shared across all models)
-	systemBlocks := e.BuildSystemPrompt(input)
-	e.LogUser(input)
-
-	// Append user message to engine messages (like RunTurn does)
-	e.Messages = append(e.Messages, anthropic.NewUserMessage(
-		anthropic.NewTextBlock(input),
-	))
-
 	// Prepare entries — each gets its own message copy
-	entries := make([]*raceEntry, len(cfg.Models))
-	for i, model := range cfg.Models {
+	entries := make([]*raceEntry, len(models))
+	for i, model := range models {
 		msgCopy := make([]anthropic.MessageParam, len(e.Messages))
 		copy(msgCopy, e.Messages)
 		entries[i] = &raceEntry{
@@ -105,9 +66,11 @@ func (e *Engine) Race(input string, cfg RaceConfig) (*RaceResult, error) {
 	}
 
 	resultCh := make(chan raceSignal, len(entries))
+	ctx, cancelAll := context.WithCancel(context.Background())
+	defer cancelAll()
 
 	// Launch a single model run
-	launchModel := func(ctx context.Context, idx int) {
+	launchModel := func(idx int) {
 		entry := entries[idx]
 
 		mc, err := agent.NewModelClient(entry.model, e.modelStore)
@@ -130,9 +93,6 @@ func (e *Engine) Race(input string, cfg RaceConfig) (*RaceResult, error) {
 	}
 
 	// Staggered launch
-	ctx, cancelAll := context.WithCancel(context.Background())
-	defer cancelAll()
-
 	var mu sync.Mutex
 	launched := 0
 
@@ -143,14 +103,14 @@ func (e *Engine) Race(input string, cfg RaceConfig) (*RaceResult, error) {
 			idx := launched
 			launched++
 			Log.Info("race: launching %s (priority %d)", entries[idx].model, idx)
-			go launchModel(ctx, idx)
+			go launchModel(idx)
 		}
 	}
 
 	// Fire first model
 	launchNext()
 
-	stagger := time.NewTicker(cfg.Delay)
+	stagger := time.NewTicker(delay)
 	defer stagger.Stop()
 
 	bestIdx := -1
@@ -193,7 +153,7 @@ func (e *Engine) Race(input string, cfg RaceConfig) (*RaceResult, error) {
 					launchNext()
 				}
 
-				betterIdx := e.waitForBetter(resultCh, entries, bestPriority, cfg.GraceWindow, &finished, start)
+				betterIdx := e.waitForBetter(resultCh, entries, bestPriority, grace, &finished, start)
 				if betterIdx >= 0 {
 					cancelAll()
 					return e.finishRace(entries, betterIdx, start, true)
@@ -253,13 +213,8 @@ func (e *Engine) waitForBetter(
 func (e *Engine) finishRace(entries []*raceEntry, winnerIdx int, start time.Time, upgraded bool) (*RaceResult, error) {
 	winner := entries[winnerIdx]
 
-	// Adopt winner's messages (includes tool call history)
+	// Adopt winner's messages (includes tool call history from the race)
 	e.Messages = winner.messages
-	e.Model = winner.model
-
-	e.LogAssistant(winner.result)
-	e.TurnCounter++
-	e.SessionCost += sessionMod.CalcCost(winner.model, winner.result.InputTokens, winner.result.OutputTokens)
 
 	return &RaceResult{
 		TurnResult: winner.result,
@@ -377,10 +332,10 @@ func raceOpenAITurn(
 					continue
 				}
 
-				output, err := tool.Run(ctx, string(block.Input))
-				if err != nil {
+				output, toolErr := tool.Run(ctx, string(block.Input))
+				if toolErr != nil {
 					toolResults = append(toolResults, anthropic.NewToolResultBlock(
-						block.ID, fmt.Sprintf("error: %s", err), true))
+						block.ID, fmt.Sprintf("error: %s", toolErr), true))
 					continue
 				}
 
