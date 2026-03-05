@@ -236,6 +236,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			if msgs, err := ws.LoadMessages(); err == nil && len(msgs) > 0 {
 				repaired := conversation.RepairDanglingToolUse(msgs)
 				repaired = conversation.RepairAlternation(repaired)
+				repaired = agent.SanitizeMessageToolIDs(repaired)
 				e.Messages = repaired
 				// Save repaired messages back so we don't re-repair every time
 				if conversation.LastRepairCount > 0 || len(repaired) != len(msgs) {

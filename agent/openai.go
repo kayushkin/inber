@@ -341,3 +341,32 @@ func joinStrings(parts []string, sep string) string {
 	}
 	return result
 }
+
+// SanitizeMessageToolIDs cleans up tool_use and tool_result IDs in a message
+// history to match Anthropic's pattern ^[a-zA-Z0-9_-]+$.
+// This is needed when resuming sessions that contain responses from
+// OpenAI-compatible providers (GLM, etc.) which may use different ID formats.
+func SanitizeMessageToolIDs(messages []anthropic.MessageParam) []anthropic.MessageParam {
+	dirty := false
+	for i := range messages {
+		for j := range messages[i].Content {
+			block := &messages[i].Content[j]
+			if block.OfToolUse != nil {
+				clean := sanitizeToolID(block.OfToolUse.ID)
+				if clean != block.OfToolUse.ID {
+					block.OfToolUse.ID = clean
+					dirty = true
+				}
+			}
+			if block.OfToolResult != nil {
+				clean := sanitizeToolID(block.OfToolResult.ToolUseID)
+				if clean != block.OfToolResult.ToolUseID {
+					block.OfToolResult.ToolUseID = clean
+					dirty = true
+				}
+			}
+		}
+	}
+	_ = dirty
+	return messages
+}
