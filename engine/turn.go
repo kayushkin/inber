@@ -267,6 +267,25 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 	for {
 		oaiAPIcalls++
 
+		// Check for mid-run injected messages
+		if oaiAPIcalls > 1 && e.injections != nil {
+			injectCheck := e.buildInjectCheck()
+			if injected := injectCheck(); len(injected) > 0 {
+				if len(e.Messages) > 0 {
+					lastIdx := len(e.Messages) - 1
+					for _, text := range injected {
+						e.Messages[lastIdx].Content = append(e.Messages[lastIdx].Content,
+							anthropic.ContentBlockParamUnion{
+								OfText: &anthropic.TextBlockParam{
+									Text: "\n\n[New message from user while you were working]\n" + text,
+								},
+							},
+						)
+					}
+				}
+			}
+		}
+
 		// Check limits before each API call (after the first)
 		forceSummary := false
 		if oaiAPIcalls > 1 && (e.maxTurns > 0 || e.maxInputTokens > 0) {

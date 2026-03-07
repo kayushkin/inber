@@ -69,6 +69,11 @@ type Agent struct {
 	// the agent will make one final tool-less API call asking the model to
 	// summarize its progress, then return.
 	LimitCheck func(result *TurnResult) (exceeded bool, reason string)
+
+	// InjectCheck is called before each API call (after the first) to check
+	// for mid-run messages from the user. Returns any pending messages to inject
+	// into the conversation before the next API call.
+	InjectCheck func() []string
 }
 
 // New creates an agent with the given system prompt.
@@ -162,6 +167,25 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 	apiCalls := 0
 	for {
 		apiCalls++
+
+		// Check for mid-run injected messages from the user
+		if apiCalls > 1 && a.InjectCheck != nil {
+			if injected := a.InjectCheck(); len(injected) > 0 {
+				// Append injected messages to the last user message (tool results)
+				if len(*messages) > 0 {
+					lastIdx := len(*messages) - 1
+					for _, text := range injected {
+						(*messages)[lastIdx].Content = append((*messages)[lastIdx].Content,
+							anthropic.ContentBlockParamUnion{
+								OfText: &anthropic.TextBlockParam{
+									Text: "\n\n[New message from user while you were working]\n" + text,
+								},
+							},
+						)
+					}
+				}
+			}
+		}
 
 		// Check limits before each API call (after the first)
 		forceSummary := false

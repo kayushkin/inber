@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -80,18 +81,62 @@ func init() {
 	runCmd.Flags().IntVar(&runMaxInputTokens, "max-input-tokens", 0, "Max cumulative input tokens per run (0=unlimited, default 500k for --detach)")
 }
 
+// stdinMessage is the JSON line format for bus-agent → inber communication.
+type stdinMessage struct {
+	Text   string `json:"text"`
+	Author string `json:"author,omitempty"`
+}
+
 func runRun(cmd *cobra.Command, args []string) {
-	// Get message from args or stdin
 	var input string
+	var injections chan string
+
 	if len(args) > 0 {
+		// Message from CLI args — no injection support
 		input = strings.Join(args, " ")
 	} else {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
+		// Read from stdin
+		reader := bufio.NewReader(os.Stdin)
+		firstLine, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
 			engine.Log.Error("reading stdin: %v", err)
 			os.Exit(1)
 		}
-		input = strings.TrimSpace(string(data))
+		firstLine = strings.TrimRight(firstLine, "\n\r")
+
+		// Try JSON line protocol (bus-agent sends JSON lines)
+		var msg stdinMessage
+		if json.Unmarshal([]byte(firstLine), &msg) == nil && msg.Text != "" {
+			input = msg.Text
+			if msg.Author != "" {
+				input = fmt.Sprintf("[%s] %s", msg.Author, input)
+			}
+
+			// Keep reading stdin for follow-up injections
+			injections = make(chan string, 10)
+			go func() {
+				defer close(injections)
+				scanner := bufio.NewScanner(reader)
+				for scanner.Scan() {
+					line := scanner.Text()
+					if line == "" {
+						continue
+					}
+					var followUp stdinMessage
+					if json.Unmarshal([]byte(line), &followUp) == nil && followUp.Text != "" {
+						text := followUp.Text
+						if followUp.Author != "" {
+							text = fmt.Sprintf("[%s] %s", followUp.Author, text)
+						}
+						injections <- text
+					}
+				}
+			}()
+		} else {
+			// Plain text fallback — read rest of stdin, no injections
+			rest, _ := io.ReadAll(reader)
+			input = strings.TrimSpace(firstLine + "\n" + string(rest))
+		}
 	}
 
 	if input == "" {
@@ -122,6 +167,7 @@ func runRun(cmd *cobra.Command, args []string) {
 		},
 		MaxTurns:       runMaxTurns,
 		MaxInputTokens: runMaxInputTokens,
+		Injections:     injections,
 	}
 
 	if runTierHigh != "" || runTierLow != "" {

@@ -201,6 +201,11 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	}
 	a.SetHooks(e.buildHooks())
 
+	// Wire up mid-run message injection
+	if e.injections != nil {
+		a.InjectCheck = e.buildInjectCheck()
+	}
+
 	// Wire up turn/token limit checks
 	if e.maxTurns > 0 || e.maxInputTokens > 0 {
 		a.SetLimitCheck(e.buildLimitCheck())
@@ -256,6 +261,32 @@ func hasToolResult(msg anthropic.MessageParam) bool {
 		}
 	}
 	return false
+}
+
+// buildInjectCheck creates a closure that drains the injection channel.
+func (e *Engine) buildInjectCheck() func() []string {
+	return func() []string {
+		var result []string
+		for {
+			select {
+			case text, ok := <-e.injections:
+				if !ok {
+					return result // channel closed
+				}
+				result = append(result, text)
+				Log.Info("injection received: %s", truncateLog(text, 80))
+			default:
+				return result // no more pending
+			}
+		}
+	}
+}
+
+func truncateLog(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 // buildLimitCheck creates a closure that checks turn/token limits.

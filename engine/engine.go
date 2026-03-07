@@ -54,8 +54,9 @@ type EngineConfig struct {
 	ExtractConfig  *conversation.ExtractionConfig // Background extraction config (nil = use defaults)
 	AutoWorkflow   AutoWorkflowConfig // Auto-branch, auto-commit, auto-format (Phase 1)
 	Tiers          *ModelTiers // model tiers for racing/fallback (nil = single model, no race)
-	MaxTurns       int  // max API round-trips per RunTurn (0 = unlimited)
-	MaxInputTokens int  // max cumulative input tokens per RunTurn (0 = unlimited)
+	MaxTurns       int            // max API round-trips per RunTurn (0 = unlimited)
+	MaxInputTokens int            // max cumulative input tokens per RunTurn (0 = unlimited)
+	Injections     <-chan string  // channel for mid-run message injection (optional, from stdin)
 }
 
 // Engine encapsulates the shared setup and execution logic for chat and run.
@@ -95,6 +96,7 @@ type Engine struct {
 	modelExplicitlySet bool                       // true if --model flag was used
 	maxTurns        int                           // max API round-trips per RunTurn (0 = unlimited)
 	maxInputTokens  int                           // max cumulative input tokens per RunTurn (0 = unlimited)
+	injections      <-chan string                  // mid-run message injection channel (nil = disabled)
 	
 	// Session-level token tracking (exported for display)
 	SessionInputTokens  int
@@ -468,6 +470,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	if e.maxTurns > 0 || e.maxInputTokens > 0 {
 		Log.Info("limits: maxTurns=%d, maxInputTokens=%d", e.maxTurns, e.maxInputTokens)
 	}
+
+	// Mid-run injection channel
+	e.injections = cfg.Injections
 
 	return e, nil
 }
