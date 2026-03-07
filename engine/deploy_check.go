@@ -190,9 +190,6 @@ func buildDeployCheckPrompt(state deployState, agentName string) string {
 func (e *Engine) runDeployCheckModel(prompt string) (string, error) {
 	// Use the first high-tier model if available, otherwise current model
 	model := e.Model
-	if e.tiers != nil && len(e.tiers.High) > 0 {
-		model = e.tiers.High[0]
-	}
 
 	// Create a lightweight model client for this check
 	mc, err := agent.NewModelClient(model, e.modelStore)

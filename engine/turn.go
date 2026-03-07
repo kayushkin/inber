@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
@@ -58,58 +59,43 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	systemBlocks := e.BuildSystemPrompt(processedInput)
 	e.lastNamedBlocks = systemBlocks
-	
-	// Auto-select tier based on turn count and error state
-	e.autoTier()
-	models := e.activeModels()
 
-	var result *agent.TurnResult
-	var modelUsed string
-	var err error
+	// Select model based on health data (failover if primary is down)
+	modelUsed, _ := e.selectModel()
 
-	if len(models) > 1 {
-		// Race multiple models with staggered starts
-		raceResult, raceErr := e.raceModels(systemBlocks, models)
-		if raceErr != nil {
-			return nil, raceErr
-		}
-		result = raceResult.TurnResult
-		modelUsed = raceResult.ModelUsed
-		if raceResult.Priority > 0 {
-			Log.Info("race winner: %s (priority %d, %v)", modelUsed, raceResult.Priority, raceResult.Latency)
-		}
-	} else {
-		// Single model — direct call
-		modelUsed = models[0]
-		e.Model = modelUsed
-
-		// Ensure we have the right client for this model
-		if e.modelClient == nil || e.Model != modelUsed {
-			mc, mcErr := agent.NewModelClient(modelUsed, e.modelStore)
-			if mcErr == nil {
-				e.modelClient = mc
-			}
-		}
-
-		if e.modelClient != nil && e.modelClient.IsOpenAI() {
-			result, err = e.runOpenAITurn(context.Background(), systemBlocks)
-		} else {
-			// Filter out OpenAI-sourced tool_use/tool_result pairs for Anthropic
-			originalLen := len(e.Messages)
-			e.Messages = agent.FilterMessagesForAnthropic(e.Messages)
-			if stats := agent.LastFilterStats(); stats.ToolUseFiltered > 0 || stats.ToolResultFiltered > 0 {
-				Log.Info("filtered %d tool_use, %d tool_result blocks from OpenAI provider (%d→%d messages)",
-					stats.ToolUseFiltered, stats.ToolResultFiltered, originalLen, len(e.Messages))
-			}
-			e.buildAgent(systemBlocks)
-			result, err = e.Agent.Run(context.Background(), e.Model, &e.Messages)
-		}
-		if err != nil {
-			return nil, err
+	// Ensure we have the right client for the selected model
+	if e.modelClient == nil || (e.modelClient.Model != nil && e.modelClient.Model.ID != modelUsed) {
+		mc, mcErr := agent.NewModelClient(modelUsed, e.modelStore)
+		if mcErr == nil {
+			e.modelClient = mc
 		}
 	}
-
 	e.Model = modelUsed
+
+	var result *agent.TurnResult
+	var err error
+	apiStart := time.Now()
+
+	if e.modelClient != nil && e.modelClient.IsOpenAI() {
+		result, err = e.runOpenAITurn(context.Background(), systemBlocks)
+	} else {
+		// Filter out OpenAI-sourced tool_use/tool_result pairs for Anthropic
+		originalLen := len(e.Messages)
+		e.Messages = agent.FilterMessagesForAnthropic(e.Messages)
+		if stats := agent.LastFilterStats(); stats.ToolUseFiltered > 0 || stats.ToolResultFiltered > 0 {
+			Log.Info("filtered %d tool_use, %d tool_result blocks from OpenAI provider (%d→%d messages)",
+				stats.ToolUseFiltered, stats.ToolResultFiltered, originalLen, len(e.Messages))
+		}
+		e.buildAgent(systemBlocks)
+		result, err = e.Agent.Run(context.Background(), e.Model, &e.Messages)
+	}
+
+	// Record health regardless of success/failure
+	e.recordModelHealth(modelUsed, time.Since(apiStart).Milliseconds(), err)
+
+	if err != nil {
+		return nil, err
+	}
 
 	if e.Session != nil {
 		e.Session.LogAssistant(result.Text, result.InputTokens, result.OutputTokens, result.ToolCalls)

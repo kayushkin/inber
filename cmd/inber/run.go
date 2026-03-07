@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/engine"
@@ -27,9 +30,9 @@ var (
 	runAutoCommit bool
 	runAutoFormat bool
 
-	// Model tiers
-	runTierHigh string // comma-separated high-cost model list
-	runTierLow  string // comma-separated low-cost model list
+	// Safety limits
+	runMaxTurns       int
+	runMaxInputTokens int
 )
 
 var runCmd = &cobra.Command{
@@ -65,23 +68,61 @@ func init() {
 	runCmd.Flags().BoolVar(&runAutoFormat, "auto-format", true, "Auto-format code after writes")
 	runCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "Run in a one-off session without affecting the main session")
 
-	// Model tiers
-	runCmd.Flags().StringVar(&runTierHigh, "tier-high", "", "High-cost models for planning (comma-separated, best first)")
-	runCmd.Flags().StringVar(&runTierLow, "tier-low", "", "Low-cost models for routine tasks (comma-separated, best first)")
+	// Safety limits
+	runCmd.Flags().IntVar(&runMaxTurns, "max-turns", 0, "Max API round-trips per run (0=unlimited, default 25 for --detach)")
+	runCmd.Flags().IntVar(&runMaxInputTokens, "max-input-tokens", 0, "Max cumulative input tokens per run (0=unlimited, default 500k for --detach)")
+}
+
+// stdinMessage is the JSON line format for bus-agent → inber communication.
+type stdinMessage struct {
+	Text   string `json:"text"`
+	Author string `json:"author,omitempty"`
 }
 
 func runRun(cmd *cobra.Command, args []string) {
-	// Get message from args or stdin
 	var input string
+	var injections chan string
+
 	if len(args) > 0 {
 		input = strings.Join(args, " ")
 	} else {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
+		reader := bufio.NewReader(os.Stdin)
+		firstLine, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
 			engine.Log.Error("reading stdin: %v", err)
 			os.Exit(1)
 		}
-		input = strings.TrimSpace(string(data))
+		firstLine = strings.TrimRight(firstLine, "\n\r")
+
+		var msg stdinMessage
+		if json.Unmarshal([]byte(firstLine), &msg) == nil && msg.Text != "" {
+			input = msg.Text
+			if msg.Author != "" {
+				input = fmt.Sprintf("[%s] %s", msg.Author, input)
+			}
+			injections = make(chan string, 10)
+			go func() {
+				defer close(injections)
+				scanner := bufio.NewScanner(reader)
+				for scanner.Scan() {
+					line := scanner.Text()
+					if line == "" {
+						continue
+					}
+					var followUp stdinMessage
+					if json.Unmarshal([]byte(line), &followUp) == nil && followUp.Text != "" {
+						text := followUp.Text
+						if followUp.Author != "" {
+							text = fmt.Sprintf("[%s] %s", followUp.Author, text)
+						}
+						injections <- text
+					}
+				}
+			}()
+		} else {
+			rest, _ := io.ReadAll(reader)
+			input = strings.TrimSpace(firstLine + "\n" + string(rest))
+		}
 	}
 
 	if input == "" {
@@ -112,20 +153,9 @@ func runRun(cmd *cobra.Command, args []string) {
 		},
 	}
 
-	if runTierHigh != "" || runTierLow != "" {
-		tiers := &engine.ModelTiers{}
-		if runTierHigh != "" {
-			for _, m := range strings.Split(runTierHigh, ",") {
-				tiers.High = append(tiers.High, strings.TrimSpace(m))
-			}
-		}
-		if runTierLow != "" {
-			for _, m := range strings.Split(runTierLow, ",") {
-				tiers.Low = append(tiers.Low, strings.TrimSpace(m))
-			}
-		}
-		cfg.Tiers = tiers
-	}
+	cfg.MaxTurns = runMaxTurns
+	cfg.MaxInputTokens = runMaxInputTokens
+	cfg.Injections = injections
 
 	eng, err := engine.NewEngine(cfg)
 	if err != nil {
@@ -134,7 +164,9 @@ func runRun(cmd *cobra.Command, args []string) {
 	}
 	defer eng.Close()
 
+	startTime := time.Now()
 	result, err := eng.RunTurn(input)
+	durationMs := time.Since(startTime).Milliseconds()
 	if err != nil {
 		engine.Log.Error("%v", err)
 		os.Exit(1)
@@ -156,4 +188,20 @@ func runRun(cmd *cobra.Command, args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "│ cost=$%.4f\n", cost)
 	fmt.Fprintf(os.Stderr, "└───────────────────────────────\n")
+
+	// Machine-readable metadata for bus-agent
+	meta := map[string]interface{}{
+		"input_tokens":          result.InputTokens,
+		"output_tokens":         result.OutputTokens,
+		"cache_read_tokens":     result.CacheReadTokens,
+		"cache_creation_tokens": result.CacheCreationTokens,
+		"tool_calls":            result.ToolCalls,
+		"cost":                  cost,
+		"duration_ms":           durationMs,
+		"model":                 eng.Model,
+		"turn":                  eng.TurnCounter,
+	}
+	if metaJSON, err := json.Marshal(meta); err == nil {
+		fmt.Fprintf(os.Stderr, "INBER_META:%s\n", metaJSON)
+	}
 }
