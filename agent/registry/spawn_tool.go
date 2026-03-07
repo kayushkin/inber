@@ -5,10 +5,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 )
+
+// External agent prefixes — routed by bus-agent, not local inber.
+var externalPrefixes = []string{"oc-"}
+
+func isExternalAgent(name string) bool {
+	for _, p := range externalPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // SpawnAgentTool creates a tool that delegates tasks to other agents.
 // Purely declarative: emits INBER_SPAWN:{json} to stderr for bus-agent to route.
@@ -21,7 +34,7 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 
 	return agent.Tool{
 		Name:        "spawn_agent",
-		Description: "Delegate a task to another agent. Always async — returns immediately. The result will be delivered when the agent completes.",
+		Description: "Delegate a task to another agent. Always async — returns immediately. The result will be delivered when the agent completes. Use oc-<name> for OpenClaw agents (e.g., oc-kayushkin, oc-downloadstack).",
 		InputSchema: anthropic.ToolInputSchemaParam{
 			Required: []string{"agent", "task"},
 			Properties: map[string]any{
@@ -48,9 +61,12 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 				return "", fmt.Errorf("task description required")
 			}
 
-			// Validate agent exists
+			// Validate agent exists locally. External agents (e.g., oc-*)
+			// are routed by bus-agent, so skip validation for those.
 			if _, err := r.GetConfig(in.Agent); err != nil {
-				return "", fmt.Errorf("unknown agent %q", in.Agent)
+				if !isExternalAgent(in.Agent) {
+					return "", fmt.Errorf("unknown agent %q", in.Agent)
+				}
 			}
 
 			// Emit spawn request to stderr for bus-agent to pick up
