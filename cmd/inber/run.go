@@ -30,10 +30,6 @@ var (
 	runAutoCommit bool
 	runAutoFormat bool
 
-	// Model tiers
-	runTierHigh string // comma-separated high-cost model list
-	runTierLow  string // comma-separated low-cost model list
-
 	// Safety limits
 	runMaxTurns       int // max API round-trips per run
 	runMaxInputTokens int // max cumulative input tokens per run
@@ -71,10 +67,6 @@ func init() {
 	runCmd.Flags().BoolVar(&runAutoCommit, "auto-commit", true, "Auto-commit after successful writes")
 	runCmd.Flags().BoolVar(&runAutoFormat, "auto-format", true, "Auto-format code after writes")
 	runCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "Run in a one-off session without affecting the main session")
-
-	// Model tiers
-	runCmd.Flags().StringVar(&runTierHigh, "tier-high", "", "High-cost models for planning (comma-separated, best first)")
-	runCmd.Flags().StringVar(&runTierLow, "tier-low", "", "Low-cost models for routine tasks (comma-separated, best first)")
 
 	// Safety limits
 	runCmd.Flags().IntVar(&runMaxTurns, "max-turns", 0, "Max API round-trips per run (0=unlimited, default 25 for --detach)")
@@ -168,21 +160,6 @@ func runRun(cmd *cobra.Command, args []string) {
 		MaxTurns:       runMaxTurns,
 		MaxInputTokens: runMaxInputTokens,
 		Injections:     injections,
-	}
-
-	if runTierHigh != "" || runTierLow != "" {
-		tiers := &engine.ModelTiers{}
-		if runTierHigh != "" {
-			for _, m := range strings.Split(runTierHigh, ",") {
-				tiers.High = append(tiers.High, strings.TrimSpace(m))
-			}
-		}
-		if runTierLow != "" {
-			for _, m := range strings.Split(runTierLow, ",") {
-				tiers.Low = append(tiers.Low, strings.TrimSpace(m))
-			}
-		}
-		cfg.Tiers = tiers
 	}
 
 	eng, err := engine.NewEngine(cfg)

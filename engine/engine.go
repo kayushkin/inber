@@ -27,15 +27,6 @@ type DisplayHooks struct {
 	OnToolResult func(name string, output string, isError bool)
 }
 
-// ModelTiers defines model lists for different cost/complexity tiers.
-// When a tier has multiple models, they are raced with staggered starts.
-type ModelTiers struct {
-	High []string      // expensive models for planning/complex reasoning (e.g. opus46, opus45)
-	Low  []string      // cheap models for routine tasks (e.g. sonnet45, glm5, glm47)
-	Delay time.Duration // delay between staggered launches (default 4s)
-	Grace time.Duration // grace window to wait for better model after fallback responds (default 8s)
-}
-
 // EngineConfig configures the Engine.
 type EngineConfig struct {
 	Model              string
@@ -53,7 +44,6 @@ type EngineConfig struct {
 	StashConfig    *conversation.StashConfig      // Large message stashing config (nil = use defaults)
 	ExtractConfig  *conversation.ExtractionConfig // Background extraction config (nil = use defaults)
 	AutoWorkflow   AutoWorkflowConfig // Auto-branch, auto-commit, auto-format (Phase 1)
-	Tiers          *ModelTiers // model tiers for racing/fallback (nil = single model, no race)
 	MaxTurns       int            // max API round-trips per RunTurn (0 = unlimited)
 	MaxInputTokens int            // max cumulative input tokens per RunTurn (0 = unlimited)
 	Injections     <-chan string  // channel for mid-run message injection (optional, from stdin)
@@ -91,7 +81,6 @@ type Engine struct {
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
 	agentRegistry   *registry.Registry            // agent registry for spawn tools
-	tiers           *ModelTiers                   // model tiers config (used for failover chain)
 	modelExplicitlySet bool                       // true if --model flag was used
 	maxTurns        int                           // max API round-trips per RunTurn (0 = unlimited)
 	maxInputTokens  int                           // max cumulative input tokens per RunTurn (0 = unlimited)
@@ -139,7 +128,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	agentName := cfg.AgentName
 	var identityText string
 
-	// Always try to load registry config for tiers and default agent
+	// Always try to load registry config for default agent
 	registryCfg, registryErr := registry.LoadConfig(
 		filepath.Join(repoRoot, "agents.json"),
 		filepath.Join(repoRoot, "agents"),
@@ -162,32 +151,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 		identityText = ac.System
 		e.AgentName = agentName
-
-		// Load default tiers from config (CLI flags override)
-		if cfg.Tiers == nil && registryCfg.Tiers != nil {
-			t := registryCfg.Tiers
-			cfg.Tiers = &ModelTiers{
-				High:  t.High,
-				Low:   t.Low,
-				Delay: time.Duration(t.Delay) * time.Second,
-				Grace: time.Duration(t.Grace) * time.Second,
-			}
-		}
 	} else if agentName == "" {
 		e.AgentName = cfg.CommandName
 		if e.AgentName == "" {
 			e.AgentName = "default"
-		}
-
-		// Still try to load tiers from config even without a named agent
-		if cfg.Tiers == nil && registryErr == nil && registryCfg.Tiers != nil {
-			t := registryCfg.Tiers
-			cfg.Tiers = &ModelTiers{
-				High:  t.High,
-				Low:   t.Low,
-				Delay: time.Duration(t.Delay) * time.Second,
-				Grace: time.Duration(t.Grace) * time.Second,
-			}
 		}
 	}
 
@@ -426,21 +393,6 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			toolInfos[i] = sessionMod.ToolInfo{Name: t.Name, Description: t.Description}
 		}
 		e.workspace.WriteToolsList(toolInfos)
-	}
-
-	// Initialize model tiers
-	if cfg.Tiers != nil {
-		e.tiers = cfg.Tiers
-		if e.tiers.Delay == 0 {
-			e.tiers.Delay = 4 * time.Second
-		}
-		if e.tiers.Grace == 0 {
-			e.tiers.Grace = 8 * time.Second
-		}
-		// If model wasn't explicitly set (still the default), use first high-tier model
-		if e.Model == agent.DefaultModel && len(e.tiers.High) > 0 {
-			e.Model = e.tiers.High[0]
-		}
 	}
 
 	// Initialize turn/token limits
