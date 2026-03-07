@@ -22,7 +22,6 @@
       "tools": [
         "shell",
         "spawn_agent",
-        "check_spawns",
         "read_file",
         "write_file",
         "edit_file",
@@ -51,7 +50,6 @@
       "thinking": 2048,
       "tools": [
         "spawn_agent",
-        "check_spawns",
         "read_file",
         "write_file",
         "edit_file",

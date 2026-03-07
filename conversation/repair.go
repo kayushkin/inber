@@ -137,6 +137,29 @@ func RepairAlternation(messages []anthropic.MessageParam) []anthropic.MessagePar
 	return fixed
 }
 
+// RepairEmptyContent removes empty text blocks from messages and drops
+// messages that end up with no content (e.g. summarized-away assistant turns).
+// The Anthropic API rejects messages with empty text blocks.
+func RepairEmptyContent(messages []anthropic.MessageParam) []anthropic.MessageParam {
+	var result []anthropic.MessageParam
+	for _, msg := range messages {
+		// Filter out empty text blocks
+		var filtered []anthropic.ContentBlockParamUnion
+		for _, block := range msg.Content {
+			if block.OfText != nil && block.OfText.Text == "" {
+				continue // skip empty text blocks
+			}
+			filtered = append(filtered, block)
+		}
+		if len(filtered) == 0 {
+			continue // drop messages with no content
+		}
+		msg.Content = filtered
+		result = append(result, msg)
+	}
+	return result
+}
+
 // repairMissingToolResults adds missing tool_result blocks to user messages
 // that follow assistant messages with tool_use.
 func RepairMissingToolResults(messages []anthropic.MessageParam) ([]anthropic.MessageParam, int) {

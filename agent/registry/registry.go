@@ -26,7 +26,6 @@ type Registry struct {
 	contexts      map[string]*context.Store
 	sessions      map[string]*session.Session
 	tools         *ToolRegistry
-	spawnManager  *SpawnManager
 	openclawURL   string   // OpenClaw gateway URL
 	openclawToken string   // OpenClaw auth token
 	openclawAgents []string // Agents that route to OpenClaw
@@ -48,7 +47,6 @@ func New(client *anthropic.Client, configDir, logsDir string) (*Registry, error)
 		contexts:     make(map[string]*context.Store),
 		sessions:     make(map[string]*session.Session),
 		tools:        NewToolRegistry(),
-		spawnManager: NewSpawnManager(logsDir),
 	}
 
 	// Apply OpenClaw configuration if present
@@ -60,7 +58,6 @@ func New(client *anthropic.Client, configDir, logsDir string) (*Registry, error)
 
 	// Register spawn_agent tool (requires registry reference)
 	r.tools.RegisterSpawnTool(r.SpawnAgentTool())
-	r.tools.Register("check_spawns", r.CheckSpawnsTool())
 
 	return r, nil
 }
@@ -225,16 +222,6 @@ func (r *Registry) CloseAll() {
 		sess.Close()
 	}
 	r.sessions = make(map[string]*session.Session)
-}
-
-// EnablePendingQueue enables queuing spawn completions for DrainPending.
-func (r *Registry) EnablePendingQueue() {
-	r.spawnManager.EnablePendingQueue()
-}
-
-// DrainPending returns completed spawns since last drain.
-func (r *Registry) DrainPending() []*SpawnedAgent {
-	return r.spawnManager.DrainPending()
 }
 
 // createAgent creates an agent instance from config
