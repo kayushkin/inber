@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/engine"
@@ -134,7 +136,9 @@ func runRun(cmd *cobra.Command, args []string) {
 	}
 	defer eng.Close()
 
+	startTime := time.Now()
 	result, err := eng.RunTurn(input)
+	durationMs := time.Since(startTime).Milliseconds()
 	if err != nil {
 		engine.Log.Error("%v", err)
 		os.Exit(1)
@@ -156,4 +160,21 @@ func runRun(cmd *cobra.Command, args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "│ cost=$%.4f\n", cost)
 	fmt.Fprintf(os.Stderr, "└───────────────────────────────\n")
+
+	// Machine-readable metadata for programmatic consumers (bus-agent, etc.)
+	// Prefixed with INBER_META: for easy parsing
+	meta := map[string]interface{}{
+		"input_tokens":          result.InputTokens,
+		"output_tokens":         result.OutputTokens,
+		"cache_read_tokens":     result.CacheReadTokens,
+		"cache_creation_tokens": result.CacheCreationTokens,
+		"tool_calls":            result.ToolCalls,
+		"cost":                  cost,
+		"duration_ms":           durationMs,
+		"model":                 eng.Model,
+		"turn":                  eng.TurnCounter,
+	}
+	if metaJSON, err := json.Marshal(meta); err == nil {
+		fmt.Fprintf(os.Stderr, "INBER_META:%s\n", metaJSON)
+	}
 }
