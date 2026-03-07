@@ -283,17 +283,20 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		sess.SetTruncateConfig(truncCfg)
 		
 		// Initialize workflow automation (auto-branch, auto-commit, auto-format)
-		workflowCfg := cfg.AutoWorkflow
-		if workflowCfg == (AutoWorkflowConfig{}) {
-			workflowCfg = DefaultAutoWorkflowConfig()
-		}
-		e.workflowHooks = NewWorkflowHooks(repoRoot, sess.SessionID(), e.AgentName, workflowCfg)
-		
-		// Initialize session branch
-		if msg, err := e.workflowHooks.InitSession(); err != nil {
-			Log.Warn("failed to init session branch: %v", err)
-		} else if msg != "" {
-			Log.Info(msg)
+		// Skip entirely for detached mode - spawns should be isolated
+		if !cfg.Detach {
+			workflowCfg := cfg.AutoWorkflow
+			if workflowCfg == (AutoWorkflowConfig{}) {
+				workflowCfg = DefaultAutoWorkflowConfig()
+			}
+			e.workflowHooks = NewWorkflowHooks(repoRoot, sess.SessionID(), e.AgentName, workflowCfg)
+
+			// Initialize session branch
+			if msg, err := e.workflowHooks.InitSession(); err != nil {
+				Log.Warn("failed to init session branch: %v", err)
+			} else if msg != "" {
+				Log.Info(msg)
+			}
 		}
 	}
 
