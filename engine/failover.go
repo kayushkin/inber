@@ -51,12 +51,25 @@ func (e *Engine) selectModel() (model string, timeoutHint time.Duration) {
 	return preferred, defaultTimeout
 }
 
-// fallbackChain returns the ordered list of fallback models from tier config.
+// fallbackChain returns the ordered list of fallback models.
+// Prefers the DB chain (enabled models by priority), falls back to tiers config.
 func (e *Engine) fallbackChain() []string {
+	// Try DB-driven chain first
+	if e.modelStore != nil {
+		models, err := e.modelStore.FailoverChain()
+		if err == nil && len(models) > 0 {
+			chain := make([]string, len(models))
+			for i, m := range models {
+				chain[i] = m.ID
+			}
+			return chain
+		}
+	}
+
+	// Fallback to tiers config
 	if e.tiers == nil {
 		return nil
 	}
-	// All models in priority order: high then low
 	var chain []string
 	seen := make(map[string]bool)
 	for _, m := range e.tiers.High {

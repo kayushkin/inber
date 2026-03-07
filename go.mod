@@ -10,7 +10,7 @@ require (
 	github.com/kayushkin/agentkit v0.0.0-20260301045703-8024de8a359f
 	github.com/kayushkin/aiauth v0.0.0-20260226191106-26d44eea610e
 	github.com/kayushkin/logstack v0.0.0-20260304030639-2b277d8d231e
-	github.com/kayushkin/model-store v0.0.0-20260307050637-348de9c81dab
+	github.com/kayushkin/model-store v0.0.0-20260307052626-ee701f18c642
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/spf13/cobra v1.10.2
 )
