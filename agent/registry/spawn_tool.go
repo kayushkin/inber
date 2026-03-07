@@ -20,33 +20,23 @@ import (
 // By default, spawning is ASYNC (fire-and-forget). Use wait:true for synchronous behavior.
 func (r *Registry) SpawnAgentTool() agent.Tool {
 	type input struct {
-		Agent   string `json:"agent"`
-		Task    string `json:"task"`
-		Timeout int    `json:"timeout"` // seconds, 0 = default (300s)
-		Wait    bool   `json:"wait"`    // if true, block until completion
+		Agent string `json:"agent"`
+		Task  string `json:"task"`
 	}
 
 	return agent.Tool{
 		Name:        "spawn_agent",
-		Description: "Spawn a sub-agent to complete a task. BY DEFAULT this is ASYNC (returns immediately with task ID). Use wait:true to block until completion. Use this to delegate work to project-specific agents.",
+		Description: "Delegate a task to another agent. Always async — emits a spawn request and returns immediately. The result is delivered when the agent completes.",
 		InputSchema: anthropic.ToolInputSchemaParam{
 			Required: []string{"agent", "task"},
 			Properties: map[string]any{
 				"agent": map[string]any{
 					"type":        "string",
-					"description": "Agent name to spawn (must match a configured agent)",
+					"description": "Agent name to delegate to (must match a configured agent)",
 				},
 				"task": map[string]any{
 					"type":        "string",
 					"description": "Task description for the agent to complete",
-				},
-				"timeout": map[string]any{
-					"type":        "integer",
-					"description": "Timeout in seconds (optional, default 300)",
-				},
-				"wait": map[string]any{
-					"type":        "boolean",
-					"description": "If true, block until agent completes. If false (default), return immediately with task ID.",
 				},
 			},
 		},
@@ -63,51 +53,18 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 				return "", fmt.Errorf("task description required")
 			}
 
-			// Bus mode: emit INBER_SPAWN to stderr for bus-agent to handle.
-			// Bus-agent sets INBER_BUS_SPAWN=1 when launching inber.
-			if os.Getenv("INBER_BUS_SPAWN") == "1" {
-				spawn := struct {
-					Agent string `json:"agent"`
-					Task  string `json:"task"`
-				}{Agent: in.Agent, Task: in.Task}
-				data, _ := json.Marshal(spawn)
-				fmt.Fprintf(os.Stderr, "INBER_SPAWN:%s\n", data)
-				return fmt.Sprintf("🚀 Delegated to %s. Bus-agent will run it and deliver the result.\n\nTask: %s",
-					in.Agent, truncate(in.Task, 200)), nil
-			}
+			// Emit INBER_SPAWN to stderr — purely declarative.
+			// Bus-agent picks this up and routes to the target agent's queue.
+			// If nothing is listening, it's just a log line.
+			spawn := struct {
+				Agent string `json:"agent"`
+				Task  string `json:"task"`
+			}{Agent: in.Agent, Task: in.Task}
+			data, _ := json.Marshal(spawn)
+			fmt.Fprintf(os.Stderr, "INBER_SPAWN:%s\n", data)
 
-			// Direct mode: launch subprocess (for local inber chat/run without bus)
-			timeout := time.Duration(in.Timeout) * time.Second
-			if in.Timeout == 0 {
-				timeout = 5 * time.Minute
-			}
-
-			// Async mode (default): spawn and return task ID immediately
-			if !in.Wait {
-				taskID, err := r.spawnManager.SpawnAsync(ctx, r, in.Agent, in.Task, timeout)
-				if err != nil {
-					return "", fmt.Errorf("spawn failed: %w", err)
-				}
-
-				return fmt.Sprintf("🚀 Spawned %s (task %s)\n\nTask: %s\n\nStatus: Running in background\n\nUse check_spawns to see results when ready.",
-					in.Agent, taskID, truncate(in.Task, 100)), nil
-			}
-
-			// Sync mode (wait:true): run and block until completion
-			result, err := r.spawnManager.SpawnSync(ctx, r, in.Agent, in.Task, timeout)
-			if err != nil {
-				return "", fmt.Errorf("spawn failed: %w", err)
-			}
-
-			if result.Status == "failed" {
-				return fmt.Sprintf("❌ Agent %s failed: %s", in.Agent, result.Error), nil
-			}
-
-			// Format result with metadata
-			response := fmt.Sprintf("✅ Agent: %s (task %s)\n\n%s\n\n[Tokens: in=%d out=%d | Tools: %d]",
-				in.Agent, result.ID, result.Result, result.InputTokens, result.OutputTokens, result.ToolCalls)
-
-			return response, nil
+			return fmt.Sprintf("🚀 Delegated to %s.\n\nTask: %s",
+				in.Agent, truncate(in.Task, 200)), nil
 		},
 	}
 }
