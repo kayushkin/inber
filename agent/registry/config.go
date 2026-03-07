@@ -16,6 +16,13 @@ type AgentConfig struct {
 	Thinking int64         `json:"thinking"`
 	Tools    []string      `json:"tools"`
 	Context  ContextConfig `json:"context"`
+	Limits   *AgentLimits  `json:"limits,omitempty"`
+}
+
+// AgentLimits defines per-agent safety limits for token/turn usage
+type AgentLimits struct {
+	MaxTurns       int `json:"maxTurns,omitempty"`       // max API round-trips per run (0 = unlimited)
+	MaxInputTokens int `json:"maxInputTokens,omitempty"` // max cumulative input tokens per run (0 = unlimited)
 }
 
 // ContextConfig defines context settings for an agent

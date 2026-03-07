@@ -63,6 +63,12 @@ type Agent struct {
 	// the messages slice. Use it to prune/compact if the conversation is too large.
 	// Return the (possibly pruned) messages. Called after OnRequest hook.
 	BeforeRequest func(messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam
+
+	// LimitCheck is called before each API call (after the first) to check
+	// whether turn/token limits have been exceeded. If it returns (true, reason),
+	// the agent will make one final tool-less API call asking the model to
+	// summarize its progress, then return.
+	LimitCheck func(result *TurnResult) (exceeded bool, reason string)
 }
 
 // New creates an agent with the given system prompt.
@@ -101,6 +107,13 @@ func (a *Agent) SetContextWindow(tokens int) {
 // pruning messages if they're approaching the context window limit.
 func (a *Agent) SetBeforeRequest(fn func(messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam) {
 	a.BeforeRequest = fn
+}
+
+// SetLimitCheck sets a callback that checks turn/token limits before each API call.
+// When the callback returns (true, reason), the agent makes one final tool-less call
+// asking the model to summarize progress, then returns.
+func (a *Agent) SetLimitCheck(fn func(result *TurnResult) (bool, string)) {
+	a.LimitCheck = fn
 }
 
 // AddTool registers a tool the agent can call.
@@ -146,7 +159,34 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 		toolMap[t.Name] = t
 	}
 
+	apiCalls := 0
 	for {
+		apiCalls++
+
+		// Check limits before each API call (after the first)
+		forceSummary := false
+		if apiCalls > 1 && a.LimitCheck != nil {
+			if exceeded, reason := a.LimitCheck(result); exceeded {
+				forceSummary = true
+				// Inject limit notice into the last user message
+				if len(*messages) > 0 {
+					lastIdx := len(*messages) - 1
+					(*messages)[lastIdx].Content = append((*messages)[lastIdx].Content,
+						anthropic.ContentBlockParamUnion{
+							OfText: &anthropic.TextBlockParam{
+								Text: fmt.Sprintf("\n\n[BUDGET LIMIT REACHED] %s\n\n"+
+									"You must stop making tool calls. Summarize your progress:\n"+
+									"1. What you've accomplished so far\n"+
+									"2. What remains to be done\n"+
+									"3. Any issues or blockers encountered\n"+
+									"Keep it concise.", reason),
+							},
+						},
+					)
+				}
+			}
+		}
+
 		params := anthropic.MessageNewParams{
 			Model:     anthropic.Model(model),
 			Messages:  *messages,
@@ -161,7 +201,8 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 			}
 		}
 
-		if len(toolParams) > 0 {
+		// When force-summarizing, omit tools so the model must produce text
+		if !forceSummary && len(toolParams) > 0 {
 			params.Tools = toolParams
 		}
 

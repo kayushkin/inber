@@ -32,6 +32,10 @@ var (
 	// Model tiers
 	runTierHigh string // comma-separated high-cost model list
 	runTierLow  string // comma-separated low-cost model list
+
+	// Safety limits
+	runMaxTurns       int // max API round-trips per run
+	runMaxInputTokens int // max cumulative input tokens per run
 )
 
 var runCmd = &cobra.Command{
@@ -70,6 +74,10 @@ func init() {
 	// Model tiers
 	runCmd.Flags().StringVar(&runTierHigh, "tier-high", "", "High-cost models for planning (comma-separated, best first)")
 	runCmd.Flags().StringVar(&runTierLow, "tier-low", "", "Low-cost models for routine tasks (comma-separated, best first)")
+
+	// Safety limits
+	runCmd.Flags().IntVar(&runMaxTurns, "max-turns", 0, "Max API round-trips per run (0=unlimited, default 25 for --detach)")
+	runCmd.Flags().IntVar(&runMaxInputTokens, "max-input-tokens", 0, "Max cumulative input tokens per run (0=unlimited, default 500k for --detach)")
 }
 
 func runRun(cmd *cobra.Command, args []string) {
@@ -112,6 +120,8 @@ func runRun(cmd *cobra.Command, args []string) {
 			AutoCommit: runAutoCommit,
 			AutoFormat: runAutoFormat,
 		},
+		MaxTurns:       runMaxTurns,
+		MaxInputTokens: runMaxInputTokens,
 	}
 
 	if runTierHigh != "" || runTierLow != "" {

@@ -54,6 +54,8 @@ type EngineConfig struct {
 	ExtractConfig  *conversation.ExtractionConfig // Background extraction config (nil = use defaults)
 	AutoWorkflow   AutoWorkflowConfig // Auto-branch, auto-commit, auto-format (Phase 1)
 	Tiers          *ModelTiers // model tiers for racing/fallback (nil = single model, no race)
+	MaxTurns       int  // max API round-trips per RunTurn (0 = unlimited)
+	MaxInputTokens int  // max cumulative input tokens per RunTurn (0 = unlimited)
 }
 
 // Engine encapsulates the shared setup and execution logic for chat and run.
@@ -91,6 +93,8 @@ type Engine struct {
 	tiers           *ModelTiers                   // model tiers config
 	activeTier      string                        // "high" or "low" — current tier
 	modelExplicitlySet bool                       // true if --model flag was used
+	maxTurns        int                           // max API round-trips per RunTurn (0 = unlimited)
+	maxInputTokens  int                           // max cumulative input tokens per RunTurn (0 = unlimited)
 	
 	// Session-level token tracking (exported for display)
 	SessionInputTokens  int
@@ -438,6 +442,31 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		if e.Model == agent.DefaultModel && len(e.tiers.High) > 0 {
 			e.Model = e.tiers.High[0]
 		}
+	}
+
+	// Initialize turn/token limits
+	// Priority: CLI flags > agent config > defaults (0 = unlimited)
+	e.maxTurns = cfg.MaxTurns
+	e.maxInputTokens = cfg.MaxInputTokens
+	if e.AgentConfig != nil && e.AgentConfig.Limits != nil {
+		if e.maxTurns == 0 {
+			e.maxTurns = e.AgentConfig.Limits.MaxTurns
+		}
+		if e.maxInputTokens == 0 {
+			e.maxInputTokens = e.AgentConfig.Limits.MaxInputTokens
+		}
+	}
+	// Detached runs (spawns) get conservative defaults if no explicit limit set
+	if cfg.Detach {
+		if e.maxTurns == 0 {
+			e.maxTurns = 25
+		}
+		if e.maxInputTokens == 0 {
+			e.maxInputTokens = 500000
+		}
+	}
+	if e.maxTurns > 0 || e.maxInputTokens > 0 {
+		Log.Info("limits: maxTurns=%d, maxInputTokens=%d", e.maxTurns, e.maxInputTokens)
 	}
 
 	return e, nil

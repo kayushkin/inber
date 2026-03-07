@@ -201,6 +201,11 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	}
 	a.SetHooks(e.buildHooks())
 
+	// Wire up turn/token limit checks
+	if e.maxTurns > 0 || e.maxInputTokens > 0 {
+		a.SetLimitCheck(e.buildLimitCheck())
+	}
+
 	modelInfo, ok := agent.Models[e.Model]
 	if ok {
 		a.SetContextWindow(modelInfo.ContextWindow)
@@ -251,6 +256,33 @@ func hasToolResult(msg anthropic.MessageParam) bool {
 		}
 	}
 	return false
+}
+
+// buildLimitCheck creates a closure that checks turn/token limits.
+func (e *Engine) buildLimitCheck() func(result *agent.TurnResult) (bool, string) {
+	return func(result *agent.TurnResult) (bool, string) {
+		// Check cumulative input tokens (session-level + current turn)
+		totalInput := e.SessionInputTokens + result.InputTokens
+		if e.maxInputTokens > 0 && totalInput > e.maxInputTokens {
+			return true, fmt.Sprintf(
+				"Input token budget exceeded: %dk / %dk used (%d tool calls so far).",
+				totalInput/1000, e.maxInputTokens/1000, result.ToolCalls,
+			)
+		}
+
+		// Check API round-trips within this turn
+		// apiCalls is tracked in Agent.Run(); result.ToolCalls is a proxy
+		// (one API call can have multiple tool calls, but each tool_use response = 1 API call)
+		// We approximate: tool_calls + 1 >= maxTurns (the +1 is the initial request)
+		if e.maxTurns > 0 && result.ToolCalls >= e.maxTurns {
+			return true, fmt.Sprintf(
+				"Turn limit exceeded: %d tool calls made (limit: %d). Used %dk input tokens.",
+				result.ToolCalls, e.maxTurns, totalInput/1000,
+			)
+		}
+
+		return false, ""
+	}
 }
 
 // buildHooks creates hooks that combine logging and display.
