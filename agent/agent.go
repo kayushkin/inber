@@ -182,6 +182,12 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 			}
 		}
 
+		// Add cache breakpoint on conversation history.
+		// Place it on the last content block of the second-to-last message
+		// so all prior conversation is cached, and only the new user message is fresh.
+		// Uses breakpoint 3 of 4 (system + tools already use 2).
+		addHistoryCacheBreakpoint(params.Messages)
+
 		if a.hooks != nil && a.hooks.OnRequest != nil {
 			a.hooks.OnRequest(&params)
 		}
@@ -326,5 +332,28 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 
 		// Unexpected stop reason
 		return result, fmt.Errorf("unexpected stop reason: %s", resp.StopReason)
+	}
+}
+
+// addHistoryCacheBreakpoint places a cache_control breakpoint on the last content
+// block of the second-to-last message. This caches the entire conversation history
+// prefix so only the new user message is uncached input.
+func addHistoryCacheBreakpoint(messages []anthropic.MessageParam) {
+	if len(messages) < 2 {
+		return
+	}
+	// Target the second-to-last message's last content block.
+	msg := &messages[len(messages)-2]
+	if len(msg.Content) == 0 {
+		return
+	}
+	last := &msg.Content[len(msg.Content)-1]
+	cc := anthropic.NewCacheControlEphemeralParam()
+	if last.OfText != nil {
+		last.OfText.CacheControl = cc
+	} else if last.OfToolUse != nil {
+		last.OfToolUse.CacheControl = cc
+	} else if last.OfToolResult != nil {
+		last.OfToolResult.CacheControl = cc
 	}
 }

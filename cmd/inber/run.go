@@ -176,18 +176,29 @@ func runRun(cmd *cobra.Command, args []string) {
 	fmt.Print(result.Text)
 
 	// Stats to stderr - more prominent token logging
-	cost := session.CalcCost(eng.Model, result.InputTokens, result.OutputTokens)
+	cost := session.CalcCostWithCache(eng.Model, result.InputTokens, result.OutputTokens,
+		result.CacheReadTokens, result.CacheCreationTokens)
 	total := result.InputTokens + result.OutputTokens
 	fmt.Fprintf(os.Stderr, "\n┌─ Tokens ──────────────────────\n")
 	fmt.Fprintf(os.Stderr, "│ in=%d  out=%d  total=%d  tools=%d\n",
 		result.InputTokens, result.OutputTokens, total, result.ToolCalls)
-	// Show cache savings if any
+	// Show cache stats
 	if result.CacheReadTokens > 0 || result.CacheCreationTokens > 0 {
-		fmt.Fprintf(os.Stderr, "│ cache: %d read, %d created\n",
-			result.CacheReadTokens, result.CacheCreationTokens)
+		cacheHitPct := 0.0
+		if result.InputTokens > 0 {
+			cacheHitPct = float64(result.CacheReadTokens) / float64(result.InputTokens) * 100
+		}
+		fmt.Fprintf(os.Stderr, "│ cache: %d read, %d created (%.0f%% hit)\n",
+			result.CacheReadTokens, result.CacheCreationTokens, cacheHitPct)
 	}
 	fmt.Fprintf(os.Stderr, "│ cost=$%.4f\n", cost)
 	fmt.Fprintf(os.Stderr, "└───────────────────────────────\n")
+
+	// Cache hit percentage
+	cacheHitPct := 0.0
+	if result.InputTokens > 0 {
+		cacheHitPct = float64(result.CacheReadTokens) / float64(result.InputTokens) * 100
+	}
 
 	// Machine-readable metadata for bus-agent
 	meta := map[string]interface{}{
@@ -195,6 +206,7 @@ func runRun(cmd *cobra.Command, args []string) {
 		"output_tokens":         result.OutputTokens,
 		"cache_read_tokens":     result.CacheReadTokens,
 		"cache_creation_tokens": result.CacheCreationTokens,
+		"cache_hit_pct":         cacheHitPct,
 		"tool_calls":            result.ToolCalls,
 		"cost":                  cost,
 		"duration_ms":           durationMs,

@@ -128,7 +128,8 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	// Track cumulative session tokens
 	e.SessionInputTokens += result.InputTokens
 	e.SessionOutputTokens += result.OutputTokens
-	e.SessionCost += sessionMod.CalcCost(modelUsed, result.InputTokens, result.OutputTokens)
+	e.SessionCost += sessionMod.CalcCostWithCache(modelUsed, result.InputTokens, result.OutputTokens,
+		result.CacheReadTokens, result.CacheCreationTokens)
 
 	// Track usage in model-store
 	if e.modelStore != nil {
