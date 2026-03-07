@@ -33,13 +33,9 @@ func (e *Engine) buildTools() []agent.Tool {
 				result = append(result, tools.RecentFiles(e.repoRoot))
 				continue
 			}
-			if toolName == "spawn_agent" || toolName == "check_spawns" {
+			if toolName == "spawn_agent" {
 				if e.agentRegistry != nil {
-					if toolName == "spawn_agent" {
-						result = append(result, e.agentRegistry.SpawnAgentTool())
-					} else {
-						result = append(result, e.agentRegistry.CheckSpawnsTool())
-					}
+					result = append(result, e.agentRegistry.SpawnAgentTool())
 				}
 				continue
 			}
@@ -78,10 +74,10 @@ func (e *Engine) buildTools() []agent.Tool {
 	return result
 }
 
-// needsSpawnTools checks if the tool list includes spawn_agent or check_spawns.
+// needsSpawnTools checks if the tool list includes spawn_agent.
 func (e *Engine) needsSpawnTools(tools []string) bool {
 	for _, t := range tools {
-		if t == "spawn_agent" || t == "check_spawns" {
+		if t == "spawn_agent" {
 			return true
 		}
 	}

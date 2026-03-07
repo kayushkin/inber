@@ -210,7 +210,8 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		e.workspace = ws
 		if !cfg.NewSession {
 			if msgs, err := ws.LoadMessages(); err == nil && len(msgs) > 0 {
-				repaired := conversation.RepairDanglingToolUse(msgs)
+				repaired := conversation.RepairEmptyContent(msgs)
+				repaired = conversation.RepairDanglingToolUse(repaired)
 				repaired = conversation.RepairAlternation(repaired)
 				repaired = agent.SanitizeMessageToolIDs(repaired)
 				e.Messages = repaired
@@ -327,8 +328,6 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			if e.MemStore != nil {
 				reg.SetMemoryStore(e.MemStore)
 			}
-			// Enable pending queue so completed spawns auto-inject on next turn
-			reg.EnablePendingQueue()
 			Log.Info("agent registry enabled for spawn tools")
 		}
 	}
