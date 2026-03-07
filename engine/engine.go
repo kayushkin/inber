@@ -91,8 +91,7 @@ type Engine struct {
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
 	agentRegistry   *registry.Registry            // agent registry for spawn tools
-	tiers           *ModelTiers                   // model tiers config
-	activeTier      string                        // "high" or "low" — current tier
+	tiers           *ModelTiers                   // model tiers config (used for failover chain)
 	modelExplicitlySet bool                       // true if --model flag was used
 	maxTurns        int                           // max API round-trips per RunTurn (0 = unlimited)
 	maxInputTokens  int                           // max cumulative input tokens per RunTurn (0 = unlimited)
@@ -438,8 +437,6 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		if e.tiers.Grace == 0 {
 			e.tiers.Grace = 8 * time.Second
 		}
-		e.activeTier = TierHigh
-
 		// If model wasn't explicitly set (still the default), use first high-tier model
 		if e.Model == agent.DefaultModel && len(e.tiers.High) > 0 {
 			e.Model = e.tiers.High[0]

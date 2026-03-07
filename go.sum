@@ -25,6 +25,8 @@ github.com/kayushkin/logstack v0.0.0-20260304030639-2b277d8d231e h1:lIxUFkB2dsuL
 github.com/kayushkin/logstack v0.0.0-20260304030639-2b277d8d231e/go.mod h1:FAOmCWRSc931/P4zThLhtAxR688HDgMqcVrWWN7Xcvs=
 github.com/kayushkin/model-store v0.0.0-20260302232334-34cce00bae94 h1:Do3wwR63bJUkKC13dtONy2OR7yKAADROxstxP6rmxLk=
 github.com/kayushkin/model-store v0.0.0-20260302232334-34cce00bae94/go.mod h1:44Y1/UkKDMfj3dU49lDx3FHMIRG+ThrQt7HKqItjvx0=
+github.com/kayushkin/model-store v0.0.0-20260307050637-348de9c81dab h1:OZjrBm0jne8EBCWeBhNp1iV+1Ul89mTQCXdRbVcX5vc=
+github.com/kayushkin/model-store v0.0.0-20260307050637-348de9c81dab/go.mod h1:44Y1/UkKDMfj3dU49lDx3FHMIRG+ThrQt7HKqItjvx0=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/mattn/go-sqlite3 v1.14.34 h1:3NtcvcUnFBPsuRcno8pUtupspG/GM+9nZ88zgJcp6Zk=
