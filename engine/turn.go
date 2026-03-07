@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
@@ -58,7 +59,7 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	systemBlocks := e.BuildSystemPrompt(processedInput)
 	e.lastNamedBlocks = systemBlocks
-	
+
 	// Select model based on health data (failover if primary is down)
 	modelUsed, _ := e.selectModel()
 
@@ -225,53 +226,7 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 	systemMessage := strings.Join(systemParts, "\n\n")
 	
 	// Tool call loop
-	oaiAPIcalls := 0
 	for {
-		oaiAPIcalls++
-
-		// Check for mid-run injected messages
-		if oaiAPIcalls > 1 && e.injections != nil {
-			injectCheck := e.buildInjectCheck()
-			if injected := injectCheck(); len(injected) > 0 {
-				if len(e.Messages) > 0 {
-					lastIdx := len(e.Messages) - 1
-					for _, text := range injected {
-						e.Messages[lastIdx].Content = append(e.Messages[lastIdx].Content,
-							anthropic.ContentBlockParamUnion{
-								OfText: &anthropic.TextBlockParam{
-									Text: "\n\n[New message from user while you were working]\n" + text,
-								},
-							},
-						)
-					}
-				}
-			}
-		}
-
-		// Check limits before each API call (after the first)
-		forceSummary := false
-		if oaiAPIcalls > 1 && (e.maxTurns > 0 || e.maxInputTokens > 0) {
-			limitCheck := e.buildLimitCheck()
-			if exceeded, reason := limitCheck(result); exceeded {
-				forceSummary = true
-				if len(e.Messages) > 0 {
-					lastIdx := len(e.Messages) - 1
-					e.Messages[lastIdx].Content = append(e.Messages[lastIdx].Content,
-						anthropic.ContentBlockParamUnion{
-							OfText: &anthropic.TextBlockParam{
-								Text: fmt.Sprintf("\n\n[BUDGET LIMIT REACHED] %s\n\n"+
-									"You must stop making tool calls. Summarize your progress:\n"+
-									"1. What you've accomplished so far\n"+
-									"2. What remains to be done\n"+
-									"3. Any issues or blockers encountered\n"+
-									"Keep it concise.", reason),
-							},
-						},
-					)
-				}
-			}
-		}
-
 		oaiMessages := agent.ConvertAnthropicMessagesToOpenAI(e.Messages)
 		
 		if systemMessage != "" {
@@ -285,7 +240,7 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 			Messages:  oaiMessages,
 			MaxTokens: 16384,
 		}
-		if !forceSummary && len(openAITools) > 0 {
+		if len(openAITools) > 0 {
 			req.Tools = openAITools
 		}
 		

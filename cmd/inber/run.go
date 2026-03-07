@@ -31,8 +31,8 @@ var (
 	runAutoFormat bool
 
 	// Safety limits
-	runMaxTurns       int // max API round-trips per run
-	runMaxInputTokens int // max cumulative input tokens per run
+	runMaxTurns       int
+	runMaxInputTokens int
 )
 
 var runCmd = &cobra.Command{
@@ -84,10 +84,8 @@ func runRun(cmd *cobra.Command, args []string) {
 	var injections chan string
 
 	if len(args) > 0 {
-		// Message from CLI args — no injection support
 		input = strings.Join(args, " ")
 	} else {
-		// Read from stdin
 		reader := bufio.NewReader(os.Stdin)
 		firstLine, err := reader.ReadString('\n')
 		if err != nil && err != io.EOF {
@@ -96,15 +94,12 @@ func runRun(cmd *cobra.Command, args []string) {
 		}
 		firstLine = strings.TrimRight(firstLine, "\n\r")
 
-		// Try JSON line protocol (bus-agent sends JSON lines)
 		var msg stdinMessage
 		if json.Unmarshal([]byte(firstLine), &msg) == nil && msg.Text != "" {
 			input = msg.Text
 			if msg.Author != "" {
 				input = fmt.Sprintf("[%s] %s", msg.Author, input)
 			}
-
-			// Keep reading stdin for follow-up injections
 			injections = make(chan string, 10)
 			go func() {
 				defer close(injections)
@@ -125,7 +120,6 @@ func runRun(cmd *cobra.Command, args []string) {
 				}
 			}()
 		} else {
-			// Plain text fallback — read rest of stdin, no injections
 			rest, _ := io.ReadAll(reader)
 			input = strings.TrimSpace(firstLine + "\n" + string(rest))
 		}
@@ -157,10 +151,11 @@ func runRun(cmd *cobra.Command, args []string) {
 			AutoCommit: runAutoCommit,
 			AutoFormat: runAutoFormat,
 		},
-		MaxTurns:       runMaxTurns,
-		MaxInputTokens: runMaxInputTokens,
-		Injections:     injections,
 	}
+
+	cfg.MaxTurns = runMaxTurns
+	cfg.MaxInputTokens = runMaxInputTokens
+	cfg.Injections = injections
 
 	eng, err := engine.NewEngine(cfg)
 	if err != nil {
@@ -194,8 +189,7 @@ func runRun(cmd *cobra.Command, args []string) {
 	fmt.Fprintf(os.Stderr, "│ cost=$%.4f\n", cost)
 	fmt.Fprintf(os.Stderr, "└───────────────────────────────\n")
 
-	// Machine-readable metadata for programmatic consumers (bus-agent, etc.)
-	// Prefixed with INBER_META: for easy parsing
+	// Machine-readable metadata for bus-agent
 	meta := map[string]interface{}{
 		"input_tokens":          result.InputTokens,
 		"output_tokens":         result.OutputTokens,

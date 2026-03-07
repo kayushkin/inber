@@ -21,8 +21,8 @@ type AgentConfig struct {
 
 // AgentLimits defines per-agent safety limits for token/turn usage
 type AgentLimits struct {
-	MaxTurns       int `json:"maxTurns,omitempty"`       // max API round-trips per run (0 = unlimited)
-	MaxInputTokens int `json:"maxInputTokens,omitempty"` // max cumulative input tokens per run (0 = unlimited)
+	MaxTurns       int `json:"maxTurns,omitempty"`
+	MaxInputTokens int `json:"maxInputTokens,omitempty"`
 }
 
 // ContextConfig defines context settings for an agent
@@ -39,10 +39,19 @@ type OpenClawConfig struct {
 	Agents []string `json:"agents"` // Agent names that route to OpenClaw
 }
 
+// TiersConfig defines default model tiers for racing/fallback.
+type TiersConfig struct {
+	High  []string `json:"high"`            // expensive models for planning (e.g. opus46, opus45, sonnet45)
+	Low   []string `json:"low"`             // cheap models for execution (e.g. glm5, glm47, haiku)
+	Delay int      `json:"delay,omitempty"` // seconds between staggered launches (default 4)
+	Grace int      `json:"grace,omitempty"` // seconds to wait for better model after fallback responds (default 8)
+}
+
 // agentsFile is the JSON config file structure
 type agentsFile struct {
 	Default  string                     `json:"default"`            // default agent name
 	Agents   map[string]*AgentConfig    `json:"agents"`
+	Tiers    *TiersConfig               `json:"tiers,omitempty"`    // default model tiers
 	OpenClaw *OpenClawConfig            `json:"openclaw,omitempty"` // OpenClaw gateway config
 }
 
@@ -50,6 +59,7 @@ type agentsFile struct {
 type RegistryConfig struct {
 	Default  string
 	Agents   map[string]*AgentConfig
+	Tiers    *TiersConfig
 	OpenClaw *OpenClawConfig
 }
 
@@ -128,6 +138,7 @@ func LoadConfig(configPath, identityDir string) (*RegistryConfig, error) {
 	return &RegistryConfig{
 		Default:  defaultAgent,
 		Agents:   af.Agents,
+		Tiers:    af.Tiers,
 		OpenClaw: af.OpenClaw,
 	}, nil
 }

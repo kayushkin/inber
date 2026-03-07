@@ -85,7 +85,7 @@ type Engine struct {
 	maxTurns        int                           // max API round-trips per RunTurn (0 = unlimited)
 	maxInputTokens  int                           // max cumulative input tokens per RunTurn (0 = unlimited)
 	injections      <-chan string                  // mid-run message injection channel (nil = disabled)
-	
+
 	// Session-level token tracking (exported for display)
 	SessionInputTokens  int
 	SessionOutputTokens int
@@ -256,20 +256,17 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		sess.SetTruncateConfig(truncCfg)
 		
 		// Initialize workflow automation (auto-branch, auto-commit, auto-format)
-		// Skip entirely for detached mode - spawns should be isolated
-		if !cfg.Detach {
-			workflowCfg := cfg.AutoWorkflow
-			if workflowCfg == (AutoWorkflowConfig{}) {
-				workflowCfg = DefaultAutoWorkflowConfig()
-			}
-			e.workflowHooks = NewWorkflowHooks(repoRoot, sess.SessionID(), e.AgentName, workflowCfg)
-
-			// Initialize session branch
-			if msg, err := e.workflowHooks.InitSession(); err != nil {
-				Log.Warn("failed to init session branch: %v", err)
-			} else if msg != "" {
-				Log.Info(msg)
-			}
+		workflowCfg := cfg.AutoWorkflow
+		if workflowCfg == (AutoWorkflowConfig{}) {
+			workflowCfg = DefaultAutoWorkflowConfig()
+		}
+		e.workflowHooks = NewWorkflowHooks(repoRoot, sess.SessionID(), e.AgentName, workflowCfg)
+		
+		// Initialize session branch
+		if msg, err := e.workflowHooks.InitSession(); err != nil {
+			Log.Warn("failed to init session branch: %v", err)
+		} else if msg != "" {
+			Log.Info(msg)
 		}
 	}
 
@@ -395,7 +392,6 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	}
 
 	// Initialize turn/token limits
-	// Priority: CLI flags > agent config > defaults (0 = unlimited)
 	e.maxTurns = cfg.MaxTurns
 	e.maxInputTokens = cfg.MaxInputTokens
 	if e.AgentConfig != nil && e.AgentConfig.Limits != nil {
@@ -406,7 +402,6 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			e.maxInputTokens = e.AgentConfig.Limits.MaxInputTokens
 		}
 	}
-	// Detached runs (spawns) get conservative defaults if no explicit limit set
 	if cfg.Detach {
 		if e.maxTurns == 0 {
 			e.maxTurns = 25
