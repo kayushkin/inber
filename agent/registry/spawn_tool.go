@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -62,7 +63,20 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 				return "", fmt.Errorf("task description required")
 			}
 
-			// Default timeout: 5 minutes
+			// Bus mode: emit INBER_SPAWN to stderr for bus-agent to handle.
+			// Bus-agent sets INBER_BUS_SPAWN=1 when launching inber.
+			if os.Getenv("INBER_BUS_SPAWN") == "1" {
+				spawn := struct {
+					Agent string `json:"agent"`
+					Task  string `json:"task"`
+				}{Agent: in.Agent, Task: in.Task}
+				data, _ := json.Marshal(spawn)
+				fmt.Fprintf(os.Stderr, "INBER_SPAWN:%s\n", data)
+				return fmt.Sprintf("🚀 Delegated to %s. Bus-agent will run it and deliver the result.\n\nTask: %s",
+					in.Agent, truncate(in.Task, 200)), nil
+			}
+
+			// Direct mode: launch subprocess (for local inber chat/run without bus)
 			timeout := time.Duration(in.Timeout) * time.Second
 			if in.Timeout == 0 {
 				timeout = 5 * time.Minute
