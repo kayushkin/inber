@@ -241,8 +241,8 @@ func (s *Session) LogUser(text string) {
 		Role:      "user",
 		Content:   text,
 	})
-	// Set task on first user message
-	if turn == 1 && s.db != nil {
+	// Set task on first user message (turn is 0 before LogRequest increments it)
+	if turn == 0 && s.db != nil {
 		s.db.SetTask(s.sessionID, text)
 	}
 }
