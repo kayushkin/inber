@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
+	github.com/kayushkin/agent-store v0.0.0
 	github.com/kayushkin/agentkit v0.0.0-20260301045703-8024de8a359f
 	github.com/kayushkin/logstack v0.0.0-20260304030639-2b277d8d231e
 	github.com/kayushkin/model-store v0.0.0-20260307230928-77f7530097d2
@@ -39,3 +40,5 @@ require (
 replace github.com/kayushkin/aiauth => ../aiauth
 
 replace github.com/kayushkin/model-store => ../model-store
+
+replace github.com/kayushkin/agent-store => ../agent-store

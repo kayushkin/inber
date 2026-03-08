@@ -128,18 +128,19 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	agentName := cfg.AgentName
 	var identityText string
 
-	// Always try to load registry config for default agent
-	registryCfg, registryErr := registry.LoadConfig(
-		filepath.Join(repoRoot, "agents.json"),
-		filepath.Join(repoRoot, "agents"),
-	)
+	// Load from agent-store (the only source of truth)
+	registryCfg, fromStore := registry.LoadConfigWithFallback("", "")
+	if !fromStore || registryCfg == nil {
+		return nil, fmt.Errorf("failed to load agent config from agent-store")
+	}
+	Log.Info("loaded config from agent-store")
 
-	// If no agent specified, use the default from agents.json
-	if agentName == "" && registryErr == nil && registryCfg.Default != "" {
+	// If no agent specified, use the default from config
+	if agentName == "" && registryCfg.Default != "" {
 		agentName = registryCfg.Default
 	}
 
-	if agentName != "" && registryErr == nil {
+	if agentName != "" && registryCfg != nil {
 		ac, ok := registryCfg.Agents[agentName]
 		if !ok {
 			return nil, fmt.Errorf("agent not found: %s", agentName)
@@ -314,7 +315,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 	// Create agent registry if spawn tools are needed
 	if e.AgentConfig != nil && e.needsSpawnTools(e.AgentConfig.Tools) {
-		reg, err := registry.New(e.Client, filepath.Join(repoRoot, "agents"), filepath.Join(repoRoot, "logs"))
+		reg, _, err := registry.NewWithFallback(e.Client, "", filepath.Join(repoRoot, "logs"))
 		if err != nil {
 			Log.Warn("failed to create agent registry: %v", err)
 		} else {
@@ -329,7 +330,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			if e.MemStore != nil {
 				reg.SetMemoryStore(e.MemStore)
 			}
-			Log.Info("agent registry enabled for spawn tools")
+			Log.Info("agent registry enabled for spawn tools (from agent-store)")
 		}
 	}
 

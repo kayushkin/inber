@@ -31,11 +31,11 @@ type Registry struct {
 	openclawAgents []string // Agents that route to OpenClaw
 }
 
-// New creates a registry and loads agent configs from the given directory
-func New(client *anthropic.Client, configDir, logsDir string) (*Registry, error) {
-	cfg, err := LoadConfigDir(configDir)
+// New creates a registry using agent-store as the source of truth.
+func New(client *anthropic.Client, logsDir string) (*Registry, error) {
+	cfg, err := LoadFromAgentStore("")
 	if err != nil {
-		return nil, fmt.Errorf("load configs: %w", err)
+		return nil, fmt.Errorf("load from agent-store: %w", err)
 	}
 
 	r := &Registry{
@@ -60,6 +60,17 @@ func New(client *anthropic.Client, configDir, logsDir string) (*Registry, error)
 	r.tools.RegisterSpawnTool(r.SpawnAgentTool())
 
 	return r, nil
+}
+
+// NewWithFallback creates a registry using agent-store.
+// The configDir parameter is no longer used but kept for API compatibility.
+// Always returns true (from agent-store) for the second return value.
+func NewWithFallback(client *anthropic.Client, configDir, logsDir string) (*Registry, bool, error) {
+	r, err := New(client, logsDir)
+	if err != nil {
+		return nil, false, err
+	}
+	return r, true, nil
 }
 
 // List returns the names of all configured agents

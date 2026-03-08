@@ -3,15 +3,17 @@ package registry
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"strconv"
+	"strings"
+
+	agentstore "github.com/kayushkin/agent-store"
 )
 
 // AgentConfig defines an agent's configuration
 type AgentConfig struct {
 	Name     string        `json:"name"`
 	Role     string        `json:"role"`
-	System   string        `json:"-"` // loaded from markdown file
+	System   string        `json:"-"` // loaded from agent-store nature
 	Model    string        `json:"model"`
 	Thinking int64         `json:"thinking"`
 	Tools    []string      `json:"tools"`
@@ -47,14 +49,6 @@ type TiersConfig struct {
 	Grace int      `json:"grace,omitempty"` // seconds to wait for better model after fallback responds (default 8)
 }
 
-// agentsFile is the JSON config file structure
-type agentsFile struct {
-	Default  string                     `json:"default"`            // default agent name
-	Agents   map[string]*AgentConfig    `json:"agents"`
-	Tiers    *TiersConfig               `json:"tiers,omitempty"`    // default model tiers
-	OpenClaw *OpenClawConfig            `json:"openclaw,omitempty"` // OpenClaw gateway config
-}
-
 // RegistryConfig holds the loaded configuration including default agent
 type RegistryConfig struct {
 	Default  string
@@ -63,89 +57,139 @@ type RegistryConfig struct {
 	OpenClaw *OpenClawConfig
 }
 
-// LoadConfig loads an agent config from JSON + markdown files
-// configPath should point to the agents.json file
-// identityDir should point to the directory containing .md files
-func LoadConfig(configPath, identityDir string) (*RegistryConfig, error) {
-	// Read JSON config
-	data, err := os.ReadFile(configPath)
+// LoadFromAgentStore loads agent configs from the agent-store database.
+// This is the only source of truth for agent configuration.
+func LoadFromAgentStore(dbPath string) (*RegistryConfig, error) {
+	store, err := agentstore.Open(dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+		return nil, fmt.Errorf("open agent-store: %w", err)
+	}
+	defer store.Close()
+
+	// Get orchestrator config for inber
+	orch, err := store.GetOrchestrator("inber")
+	if err != nil {
+		return nil, fmt.Errorf("get inber orchestrator: %w", err)
 	}
 
-	var af agentsFile
-	if err := json.Unmarshal(data, &af); err != nil {
-		return nil, fmt.Errorf("parse json: %w", err)
+	// Get all agents
+	agents, err := store.ListAgents()
+	if err != nil {
+		return nil, fmt.Errorf("list agents: %w", err)
 	}
 
-	if len(af.Agents) == 0 {
-		return nil, fmt.Errorf("no agents defined in %s", configPath)
+	if len(agents) == 0 {
+		return nil, fmt.Errorf("no agents in agent-store")
 	}
 
-	// Load shared context files (_principles.md, _values.md, _user.md)
-	var sharedContext string
-	for _, shared := range []string{"_principles.md", "_values.md", "_user.md"} {
-		data, err := os.ReadFile(filepath.Join(identityDir, shared))
-		if err == nil {
-			sharedContext += string(data) + "\n\n"
+	// Build config map
+	configs := make(map[string]*AgentConfig)
+	for _, a := range agents {
+		cfg := &AgentConfig{
+			Name: a.Name,
+			Role: a.Role,
 		}
-		// Missing shared files are not errors — they're optional
-	}
 
-	// Load identity (system prompt) from markdown files
-	// Supports two layouts:
-	//   agents/<name>.md           (flat, legacy)
-	//   agents/<name>/soul.md      (directory, preferred)
-	for name, cfg := range af.Agents {
-		var identityData []byte
-		var err error
+		// Get agent nature (identity, principles, values, user)
+		natures, err := store.GetAgentNature(a.ID)
+		if err == nil && len(natures) > 0 {
+			var systemParts []string
+			for _, n := range natures {
+				if n.Content != "" {
+					systemParts = append(systemParts, n.Content)
+				}
+			}
+			cfg.System = strings.Join(systemParts, "\n\n")
+		}
 
-		// Try directory layout first: agents/<name>/soul.md
-		dirPath := filepath.Join(identityDir, name, "soul.md")
-		identityData, err = os.ReadFile(dirPath)
-		if err != nil {
-			// Fall back to flat layout: agents/<name>.md
-			flatPath := filepath.Join(identityDir, name+".md")
-			identityData, err = os.ReadFile(flatPath)
-			if err != nil {
-				return nil, fmt.Errorf("read identity for %s: no soul.md or %s.md found in %s", name, name, identityDir)
+		// Get agent-specific config for inber
+		agentCfg, err := store.GetAgentConfig(a.ID, "inber")
+		if err == nil {
+			// Model
+			if model, ok := agentCfg.Values["model"]; ok && model != "" {
+				cfg.Model = model
+			}
+			// Thinking budget
+			if thinking, ok := agentCfg.Values["thinking"]; ok {
+				if t, err := strconv.ParseInt(thinking, 10, 64); err == nil {
+					cfg.Thinking = t
+				}
+			}
+			// Context budget
+			if budget, ok := agentCfg.Values["context_budget"]; ok {
+				if b, err := strconv.Atoi(budget); err == nil {
+					cfg.Context.Budget = b
+				}
+			}
+			// Tools
+			for _, tc := range agentCfg.Tools {
+				if tc.Enabled {
+					cfg.Tools = append(cfg.Tools, tc.Tool)
+				}
+			}
+			// Limits
+			if len(agentCfg.Limits) > 0 {
+				cfg.Limits = &AgentLimits{}
+				if maxTurns, ok := agentCfg.Limits["max_turns"]; ok {
+					cfg.Limits.MaxTurns = maxTurns
+				}
+				if maxInputTokens, ok := agentCfg.Limits["max_input_tokens"]; ok {
+					cfg.Limits.MaxInputTokens = maxInputTokens
+				}
 			}
 		}
 
-		// Combine: shared context + agent soul
-		cfg.System = sharedContext + string(identityData)
-
-		// Validate required fields
-		if cfg.Name == "" {
-			return nil, fmt.Errorf("agent name is required")
-		}
-		if cfg.System == "" {
-			return nil, fmt.Errorf("agent %s: system prompt is empty", name)
-		}
+		// Set default model if not specified
 		if cfg.Model == "" {
-			cfg.Model = "claude-sonnet-4-5" // default model
+			cfg.Model = "claude-sonnet-4-5"
 		}
+
+		configs[a.ID] = cfg
 	}
 
-	// Set default agent if specified
-	defaultAgent := af.Default
-	if defaultAgent != "" {
-		if _, ok := af.Agents[defaultAgent]; !ok {
-			return nil, fmt.Errorf("default agent %q not found in agents", defaultAgent)
+	// Get orchestrator settings (tiers)
+	var tiers *TiersConfig
+	settings, err := store.GetOrchestratorSettings("inber")
+	if err == nil && len(settings) > 0 {
+		tiers = &TiersConfig{}
+		if highJSON, ok := settings["tier_high"]; ok {
+			var high []string
+			if err := json.Unmarshal([]byte(highJSON), &high); err == nil {
+				tiers.High = high
+			}
+		}
+		if lowJSON, ok := settings["tier_low"]; ok {
+			var low []string
+			if err := json.Unmarshal([]byte(lowJSON), &low); err == nil {
+				tiers.Low = low
+			}
+		}
+		if delay, ok := settings["tier_delay"]; ok {
+			if d, err := strconv.Atoi(delay); err == nil {
+				tiers.Delay = d
+			}
+		}
+		if grace, ok := settings["tier_grace"]; ok {
+			if g, err := strconv.Atoi(grace); err == nil {
+				tiers.Grace = g
+			}
 		}
 	}
 
 	return &RegistryConfig{
-		Default:  defaultAgent,
-		Agents:   af.Agents,
-		Tiers:    af.Tiers,
-		OpenClaw: af.OpenClaw,
+		Default:  orch.DefaultAgent,
+		Agents:   configs,
+		Tiers:    tiers,
 	}, nil
 }
 
-// LoadConfigDir loads agent configs from a directory
-// Expects: agents.json and .md files in the same directory
-func LoadConfigDir(dir string) (*RegistryConfig, error) {
-	configPath := filepath.Join(dir, "..", "agents.json")
-	return LoadConfig(configPath, dir)
+// LoadConfigWithFallback loads agent config from agent-store.
+// The configPath and identityDir parameters are no longer used but kept for API compatibility.
+// Returns the config and true (always from agent-store now).
+func LoadConfigWithFallback(configPath, identityDir string) (*RegistryConfig, bool) {
+	cfg, err := LoadFromAgentStore("")
+	if err != nil {
+		return nil, false
+	}
+	return cfg, true
 }

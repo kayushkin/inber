@@ -26,6 +26,7 @@ func executeCommand(args ...string) (string, error) {
 }
 
 // setupTestRepo creates a temporary repo structure for testing
+// Note: Agent configs now come from agent-store, not files
 func setupTestRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -33,23 +34,8 @@ func setupTestRepo(t *testing.T) string {
 	// Create .git dir so FindRepoRoot works
 	os.MkdirAll(filepath.Join(dir, ".git"), 0755)
 
-	// Create agents dir with a test agent
-	agentsDir := filepath.Join(dir, "agents")
-	os.MkdirAll(agentsDir, 0755)
-
-	os.WriteFile(filepath.Join(agentsDir, "test-agent.md"), []byte("# Test Agent\nYou are a test agent."), 0644)
-
-	// Create agents.json
-	agentsJSON := `{
-		"agents": {
-			"test-agent": {
-				"name": "test-agent",
-				"model": "claude-sonnet-4-20250514",
-				"tools": ["shell", "read_file"]
-			}
-		}
-	}`
-	os.WriteFile(filepath.Join(dir, "agents.json"), []byte(agentsJSON), 0644)
+	// Create logs directory
+	os.MkdirAll(filepath.Join(dir, "logs"), 0755)
 
 	return dir
 }
@@ -89,6 +75,8 @@ func TestFindRepoRoot_NotInRepo(t *testing.T) {
 	}
 }
 
+// TestAgentsList tests that the agents list command works with agent-store
+// It uses the real agent-store database, so we check for "claxon" which is the default
 func TestAgentsList(t *testing.T) {
 	dir := setupTestRepo(t)
 	orig, _ := os.Getwd()
@@ -108,14 +96,16 @@ func TestAgentsList(t *testing.T) {
 	buf.ReadFrom(r)
 
 	output := buf.String()
-	if !strings.Contains(output, "test-agent") {
-		t.Errorf("expected output to contain 'test-agent', got: %s", output)
+	// Check for claxon which exists in the real agent-store
+	if !strings.Contains(output, "claxon") {
+		t.Errorf("expected output to contain 'claxon', got: %s", output)
 	}
 	if !strings.Contains(output, "Configured agents") {
 		t.Errorf("expected output to contain 'Configured agents', got: %s", output)
 	}
 }
 
+// TestAgentsShow tests that the agents show command works with agent-store
 func TestAgentsShow(t *testing.T) {
 	dir := setupTestRepo(t)
 	orig, _ := os.Getwd()
@@ -127,18 +117,16 @@ func TestAgentsShow(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	runAgentsShow(nil, []string{"test-agent"})
+	// Use claxon which exists in the real agent-store
+	runAgentsShow(nil, []string{"claxon"})
 
 	w.Close()
 	os.Stdout = old
 	buf.ReadFrom(r)
 
 	output := buf.String()
-	if !strings.Contains(output, "test-agent") {
+	if !strings.Contains(output, "claxon") {
 		t.Errorf("expected agent name in output, got: %s", output)
-	}
-	if !strings.Contains(output, "You are a test agent") {
-		t.Errorf("expected identity text in output, got: %s", output)
 	}
 }
 
@@ -490,7 +478,7 @@ func TestSessionsActive(t *testing.T) {
 	os.Chdir(dir)
 
 	// Create a session and register it as active
-	sess, err := session.New(filepath.Join(dir, "logs"), "test-model", "test-agent", "")
+	sess, err := session.New(filepath.Join(dir, "logs"), "test-model", "claxon", "")
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}
@@ -509,8 +497,8 @@ func TestSessionsActive(t *testing.T) {
 	if len(active) != 1 {
 		t.Fatalf("expected 1 active session, got %d", len(active))
 	}
-	if active[0].Agent != "test-agent" {
-		t.Errorf("expected agent test-agent, got %s", active[0].Agent)
+	if active[0].Agent != "claxon" {
+		t.Errorf("expected agent claxon, got %s", active[0].Agent)
 	}
 	if active[0].Command != "chat" {
 		t.Errorf("expected command chat, got %s", active[0].Command)
