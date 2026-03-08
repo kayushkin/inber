@@ -78,8 +78,7 @@ type Engine struct {
 	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
 	workflowHooks   *WorkflowHooks                // auto-commit, auto-format, build/test
 	forgeHook       *forge.Hook                   // workspace/preview automation
-	forgeDB         *forge.Forge                  // forge database handle (for slot release on close)
-	forgeSlot       *forge.Slot                   // acquired slot (nil if not using slots)
+	forgeDB         *forge.Forge                  // forge database handle
 	deployCheckCfg  DeployCheckConfig             // post-request deploy verification
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
@@ -268,39 +267,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		e.workflowHooks = NewWorkflowHooks(repoRoot, sess.SessionID(), e.AgentName, workflowCfg)
 	}
 
-	// Initialize forge: auto-detect project, acquire slot for isolation
+	// Initialize forge hook (project detection for build/preview tracking)
 	if f, err := forge.Open(""); err == nil {
 		e.forgeDB = f
 		if proj := f.FindProjectByPath(repoRoot); proj != nil {
-			// Try to acquire a worktree slot for isolated work
-			sessionID := ""
-			if e.Session != nil {
-				sessionID = e.Session.SessionID()
-			}
-			slot, err := f.Acquire(proj.ID, forge.AcquireOpts{
-				AgentID:      e.AgentName,
-				SessionID:    sessionID,
-				Orchestrator: "inber",
-			})
-			if err == nil {
-				e.forgeSlot = slot
-				e.repoRoot = slot.Path
-				Log.Info("forge: acquired slot %d for %q → %s", slot.ID, proj.ID, slot.Path)
-				
-				// Change working directory so tools operate in the slot
-				os.Chdir(slot.Path)
-				
-				// Update worktree to latest from main repo
-				f.SlotPull(proj.ID, slot.ID)
-				
-				// Re-init workflow hooks with new repo root
-				if e.workflowHooks != nil {
-					e.workflowHooks = NewWorkflowHooks(slot.Path, sessionID, e.AgentName, cfg.AutoWorkflow)
-				}
-			} else {
-				Log.Info("forge: no slots available for %q, working in main repo", proj.ID)
-			}
-
 			e.forgeHook = f.NewHook(forge.HookConfig{
 				Project:     proj.ID,
 				AutoBuild:   false,

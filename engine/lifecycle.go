@@ -193,11 +193,6 @@ func (e *Engine) Close() {
 		e.modelStore.Close()
 	}
 
-	// Release forge slot
-	if e.forgeSlot != nil && e.forgeDB != nil {
-		Log.Info("forge: releasing slot %d for %q", e.forgeSlot.ID, e.forgeSlot.Project)
-		e.forgeDB.Release(e.forgeSlot.Project, e.forgeSlot.ID)
-	}
 	if e.forgeDB != nil {
 		e.forgeDB.Close()
 	}
