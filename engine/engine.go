@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/kayushkin/aiauth"
-	"github.com/kayushkin/aiauth/providers"
+	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 	inbercontext "github.com/kayushkin/inber/context"
@@ -23,6 +22,7 @@ import (
 // DisplayHooks configures how engine events are shown to the user.
 type DisplayHooks struct {
 	OnThinking   func(text string)
+	OnTextDelta  func(text string) // streaming text chunks from API
 	OnToolCall   func(name string, input string)
 	OnToolResult func(name string, output string, isError bool)
 }
@@ -35,6 +35,7 @@ type EngineConfig struct {
 	AgentName      string // load from registry
 	Raw            bool   // skip context/memory
 	NoTools        bool
+	NoHooks        bool   // skip post-request verification (git/deploy checks)
 	SystemOverride string
 	RepoRoot       string
 	CommandName    string // "chat" or "run" for session registration
@@ -51,7 +52,6 @@ type EngineConfig struct {
 
 // Engine encapsulates the shared setup and execution logic for chat and run.
 type Engine struct {
-	AuthStore    *aiauth.Store
 	Client       *anthropic.Client
 	Agent        *agent.Agent
 	ContextStore *inbercontext.Store
@@ -77,11 +77,13 @@ type Engine struct {
 	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
 	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
 	workflowHooks   *WorkflowHooks                // auto-branch, auto-commit, auto-format, build/test
+	forgeHook       *forge.Hook                   // workspace/preview automation
 	deployCheckCfg  DeployCheckConfig             // post-request deploy verification
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
 	agentRegistry   *registry.Registry            // agent registry for spawn tools
 	modelExplicitlySet bool                       // true if --model flag was used
+	noHooks         bool                          // skip post-request verification
 	maxTurns        int                           // max API round-trips per RunTurn (0 = unlimited)
 	maxInputTokens  int                           // max cumulative input tokens per RunTurn (0 = unlimited)
 	injections      <-chan string                  // mid-run message injection channel (nil = disabled)
@@ -128,18 +130,19 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	agentName := cfg.AgentName
 	var identityText string
 
-	// Always try to load registry config for default agent
-	registryCfg, registryErr := registry.LoadConfig(
-		filepath.Join(repoRoot, "agents.json"),
-		filepath.Join(repoRoot, "agents"),
-	)
+	// Load from agent-store (the only source of truth)
+	registryCfg, fromStore := registry.LoadConfigWithFallback("", "")
+	if !fromStore || registryCfg == nil {
+		return nil, fmt.Errorf("failed to load agent config from agent-store")
+	}
+	Log.Info("loaded config from agent-store")
 
-	// If no agent specified, use the default from agents.json
-	if agentName == "" && registryErr == nil && registryCfg.Default != "" {
+	// If no agent specified, use the default from config
+	if agentName == "" && registryCfg.Default != "" {
 		agentName = registryCfg.Default
 	}
 
-	if agentName != "" && registryErr == nil {
+	if agentName != "" && registryCfg != nil {
 		ac, ok := registryCfg.Agents[agentName]
 		if !ok {
 			return nil, fmt.Errorf("agent not found: %s", agentName)
@@ -270,20 +273,37 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 	}
 
-	// API client (via model-store or aiauth fallback)
-	aiauth.RegisterProvider(&providers.Anthropic{})
-	e.AuthStore = aiauth.DefaultStore()
-	
+	// Initialize forge hook (auto-detect project from repo root)
+	if f, err := forge.Open(""); err == nil {
+		if proj := f.FindProjectByPath(repoRoot); proj != nil {
+			e.forgeHook = f.NewHook(forge.HookConfig{
+				Project:     proj.ID,
+				AutoBuild:   false, // workflow hooks handle build already
+				AutoPreview: false, // manual for now
+			})
+			Log.Info("forge: project %q detected", proj.ID)
+		}
+		// Don't close forge here — hook needs it. Close in engine.Close()
+	}
+
 	// Open model-store once for the lifetime of the engine
 	store, err := modelstore.Open("")
 	if err == nil {
 		e.modelStore = store
+		// Register OAuth providers for token refresh
+		store.RegisterDefaultOAuthProviders()
+		// Enable auto-sync to OpenClaw's auth-profiles.json
+		store.EnableAuthProfileSync("")
 		// Seed if empty (one-time init)
 		providers, _ := store.Providers()
 		if len(providers) == 0 {
 			if err := store.Seed(); err != nil {
 				Log.Warn("failed to seed model-store: %v", err)
 			}
+		}
+		// Initial sync to ensure OpenClaw has latest credentials
+		if syncErr := store.SyncToAuthProfiles(""); syncErr != nil {
+			Log.Warn("initial auth-profiles sync: %v", syncErr)
 		}
 	} else {
 		Log.Warn("model-store unavailable: %v", err)
@@ -310,7 +330,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 	// Create agent registry if spawn tools are needed
 	if e.AgentConfig != nil && e.needsSpawnTools(e.AgentConfig.Tools) {
-		reg, err := registry.New(e.Client, filepath.Join(repoRoot, "agents"), filepath.Join(repoRoot, "logs"))
+		reg, _, err := registry.NewWithFallback(e.Client, "", filepath.Join(repoRoot, "logs"))
 		if err != nil {
 			Log.Warn("failed to create agent registry: %v", err)
 		} else {
@@ -325,7 +345,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			if e.MemStore != nil {
 				reg.SetMemoryStore(e.MemStore)
 			}
-			Log.Info("agent registry enabled for spawn tools")
+			Log.Info("agent registry enabled for spawn tools (from agent-store)")
 		}
 	}
 
@@ -390,6 +410,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 		e.workspace.WriteToolsList(toolInfos)
 	}
+
+	// Hooks
+	e.noHooks = cfg.NoHooks
 
 	// Initialize turn/token limits
 	e.maxTurns = cfg.MaxTurns

@@ -28,6 +28,7 @@ type SessionRow struct {
 	Status    string // "running", "completed", "error", "interrupted"
 	Error     string
 	LogFile   string
+	Task      string // first user message, truncated
 }
 
 // TurnRow represents a single API round-trip.
@@ -109,7 +110,13 @@ func migrate(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
 		CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migration: add task column
+	db.Exec(`ALTER TABLE sessions ADD COLUMN task TEXT DEFAULT ''`)
+	return nil
 }
 
 // InsertSession creates a new session record.
@@ -130,6 +137,69 @@ func (d *DB) EndSession(id, status, errMsg string) error {
 		time.Now(), status, nullStr(errMsg), id,
 	)
 	return err
+}
+
+// SetTask sets the task description for a session (first user message, truncated).
+func (d *DB) SetTask(sessionID, task string) {
+	if len(task) > 200 {
+		task = task[:200] + "…"
+	}
+	d.db.Exec(`UPDATE sessions SET task = ? WHERE id = ?`, task, sessionID)
+}
+
+// ActiveAgentStatus represents a running agent for status display.
+type ActiveAgentStatus struct {
+	Agent     string
+	Model     string
+	Task      string
+	Turns     int
+	StartedAt time.Time
+	LastTurn  time.Time
+	Duration  time.Duration
+	SessionID string
+}
+
+// ListActiveStatus returns running agents with their latest turn time and task.
+// Cleans up stale sessions (dead PIDs) as a side effect.
+func (d *DB) ListActiveStatus() ([]ActiveAgentStatus, error) {
+	rows, err := d.db.Query(`
+		SELECT s.id, s.agent, s.model, COALESCE(s.task,''), s.pid, s.started_at,
+			COUNT(t.turn),
+			COALESCE(MAX(t.started_at), s.started_at) as last_turn
+		FROM sessions s
+		LEFT JOIN turns t ON s.id = t.session_id
+		WHERE s.status = 'running'
+		GROUP BY s.id
+		ORDER BY s.started_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []ActiveAgentStatus
+	var stale []string
+	for rows.Next() {
+		var a ActiveAgentStatus
+		var pid int
+		err := rows.Scan(&a.SessionID, &a.Agent, &a.Model, &a.Task, &pid, &a.StartedAt, &a.Turns, &a.LastTurn)
+		if err != nil {
+			return nil, err
+		}
+		if !isProcessAlive(pid) {
+			stale = append(stale, a.SessionID)
+			continue
+		}
+		a.Duration = time.Since(a.StartedAt)
+		result = append(result, a)
+	}
+
+	// Clean up stale sessions
+	for _, id := range stale {
+		d.EndSession(id, "interrupted", "process exited unexpectedly")
+	}
+
+	return result, nil
 }
 
 // InsertTurn creates a new turn record (called when an API request starts).

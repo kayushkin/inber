@@ -24,6 +24,12 @@ func (e *Engine) selectModel() (model string, timeoutHint time.Duration) {
 		return preferred, defaultTimeout
 	}
 
+	// When --model was explicitly set, honor it without failover
+	if e.modelExplicitlySet {
+		health := e.modelStore.GetHealth(preferred)
+		return preferred, timeoutFromHealth(health, defaultTimeout)
+	}
+
 	health := e.modelStore.GetHealth(preferred)
 
 	// Healthy or unknown → use it

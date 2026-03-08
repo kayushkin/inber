@@ -151,6 +151,11 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 			blocks = append(blocks, sessionMod.NamedBlock{ID: desc, Text: text})
 		}
 
+		// Inject fleet status (active agents) for orchestrator awareness
+		if status := e.buildFleetStatus(); status != "" {
+			blocks = append(blocks, sessionMod.NamedBlock{ID: "fleet-status", Text: status})
+		}
+
 		if e.workspace != nil {
 			e.workspace.WriteSystem(blocks)
 		}
@@ -319,6 +324,9 @@ func (e *Engine) buildHooks() *agent.Hooks {
 	if e.display != nil && e.display.OnThinking != nil {
 		hooks.OnThinking = e.display.OnThinking
 	}
+	if e.display != nil && e.display.OnTextDelta != nil {
+		hooks.OnTextDelta = e.display.OnTextDelta
+	}
 	if e.display != nil && e.display.OnToolCall != nil {
 		hooks.OnToolCall = func(toolID, name string, input []byte) {
 			e.display.OnToolCall(name, string(input))
@@ -386,11 +394,25 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			return ""
 		}
 		hooks.PostToolResult = func(toolID, name, output string, isError bool) string {
-			if isError || e.workflowHooks == nil {
+			if isError {
 				return ""
 			}
 			toolInput := e.toolInputsCache[toolID]
-			result := e.workflowHooks.OnToolResult(name, toolInput, output, isError)
+			
+			// Workflow hooks (auto-branch, auto-commit, auto-format, build/test)
+			var result string
+			if e.workflowHooks != nil {
+				result = e.workflowHooks.OnToolResult(name, toolInput, output, isError)
+			}
+			
+			// Forge hooks (project detection, preview tracking)
+			if e.forgeHook != nil {
+				action := e.forgeHook.Evaluate(name, toolInput, output, isError)
+				if action.Kind != "none" {
+					Log.Info("forge: %s — %s", action.Kind, action.Reason)
+				}
+			}
+			
 			if e.toolInputsCache != nil {
 				delete(e.toolInputsCache, toolID)
 			}

@@ -189,6 +189,11 @@ func (s *Session) AgentName() string {
 }
 
 // AttachDB attaches a session tracking database and registers this session.
+// DB returns the attached session database, or nil.
+func (s *Session) DB() *DB {
+	return s.db
+}
+
 func (s *Session) AttachDB(db *DB, command string) {
 	s.db = db
 	if db != nil {
@@ -229,12 +234,17 @@ func (s *Session) currentTurn() int {
 
 // LogUser logs a user message.
 func (s *Session) LogUser(text string) {
+	turn := s.currentTurn()
 	s.write(Entry{
 		Timestamp: time.Now(),
-		Turn:      s.currentTurn(),
+		Turn:      turn,
 		Role:      "user",
 		Content:   text,
 	})
+	// Set task on first user message
+	if turn == 1 && s.db != nil {
+		s.db.SetTask(s.sessionID, text)
+	}
 }
 
 // LogAssistant logs an assistant response with token counts.

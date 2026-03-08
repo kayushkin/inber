@@ -40,13 +40,32 @@ type TimelineEvent struct {
 	Model        string
 }
 
-// CalcCost calculates cost from model and token counts.
+// CalcCost calculates cost from model and token counts (without cache adjustment).
 func CalcCost(model string, inTok, outTok int) float64 {
 	info, ok := agent.Models[model]
 	if !ok {
 		return 0
 	}
 	return (float64(inTok)*info.InputCostPer1M + float64(outTok)*info.OutputCostPer1M) / 1_000_000
+}
+
+// CalcCostWithCache calculates cost factoring in cache pricing.
+// Cache reads cost 10% of normal input. Cache writes cost 125% of normal input.
+// "Fresh" input = inTok - cacheRead - cacheWrite (the uncached portion).
+func CalcCostWithCache(model string, inTok, outTok, cacheRead, cacheWrite int) float64 {
+	info, ok := agent.Models[model]
+	if !ok {
+		return 0
+	}
+	freshInput := inTok - cacheRead - cacheWrite
+	if freshInput < 0 {
+		freshInput = 0
+	}
+	inputCost := float64(freshInput) * info.InputCostPer1M
+	cacheReadCost := float64(cacheRead) * info.InputCostPer1M * 0.1
+	cacheWriteCost := float64(cacheWrite) * info.InputCostPer1M * 1.25
+	outputCost := float64(outTok) * info.OutputCostPer1M
+	return (inputCost + cacheReadCost + cacheWriteCost + outputCost) / 1_000_000
 }
 
 // FormatTimeline formats a slice of events into markdown.
