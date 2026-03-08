@@ -163,9 +163,10 @@ type ActiveAgentStatus struct {
 // Cleans up stale sessions (dead PIDs) as a side effect.
 func (d *DB) ListActiveStatus() ([]ActiveAgentStatus, error) {
 	rows, err := d.db.Query(`
-		SELECT s.id, s.agent, s.model, COALESCE(s.task,''), s.pid, s.started_at,
+		SELECT s.id, s.agent, s.model, COALESCE(s.task,''), s.pid,
+			strftime('%s', s.started_at),
 			COUNT(t.turn),
-			COALESCE(MAX(t.started_at), s.started_at) as last_turn
+			strftime('%s', COALESCE(MAX(t.started_at), s.started_at))
 		FROM sessions s
 		LEFT JOIN turns t ON s.id = t.session_id
 		WHERE s.status = 'running'
@@ -182,10 +183,13 @@ func (d *DB) ListActiveStatus() ([]ActiveAgentStatus, error) {
 	for rows.Next() {
 		var a ActiveAgentStatus
 		var pid int
-		err := rows.Scan(&a.SessionID, &a.Agent, &a.Model, &a.Task, &pid, &a.StartedAt, &a.Turns, &a.LastTurn)
+		var startedAtUnix, lastTurnUnix int64
+		err := rows.Scan(&a.SessionID, &a.Agent, &a.Model, &a.Task, &pid, &startedAtUnix, &a.Turns, &lastTurnUnix)
 		if err != nil {
 			return nil, err
 		}
+		a.StartedAt = time.Unix(startedAtUnix, 0)
+		a.LastTurn = time.Unix(lastTurnUnix, 0)
 		if !isProcessAlive(pid) {
 			stale = append(stale, a.SessionID)
 			continue
