@@ -76,7 +76,7 @@ type Engine struct {
 	lastTurnHadError   bool
 	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
 	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
-	workflowHooks   *WorkflowHooks                // auto-branch, auto-commit, auto-format, build/test
+	workflowHooks   *WorkflowHooks                // auto-commit, auto-format, build/test
 	forgeHook       *forge.Hook                   // workspace/preview automation
 	deployCheckCfg  DeployCheckConfig             // post-request deploy verification
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
@@ -258,19 +258,12 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		truncCfg := sessionMod.TruncateConfigForRole(e.AgentName)
 		sess.SetTruncateConfig(truncCfg)
 		
-		// Initialize workflow automation (auto-branch, auto-commit, auto-format)
+		// Initialize workflow automation (auto-commit, auto-format)
 		workflowCfg := cfg.AutoWorkflow
 		if workflowCfg == (AutoWorkflowConfig{}) {
 			workflowCfg = DefaultAutoWorkflowConfig()
 		}
 		e.workflowHooks = NewWorkflowHooks(repoRoot, sess.SessionID(), e.AgentName, workflowCfg)
-		
-		// Initialize session branch
-		if msg, err := e.workflowHooks.InitSession(); err != nil {
-			Log.Warn("failed to init session branch: %v", err)
-		} else if msg != "" {
-			Log.Info(msg)
-		}
 	}
 
 	// Initialize forge hook (auto-detect project from repo root)

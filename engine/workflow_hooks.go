@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// WorkflowHooks orchestrates auto-branch, auto-commit, auto-format, and auto-test.
+// WorkflowHooks orchestrates auto-commit, auto-format, and auto-test.
 type WorkflowHooks struct {
 	repoRoot    string
 	sessionID   string
@@ -16,17 +16,14 @@ type WorkflowHooks struct {
 	projectType string // "go", "node", "rust", ""
 
 	// Config flags
-	autoBranch     bool
 	autoCommit     bool
 	autoFormat     bool
 	smartTests     bool
 	verifyDeployed bool
 
 	// State
-	sessionBranch string
-	originalBranch string
-	lastError     string // for deduplication
-	changedFiles  []string
+	lastError    string // for deduplication
+	changedFiles []string
 }
 
 // NewWorkflowHooks creates workflow automation for a session.
@@ -35,7 +32,6 @@ func NewWorkflowHooks(repoRoot, sessionID, agentName string, cfg AutoWorkflowCon
 		repoRoot:       repoRoot,
 		sessionID:      sessionID,
 		agentName:      agentName,
-		autoBranch:     cfg.AutoBranch,
 		autoCommit:     cfg.AutoCommit,
 		autoFormat:     cfg.AutoFormat,
 		smartTests:     cfg.SmartTests,
@@ -66,95 +62,6 @@ func (h *WorkflowHooks) git(args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", h.repoRoot}, args...)...)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
-}
-
-// InitSession sets up the session branch. Handles dirty worktrees,
-// detached HEAD, merge conflicts, and other git weirdness gracefully.
-// Returns (info message, injection for model to see, error).
-func (h *WorkflowHooks) InitSession() (string, error) {
-	if !h.autoBranch {
-		return "", nil
-	}
-
-	// Remember where we started
-	currentBranch, err := h.git("rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		// Not a git repo or broken state — disable branching silently
-		Log.Warn("auto-branch: not a git repo or broken state, disabling: %s", currentBranch)
-		h.autoBranch = false
-		return "", nil
-	}
-	h.originalBranch = currentBranch
-
-	// Target branch name
-	shortID := h.sessionID
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
-	branchName := fmt.Sprintf("inber/%s-%s", h.agentName, shortID)
-	h.sessionBranch = branchName
-
-	// Check for uncommitted changes
-	status, _ := h.git("status", "--porcelain")
-	hasChanges := status != ""
-
-	// If dirty worktree, stash before switching
-	if hasChanges {
-		Log.Info("auto-branch: stashing uncommitted changes before switching")
-		out, err := h.git("stash", "push", "-m", fmt.Sprintf("inber-auto-stash-%s", shortID))
-		if err != nil {
-			// Stash failed — work with what we have
-			Log.Warn("auto-branch: stash failed (%s), trying branch switch anyway", out)
-		}
-	}
-
-	// Try to switch to branch (existing or new)
-	if out, err := h.git("rev-parse", "--verify", branchName); err == nil {
-		_ = out
-		// Branch exists — resume
-		out, err := h.git("checkout", branchName)
-		if err != nil {
-			return h.recoverBranch(branchName, hasChanges, fmt.Sprintf("checkout failed: %s", out))
-		}
-		if hasChanges {
-			h.git("stash", "pop") // best effort
-		}
-		return fmt.Sprintf("Resumed session branch: %s", branchName), nil
-	}
-
-	// Create new branch
-	out, err := h.git("checkout", "-b", branchName)
-	if err != nil {
-		return h.recoverBranch(branchName, hasChanges, fmt.Sprintf("create branch failed: %s", out))
-	}
-
-	if hasChanges {
-		h.git("stash", "pop") // best effort
-	}
-	return fmt.Sprintf("Created session branch: %s", branchName), nil
-}
-
-// recoverBranch handles git failures during branch setup.
-// Tries to get back to a working state and disables auto-branching.
-func (h *WorkflowHooks) recoverBranch(branchName string, hadStash bool, reason string) (string, error) {
-	Log.Warn("auto-branch: %s — recovering", reason)
-
-	// Try to get back to original branch
-	if h.originalBranch != "" {
-		h.git("checkout", h.originalBranch)
-	}
-
-	// Pop stash if we stashed
-	if hadStash {
-		h.git("stash", "pop")
-	}
-
-	// Disable auto-branch for this session
-	h.autoBranch = false
-	h.sessionBranch = ""
-
-	// Don't fail the session — just warn
-	return fmt.Sprintf("⚠️ auto-branch disabled: %s (continuing on %s)", reason, h.originalBranch), nil
 }
 
 // OnToolResult runs after a tool completes.
@@ -318,48 +225,27 @@ func (h *WorkflowHooks) commitFile(toolName, filePath string) string {
 		return fmt.Sprintf("⚠️ git add failed for %s:\n%s\nFix this before continuing.", filePath, out)
 	}
 
-	// Check if there's actually something to commit
-	out, _ = h.git("diff", "--cached", "--quiet")
-	if out == "" {
-		// diff --cached --quiet exits 0 if nothing staged
-		// But we need to check the exit code, which we lost. Just try commit.
-	}
-
 	// Commit
 	out, err = h.git("commit", "-m", msg)
 	if err != nil {
 		outStr := strings.TrimSpace(out)
-		// "nothing to commit" is fine
 		if strings.Contains(outStr, "nothing to commit") ||
 			strings.Contains(outStr, "no changes added") {
 			return ""
 		}
-		// Actual git error — surface it to the model
 		return fmt.Sprintf("⚠️ git commit failed:\n%s\nFix this git issue before continuing.", outStr)
 	}
 
 	return ""
 }
 
-// FinishSession returns a summary. Tries to return to original branch.
+// FinishSession returns a summary of work done.
 func (h *WorkflowHooks) FinishSession() string {
-	if !h.autoBranch || h.sessionBranch == "" {
-		return ""
-	}
-
 	fileCount := len(h.changedFiles)
 	if fileCount == 0 {
-		return fmt.Sprintf("Session branch: %s (no changes)", h.sessionBranch)
+		return ""
 	}
-
-	return fmt.Sprintf(`Session complete (%d file%s changed).
-Branch: %s
-Merge with: git merge --squash %s`,
-		fileCount,
-		plural(fileCount),
-		h.sessionBranch,
-		h.sessionBranch,
-	)
+	return fmt.Sprintf("Session complete (%d file%s changed).", fileCount, plural(fileCount))
 }
 
 func plural(n int) string {
@@ -370,38 +256,33 @@ func plural(n int) string {
 }
 
 // VerifyDeployment checks if changes are pushed and deployed, returns issues if any.
-// Returns: (issuesFound, description)
 func (h *WorkflowHooks) VerifyDeployment() (bool, string) {
 	if !h.verifyDeployed {
 		return false, ""
 	}
 
-	// No files changed? Nothing to verify.
 	if len(h.changedFiles) == 0 {
 		return false, ""
 	}
 
 	var issues []string
 
-	// Check 1: Are there uncommitted changes?
+	// Check 1: Uncommitted changes?
 	status, err := h.git("status", "--porcelain")
 	if err == nil && status != "" {
 		issues = append(issues, fmt.Sprintf("Uncommitted changes:\n%s", status))
 	}
 
-	// Check 2: Are committed changes pushed?
-	// Compare local branch with remote tracking branch
+	// Check 2: Unpushed commits?
 	currentBranch, err := h.git("rev-parse", "--abbrev-ref", "HEAD")
 	if err == nil && currentBranch != "" {
-		// Check if we're ahead of remote
 		ahead, err := h.git("rev-list", "--count", "@{u}..")
 		if err == nil && ahead != "" && ahead != "0" {
 			issues = append(issues, fmt.Sprintf("Branch '%s' has %s unpushed commits", currentBranch, ahead))
 		}
 	}
 
-	// Check 3: Is there a deployment script? Has it been run?
-	// Common patterns: update.sh, deploy.sh, Makefile with deploy target
+	// Check 3: Deployment script?
 	deployScript := ""
 	for _, candidate := range []string{"update.sh", "deploy.sh", "scripts/deploy.sh"} {
 		fullPath := filepath.Join(h.repoRoot, candidate)
@@ -414,17 +295,13 @@ func (h *WorkflowHooks) VerifyDeployment() (bool, string) {
 	// Check for systemd services (common for Go projects)
 	serviceName := ""
 	if h.projectType == "go" {
-		// Try to detect service name from go.mod
 		modPath := filepath.Join(h.repoRoot, "go.mod")
 		if content, err := os.ReadFile(modPath); err == nil {
 			lines := strings.Split(string(content), "\n")
 			if len(lines) > 0 {
-				// First line: "module github.com/user/project"
 				parts := strings.Fields(lines[0])
 				if len(parts) >= 2 {
-					modulePath := parts[1]
-					projectName := filepath.Base(modulePath)
-					serviceName = projectName
+					serviceName = filepath.Base(parts[1])
 				}
 			}
 		}
@@ -435,7 +312,6 @@ func (h *WorkflowHooks) VerifyDeployment() (bool, string) {
 		deploymentChecks = append(deploymentChecks, fmt.Sprintf("Deployment script found: %s", deployScript))
 	}
 	if serviceName != "" {
-		// Check if service is running
 		cmd := exec.Command("systemctl", "is-active", serviceName)
 		if err := cmd.Run(); err != nil {
 			deploymentChecks = append(deploymentChecks, fmt.Sprintf("Service '%s' is not active", serviceName))
@@ -461,7 +337,6 @@ func (h *WorkflowHooks) VerifyDeployment() (bool, string) {
 
 // AutoWorkflowConfig controls which auto-workflows are enabled.
 type AutoWorkflowConfig struct {
-	AutoBranch     bool // Create branch per session
 	AutoCommit     bool // Commit after every write
 	AutoFormat     bool // Run formatter on write
 	SmartTests     bool // Only run relevant tests
@@ -471,10 +346,9 @@ type AutoWorkflowConfig struct {
 // DefaultAutoWorkflowConfig returns safe defaults.
 func DefaultAutoWorkflowConfig() AutoWorkflowConfig {
 	return AutoWorkflowConfig{
-		AutoBranch:     true,
 		AutoCommit:     true,
 		AutoFormat:     true,
 		SmartTests:     false,
-		VerifyDeployed: false, // opt-in for now
+		VerifyDeployed: false,
 	}
 }

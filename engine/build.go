@@ -399,7 +399,7 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			}
 			toolInput := e.toolInputsCache[toolID]
 			
-			// Workflow hooks (auto-branch, auto-commit, auto-format, build/test)
+			// Workflow hooks (auto-commit, auto-format, build/test)
 			var result string
 			if e.workflowHooks != nil {
 				result = e.workflowHooks.OnToolResult(name, toolInput, output, isError)
