@@ -326,11 +326,25 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			return ""
 		}
 		hooks.PostToolResult = func(toolID, name, output string, isError bool) string {
-			if isError || e.workflowHooks == nil {
+			if isError {
 				return ""
 			}
 			toolInput := e.toolInputsCache[toolID]
-			result := e.workflowHooks.OnToolResult(name, toolInput, output, isError)
+			
+			// Workflow hooks (auto-branch, auto-commit, auto-format, build/test)
+			var result string
+			if e.workflowHooks != nil {
+				result = e.workflowHooks.OnToolResult(name, toolInput, output, isError)
+			}
+			
+			// Forge hooks (project detection, preview tracking)
+			if e.forgeHook != nil {
+				action := e.forgeHook.Evaluate(name, toolInput, output, isError)
+				if action.Kind != "none" {
+					Log.Info("forge: %s — %s", action.Kind, action.Reason)
+				}
+			}
+			
 			if e.toolInputsCache != nil {
 				delete(e.toolInputsCache, toolID)
 			}

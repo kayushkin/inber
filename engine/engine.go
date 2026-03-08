@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 	inbercontext "github.com/kayushkin/inber/context"
@@ -76,6 +77,7 @@ type Engine struct {
 	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
 	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
 	workflowHooks   *WorkflowHooks                // auto-branch, auto-commit, auto-format, build/test
+	forgeHook       *forge.Hook                   // workspace/preview automation
 	deployCheckCfg  DeployCheckConfig             // post-request deploy verification
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
@@ -269,6 +271,19 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		} else if msg != "" {
 			Log.Info(msg)
 		}
+	}
+
+	// Initialize forge hook (auto-detect project from repo root)
+	if f, err := forge.Open(""); err == nil {
+		if proj := f.FindProjectByPath(repoRoot); proj != nil {
+			e.forgeHook = f.NewHook(forge.HookConfig{
+				Project:     proj.ID,
+				AutoBuild:   false, // workflow hooks handle build already
+				AutoPreview: false, // manual for now
+			})
+			Log.Info("forge: project %q detected", proj.ID)
+		}
+		// Don't close forge here — hook needs it. Close in engine.Close()
 	}
 
 	// Open model-store once for the lifetime of the engine

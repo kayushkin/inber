@@ -11,7 +11,6 @@ require (
 	github.com/kayushkin/agentkit v0.0.0-20260301045703-8024de8a359f
 	github.com/kayushkin/logstack v0.0.0-20260304030639-2b277d8d231e
 	github.com/kayushkin/model-store v0.0.0-20260307230928-77f7530097d2
-	github.com/kayushkin/si v0.0.0-20260307084700-ca793c2239e1
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/spf13/cobra v1.10.2
 )
@@ -20,6 +19,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/kayushkin/aiauth v0.0.0 // indirect
+	github.com/kayushkin/forge v0.0.0-20260308213252-e9c2836d5716 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -42,3 +42,5 @@ replace github.com/kayushkin/aiauth => ../aiauth
 replace github.com/kayushkin/model-store => ../model-store
 
 replace github.com/kayushkin/agent-store => ../agent-store
+
+replace github.com/kayushkin/forge => ../forge
