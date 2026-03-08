@@ -369,9 +369,25 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 // addHistoryCacheBreakpoint places a cache_control breakpoint on the last content
 // block of the second-to-last message. This caches the entire conversation history
 // prefix so only the new user message is uncached input.
+// First clears any existing history breakpoints to avoid exceeding the 4-block limit.
 func addHistoryCacheBreakpoint(messages []anthropic.MessageParam) {
 	if len(messages) < 2 {
 		return
+	}
+	// Clear existing cache_control from all message content blocks.
+	// System blocks and tools manage their own breakpoints separately.
+	var zero anthropic.CacheControlEphemeralParam
+	for i := range messages {
+		for j := range messages[i].Content {
+			b := &messages[i].Content[j]
+			if b.OfText != nil {
+				b.OfText.CacheControl = zero
+			} else if b.OfToolUse != nil {
+				b.OfToolUse.CacheControl = zero
+			} else if b.OfToolResult != nil {
+				b.OfToolResult.CacheControl = zero
+			}
+		}
 	}
 	// Target the second-to-last message's last content block.
 	msg := &messages[len(messages)-2]

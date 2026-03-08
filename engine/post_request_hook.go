@@ -43,7 +43,7 @@ type modelInfo interface {
 
 // NewPostRequestHook creates a hook for post-request verification and deployment.
 func NewPostRequestHook(repoRoot string, client *anthropic.Client, highTierModels []string, modelStore modelStore) *PostRequestHook {
-	model := "claude-opus-4-5-20250414" // default to opus for deployment decisions
+	model := "claude-opus-4-6" // default to opus for deployment decisions
 	if len(highTierModels) > 0 {
 		model = highTierModels[0]
 	}
