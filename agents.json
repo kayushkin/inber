@@ -230,6 +230,25 @@
         ],
         "budget": 50000
       }
+    },
+    "bench": {
+      "name": "Bench",
+      "role": "benchmarking agent \u2014 minimal overhead, no personality",
+      "model": "claude-sonnet-4-5-20250929",
+      "tools": [
+        "shell",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_files"
+      ],
+      "system": "You are a coding assistant. Complete the task efficiently.\n\nTool call style: call tools directly without narration. Do not explain what you are about to do \u2014 just do it. Skip summaries unless asked.",
+      "context": {
+        "tags": []
+      },
+      "limits": {
+        "maxTurns": 15
+      }
     }
   }
 }

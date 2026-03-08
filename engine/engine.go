@@ -34,6 +34,7 @@ type EngineConfig struct {
 	AgentName      string // load from registry
 	Raw            bool   // skip context/memory
 	NoTools        bool
+	NoHooks        bool   // skip post-request verification (git/deploy checks)
 	SystemOverride string
 	RepoRoot       string
 	CommandName    string // "chat" or "run" for session registration
@@ -80,6 +81,7 @@ type Engine struct {
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
 	agentRegistry   *registry.Registry            // agent registry for spawn tools
 	modelExplicitlySet bool                       // true if --model flag was used
+	noHooks         bool                          // skip post-request verification
 	maxTurns        int                           // max API round-trips per RunTurn (0 = unlimited)
 	maxInputTokens  int                           // max cumulative input tokens per RunTurn (0 = unlimited)
 	injections      <-chan string                  // mid-run message injection channel (nil = disabled)
@@ -392,6 +394,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 		e.workspace.WriteToolsList(toolInfos)
 	}
+
+	// Hooks
+	e.noHooks = cfg.NoHooks
 
 	// Initialize turn/token limits
 	e.maxTurns = cfg.MaxTurns

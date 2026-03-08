@@ -21,6 +21,7 @@ var (
 	runAgent    string
 	runRaw      bool
 	runNoTools  bool
+	runNoHooks  bool
 	runSystem   string
 	runNew      bool
 	runDetach   bool
@@ -59,6 +60,7 @@ func init() {
 	runCmd.Flags().StringVarP(&runAgent, "agent", "a", "", "Agent name to load from registry")
 	runCmd.Flags().BoolVar(&runRaw, "raw", false, "Skip context and memory loading")
 	runCmd.Flags().BoolVar(&runNoTools, "no-tools", false, "Disable all tools")
+	runCmd.Flags().BoolVar(&runNoHooks, "no-hooks", false, "Skip post-request hooks (git/deploy verification)")
 	runCmd.Flags().StringVar(&runSystem, "system", "", "Override system prompt")
 	runCmd.Flags().BoolVarP(&runNew, "new", "n", false, "Start a new session instead of continuing the default")
 	
@@ -138,6 +140,7 @@ func runRun(cmd *cobra.Command, args []string) {
 		AgentName:          runAgent,
 		Raw:                runRaw,
 		NoTools:            runNoTools,
+		NoHooks:            runNoHooks,
 		SystemOverride:     runSystem,
 		CommandName:        "run",
 		NewSession:         runNew,
