@@ -256,6 +256,9 @@ func (e *Engine) buildHooks() *agent.Hooks {
 	if e.display != nil && e.display.OnThinking != nil {
 		hooks.OnThinking = e.display.OnThinking
 	}
+	if e.display != nil && e.display.OnTextDelta != nil {
+		hooks.OnTextDelta = e.display.OnTextDelta
+	}
 	if e.display != nil && e.display.OnToolCall != nil {
 		hooks.OnToolCall = func(toolID, name string, input []byte) {
 			e.display.OnToolCall(name, string(input))

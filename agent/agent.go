@@ -35,6 +35,7 @@ type Hooks struct {
 	OnRequest    func(params *anthropic.MessageNewParams)                    // called before each API request
 	OnResponse   func(resp *anthropic.Message)                               // called after each API response
 	OnThinking   func(text string)                                           // called when thinking blocks are received
+	OnTextDelta  func(text string)                                           // called for each text chunk during streaming
 	OnToolCall   func(toolID, name string, input []byte)
 	OnToolResult func(toolID, name, output string, isError bool)
 	// ModifyToolResult is called before a tool result is added to the conversation.
@@ -192,19 +193,49 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 			a.hooks.OnRequest(&params)
 		}
 
-		resp, err := a.client.Messages.New(ctx, params)
-		if err != nil {
+		// Use streaming if OnTextDelta hook is set, otherwise use non-streaming.
+		var resp *anthropic.Message
+		var apiErr error
+
+		if a.hooks != nil && a.hooks.OnTextDelta != nil {
+			// Streaming API call
+			stream := a.client.Messages.NewStreaming(ctx, params)
+			var accumulated anthropic.Message
+			for stream.Next() {
+				event := stream.Current()
+				if err := accumulated.Accumulate(event); err != nil {
+					continue
+				}
+				// Emit text deltas
+				if delta, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+					if textDelta, ok := delta.Delta.AsAny().(anthropic.TextDelta); ok && textDelta.Text != "" {
+						a.hooks.OnTextDelta(textDelta.Text)
+					}
+				}
+			}
+			if err := stream.Err(); err != nil {
+				apiErr = err
+			} else {
+				resp = &accumulated
+			}
+			stream.Close()
+		} else {
+			// Non-streaming API call
+			resp, apiErr = a.client.Messages.New(ctx, params)
+		}
+
+		if apiErr != nil {
 			// If we hit a context length error, try pruning and retry once
-			if a.BeforeRequest != nil && a.contextWindow > 0 && isContextLengthError(err) {
-				pruned := a.BeforeRequest(*messages, a.contextWindow/2) // aggressive budget
+			if a.BeforeRequest != nil && a.contextWindow > 0 && isContextLengthError(apiErr) {
+				pruned := a.BeforeRequest(*messages, a.contextWindow/2)
 				if len(pruned) < len(*messages) {
 					*messages = pruned
 					params.Messages = *messages
-					resp, err = a.client.Messages.New(ctx, params)
+					resp, apiErr = a.client.Messages.New(ctx, params)
 				}
 			}
-			if err != nil {
-				return result, fmt.Errorf("api call failed: %w", err)
+			if apiErr != nil {
+				return result, fmt.Errorf("api call failed: %w", apiErr)
 			}
 		}
 

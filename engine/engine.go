@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/kayushkin/aiauth"
-	"github.com/kayushkin/aiauth/providers"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 	inbercontext "github.com/kayushkin/inber/context"
@@ -23,6 +21,7 @@ import (
 // DisplayHooks configures how engine events are shown to the user.
 type DisplayHooks struct {
 	OnThinking   func(text string)
+	OnTextDelta  func(text string) // streaming text chunks from API
 	OnToolCall   func(name string, input string)
 	OnToolResult func(name string, output string, isError bool)
 }
@@ -51,7 +50,6 @@ type EngineConfig struct {
 
 // Engine encapsulates the shared setup and execution logic for chat and run.
 type Engine struct {
-	AuthStore    *aiauth.Store
 	Client       *anthropic.Client
 	Agent        *agent.Agent
 	ContextStore *inbercontext.Store
@@ -270,20 +268,24 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 	}
 
-	// API client (via model-store or aiauth fallback)
-	aiauth.RegisterProvider(&providers.Anthropic{})
-	e.AuthStore = aiauth.DefaultStore()
-	
 	// Open model-store once for the lifetime of the engine
 	store, err := modelstore.Open("")
 	if err == nil {
 		e.modelStore = store
+		// Register OAuth providers for token refresh
+		store.RegisterDefaultOAuthProviders()
+		// Enable auto-sync to OpenClaw's auth-profiles.json
+		store.EnableAuthProfileSync("")
 		// Seed if empty (one-time init)
 		providers, _ := store.Providers()
 		if len(providers) == 0 {
 			if err := store.Seed(); err != nil {
 				Log.Warn("failed to seed model-store: %v", err)
 			}
+		}
+		// Initial sync to ensure OpenClaw has latest credentials
+		if syncErr := store.SyncToAuthProfiles(""); syncErr != nil {
+			Log.Warn("initial auth-profiles sync: %v", syncErr)
 		}
 	} else {
 		Log.Warn("model-store unavailable: %v", err)

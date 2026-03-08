@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
-	"github.com/kayushkin/aiauth"
+	modelstore "github.com/kayushkin/model-store"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/engine"
 	"github.com/spf13/cobra"
@@ -46,12 +47,33 @@ func init() {
 func runConfigShow(cmd *cobra.Command, args []string) {
 	fmt.Printf("%sConfiguration:%s\n\n", engine.Bold+engine.Blue, engine.Reset)
 	
-	store := aiauth.DefaultStore()
-	key, keyErr := store.AnthropicKey()
-	if keyErr == nil && key != "" {
-		fmt.Printf("ANTHROPIC_API_KEY: %s\n", aiauth.MaskKey(key))
+	// Try model-store first
+	store, err := modelstore.Open("")
+	if err == nil {
+		creds, credErr := store.Resolve("anthropic")
+		if credErr == nil && creds != nil {
+			key := modelstore.ActiveKey(creds)
+			if key != "" {
+				fmt.Printf("ANTHROPIC_API_KEY: %s (from model-store: %s)\n", maskKey(key), creds.ID)
+			} else {
+				fmt.Printf("%sANTHROPIC_API_KEY: no active key in credential%s\n", engine.Red, engine.Reset)
+			}
+		} else {
+			// Fall back to env var
+			if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
+				fmt.Printf("ANTHROPIC_API_KEY: %s (from env)\n", maskKey(apiKey))
+			} else {
+				fmt.Printf("%sANTHROPIC_API_KEY: not set%s\n", engine.Red, engine.Reset)
+			}
+		}
+		store.Close()
 	} else {
-		fmt.Printf("%sANTHROPIC_API_KEY: not set%s\n", engine.Red, engine.Reset)
+		// Fall back to env var
+		if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
+			fmt.Printf("ANTHROPIC_API_KEY: %s (from env)\n", maskKey(apiKey))
+		} else {
+			fmt.Printf("%sANTHROPIC_API_KEY: not set%s\n", engine.Red, engine.Reset)
+		}
 	}
 	
 	// Show config file locations
@@ -213,4 +235,12 @@ func runConfigUser(cmd *cobra.Command, args []string) {
 	} else {
 		fmt.Printf("\n%sAPI key saved. You can now use inber from any directory.%s\n", engine.Green, engine.Reset)
 	}
+}
+
+// maskKey masks a key for display, showing only the first and last 4 chars.
+func maskKey(key string) string {
+	if len(key) <= 12 {
+		return strings.Repeat("*", len(key))
+	}
+	return key[:4] + "..." + key[len(key)-4:]
 }

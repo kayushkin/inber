@@ -145,6 +145,13 @@ func runRun(cmd *cobra.Command, args []string) {
 		Display: &engine.DisplayHooks{
 			OnToolCall:   engine.DisplayToolCall,
 			OnToolResult: engine.DisplayToolResult,
+			OnTextDelta: func(text string) {
+				// Emit streaming deltas on stderr for bus-agent to pick up.
+				// URL-safe encoding: newlines would break line-based parsing.
+				encoded := strings.ReplaceAll(text, "\n", "\\n")
+				encoded = strings.ReplaceAll(encoded, "\r", "\\r")
+				fmt.Fprintf(os.Stderr, "INBER_DELTA:%s\n", encoded)
+			},
 		},
 		AutoWorkflow: engine.AutoWorkflowConfig{
 			AutoBranch: runAutoBranch,
