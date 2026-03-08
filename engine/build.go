@@ -151,6 +151,11 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 			blocks = append(blocks, sessionMod.NamedBlock{ID: desc, Text: text})
 		}
 
+		// Inject fleet status (active agents) for orchestrator awareness
+		if status := e.buildFleetStatus(); status != "" {
+			blocks = append(blocks, sessionMod.NamedBlock{ID: "fleet-status", Text: status})
+		}
+
 		if e.workspace != nil {
 			e.workspace.WriteSystem(blocks)
 		}
