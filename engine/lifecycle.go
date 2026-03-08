@@ -166,9 +166,9 @@ func (e *Engine) Close() {
 		}
 	}
 
-	// Post-request verification: check if changes are pushed and deployed
-	if !e.noHooks && e.Client != nil && e.repoRoot != "" && len(e.Messages) > 0 {
-		verifier := NewPostRequestVerifier(e.repoRoot, e.Client, nil)
+	// Post-request: ensure changes are committed and pushed
+	if !e.noHooks && e.repoRoot != "" && len(e.Messages) > 0 {
+		verifier := NewPostRequestVerifier(e.repoRoot, nil, nil)
 		if result, err := verifier.Verify(context.Background()); err == nil {
 			if output := result.Format(); output != "" {
 				fmt.Fprint(os.Stderr, output)

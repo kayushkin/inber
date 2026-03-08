@@ -79,7 +79,6 @@ type Engine struct {
 	workflowHooks   *WorkflowHooks                // auto-commit, auto-format, build/test
 	forgeHook       *forge.Hook                   // workspace/preview automation
 	forgeDB         *forge.Forge                  // forge database handle
-	deployCheckCfg  DeployCheckConfig             // post-request deploy verification
 	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
 	agentRegistry   *registry.Registry            // agent registry for spawn tools
