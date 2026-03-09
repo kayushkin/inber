@@ -33,6 +33,10 @@ func (e *Engine) buildTools() []agent.Tool {
 				result = append(result, tools.RecentFiles(e.repoRoot))
 				continue
 			}
+			if toolName == "deploy" {
+				result = append(result, tools.Deploy())
+				continue
+			}
 			if toolName == "spawn_agent" {
 				if e.agentRegistry != nil {
 					result = append(result, e.agentRegistry.SpawnAgentTool())
