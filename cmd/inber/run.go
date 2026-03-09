@@ -144,8 +144,23 @@ func runRun(cmd *cobra.Command, args []string) {
 		NewSession:         runNew,
 		Detach:             runDetach,
 		Display: &engine.DisplayHooks{
-			OnToolCall:   engine.DisplayToolCall,
-			OnToolResult: engine.DisplayToolResult,
+			OnToolCall: func(name string, input string) {
+				engine.DisplayToolCall(name, input)
+				// Emit structured tool call for bus-agent
+				tc, _ := json.Marshal(map[string]string{"event": "call", "tool": name, "input": input})
+				fmt.Fprintf(os.Stderr, "INBER_TOOL:%s\n", tc)
+			},
+			OnToolResult: func(name string, output string, isError bool) {
+				engine.DisplayToolResult(name, output, isError)
+				// Emit structured tool result for bus-agent
+				// Truncate large outputs
+				truncated := output
+				if len(truncated) > 2000 {
+					truncated = truncated[:2000] + "…"
+				}
+				tr, _ := json.Marshal(map[string]interface{}{"event": "result", "tool": name, "output": truncated, "error": isError})
+				fmt.Fprintf(os.Stderr, "INBER_TOOL:%s\n", tr)
+			},
 			OnTextDelta: func(text string) {
 				// Emit streaming deltas on stderr for bus-agent to pick up.
 				// URL-safe encoding: newlines would break line-based parsing.
