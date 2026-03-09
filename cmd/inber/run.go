@@ -144,6 +144,13 @@ func runRun(cmd *cobra.Command, args []string) {
 		NewSession:         runNew,
 		Detach:             runDetach,
 		Display: &engine.DisplayHooks{
+			OnThinking: func(text string) {
+				engine.DisplayThinking(text)
+				// Emit thinking for bus-agent — escape newlines for line-based parsing
+				encoded := strings.ReplaceAll(text, "\n", "\\n")
+				encoded = strings.ReplaceAll(encoded, "\r", "\\r")
+				fmt.Fprintf(os.Stderr, "INBER_THINK:%s\n", encoded)
+			},
 			OnToolCall: func(name string, input string) {
 				engine.DisplayToolCall(name, input)
 				// Emit structured tool call for bus-agent
