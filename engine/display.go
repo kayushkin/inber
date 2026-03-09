@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/kayushkin/inber/agent"
@@ -39,15 +40,15 @@ const (
 
 // DisplayToolCall prints a tool call to the terminal with inline payload.
 func DisplayToolCall(name string, input string) {
-	fmt.Printf("\n%s⚡ %s%s", magenta+bold, name, reset)
+	fmt.Fprintf(os.Stderr, "\n%s⚡ %s%s", magenta+bold, name, reset)
 	
 	// Show payload inline if small enough
 	payload := formatToolPayload(name, input)
 	if payload != "" {
-		fmt.Printf(" %s%s%s", dim, payload, reset)
+		fmt.Fprintf(os.Stderr, " %s%s%s", dim, payload, reset)
 	}
 	
-	fmt.Println()
+	fmt.Fprintln(os.Stderr)
 }
 
 // DisplayToolResult prints a tool result to the terminal with inline summary.
@@ -58,13 +59,13 @@ func DisplayToolResult(name string, output string, isError bool) {
 		if len(errMsg) > 100 {
 			errMsg = errMsg[:100] + "…"
 		}
-		fmt.Printf("%s  ✗ %s%s\n", red, errMsg, reset)
+		fmt.Fprintf(os.Stderr, "%s  ✗ %s%s\n", red, errMsg, reset)
 		return
 	}
 	
 	// Show result summary
 	summary := formatToolResult(name, output)
-	fmt.Printf("%s  → %s%s\n", dim, summary, reset)
+	fmt.Fprintf(os.Stderr, "%s  → %s%s\n", dim, summary, reset)
 }
 
 // formatToolPayload formats the tool input payload for inline display.
@@ -283,28 +284,28 @@ func DisplayThinking(text string) {
 	if text == "" {
 		return
 	}
-	fmt.Printf("\n%s%s💭 thinking...%s\n", dim, italic, reset)
+	fmt.Fprintf(os.Stderr, "\n%s%s💭 thinking...%s\n", dim, italic, reset)
 	// Show truncated thinking — full text goes to logs
 	lines := strings.Split(text, "\n")
 	max := 8
 	if len(lines) <= max {
 		for _, l := range lines {
-			fmt.Printf("%s%s  %s%s\n", dim, italic, l, reset)
+			fmt.Fprintf(os.Stderr, "%s%s  %s%s\n", dim, italic, l, reset)
 		}
 	} else {
 		for _, l := range lines[:3] {
-			fmt.Printf("%s%s  %s%s\n", dim, italic, l, reset)
+			fmt.Fprintf(os.Stderr, "%s%s  %s%s\n", dim, italic, l, reset)
 		}
-		fmt.Printf("%s%s  ... (%d more lines)%s\n", dim, italic, len(lines)-6, reset)
+		fmt.Fprintf(os.Stderr, "%s%s  ... (%d more lines)%s\n", dim, italic, len(lines)-6, reset)
 		for _, l := range lines[len(lines)-3:] {
-			fmt.Printf("%s%s  %s%s\n", dim, italic, l, reset)
+			fmt.Fprintf(os.Stderr, "%s%s  %s%s\n", dim, italic, l, reset)
 		}
 	}
 }
 
 // DisplayResponse prints the final assistant response.
 func DisplayResponse(text string) {
-	fmt.Printf("\n%s\n", text)
+	fmt.Fprintf(os.Stderr, "\n%s\n", text)
 }
 
 // DisplayStats prints token usage and cost using the shared CalcCost from session package.
@@ -314,7 +315,7 @@ func DisplayStats(result *agent.TurnResult, model string) {
 	total := result.InputTokens + result.OutputTokens
 	
 	// Show prominent token summary
-	fmt.Printf("\n%s┌─ Turn Tokens ─────────────────%s\n", dim, reset)
+	fmt.Fprintf(os.Stderr, "\n%s┌─ Turn Tokens ─────────────────%s\n", dim, reset)
 	fmt.Printf("%s│%s in=%s%d%s  out=%s%d%s  total=%s%d%s", 
 		dim, reset,
 		cyan, result.InputTokens, reset,
@@ -322,21 +323,21 @@ func DisplayStats(result *agent.TurnResult, model string) {
 		bold+cyan, total, reset)
 	
 	if result.ToolCalls > 0 {
-		fmt.Printf("  tools=%s%d%s", yellow, result.ToolCalls, reset)
+		fmt.Fprintf(os.Stderr, "  tools=%s%d%s", yellow, result.ToolCalls, reset)
 	}
 	
 	if cost > 0 {
-		fmt.Printf("  cost=%s$%.4f%s", green, cost, reset)
+		fmt.Fprintf(os.Stderr, "  cost=%s$%.4f%s", green, cost, reset)
 	}
 	
-	fmt.Printf("\n%s└───────────────────────────────%s\n", dim, reset)
+	fmt.Fprintf(os.Stderr, "\n%s└───────────────────────────────%s\n", dim, reset)
 }
 
 // DisplaySessionStats prints cumulative session token usage and cost.
 func DisplaySessionStats(turnNum, inputTokens, outputTokens int, cost float64) {
 	total := inputTokens + outputTokens
 	
-	fmt.Printf("%s│ Session (turn %d): in=%d out=%d total=%s%d%s cost=%s$%.4f%s%s\n", 
+	fmt.Fprintf(os.Stderr, "%s│ Session (turn %d): in=%d out=%d total=%s%d%s cost=%s$%.4f%s%s\n", 
 		dim,
 		turnNum,
 		inputTokens,
