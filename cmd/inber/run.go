@@ -245,4 +245,21 @@ func runRun(cmd *cobra.Command, args []string) {
 	if metaJSON, err := json.Marshal(meta); err == nil {
 		fmt.Fprintf(os.Stderr, "INBER_META:%s\n", metaJSON)
 	}
+
+	// Emit turn end signal for bus-agent to handle commit/deploy
+	// Use first line or first 100 chars of response as commit summary
+	summary := result.Text
+	if idx := strings.Index(summary, "\n"); idx > 0 && idx < 100 {
+		summary = summary[:idx]
+	} else if len(summary) > 100 {
+		summary = summary[:97] + "..."
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		summary = "auto: agent changes"
+	}
+	turnEnd := map[string]string{"summary": summary}
+	if turnJSON, err := json.Marshal(turnEnd); err == nil {
+		fmt.Fprintf(os.Stderr, "INBER_TURN_END:%s\n", turnJSON)
+	}
 }
