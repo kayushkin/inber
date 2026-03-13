@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
@@ -211,8 +212,8 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 		a.InjectCheck = e.buildInjectCheck()
 	}
 
-	// Wire up turn/token limit checks
-	if e.maxTurns > 0 || e.maxInputTokens > 0 {
+	// Wire up turn/token/time limit checks
+	if e.maxTurns > 0 || e.maxInputTokens > 0 || e.maxResponseTime > 0 {
 		a.SetLimitCheck(e.buildLimitCheck())
 	}
 
@@ -294,7 +295,7 @@ func truncateLog(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// buildLimitCheck creates a closure that checks turn/token limits.
+// buildLimitCheck creates a closure that checks turn/token/time limits.
 func (e *Engine) buildLimitCheck() func(result *agent.TurnResult) (bool, string) {
 	return func(result *agent.TurnResult) (bool, string) {
 		// Check cumulative input tokens (session-level + current turn)
@@ -307,14 +308,26 @@ func (e *Engine) buildLimitCheck() func(result *agent.TurnResult) (bool, string)
 		}
 
 		// Check API round-trips within this turn
-		// apiCalls is tracked in Agent.Run(); result.ToolCalls is a proxy
-		// (one API call can have multiple tool calls, but each tool_use response = 1 API call)
-		// We approximate: tool_calls + 1 >= maxTurns (the +1 is the initial request)
 		if e.maxTurns > 0 && result.ToolCalls >= e.maxTurns {
 			return true, fmt.Sprintf(
 				"Turn limit exceeded: %d tool calls made (limit: %d). Used %dk input tokens.",
 				result.ToolCalls, e.maxTurns, totalInput/1000,
 			)
+		}
+
+		// Check response time limit (orchestrator speed enforcement)
+		if e.maxResponseTime > 0 && !e.turnStartTime.IsZero() {
+			elapsed := time.Since(e.turnStartTime)
+			limit := time.Duration(e.maxResponseTime) * time.Second
+			if elapsed > limit {
+				return true, fmt.Sprintf(
+					"Response time exceeded: %.0fs elapsed (limit: %ds). "+
+						"You are an orchestrator — respond or spawn immediately. "+
+						"Do NOT continue reading files or running commands. "+
+						"Either give your answer now or spawn_agent for the work.",
+					elapsed.Seconds(), e.maxResponseTime,
+				)
+			}
 		}
 
 		return false, ""

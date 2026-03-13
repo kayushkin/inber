@@ -3,7 +3,7 @@
   "agents": {
     "claxon": {
       "name": "Claxon",
-      "role": "main orchestrator \u2014 the one who's actually here \ud83e\udd80",
+      "role": "main orchestrator — the one who's actually here 🦀",
       "model": "claude-opus-4-6",
       "thinking": 2048,
       "tools": [
@@ -28,11 +28,16 @@
           "code"
         ],
         "budget": 50000
+      },
+      "limits": {
+        "maxTurns": 5,
+        "maxInputTokens": 200000,
+        "maxResponseTime": 20
       }
     },
     "bran": {
       "name": "Bran",
-      "role": "secondary orchestrator \u2014 complex multi-agent campaigns",
+      "role": "secondary orchestrator — complex multi-agent campaigns",
       "model": "claude-sonnet-4-5",
       "thinking": 2048,
       "tools": [
@@ -53,12 +58,17 @@
           "planning"
         ],
         "budget": 40000
+      },
+      "limits": {
+        "maxTurns": 5,
+        "maxInputTokens": 200000,
+        "maxResponseTime": 20
       }
     },
     "fionn": {
       "name": "Fionn",
       "project": "inber",
-      "role": "inber framework \u2014 the wise one who builds the foundation",
+      "role": "inber framework — the wise one who builds the foundation",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -84,7 +94,7 @@
     "brigid": {
       "name": "Brigid",
       "project": "kayushkin.com",
-      "role": "kayushkin.com \u2014 the smith-poet, beauty and function",
+      "role": "kayushkin.com — the smith-poet, beauty and function",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -110,9 +120,9 @@
       }
     },
     "oisin": {
-      "name": "Ois\u00edn",
+      "name": "Oisín",
       "project": "si",
-      "role": "si comms layer \u2014 the messenger between worlds",
+      "role": "si comms layer — the messenger between worlds",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -138,9 +148,9 @@
       }
     },
     "manannan": {
-      "name": "Manann\u00e1n",
+      "name": "Manannán",
       "project": "downloadstack",
-      "role": "downloadstack \u2014 the sea god gathering treasures",
+      "role": "downloadstack — the sea god gathering treasures",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -167,7 +177,7 @@
     "ogma": {
       "name": "Ogma",
       "project": "logstack",
-      "role": "logstack \u2014 the scribe, nothing forgotten",
+      "role": "logstack — the scribe, nothing forgotten",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -192,9 +202,9 @@
       }
     },
     "scathach": {
-      "name": "Sc\u00e1thach",
+      "name": "Scáthach",
       "project": "claxon-android",
-      "role": "claxon android \u2014 shadow warrior of mobile",
+      "role": "claxon android — shadow warrior of mobile",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -220,7 +230,7 @@
     },
     "bench": {
       "name": "Bench",
-      "role": "benchmarking agent \u2014 minimal overhead, no personality",
+      "role": "benchmarking agent — minimal overhead, no personality",
       "model": "claude-sonnet-4-5-20250929",
       "tools": [
         "shell",
@@ -229,7 +239,7 @@
         "edit_file",
         "list_files"
       ],
-      "system": "You are a coding assistant. Complete the task efficiently.\n\nTool call style: call tools directly without narration. Do not explain what you are about to do \u2014 just do it. Skip summaries unless asked.",
+      "system": "You are a coding assistant. Complete the task efficiently.\n\nTool call style: call tools directly without narration. Do not explain what you are about to do — just do it. Skip summaries unless asked.",
       "context": {
         "tags": []
       },

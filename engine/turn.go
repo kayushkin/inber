@@ -18,6 +18,7 @@ import (
 func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	// Increment and log turn number
 	e.TurnCounter++
+	e.turnStartTime = time.Now()
 	fmt.Fprintf(os.Stderr, "\n%s━━━ Turn %d ━━━%s\n", cyan+bold, e.TurnCounter, reset)
 	
 	// Get session ID for tagging

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"testing"
+	"time"
 
 	"github.com/kayushkin/inber/agent"
 )
@@ -210,5 +211,125 @@ func TestCLIOverridesAgentConfig(t *testing.T) {
 	}
 	if e.maxInputTokens != 1000000 {
 		t.Errorf("CLI maxInputTokens = %d, want 1000000", e.maxInputTokens)
+	}
+}
+
+func TestBuildLimitCheck_ResponseTimeUnderLimit(t *testing.T) {
+	e := &Engine{
+		maxResponseTime: 20,
+		turnStartTime:   time.Now(), // just started
+	}
+	check := e.buildLimitCheck()
+	result := &agent.TurnResult{InputTokens: 1000, ToolCalls: 1}
+	exceeded, _ := check(result)
+	if exceeded {
+		t.Error("should not exceed when under response time limit")
+	}
+}
+
+func TestBuildLimitCheck_ResponseTimeExceeded(t *testing.T) {
+	e := &Engine{
+		maxResponseTime: 20,
+		turnStartTime:   time.Now().Add(-25 * time.Second), // 25s ago
+	}
+	check := e.buildLimitCheck()
+	result := &agent.TurnResult{InputTokens: 1000, ToolCalls: 1}
+	exceeded, reason := check(result)
+	if !exceeded {
+		t.Error("should exceed when response time limit passed")
+	}
+	if reason == "" {
+		t.Error("should provide a reason")
+	}
+}
+
+func TestBuildLimitCheck_ResponseTimeZeroMeansUnlimited(t *testing.T) {
+	e := &Engine{
+		maxResponseTime: 0,
+		turnStartTime:   time.Now().Add(-300 * time.Second), // 5 minutes ago
+	}
+	check := e.buildLimitCheck()
+	result := &agent.TurnResult{InputTokens: 1000, ToolCalls: 1}
+	exceeded, _ := check(result)
+	if exceeded {
+		t.Error("should not exceed when maxResponseTime is 0 (unlimited)")
+	}
+}
+
+func TestBuildLimitCheck_ResponseTimeNotSetMeansUnlimited(t *testing.T) {
+	e := &Engine{
+		turnStartTime: time.Now().Add(-300 * time.Second),
+	}
+	check := e.buildLimitCheck()
+	result := &agent.TurnResult{InputTokens: 1000, ToolCalls: 1}
+	exceeded, _ := check(result)
+	if exceeded {
+		t.Error("should not exceed when maxResponseTime is not set")
+	}
+}
+
+func TestBuildLimitCheck_ResponseTimeWithTurnLimit(t *testing.T) {
+	// Time exceeded but turns not — time should trigger first
+	e := &Engine{
+		maxTurns:        10,
+		maxResponseTime: 20,
+		turnStartTime:   time.Now().Add(-30 * time.Second),
+	}
+	check := e.buildLimitCheck()
+	result := &agent.TurnResult{InputTokens: 1000, ToolCalls: 2}
+	exceeded, reason := check(result)
+	if !exceeded {
+		t.Error("should exceed when response time limit passed")
+	}
+	// The reason should mention response time (it's checked after turns)
+	if reason == "" {
+		t.Error("should provide a reason")
+	}
+}
+
+func TestOrchestratorLimitsFromConfig(t *testing.T) {
+	// Simulate what NewEngine does with orchestrator config
+	e := &Engine{}
+
+	// Simulated agent config with orchestrator limits
+	limits := struct {
+		MaxTurns        int
+		MaxInputTokens  int
+		MaxResponseTime int
+	}{
+		MaxTurns:        5,
+		MaxInputTokens:  200000,
+		MaxResponseTime: 20,
+	}
+
+	if e.maxTurns == 0 {
+		e.maxTurns = limits.MaxTurns
+	}
+	if e.maxInputTokens == 0 {
+		e.maxInputTokens = limits.MaxInputTokens
+	}
+	if e.maxResponseTime == 0 {
+		e.maxResponseTime = limits.MaxResponseTime
+	}
+
+	if e.maxTurns != 5 {
+		t.Errorf("maxTurns = %d, want 5", e.maxTurns)
+	}
+	if e.maxInputTokens != 200000 {
+		t.Errorf("maxInputTokens = %d, want 200000", e.maxInputTokens)
+	}
+	if e.maxResponseTime != 20 {
+		t.Errorf("maxResponseTime = %d, want 20", e.maxResponseTime)
+	}
+
+	// Verify limits work together
+	e.turnStartTime = time.Now().Add(-25 * time.Second)
+	check := e.buildLimitCheck()
+
+	// Under turn/token limits but over time
+	result := &agent.TurnResult{InputTokens: 50000, ToolCalls: 2}
+	exceeded, _ := check(result)
+	if !exceeded {
+		t.Error("should exceed on time even when under turn/token limits")
 	}
 }

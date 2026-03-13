@@ -23,8 +23,9 @@ type AgentConfig struct {
 
 // AgentLimits defines per-agent safety limits for token/turn usage
 type AgentLimits struct {
-	MaxTurns       int `json:"maxTurns,omitempty"`
-	MaxInputTokens int `json:"maxInputTokens,omitempty"`
+	MaxTurns        int `json:"maxTurns,omitempty"`
+	MaxInputTokens  int `json:"maxInputTokens,omitempty"`
+	MaxResponseTime int `json:"maxResponseTime,omitempty"` // max seconds for orchestrator to respond/spawn
 }
 
 // ContextConfig defines context settings for an agent
@@ -135,6 +136,9 @@ func LoadFromAgentStore(dbPath string) (*RegistryConfig, error) {
 				}
 				if maxInputTokens, ok := agentCfg.Limits["max_input_tokens"]; ok {
 					cfg.Limits.MaxInputTokens = maxInputTokens
+				}
+				if maxResponseTime, ok := agentCfg.Limits["max_response_time"]; ok {
+					cfg.Limits.MaxResponseTime = maxResponseTime
 				}
 			}
 		}

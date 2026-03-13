@@ -86,6 +86,8 @@ type Engine struct {
 	noHooks         bool                          // skip post-request verification
 	maxTurns        int                           // max API round-trips per RunTurn (0 = unlimited)
 	maxInputTokens  int                           // max cumulative input tokens per RunTurn (0 = unlimited)
+	maxResponseTime int                           // max seconds for orchestrator to respond (0 = unlimited)
+	turnStartTime   time.Time                     // when the current turn started (for time limit enforcement)
 	injections      <-chan string                  // mid-run message injection channel (nil = disabled)
 
 	// Session-level token tracking (exported for display)
@@ -417,6 +419,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		if e.maxInputTokens == 0 {
 			e.maxInputTokens = e.AgentConfig.Limits.MaxInputTokens
 		}
+		if e.maxResponseTime == 0 {
+			e.maxResponseTime = e.AgentConfig.Limits.MaxResponseTime
+		}
 	}
 	if cfg.Detach {
 		if e.maxTurns == 0 {
@@ -426,8 +431,8 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			e.maxInputTokens = 500000
 		}
 	}
-	if e.maxTurns > 0 || e.maxInputTokens > 0 {
-		Log.Info("limits: maxTurns=%d, maxInputTokens=%d", e.maxTurns, e.maxInputTokens)
+	if e.maxTurns > 0 || e.maxInputTokens > 0 || e.maxResponseTime > 0 {
+		Log.Info("limits: maxTurns=%d, maxInputTokens=%d, maxResponseTime=%ds", e.maxTurns, e.maxInputTokens, e.maxResponseTime)
 	}
 
 	// Mid-run injection channel
