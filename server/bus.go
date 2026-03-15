@@ -38,6 +38,7 @@ type InboundMessage struct {
 	Text         string    `json:"text"`
 	Author       string    `json:"author,omitempty"`
 	Agent        string    `json:"agent,omitempty"`
+	Orchestrator string    `json:"orchestrator,omitempty"` // "inber", "openclaw", etc.
 	Channel      string    `json:"channel,omitempty"`
 	ReplyTo      string    `json:"reply_to,omitempty"`
 	MediaURL     string    `json:"media_url,omitempty"`
@@ -186,7 +187,14 @@ func (c *BusClient) subscribeLoop(ctx context.Context, topics []string, ch chan<
 			continue
 		}
 
-		log.Printf("[bus] ← [%s] %s: %s", msg.Channel, msg.Author, truncateBus(msg.Text, 80))
+		// Only process messages addressed to this orchestrator.
+		if msg.Orchestrator != "" && msg.Orchestrator != "inber" {
+			log.Printf("[bus] skipping message for orchestrator %q", msg.Orchestrator)
+			go c.ack(busMsg.Topic, busMsg.ID)
+			continue
+		}
+
+		log.Printf("[bus] ← [%s] %s → %s: %s", msg.Channel, msg.Author, msg.Agent, truncateBus(msg.Text, 80))
 
 		select {
 		case ch <- msg:

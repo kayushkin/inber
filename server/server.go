@@ -61,7 +61,6 @@ type Server struct {
 	store      *Store            // session/request persistence
 	events     *EventPublisher   // bus event publisher (nil = disabled)
 	bus        *BusClient        // bus subscription client (nil = API-only mode)
-	routes     *RouteTable       // channel → agent routing
 	modelStore *modelstore.Store
 	forgeDB    WorkspaceManager             // workspace management
 	workspaces map[string]*forge.Workspace // active workspaces by ID
@@ -150,13 +149,6 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 
-	// Open route table for channel→agent resolution.
-	routesPath := filepath.Join(cfg.DataDir, "routes.db")
-	routeTable, err := NewRouteTable(routesPath)
-	if err != nil {
-		log.Printf("[server] warning: route table unavailable: %v", err)
-	}
-
 	// Create bus client for inbound subscription + outbound publishing.
 	busClient := NewBusClient(cfg.BusURL, cfg.BusToken, "inber-server")
 
@@ -166,7 +158,6 @@ func New(cfg Config) (*Server, error) {
 		store:      store,
 		events:     events,
 		bus:        busClient,
-		routes:     routeTable,
 		modelStore: ms,
 		forgeDB:    forgeDB,
 		workspaces: make(map[string]*forge.Workspace),
@@ -185,9 +176,6 @@ func (g *Server) Close() error {
 	}
 	if g.modelStore != nil {
 		g.modelStore.Close()
-	}
-	if g.routes != nil {
-		g.routes.Close()
 	}
 	if g.forgeDB != nil {
 		g.forgeDB.Close()
@@ -223,17 +211,12 @@ func (g *Server) ListenBus(ctx context.Context) error {
 
 // handleBusMessage routes an inbound bus message to the correct agent.
 func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
-	// Resolve agent: explicit > route table > default.
 	agent := msg.Agent
-	if agent == "" && g.routes != nil {
-		agent = g.routes.Resolve(msg.Channel)
-	}
 	if agent == "" {
 		agent = g.config.DefaultAgent
 	}
-
 	if agent == "" {
-		log.Printf("[server] no agent for channel %q, dropping message", msg.Channel)
+		log.Printf("[server] no agent specified and no default, dropping message")
 		return
 	}
 
