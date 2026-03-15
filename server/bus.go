@@ -78,12 +78,16 @@ func NewBusClient(busURL, token, consumer string) *BusClient {
 	wsURL := strings.Replace(busURL, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 
+	// Ensure we have an HTTP URL for REST calls (ack, publish).
+	httpURL := strings.Replace(busURL, "wss://", "https://", 1)
+	httpURL = strings.Replace(httpURL, "ws://", "http://", 1)
+
 	if consumer == "" {
 		consumer = "inber-server"
 	}
 
 	return &BusClient{
-		busURL:   busURL,
+		busURL:   httpURL,
 		wsURL:    wsURL,
 		token:    token,
 		consumer: consumer,
@@ -189,7 +193,7 @@ func (c *BusClient) subscribeLoop(ctx context.Context, topics []string, ch chan<
 
 		// Filter: only process messages for "inber" or known proxy targets.
 		// Messages for other orchestrators are left for their own subscribers.
-		if msg.Orchestrator != "" && msg.Orchestrator != "inber" && msg.Orchestrator != "openclaw" {
+		if msg.Orchestrator != "" && msg.Orchestrator != "inber" {
 			log.Printf("[bus] skipping message for orchestrator %q", msg.Orchestrator)
 			go c.ack(busMsg.Topic, busMsg.ID)
 			continue
