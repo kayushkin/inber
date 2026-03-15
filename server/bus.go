@@ -187,8 +187,9 @@ func (c *BusClient) subscribeLoop(ctx context.Context, topics []string, ch chan<
 			continue
 		}
 
-		// Only process messages addressed to this orchestrator.
-		if msg.Orchestrator != "" && msg.Orchestrator != "inber" {
+		// Filter: only process messages for "inber" or known proxy targets.
+		// Messages for other orchestrators are left for their own subscribers.
+		if msg.Orchestrator != "" && msg.Orchestrator != "inber" && msg.Orchestrator != "openclaw" {
 			log.Printf("[bus] skipping message for orchestrator %q", msg.Orchestrator)
 			go c.ack(busMsg.Topic, busMsg.ID)
 			continue

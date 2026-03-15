@@ -40,6 +40,10 @@ type Config struct {
 	// Bus integration for dashboard events.
 	BusURL   string `json:"bus_url,omitempty"`
 	BusToken string `json:"bus_token,omitempty"`
+
+	// OpenClaw proxy — forward bus messages where orchestrator=openclaw.
+	OpenClawURL   string `json:"openclaw_url,omitempty"`   // e.g. "http://localhost:18789"
+	OpenClawToken string `json:"openclaw_token,omitempty"` // bearer token
 }
 
 // AgentConfig defines one agent.
@@ -211,6 +215,12 @@ func (g *Server) ListenBus(ctx context.Context) error {
 
 // handleBusMessage routes an inbound bus message to the correct agent.
 func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
+	// Proxy openclaw messages to OpenClaw API.
+	if msg.Orchestrator == "openclaw" {
+		g.proxyToOpenClaw(ctx, msg)
+		return
+	}
+
 	agent := msg.Agent
 	if agent == "" {
 		agent = g.config.DefaultAgent

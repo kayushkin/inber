@@ -69,6 +69,14 @@ func runServe() error {
 		cfg.BusToken = busToken
 	}
 
+	// Wire OpenClaw proxy from env vars.
+	if ocURL := os.Getenv("OPENCLAW_URL"); ocURL != "" {
+		cfg.OpenClawURL = ocURL
+	}
+	if ocToken := os.Getenv("OPENCLAW_TOKEN"); ocToken != "" {
+		cfg.OpenClawToken = ocToken
+	}
+
 	g, err := server.New(cfg)
 	if err != nil {
 		return fmt.Errorf("create server: %w", err)
