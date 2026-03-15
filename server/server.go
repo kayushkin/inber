@@ -248,7 +248,6 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 	onEvent := func(ev StreamEvent) {
 		switch ev.Kind {
 		case "delta":
-			// Publish streaming delta to bus.
 			g.bus.PublishOutbound(OutboundMessage{
 				Text:     ev.Text,
 				Agent:    agent,
@@ -256,6 +255,38 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 				Channel:  msg.Channel,
 				Stream:   "delta",
 				StreamID: streamID,
+			})
+
+		case "thinking":
+			g.bus.PublishOutbound(OutboundMessage{
+				Text:     ev.Text,
+				Agent:    agent,
+				Author:   agent,
+				Channel:  msg.Channel,
+				Stream:   "thinking",
+				StreamID: streamID,
+			})
+
+		case "tool_call":
+			g.bus.PublishOutbound(OutboundMessage{
+				Text:     ev.Text,
+				Agent:    agent,
+				Author:   agent,
+				Channel:  msg.Channel,
+				Stream:   "tool_call",
+				StreamID: streamID,
+				Tool:     ev.Tool,
+			})
+
+		case "tool_result":
+			g.bus.PublishOutbound(OutboundMessage{
+				Text:     ev.Text,
+				Agent:    agent,
+				Author:   agent,
+				Channel:  msg.Channel,
+				Stream:   "tool_result",
+				StreamID: streamID,
+				Tool:     ev.Tool,
 			})
 
 		case "done":

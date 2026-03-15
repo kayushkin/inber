@@ -53,6 +53,7 @@ type OutboundMessage struct {
 	Channel   string       `json:"channel"`
 	Stream    string       `json:"stream,omitempty"`
 	StreamID  string       `json:"stream_id,omitempty"`
+	Tool      string       `json:"tool,omitempty"`
 	Timestamp time.Time    `json:"timestamp"`
 	Meta      *OutboundMeta `json:"meta,omitempty"`
 }
