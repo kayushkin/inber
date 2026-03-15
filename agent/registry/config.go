@@ -13,7 +13,8 @@ import (
 type AgentConfig struct {
 	Name     string        `json:"name"`
 	Role     string        `json:"role"`
-	System   string        `json:"-"` // loaded from agent-store nature
+	Project  string        `json:"project,omitempty"` // forge project name (e.g. "kayushkin.com")
+	System   string        `json:"-"`                 // loaded from agent-store nature
 	Model    string        `json:"model"`
 	Thinking int64         `json:"thinking"`
 	Tools    []string      `json:"tools"`
@@ -121,6 +122,10 @@ func LoadFromAgentStore(dbPath string) (*RegistryConfig, error) {
 				if b, err := strconv.Atoi(budget); err == nil {
 					cfg.Context.Budget = b
 				}
+			}
+			// Project (forge workspace)
+			if project, ok := agentCfg.Values["project"]; ok && project != "" {
+				cfg.Project = project
 			}
 			// Tools
 			for _, tc := range agentCfg.Tools {

@@ -76,8 +76,10 @@ func (g *Gateway) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, 
 		ac.Model = req.Model
 	}
 
-	// Create child session.
+	// Generate child session key.
 	childKey := sessionKeyForChild(req.ParentKey)
+
+	// Create child session.
 	var child *Session
 	var err error
 
@@ -305,6 +307,12 @@ func (g *Gateway) deliverResult(parentKey string, result SpawnResult) {
 		// Parent finished its turn. Queue for delivery on next turn.
 		parent.queuePending(msg)
 		log.Printf("[gateway] result queued (parent %s idle), will deliver on next turn", parentKey)
+
+		// Publish the result directly to the bus outbound topic
+		// so the dashboard shows it immediately.
+		if g.events != nil {
+			g.events.PublishOutbound(parent.AgentName, result)
+		}
 	}
 }
 

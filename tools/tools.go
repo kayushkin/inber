@@ -3,6 +3,9 @@
 package tools
 
 import (
+	"context"
+	"encoding/json"
+
 	"github.com/kayushkin/agentkit"
 	agentkittools "github.com/kayushkin/agentkit/tools"
 	"github.com/kayushkin/inber/agent"
@@ -20,6 +23,26 @@ func wrap(t agentkit.Tool) agent.Tool {
 
 // File system tools
 func Shell() agent.Tool     { return wrap(agentkittools.Shell()) }
+
+// ShellInDir returns a shell tool that defaults to the given directory.
+func ShellInDir(dir string) agent.Tool {
+	t := agentkittools.Shell()
+	origRun := t.Run
+	t.Run = func(ctx context.Context, raw string) (string, error) {
+		// Inject default workdir if not specified.
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			if _, ok := parsed["workdir"]; !ok || parsed["workdir"] == "" {
+				parsed["workdir"] = dir
+				if newRaw, err := json.Marshal(parsed); err == nil {
+					raw = string(newRaw)
+				}
+			}
+		}
+		return origRun(ctx, raw)
+	}
+	return wrap(t)
+}
 func ReadFile() agent.Tool  { return wrap(agentkittools.ReadFile()) }
 func WriteFile() agent.Tool { return wrap(agentkittools.WriteFile()) }
 func EditFile() agent.Tool  { return wrap(agentkittools.EditFile()) }

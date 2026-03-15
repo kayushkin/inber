@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -68,6 +69,7 @@ type Engine struct {
 	repoRoot        string
 	agentTools      []agent.Tool
 	display         *DisplayHooks
+	displayMu       sync.Mutex
 	workspace       *sessionMod.Workspace
 	thinkingBud     int64
 	lastNamedBlocks []sessionMod.NamedBlock
@@ -98,6 +100,21 @@ type Engine struct {
 }
 
 // NewEngine creates and fully initializes an Engine: context, memory, tools, session, hooks.
+// SetDisplayHooks updates the display hooks (thread-safe).
+// Used by the gateway to point hooks at the current HTTP request's writer.
+func (e *Engine) SetDisplayHooks(hooks *DisplayHooks) {
+	e.displayMu.Lock()
+	e.display = hooks
+	e.displayMu.Unlock()
+}
+
+// GetDisplayHooks returns the current display hooks (thread-safe).
+func (e *Engine) GetDisplayHooks() *DisplayHooks {
+	e.displayMu.Lock()
+	defer e.displayMu.Unlock()
+	return e.display
+}
+
 func NewEngine(cfg EngineConfig) (*Engine, error) {
 	repoRoot := cfg.RepoRoot
 	if repoRoot == "" {

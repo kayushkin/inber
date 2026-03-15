@@ -99,6 +99,36 @@ func (ep *EventPublisher) SpawnCompleted(result SpawnResult) {
 	})
 }
 
+// PublishOutbound sends a spawn result to the bus "outbound" topic so the
+// dashboard displays it immediately (without waiting for the next user message).
+func (ep *EventPublisher) PublishOutbound(parentAgent string, result SpawnResult) {
+	if ep == nil {
+		return
+	}
+
+	payload := map[string]interface{}{
+		"text":         fmt.Sprintf("🔔 **Sub-agent %s completed** (%s)\n%s", result.Agent, result.Status, result.Summary),
+		"agent":        parentAgent,
+		"author":       parentAgent,
+		"channel":      "websocket",
+		"orchestrator": "inber",
+		"timestamp":    time.Now().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(map[string]interface{}{
+		"topic":   "outbound",
+		"payload": payload,
+		"source":  "gateway",
+	})
+
+	url := fmt.Sprintf("%s/publish?token=%s", ep.busURL, ep.busToken)
+	resp, err := ep.client.Post(url, "application/json", bytes.NewReader(data))
+	if err != nil {
+		log.Printf("[events] outbound publish error: %v", err)
+		return
+	}
+	resp.Body.Close()
+}
+
 // SessionActive publishes when a session starts running.
 func (ep *EventPublisher) SessionActive(sessionKey, agent string) {
 	ep.Publish(GatewayEvent{

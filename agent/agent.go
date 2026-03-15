@@ -169,6 +169,23 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 	for {
 		apiCalls++
 
+		// Check context cancellation (e.g. spawn timeout).
+		if ctx.Err() != nil {
+			if result.Text == "" {
+				result.Text = fmt.Sprintf("[Agent stopped: %s after %d API calls]", ctx.Err(), apiCalls-1)
+			}
+			return result, ctx.Err()
+		}
+
+		// Hard cap on API round-trips per turn to prevent runaway agents.
+		const maxAPICalls = 50
+		if apiCalls > maxAPICalls {
+			if result.Text == "" {
+				result.Text = fmt.Sprintf("[Agent stopped: exceeded %d API calls in one turn]", maxAPICalls)
+			}
+			return result, fmt.Errorf("exceeded max API calls (%d)", maxAPICalls)
+		}
+
 		// Check for mid-run injected messages from the user
 		if apiCalls > 1 && a.InjectCheck != nil {
 			if injected := a.InjectCheck(); len(injected) > 0 {

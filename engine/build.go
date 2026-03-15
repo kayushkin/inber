@@ -46,7 +46,12 @@ func (e *Engine) buildTools() []agent.Tool {
 			}
 			for _, t := range tools.All() {
 				if t.Name == toolName {
-					result = append(result, t)
+					// Use workspace-scoped shell when repoRoot is set.
+					if t.Name == "shell" && e.repoRoot != "" {
+						result = append(result, tools.ShellInDir(e.repoRoot))
+					} else {
+						result = append(result, t)
+					}
 					break
 				}
 			}
@@ -65,6 +70,15 @@ func (e *Engine) buildTools() []agent.Tool {
 		}
 	} else {
 		result = tools.All()
+		// Replace shell with workspace-scoped version.
+		if e.repoRoot != "" {
+			for i, t := range result {
+				if t.Name == "shell" {
+					result[i] = tools.ShellInDir(e.repoRoot)
+					break
+				}
+			}
+		}
 		if e.MemStore != nil {
 			result = append(result, memory.AllMemoryTools(e.MemStore)...)
 		}
@@ -342,28 +356,11 @@ func (e *Engine) buildLimitCheck() func(result *agent.TurnResult) (bool, string)
 func (e *Engine) buildHooks() *agent.Hooks {
 	hooks := &agent.Hooks{}
 
-	if e.display != nil && e.display.OnThinking != nil {
-		hooks.OnThinking = e.display.OnThinking
-	}
-	if e.display != nil && e.display.OnTextDelta != nil {
-		hooks.OnTextDelta = e.display.OnTextDelta
-	}
-	if e.display != nil && e.display.OnToolCall != nil {
-		hooks.OnToolCall = func(toolID, name string, input []byte) {
-			e.display.OnToolCall(name, string(input))
-		}
-	}
-	if e.display != nil && e.display.OnToolResult != nil {
-		hooks.OnToolResult = func(toolID, name, output string, isError bool) {
-			e.display.OnToolResult(name, output, isError)
-		}
-	}
+	// Display hooks are resolved dynamically via GetDisplayHooks() so the
+	// gateway can swap them per-request without rebuilding the engine.
 
 	if e.Session != nil {
 		logHooks := e.Session.Hooks()
-		origThinking := hooks.OnThinking
-		origToolCall := hooks.OnToolCall
-		origToolResult := hooks.OnToolResult
 
 		hooks.OnRequest = func(params *anthropic.MessageNewParams) {
 			if logHooks.OnRequest != nil {
@@ -375,8 +372,13 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			if logHooks.OnThinking != nil {
 				logHooks.OnThinking(text)
 			}
-			if origThinking != nil {
-				origThinking(text)
+			if d := e.GetDisplayHooks(); d != nil && d.OnThinking != nil {
+				d.OnThinking(text)
+			}
+		}
+		hooks.OnTextDelta = func(text string) {
+			if d := e.GetDisplayHooks(); d != nil && d.OnTextDelta != nil {
+				d.OnTextDelta(text)
 			}
 		}
 		hooks.OnToolCall = func(toolID, name string, input []byte) {
@@ -386,16 +388,16 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			if logHooks.OnToolCall != nil {
 				logHooks.OnToolCall(toolID, name, input)
 			}
-			if origToolCall != nil {
-				origToolCall(toolID, name, input)
+			if d := e.GetDisplayHooks(); d != nil && d.OnToolCall != nil {
+				d.OnToolCall(name, string(input))
 			}
 		}
 		hooks.OnToolResult = func(toolID, name, output string, isError bool) {
 			if logHooks.OnToolResult != nil {
 				logHooks.OnToolResult(toolID, name, output, isError)
 			}
-			if origToolResult != nil {
-				origToolResult(toolID, name, output, isError)
+			if d := e.GetDisplayHooks(); d != nil && d.OnToolResult != nil {
+				d.OnToolResult(name, output, isError)
 			}
 			if isError {
 				e.consecutiveErrors++
@@ -460,6 +462,28 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			e.lastTurnHadError = false
 			if logHooks.OnResponse != nil {
 				logHooks.OnResponse(resp)
+			}
+		}
+	} else {
+		// No session logging, but still wire display hooks dynamically.
+		hooks.OnThinking = func(text string) {
+			if d := e.GetDisplayHooks(); d != nil && d.OnThinking != nil {
+				d.OnThinking(text)
+			}
+		}
+		hooks.OnTextDelta = func(text string) {
+			if d := e.GetDisplayHooks(); d != nil && d.OnTextDelta != nil {
+				d.OnTextDelta(text)
+			}
+		}
+		hooks.OnToolCall = func(toolID, name string, input []byte) {
+			if d := e.GetDisplayHooks(); d != nil && d.OnToolCall != nil {
+				d.OnToolCall(name, string(input))
+			}
+		}
+		hooks.OnToolResult = func(toolID, name, output string, isError bool) {
+			if d := e.GetDisplayHooks(); d != nil && d.OnToolResult != nil {
+				d.OnToolResult(name, output, isError)
 			}
 		}
 	}

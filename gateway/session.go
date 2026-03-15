@@ -62,6 +62,42 @@ type Session struct {
 	cancel          context.CancelFunc
 	injections      chan string
 	pendingMessages []string // results queued while session was idle
+	onEvent         func(StreamEvent) // current request's event callback (updated per-turn)
+}
+
+// setOnEvent sets the event callback for the current request.
+// Must be called before turn() so hooks point to the right writer.
+func (s *Session) setOnEvent(onEvent func(StreamEvent)) {
+	s.mu.Lock()
+	s.onEvent = onEvent
+	s.mu.Unlock()
+}
+
+// updateHooks updates the engine's display hooks to use the current onEvent.
+// Must be called with s.mu held.
+func (s *Session) updateHooks() {
+	onEvent := s.onEvent
+	if s.Engine == nil {
+		return
+	}
+	if onEvent != nil {
+		s.Engine.SetDisplayHooks(&engine.DisplayHooks{
+			OnThinking: func(text string) {
+				onEvent(StreamEvent{Kind: "thinking", Text: text})
+			},
+			OnTextDelta: func(text string) {
+				onEvent(StreamEvent{Kind: "delta", Text: text})
+			},
+			OnToolCall: func(name, input string) {
+				onEvent(StreamEvent{Kind: "tool_call", Tool: name, Text: input})
+			},
+			OnToolResult: func(name, output string, isError bool) {
+				onEvent(StreamEvent{Kind: "tool_result", Tool: name, Text: output})
+			},
+		})
+	} else {
+		s.Engine.SetDisplayHooks(nil)
+	}
 }
 
 // turn executes one turn on this session's engine.
@@ -72,6 +108,8 @@ func (s *Session) turn(ctx context.Context, input string) (*agent.TurnResult, er
 	s.mu.Lock()
 	s.Status = Running
 	ctx, s.cancel = context.WithCancel(ctx)
+	// Update engine's display hooks to point to current request's onEvent.
+	s.updateHooks()
 	// Drain pending messages and prepend to input.
 	if len(s.pendingMessages) > 0 {
 		prefix := strings.Join(s.pendingMessages, "\n\n---\n\n")
@@ -142,13 +180,16 @@ func (s *Session) close() {
 // getOrCreateSession returns an existing session or creates one.
 func (g *Gateway) getOrCreateSession(key, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
 	if val, ok := g.sessions.Load(key); ok {
-		return val.(*Session), nil
+		sess := val.(*Session)
+		sess.setOnEvent(onEvent)
+		return sess, nil
 	}
 
 	sess, err := g.createSession(key, agentName, ac, onEvent)
 	if err != nil {
 		return nil, err
 	}
+	sess.setOnEvent(onEvent)
 
 	// Store, but handle race (another goroutine may have created it).
 	actual, loaded := g.sessions.LoadOrStore(key, sess)
@@ -185,23 +226,8 @@ func (g *Gateway) createSession(key, agentName string, ac AgentConfig, onEvent f
 		// For now, engine opens its own. This is fine initially.
 	}
 
-	// Set up display hooks for streaming.
-	if onEvent != nil {
-		cfg.Display = &engine.DisplayHooks{
-			OnThinking: func(text string) {
-				onEvent(StreamEvent{Kind: "thinking", Text: text})
-			},
-			OnTextDelta: func(text string) {
-				onEvent(StreamEvent{Kind: "delta", Text: text})
-			},
-			OnToolCall: func(name, input string) {
-				onEvent(StreamEvent{Kind: "tool_call", Tool: name, Text: input})
-			},
-			OnToolResult: func(name, output string, isError bool) {
-				onEvent(StreamEvent{Kind: "tool_result", Tool: name, Text: output})
-			},
-		}
-	}
+	// Display hooks are set dynamically per-request via setOnEvent/updateHooks.
+	// Don't set them at creation time — they'd become stale.
 
 	// Try to load existing messages from persistence.
 	msgs := g.loadPersistedMessages(key)

@@ -44,10 +44,11 @@ type Config struct {
 // AgentConfig defines one agent.
 type AgentConfig struct {
 	Name      string   `json:"name"`
-	Workspace string   `json:"workspace"` // repo root / cwd
+	Project   string   `json:"project,omitempty"` // project name for workspace isolation
+	Workspace string   `json:"workspace"`         // repo root / cwd (resolved from project)
 	Model     string   `json:"model"`
 	Thinking  int64    `json:"thinking"`
-	Tools     []string `json:"tools"`     // tool allowlist (empty = all)
+	Tools     []string `json:"tools"`             // tool allowlist (empty = all)
 }
 
 // Gateway manages agent sessions, routing, and sub-agent orchestration.

@@ -93,7 +93,7 @@
     },
     "brigid": {
       "name": "Brigid",
-      "project": "kayushkin.com",
+      "project": "kayushkin",
       "role": "kayushkin.com — the smith-poet, beauty and function",
       "model": "claude-sonnet-4-5",
       "tools": [
