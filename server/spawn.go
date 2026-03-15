@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
@@ -40,8 +41,11 @@ type SpawnResult struct {
 	Status   string        `json:"status"` // "success", "error", "timeout"
 	Summary  string        `json:"summary"`
 	Tokens   TokenUsage    `json:"tokens"`
-	Duration time.Duration `json:"duration"`
-	Error    string        `json:"error,omitempty"`
+	Duration    time.Duration `json:"duration"`
+	Error       string        `json:"error,omitempty"`
+	WorkspaceID string        `json:"workspace_id,omitempty"`
+	Branch      string        `json:"branch,omitempty"`
+	Commits     map[string]string `json:"commits,omitempty"` // repo → hash
 }
 
 // Spawn creates a child session and enqueues its work.
@@ -79,6 +83,20 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 	// Generate child session key.
 	childKey := sessionKeyForChild(req.ParentKey)
 
+	// Create ephemeral workspace if agent has projects configured.
+	var ws *forge.Workspace
+	if len(ac.Projects) > 0 && g.forgeDB != nil {
+		w, err := g.forgeDB.CreateWorkspace(req.Agent, ac.Projects)
+		if err != nil {
+			log.Printf("[server] workspace creation failed for %s: %v (using source repo)", req.Agent, err)
+		} else {
+			ws = w
+			// Set agent's working directory to the primary repo worktree.
+			ac.Workspace = w.Repos[w.Primary]
+			log.Printf("[server] workspace %s created → %s", w.ID, w.BaseDir)
+		}
+	}
+
 	// Create child session.
 	var child *Session
 	var err error
@@ -93,6 +111,9 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 		}
 	}
 	if err != nil {
+		if ws != nil {
+			g.forgeDB.Cleanup(ws)
+		}
 		return nil, fmt.Errorf("create child session: %w", err)
 	}
 
@@ -181,16 +202,42 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 			// Inject short update into the agent's main session.
 			g.updateMainSession(req.Agent, req.Task, status, summary)
 
+			// Commit workspace changes (stay on spawn branch — no merge).
+			var workspaceID, branch string
+			var commits map[string]string
+			if ws != nil {
+				commitMsg := fmt.Sprintf("%s: %s", req.Agent, truncate(req.Task, 100))
+				results, cerr := g.forgeDB.CommitAll(ws, commitMsg)
+				if cerr != nil {
+					log.Printf("[server] workspace commit error: %v", cerr)
+				} else {
+					commits = make(map[string]string)
+					for repo, cr := range results {
+						if cr.Dirty && cr.Hash != "" {
+							commits[repo] = cr.Hash
+							log.Printf("[server] committed %s: %s", repo, cr.Hash)
+						} else if cr.Error != "" {
+							log.Printf("[server] commit failed for %s: %s", repo, cr.Error)
+						}
+					}
+				}
+				workspaceID = ws.ID
+				branch = ws.Branch
+			}
+
 			// Deliver full result to the parent orchestrator + publish to bus.
 			spawnResult := SpawnResult{
-				ChildKey: childKey,
-				Agent:    req.Agent,
-				Task:     req.Task,
-				Status:   status,
-				Summary:  summary,
-				Tokens:   tokens,
-				Duration: time.Since(start),
-				Error:    errMsg,
+				ChildKey:    childKey,
+				Agent:       req.Agent,
+				Task:        req.Task,
+				Status:      status,
+				Summary:     summary,
+				Tokens:      tokens,
+				Duration:    time.Since(start),
+				Error:       errMsg,
+				WorkspaceID: workspaceID,
+				Branch:      branch,
+				Commits:     commits,
 			}
 			g.events.SpawnCompleted(spawnResult)
 			g.deliverResult(req.ParentKey, spawnResult)
@@ -202,6 +249,9 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 		})
 		if err != nil {
 			log.Printf("[server] spawn %s failed: %v", childKey, err)
+			if ws != nil {
+				g.forgeDB.Cleanup(ws)
+			}
 			g.store.CompleteRequest(reqID, "error", "", fmt.Sprintf("enqueue failed: %v", err), 0, 0, 0, 0, 0, 0)
 			// If enqueue itself failed (not the work), still notify parent.
 			g.deliverResult(req.ParentKey, SpawnResult{
@@ -288,6 +338,16 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 		result.Tokens.Input, result.Tokens.Output, cost,
 		result.Summary,
 	)
+
+	if result.WorkspaceID != "" {
+		msg += fmt.Sprintf("\n\nWorkspace: %s (branch: %s)", result.WorkspaceID, result.Branch)
+		if len(result.Commits) > 0 {
+			for repo, hash := range result.Commits {
+				msg += fmt.Sprintf("\n  %s: %s", repo, hash)
+			}
+		}
+		msg += "\n\nActions: merge(workspace_id) | reject(workspace_id) | fix(workspace_id, instructions)"
+	}
 
 	if result.Error != "" {
 		msg += fmt.Sprintf("\n\nError: %s", result.Error)

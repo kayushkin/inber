@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kayushkin/forge"
 	modelstore "github.com/kayushkin/model-store"
 	sessionMod "github.com/kayushkin/inber/session"
 )
@@ -44,8 +45,9 @@ type Config struct {
 // AgentConfig defines one agent.
 type AgentConfig struct {
 	Name      string   `json:"name"`
-	Project   string   `json:"project,omitempty"` // project name for workspace isolation
-	Workspace string   `json:"workspace"`         // repo root / cwd (resolved from project)
+	Project   string   `json:"project,omitempty"`  // primary project name
+	Projects  []string `json:"projects,omitempty"` // all repos for workspace isolation
+	Workspace string   `json:"workspace"`          // repo root / cwd
 	Model     string   `json:"model"`
 	Thinking  int64    `json:"thinking"`
 	Tools     []string `json:"tools"`             // tool allowlist (empty = all)
@@ -59,6 +61,7 @@ type Server struct {
 	store      *Store            // session/request persistence
 	events     *EventPublisher   // bus event publisher (nil = disabled)
 	modelStore *modelstore.Store
+	forgeDB    *forge.Forge // workspace management
 	mu         sync.RWMutex
 }
 
@@ -131,12 +134,26 @@ func New(cfg Config) (*Server, error) {
 
 	events := NewEventPublisher(cfg.BusURL, cfg.BusToken)
 
+	// Open forge DB for workspace management.
+	var forgeDB *forge.Forge
+	home, _ := os.UserHomeDir()
+	forgePath := filepath.Join(home, ".config", "forge", "forge.db")
+	if _, err := os.Stat(forgePath); err == nil {
+		if f, err := forge.Open(forgePath); err != nil {
+			log.Printf("[server] warning: forge unavailable: %v", err)
+		} else {
+			forgeDB = f
+			log.Printf("[server] forge DB opened")
+		}
+	}
+
 	return &Server{
 		config:     cfg,
 		queue:      q,
 		store:      store,
 		events:     events,
 		modelStore: ms,
+		forgeDB:    forgeDB,
 	}, nil
 }
 
@@ -152,6 +169,9 @@ func (g *Server) Close() error {
 	}
 	if g.modelStore != nil {
 		g.modelStore.Close()
+	}
+	if g.forgeDB != nil {
+		g.forgeDB.Close()
 	}
 	return nil
 }

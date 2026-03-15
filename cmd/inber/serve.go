@@ -102,16 +102,13 @@ func buildConfigFromRegistry() server.Config {
 		projectMap := loadAgentsJSONProjects()
 
 		for name, ac := range regCfg.Agents {
-			// Get project from agents.json (agent-store doesn't have it).
-			project := projectMap[name]
+			info := projectMap[name]
 
 			workspace := ""
-			// Resolve workspace from project field, falling back to agent name.
-			// This is the SOURCE repo — slots are resolved at spawn time via forge.
 			home, _ := os.UserHomeDir()
 			lookupName := name
-			if project != "" {
-				lookupName = project
+			if info.Project != "" {
+				lookupName = info.Project
 			}
 			candidate := filepath.Join(home, "life", "repos", lookupName)
 			if _, err := os.Stat(candidate); err == nil {
@@ -120,8 +117,9 @@ func buildConfigFromRegistry() server.Config {
 
 			gac := server.AgentConfig{
 				Name:      name,
-				Project:   project,
-				Workspace: workspace, // source repo (slots override this for spawns)
+				Project:   info.Project,
+				Projects:  info.Projects,
+				Workspace: workspace,
 				Model:     ac.Model,
 				Thinking:  ac.Thinking,
 				Tools:     ac.Tools,
@@ -159,12 +157,17 @@ func buildConfigFromRegistry() server.Config {
 	}
 }
 
-// loadAgentsJSONProjects reads agents.json and returns a map of agent name → project.
-func loadAgentsJSONProjects() map[string]string {
-	result := make(map[string]string)
+// agentProjectInfo holds project config from agents.json.
+type agentProjectInfo struct {
+	Project  string
+	Projects []string
+}
+
+// loadAgentsJSONProjects reads agents.json and returns per-agent project info.
+func loadAgentsJSONProjects() map[string]agentProjectInfo {
+	result := make(map[string]agentProjectInfo)
 	home, _ := os.UserHomeDir()
 
-	// Try multiple locations for agents.json.
 	paths := []string{
 		filepath.Join(home, "life", "repos", "inber", "agents.json"),
 		"agents.json",
@@ -177,16 +180,23 @@ func loadAgentsJSONProjects() map[string]string {
 		}
 		var raw struct {
 			Agents map[string]struct {
-				Project string `json:"project"`
+				Project  string   `json:"project"`
+				Projects []string `json:"projects"`
 			} `json:"agents"`
 		}
 		if err := json.Unmarshal(data, &raw); err != nil {
 			continue
 		}
 		for name, cfg := range raw.Agents {
-			if cfg.Project != "" {
-				result[name] = cfg.Project
+			info := agentProjectInfo{
+				Project:  cfg.Project,
+				Projects: cfg.Projects,
 			}
+			// If projects list is empty, use project as single-item list.
+			if len(info.Projects) == 0 && info.Project != "" {
+				info.Projects = []string{info.Project}
+			}
+			result[name] = info
 		}
 		break
 	}
