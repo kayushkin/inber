@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -322,7 +324,8 @@ func (g *Server) handleModelTest(w http.ResponseWriter, r *http.Request) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// GET /api/agents — list configured agents with status
+// GET /api/agents — list all agents across all orchestrators.
+// Returns inber agents from config + openclaw agents from filesystem scan.
 func (g *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	if r.Method != http.MethodGet {
@@ -330,30 +333,46 @@ func (g *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type agentInfo struct {
-		Name      string   `json:"name"`
-		Model     string   `json:"model,omitempty"`
-		Project   string   `json:"project,omitempty"`
-		Projects  []string `json:"projects,omitempty"`
-		Workspace string   `json:"workspace,omitempty"`
-		Tools     []string `json:"tools,omitempty"`
-		IsDefault bool     `json:"is_default,omitempty"`
-	}
+	var agents []registryAgent
 
-	var agents []agentInfo
-	for name, ac := range g.config.Agents {
-		agents = append(agents, agentInfo{
-			Name:      name,
-			Model:     ac.Model,
-			Project:   ac.Project,
-			Projects:  ac.Projects,
-			Workspace: ac.Workspace,
-			Tools:     ac.Tools,
-			IsDefault: name == g.config.DefaultAgent,
+	// Inber agents from config.
+	for name := range g.config.Agents {
+		agents = append(agents, registryAgent{
+			Name:         name,
+			Orchestrator: "inber",
+			Enabled:      true,
 		})
 	}
 
+	// OpenClaw agents from filesystem.
+	home, _ := os.UserHomeDir()
+	agentsDir := filepath.Join(home, ".openclaw", "agents")
+	if entries, err := os.ReadDir(agentsDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			agentSubdir := filepath.Join(agentsDir, entry.Name(), "agent")
+			if _, err := os.Stat(agentSubdir); err != nil {
+				continue
+			}
+			agents = append(agents, registryAgent{
+				Name:         entry.Name(),
+				Orchestrator: "openclaw",
+				Enabled:      true,
+			})
+		}
+	}
+
 	jsonResponse(w, agents)
+}
+
+// registryAgent is the API response type for agent listings.
+type registryAgent struct {
+	Name         string `json:"name"`
+	Orchestrator string `json:"orchestrator"`
+	Description  string `json:"description,omitempty"`
+	Enabled      bool   `json:"enabled"`
 }
 
 func jsonResponse(w http.ResponseWriter, data any) {
