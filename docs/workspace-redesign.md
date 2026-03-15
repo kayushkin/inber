@@ -20,8 +20,8 @@ Agent work stays on spawn branches until the orchestrator explicitly merges to m
 | Action | Owner | Notes |
 |--------|-------|-------|
 | Create/destroy worktree | Forge | Workspace lifecycle |
-| Assign workspace to agent | Gateway | Knows which agent is spawning |
-| Set agent cwd | Gateway | Configures engine |
+| Assign workspace to agent | Server | Knows which agent is spawning |
+| Set agent cwd | Server | Configures engine |
 | Edit/build/test | Agent | Its job |
 | Commit changes | Forge | Auto-commit on spawn branch |
 | Deploy to staging | Forge | Branch → staging env |
@@ -29,7 +29,7 @@ Agent work stays on spawn branches until the orchestrator explicitly merges to m
 | Push to origin | Forge | Part of merge |
 | Deploy prod | Forge | Post-merge |
 | Cleanup | Forge | Remove worktree + branch |
-| Orchestrate sequence | Gateway | Calls forge in order |
+| Orchestrate sequence | Server | Calls forge in order |
 | Approve/reject merge | Orchestrator | Claxon decides what hits main |
 
 ### Forge API
@@ -137,7 +137,7 @@ Errors:
 
 ### Phase 5: REVIEW (orchestrator)
 
-Gateway delivers result to orchestrator:
+Server delivers result to orchestrator:
 ```
 [Spawn completed]
 Agent: brigid
@@ -247,7 +247,7 @@ Projects registered in forge:
 - SQLite `slots` table
 - SQLite `projects.base_repo` (replaced by new config)
 
-### Gateway (spawn.go)
+### Server (spawn.go)
 - All inline `exec.Command("git", ...)` calls
 - `deploySlot()` method entirely
 - Stash/pop logic

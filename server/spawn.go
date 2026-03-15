@@ -1,4 +1,4 @@
-package gateway
+package server
 
 import (
 	"context"
@@ -46,7 +46,7 @@ type SpawnResult struct {
 
 // Spawn creates a child session and enqueues its work.
 // Returns immediately. Result delivered to parent async.
-func (g *Gateway) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, error) {
+func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, error) {
 	// Validate parent.
 	val, ok := g.sessions.Load(req.ParentKey)
 	if !ok {
@@ -103,7 +103,7 @@ func (g *Gateway) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, 
 	parent.Children = append(parent.Children, childKey)
 	parent.mu.Unlock()
 
-	log.Printf("[gateway] spawn %s → %s/%s: %s",
+	log.Printf("[server] spawn %s → %s/%s: %s",
 		req.ParentKey, req.Agent, childKey, truncate(req.Task, 80))
 
 	// Apply timeout.
@@ -201,7 +201,7 @@ func (g *Gateway) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, 
 			return err
 		})
 		if err != nil {
-			log.Printf("[gateway] spawn %s failed: %v", childKey, err)
+			log.Printf("[server] spawn %s failed: %v", childKey, err)
 			g.store.CompleteRequest(reqID, "error", "", fmt.Sprintf("enqueue failed: %v", err), 0, 0, 0, 0, 0, 0)
 			// If enqueue itself failed (not the work), still notify parent.
 			g.deliverResult(req.ParentKey, SpawnResult{
@@ -223,7 +223,7 @@ func (g *Gateway) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, 
 
 // ForkAndSpawn forks the parent session N times, one per task.
 // All children start with the same conversation history.
-func (g *Gateway) ForkAndSpawn(ctx context.Context, parentKey string, tasks []SpawnRequest) ([]*SpawnResponse, error) {
+func (g *Server) ForkAndSpawn(ctx context.Context, parentKey string, tasks []SpawnRequest) ([]*SpawnResponse, error) {
 	var responses []*SpawnResponse
 
 	for _, task := range tasks {
@@ -232,7 +232,7 @@ func (g *Gateway) ForkAndSpawn(ctx context.Context, parentKey string, tasks []Sp
 
 		resp, err := g.Spawn(ctx, task)
 		if err != nil {
-			log.Printf("[gateway] fork-spawn failed for %s: %v", task.Agent, err)
+			log.Printf("[server] fork-spawn failed for %s: %v", task.Agent, err)
 			continue
 		}
 		responses = append(responses, resp)
@@ -242,7 +242,7 @@ func (g *Gateway) ForkAndSpawn(ctx context.Context, parentKey string, tasks []Sp
 }
 
 // deliverProgress sends a lightweight status update to the parent session.
-func (g *Gateway) deliverProgress(parentKey, childKey, agentName, message string) {
+func (g *Server) deliverProgress(parentKey, childKey, agentName, message string) {
 	val, ok := g.sessions.Load(parentKey)
 	if !ok {
 		return
@@ -263,10 +263,10 @@ func (g *Gateway) deliverProgress(parentKey, childKey, agentName, message string
 }
 
 // deliverResult injects the child's result into the parent session.
-func (g *Gateway) deliverResult(parentKey string, result SpawnResult) {
+func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 	val, ok := g.sessions.Load(parentKey)
 	if !ok {
-		log.Printf("[gateway] parent %s gone, dropping result from %s", parentKey, result.ChildKey)
+		log.Printf("[server] parent %s gone, dropping result from %s", parentKey, result.ChildKey)
 		return
 	}
 	parent := val.(*Session)
@@ -293,7 +293,7 @@ func (g *Gateway) deliverResult(parentKey string, result SpawnResult) {
 		msg += fmt.Sprintf("\n\nError: %s", result.Error)
 	}
 
-	log.Printf("[gateway] result %s → %s: %s (%s, %s)",
+	log.Printf("[server] result %s → %s: %s (%s, %s)",
 		result.ChildKey, parentKey, result.Status,
 		result.Duration.Round(time.Second), truncate(result.Summary, 60))
 
@@ -306,7 +306,7 @@ func (g *Gateway) deliverResult(parentKey string, result SpawnResult) {
 	} else {
 		// Parent finished its turn. Queue for delivery on next turn.
 		parent.queuePending(msg)
-		log.Printf("[gateway] result queued (parent %s idle), will deliver on next turn", parentKey)
+		log.Printf("[server] result queued (parent %s idle), will deliver on next turn", parentKey)
 
 		// Publish the result directly to the bus outbound topic
 		// so the dashboard shows it immediately.
@@ -318,7 +318,7 @@ func (g *Gateway) deliverResult(parentKey string, result SpawnResult) {
 
 // saveSpawnToMemory persists a summary of the spawn's work into the agent's memory DB.
 // This gives the agent's main session access to the full context via memory_search.
-func (g *Gateway) saveSpawnToMemory(child *Session, agentName, task, status, summary string) {
+func (g *Server) saveSpawnToMemory(child *Session, agentName, task, status, summary string) {
 	if child.Engine == nil || child.Engine.MemStore == nil {
 		return
 	}
@@ -338,15 +338,15 @@ func (g *Gateway) saveSpawnToMemory(child *Session, agentName, task, status, sum
 		Source:     "system",
 	})
 	if err != nil {
-		log.Printf("[gateway] failed to save spawn memory for %s: %v", agentName, err)
+		log.Printf("[server] failed to save spawn memory for %s: %v", agentName, err)
 	} else {
-		log.Printf("[gateway] saved spawn result to %s memory", agentName)
+		log.Printf("[server] saved spawn result to %s memory", agentName)
 	}
 }
 
 // updateMainSession injects a short context update into the agent's main session
 // so it knows what happened in the spawn without loading the full transcript.
-func (g *Gateway) updateMainSession(agentName, task, status, summary string) {
+func (g *Server) updateMainSession(agentName, task, status, summary string) {
 	mainKey := fmt.Sprintf("agent:%s:main", agentName)
 	val, ok := g.sessions.Load(mainKey)
 	if !ok {
@@ -389,7 +389,7 @@ func formatTranscriptHighlights(msgs []anthropic.MessageParam) string {
 }
 
 // SessionsListTool creates a tool for checking sub-agent status.
-func (g *Gateway) SessionsListTool(parentSessionKey string) agent.Tool {
+func (g *Server) SessionsListTool(parentSessionKey string) agent.Tool {
 	return agent.Tool{
 		Name:        "sessions_list",
 		Description: "List active sessions and their status. Shows your spawned sub-agents and whether they're running, idle, completed, or errored.",
@@ -425,7 +425,7 @@ func (g *Gateway) SessionsListTool(parentSessionKey string) agent.Tool {
 }
 
 // SteerAgentTool creates a tool for sending messages to running sub-agents.
-func (g *Gateway) SteerAgentTool() agent.Tool {
+func (g *Server) SteerAgentTool() agent.Tool {
 	return agent.Tool{
 		Name: "steer_agent",
 		Description: "Send a message to a running sub-agent session. " +
@@ -476,9 +476,9 @@ func (g *Gateway) SteerAgentTool() agent.Tool {
 	}
 }
 
-// SpawnAgentTool creates the spawn_agent tool that calls gateway.Spawn directly.
+// SpawnAgentTool creates the spawn_agent tool that calls server.Spawn directly.
 // This replaces the old stderr-based INBER_SPAWN protocol.
-func (g *Gateway) SpawnAgentTool(parentSessionKey string) agent.Tool {
+func (g *Server) SpawnAgentTool(parentSessionKey string) agent.Tool {
 	// Build available agents description.
 	agentNames := make([]string, 0, len(g.config.Agents))
 	for name := range g.config.Agents {

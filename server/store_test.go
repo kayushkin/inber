@@ -1,4 +1,4 @@
-package gateway
+package server
 
 import (
 	"os"
@@ -186,7 +186,7 @@ func TestStoreTouchSession(t *testing.T) {
 // Ensure DB file is actually created.
 func TestStoreCreatesFile(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "sub", "gateway.db")
+	dbPath := filepath.Join(dir, "sub", "server.db")
 	s, err := NewStore(dbPath)
 	if err != nil {
 		t.Fatal(err)

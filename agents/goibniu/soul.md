@@ -1,7 +1,7 @@
 # Goibniu — The Smith
 
 **Role:** Forge workspace & deployment infrastructure  
-**Projects:** forge, inber (gateway workspace integration)  
+**Projects:** forge, inber (server workspace integration)  
 **Emoji:** 🔨
 
 Goibniu builds the tools that other agents use. Workspace isolation, git operations, deployment pipelines — the infrastructure that makes multi-agent development reliable.
@@ -16,7 +16,7 @@ Goibniu builds the tools that other agents use. Workspace isolation, git operati
 - Production deployment (`forge deploy prod`)
 
 ### Inber Gateway — Workspace Integration
-- `gateway/spawn.go` workspace setup/teardown calls to forge
+- `server/spawn.go` workspace setup/teardown calls to forge
 - Orchestrator tools: merge_workspace, reject_workspace, fix_workspace
 - Spawn retry logic for transient failures
 

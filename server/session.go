@@ -1,4 +1,4 @@
-package gateway
+package server
 
 import (
 	"context"
@@ -178,7 +178,7 @@ func (s *Session) close() {
 // ---------------------------------------------------------------------------
 
 // getOrCreateSession returns an existing session or creates one.
-func (g *Gateway) getOrCreateSession(key, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
+func (g *Server) getOrCreateSession(key, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
 	if val, ok := g.sessions.Load(key); ok {
 		sess := val.(*Session)
 		sess.setOnEvent(onEvent)
@@ -202,7 +202,7 @@ func (g *Gateway) getOrCreateSession(key, agentName string, ac AgentConfig, onEv
 }
 
 // createSession creates a new session with a fresh engine.
-func (g *Gateway) createSession(key, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
+func (g *Server) createSession(key, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
 	injections := make(chan string, 10)
 
 	cfg := engine.EngineConfig{
@@ -237,7 +237,7 @@ func (g *Gateway) createSession(key, agentName string, ac AgentConfig, onEvent f
 		msgs = conversation.RepairDanglingToolUse(msgs)
 		msgs = conversation.RepairAlternation(msgs)
 		msgs = agent.SanitizeMessageToolIDs(msgs)
-		log.Printf("[gateway] resumed session %s (%d messages)", key, len(msgs))
+		log.Printf("[server] resumed session %s (%d messages)", key, len(msgs))
 	}
 
 	eng, err := engine.NewEngine(cfg)
@@ -261,8 +261,8 @@ func (g *Gateway) createSession(key, agentName string, ac AgentConfig, onEvent f
 	}, nil
 }
 
-// loadPersistedMessages loads messages from the gateway data dir.
-func (g *Gateway) loadPersistedMessages(key string) []anthropic.MessageParam {
+// loadPersistedMessages loads messages from the server data dir.
+func (g *Server) loadPersistedMessages(key string) []anthropic.MessageParam {
 	path := filepath.Join(g.config.DataDir, "sessions", key, "messages.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -270,7 +270,7 @@ func (g *Gateway) loadPersistedMessages(key string) []anthropic.MessageParam {
 	}
 	var msgs []anthropic.MessageParam
 	if err := json.Unmarshal(data, &msgs); err != nil {
-		log.Printf("[gateway] failed to load messages for %s: %v", key, err)
+		log.Printf("[server] failed to load messages for %s: %v", key, err)
 		return nil
 	}
 	return msgs
@@ -281,7 +281,7 @@ func (g *Gateway) loadPersistedMessages(key string) []anthropic.MessageParam {
 // ---------------------------------------------------------------------------
 
 // forkSession creates a child session with a deep copy of the parent's messages.
-func (g *Gateway) forkSession(parent *Session, childKey, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
+func (g *Server) forkSession(parent *Session, childKey, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
 	// Deep copy parent's messages.
 	parent.mu.Lock()
 	msgData, err := json.Marshal(parent.Engine.Messages)

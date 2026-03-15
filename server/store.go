@@ -1,4 +1,4 @@
-package gateway
+package server
 
 import (
 	"database/sql"
@@ -15,16 +15,16 @@ type Store struct {
 	db *sql.DB
 }
 
-// NewStore opens or creates the gateway database.
+// NewStore opens or creates the server database.
 func NewStore(dbPath string) (*Store, error) {
 	os.MkdirAll(filepath.Dir(dbPath), 0755)
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
-		return nil, fmt.Errorf("open gateway db: %w", err)
+		return nil, fmt.Errorf("open server db: %w", err)
 	}
 	if err := migrateGatewayDB(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("migrate gateway db: %w", err)
+		return nil, fmt.Errorf("migrate server db: %w", err)
 	}
 	return &Store{db: db}, nil
 }

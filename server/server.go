@@ -1,4 +1,4 @@
-package gateway
+package server
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
-// Config defines the gateway's runtime configuration.
+// Config defines the server's runtime configuration.
 type Config struct {
 	// Agent definitions: name → config.
 	Agents map[string]AgentConfig `json:"agents"`
@@ -34,7 +34,7 @@ type Config struct {
 	ListenAddr string `json:"listen_addr"` // default ":8200"
 
 	// Data directory for session persistence.
-	DataDir string `json:"data_dir"` // default ~/.inber/gateway
+	DataDir string `json:"data_dir"` // default ~/.inber/server
 
 	// Bus integration for dashboard events.
 	BusURL   string `json:"bus_url,omitempty"`
@@ -51,8 +51,8 @@ type AgentConfig struct {
 	Tools     []string `json:"tools"`             // tool allowlist (empty = all)
 }
 
-// Gateway manages agent sessions, routing, and sub-agent orchestration.
-type Gateway struct {
+// Server manages agent sessions, routing, and sub-agent orchestration.
+type Server struct {
 	config     Config
 	sessions   sync.Map          // sessionKey → *Session
 	queue      *Queue
@@ -62,8 +62,8 @@ type Gateway struct {
 	mu         sync.RWMutex
 }
 
-// New creates a gateway.
-func New(cfg Config) (*Gateway, error) {
+// New creates a server.
+func New(cfg Config) (*Server, error) {
 	// Apply defaults.
 	if cfg.MainConcurrency <= 0 {
 		cfg.MainConcurrency = 4
@@ -82,7 +82,13 @@ func New(cfg Config) (*Gateway, error) {
 	}
 	if cfg.DataDir == "" {
 		home, _ := os.UserHomeDir()
-		cfg.DataDir = filepath.Join(home, ".inber", "gateway")
+		// Use legacy dir if it exists, otherwise new name
+		legacyDir := filepath.Join(home, ".inber", "gateway")
+		if fileExists(legacyDir) {
+			cfg.DataDir = legacyDir
+		} else {
+			cfg.DataDir = filepath.Join(home, ".inber", "server")
+		}
 	}
 	if cfg.DefaultAgent == "" && len(cfg.Agents) > 0 {
 		// Pick first agent as default.
@@ -97,21 +103,25 @@ func New(cfg Config) (*Gateway, error) {
 	// Open shared model store.
 	ms, err := modelstore.Open("")
 	if err != nil {
-		log.Printf("[gateway] warning: model store unavailable: %v", err)
+		log.Printf("[server] warning: model store unavailable: %v", err)
 	}
 
-	// Open gateway store.
-	dbPath := filepath.Join(cfg.DataDir, "gateway.db")
+	// Open server store.
+	// Check for legacy gateway.db first, fall back to server.db
+	dbPath := filepath.Join(cfg.DataDir, "server.db")
+	if legacyPath := filepath.Join(cfg.DataDir, "gateway.db"); fileExists(legacyPath) {
+		dbPath = legacyPath // use existing data
+	}
 	store, err := NewStore(dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("open gateway store: %w", err)
+		return nil, fmt.Errorf("open server store: %w", err)
 	}
 
 	// Mark any previously-running requests as interrupted.
 	if n, err := store.InterruptRunning(); err != nil {
-		log.Printf("[gateway] warning: failed to interrupt running requests: %v", err)
+		log.Printf("[server] warning: failed to interrupt running requests: %v", err)
 	} else if n > 0 {
-		log.Printf("[gateway] marked %d interrupted requests from previous run", n)
+		log.Printf("[server] marked %d interrupted requests from previous run", n)
 	}
 
 	q := NewQueue(map[string]int{
@@ -121,7 +131,7 @@ func New(cfg Config) (*Gateway, error) {
 
 	events := NewEventPublisher(cfg.BusURL, cfg.BusToken)
 
-	return &Gateway{
+	return &Server{
 		config:     cfg,
 		queue:      q,
 		store:      store,
@@ -131,7 +141,7 @@ func New(cfg Config) (*Gateway, error) {
 }
 
 // Close shuts down all sessions and releases resources.
-func (g *Gateway) Close() error {
+func (g *Server) Close() error {
 	g.sessions.Range(func(key, val any) bool {
 		s := val.(*Session)
 		s.close()
@@ -148,12 +158,12 @@ func (g *Gateway) Close() error {
 
 // Route resolves which agent handles a message.
 // For now: returns the default agent. Routing rules can be added later.
-func (g *Gateway) Route(channel, author string) string {
+func (g *Server) Route(channel, author string) string {
 	return g.config.DefaultAgent
 }
 
 // AgentConfig returns config for a named agent.
-func (g *Gateway) GetAgentConfig(name string) (AgentConfig, bool) {
+func (g *Server) GetAgentConfig(name string) (AgentConfig, bool) {
 	ac, ok := g.config.Agents[name]
 	return ac, ok
 }
@@ -198,17 +208,17 @@ type StreamEvent struct {
 
 // Run sends a message to an agent session. Creates the session if needed.
 // Blocks until the turn completes.
-func (g *Gateway) Run(ctx context.Context, req RunRequest) (*RunResponse, error) {
+func (g *Server) Run(ctx context.Context, req RunRequest) (*RunResponse, error) {
 	return g.run(ctx, req, nil)
 }
 
 // Stream is like Run but calls onEvent for real-time output.
-func (g *Gateway) Stream(ctx context.Context, req RunRequest, onEvent func(StreamEvent)) error {
+func (g *Server) Stream(ctx context.Context, req RunRequest, onEvent func(StreamEvent)) error {
 	_, err := g.run(ctx, req, onEvent)
 	return err
 }
 
-func (g *Gateway) run(ctx context.Context, req RunRequest, onEvent func(StreamEvent)) (*RunResponse, error) {
+func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEvent)) (*RunResponse, error) {
 	// Resolve agent.
 	agentName := req.Agent
 	if agentName == "" {
@@ -239,7 +249,7 @@ func (g *Gateway) run(ctx context.Context, req RunRequest, onEvent func(StreamEv
 		sess.mu.Unlock()
 
 		if isRunning {
-			log.Printf("[gateway] session %s busy, injecting message mid-turn", sessionKey)
+			log.Printf("[server] session %s busy, injecting message mid-turn", sessionKey)
 			sess.inject(input)
 			return &RunResponse{
 				Text:       "[Message injected into running session — agent will see it during current work]",
@@ -311,7 +321,7 @@ func (g *Gateway) run(ctx context.Context, req RunRequest, onEvent func(StreamEv
 // Inject sends a message into a session.
 // If the session is running, injects mid-turn (agent sees it between tool calls).
 // If idle, queues as pending (delivered as prefix on next turn).
-func (g *Gateway) Inject(sessionKey, message string) error {
+func (g *Server) Inject(sessionKey, message string) error {
 	val, ok := g.sessions.Load(sessionKey)
 	if !ok {
 		return fmt.Errorf("session not found: %s", sessionKey)
@@ -334,7 +344,7 @@ func (g *Gateway) Inject(sessionKey, message string) error {
 // Session persistence
 // ---------------------------------------------------------------------------
 
-func (g *Gateway) persistMessages(s *Session) {
+func (g *Server) persistMessages(s *Session) {
 	s.mu.Lock()
 	msgs := s.Engine.Messages
 	s.mu.Unlock()
@@ -344,7 +354,7 @@ func (g *Gateway) persistMessages(s *Session) {
 
 	data, err := json.Marshal(msgs)
 	if err != nil {
-		log.Printf("[gateway] persist %s: %v", s.Key, err)
+		log.Printf("[server] persist %s: %v", s.Key, err)
 		return
 	}
 	os.WriteFile(filepath.Join(dir, "messages.json"), data, 0644)
@@ -368,7 +378,7 @@ type SessionInfo struct {
 }
 
 // ListSessions returns info about all sessions.
-func (g *Gateway) ListSessions() []*SessionInfo {
+func (g *Server) ListSessions() []*SessionInfo {
 	var result []*SessionInfo
 	g.sessions.Range(func(key, val any) bool {
 		s := val.(*Session)
@@ -392,7 +402,7 @@ func (g *Gateway) ListSessions() []*SessionInfo {
 }
 
 // StopSession aborts a running session and cascades to children.
-func (g *Gateway) StopSession(key string) error {
+func (g *Server) StopSession(key string) error {
 	val, ok := g.sessions.Load(key)
 	if !ok {
 		return fmt.Errorf("session not found: %s", key)
@@ -416,7 +426,7 @@ func (g *Gateway) StopSession(key string) error {
 // Config loading
 // ---------------------------------------------------------------------------
 
-// LoadConfig loads gateway config from a JSON file.
+// LoadConfig loads server config from a JSON file.
 func LoadConfig(path string) (Config, error) {
 	var cfg Config
 	data, err := os.ReadFile(path)
@@ -434,4 +444,9 @@ func ConfigFromAgents(agents map[string]AgentConfig, defaultAgent string) Config
 		Agents:       agents,
 		DefaultAgent: defaultAgent,
 	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

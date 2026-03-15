@@ -1,4 +1,4 @@
-package gateway
+package server
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// EventPublisher sends gateway events to the bus so dashboards can display them.
+// EventPublisher sends server events to the bus so dashboards can display them.
 type EventPublisher struct {
 	busURL   string
 	busToken string
@@ -43,7 +43,7 @@ func NewEventPublisher(busURL, busToken string) *EventPublisher {
 	}
 }
 
-// Publish sends an event to the bus on the "gateway" topic.
+// Publish sends an event to the bus on the "server" topic.
 func (ep *EventPublisher) Publish(event GatewayEvent) {
 	if ep == nil {
 		return
@@ -58,9 +58,9 @@ func (ep *EventPublisher) Publish(event GatewayEvent) {
 	}
 
 	body := map[string]interface{}{
-		"topic":   "gateway",
+		"topic":   "server",
 		"payload": json.RawMessage(payload),
-		"source":  "gateway",
+		"source":  "server",
 	}
 	data, _ := json.Marshal(body)
 
@@ -117,7 +117,7 @@ func (ep *EventPublisher) PublishOutbound(parentAgent string, result SpawnResult
 	data, _ := json.Marshal(map[string]interface{}{
 		"topic":   "outbound",
 		"payload": payload,
-		"source":  "gateway",
+		"source":  "server",
 	})
 
 	url := fmt.Sprintf("%s/publish?token=%s", ep.busURL, ep.busToken)

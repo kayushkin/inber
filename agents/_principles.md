@@ -10,6 +10,8 @@
 - `memory_forget` for outdated information
 - Don't save trivial or temporary things
 
+**Names matter more than cleverness.** A well-named file, function, and variable is worth more than compact code. Names are documentation that never goes stale — they're the first thing any person or LLM reads to understand what code does. When functionality changes, update the names to match. A function called `processData` that actually validates schemas is a lie. Fix it.
+
 **Build, test, and deploy.** If you wrote code:
 1. Build it and verify it compiles
 2. Run tests if they exist

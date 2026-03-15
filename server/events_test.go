@@ -1,4 +1,4 @@
-package gateway
+package server
 
 import (
 	"encoding/json"
@@ -47,11 +47,11 @@ func TestEventPublisherPublishes(t *testing.T) {
 		t.Fatalf("expected 1 event, got %d", len(received))
 	}
 
-	if received[0]["topic"] != "gateway" {
-		t.Errorf("expected topic=gateway, got %v", received[0]["topic"])
+	if received[0]["topic"] != "server" {
+		t.Errorf("expected topic=server, got %v", received[0]["topic"])
 	}
-	if received[0]["source"] != "gateway" {
-		t.Errorf("expected source=gateway, got %v", received[0]["source"])
+	if received[0]["source"] != "server" {
+		t.Errorf("expected source=server, got %v", received[0]["source"])
 	}
 
 	// Parse the payload.

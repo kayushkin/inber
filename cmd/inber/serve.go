@@ -12,7 +12,7 @@ import (
 	"syscall"
 
 	"github.com/kayushkin/inber/agent/registry"
-	"github.com/kayushkin/inber/gateway"
+	"github.com/kayushkin/inber/server"
 	"github.com/spf13/cobra"
 )
 
@@ -23,11 +23,11 @@ var (
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start the gateway daemon",
-	Long: `Start the inber gateway daemon. Keeps agent sessions alive,
+	Short: "Start the inber server",
+	Long: `Start the inber server daemon. Keeps agent sessions alive,
 manages sub-agent spawning, and exposes an HTTP API.
 
-The gateway loads agent configs from agents.json / agent-store
+The server loads agent configs from agents.json / agent-store
 and creates engines on demand.
 
 Example:
@@ -45,11 +45,11 @@ func init() {
 }
 
 func runServe() error {
-	var cfg gateway.Config
+	var cfg server.Config
 
 	// Try loading from config file.
 	if serveConfig != "" {
-		loaded, err := gateway.LoadConfig(serveConfig)
+		loaded, err := server.LoadConfig(serveConfig)
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
@@ -69,9 +69,9 @@ func runServe() error {
 		cfg.BusToken = busToken
 	}
 
-	g, err := gateway.New(cfg)
+	g, err := server.New(cfg)
 	if err != nil {
-		return fmt.Errorf("create gateway: %w", err)
+		return fmt.Errorf("create server: %w", err)
 	}
 	defer g.Close()
 
@@ -83,7 +83,7 @@ func runServe() error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigCh
-		log.Printf("[gateway] received %s, shutting down...", sig)
+		log.Printf("[server] received %s, shutting down...", sig)
 		cancel()
 	}()
 
@@ -92,10 +92,10 @@ func runServe() error {
 
 // buildConfigFromRegistry builds gateway config from the existing
 // agents.json / agent-store system.
-func buildConfigFromRegistry() gateway.Config {
+func buildConfigFromRegistry() server.Config {
 	regCfg, fromStore := registry.LoadConfigWithFallback("", "")
 
-	agents := make(map[string]gateway.AgentConfig)
+	agents := make(map[string]server.AgentConfig)
 
 	if regCfg != nil && regCfg.Agents != nil {
 		// Also load agents.json for project field (not in agent-store).
@@ -118,7 +118,7 @@ func buildConfigFromRegistry() gateway.Config {
 				workspace = candidate
 			}
 
-			gac := gateway.AgentConfig{
+			gac := server.AgentConfig{
 				Name:      name,
 				Project:   project,
 				Workspace: workspace, // source repo (slots override this for spawns)
@@ -138,8 +138,8 @@ func buildConfigFromRegistry() gateway.Config {
 	_ = fromStore // suppress unused
 
 	if len(agents) == 0 {
-		log.Printf("[gateway] no agents found in registry, using defaults")
-		agents["default"] = gateway.AgentConfig{
+		log.Printf("[server] no agents found in registry, using defaults")
+		agents["default"] = server.AgentConfig{
 			Name:  "default",
 			Model: "claude-sonnet-4-5-20250929",
 		}
@@ -150,10 +150,10 @@ func buildConfigFromRegistry() gateway.Config {
 	for name := range agents {
 		agentNames = append(agentNames, name)
 	}
-	log.Printf("[gateway] loaded %d agents from registry: %s (default: %s)",
+	log.Printf("[server] loaded %d agents from registry: %s (default: %s)",
 		len(agents), strings.Join(agentNames, ", "), defaultAgent)
 
-	return gateway.Config{
+	return server.Config{
 		Agents:       agents,
 		DefaultAgent: defaultAgent,
 	}

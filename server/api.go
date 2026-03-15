@@ -1,4 +1,4 @@
-package gateway
+package server
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 )
 
 // Serve starts the HTTP API server. Blocks until ctx is cancelled.
-func (g *Gateway) Serve(ctx context.Context) error {
+func (g *Server) Serve(ctx context.Context) error {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/run", g.handleRun)
@@ -33,8 +33,8 @@ func (g *Gateway) Serve(ctx context.Context) error {
 		server.Shutdown(context.Background())
 	}()
 
-	log.Printf("[gateway] API listening on %s", g.config.ListenAddr)
-	log.Printf("[gateway] %d agents configured, default=%s", len(g.config.Agents), g.config.DefaultAgent)
+	log.Printf("[server] API listening on %s", g.config.ListenAddr)
+	log.Printf("[server] %d agents configured, default=%s", len(g.config.Agents), g.config.DefaultAgent)
 
 	err := server.ListenAndServe()
 	if err == http.ErrServerClosed {
@@ -48,7 +48,7 @@ func (g *Gateway) Serve(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 
 // POST /api/run
-func (g *Gateway) handleRun(w http.ResponseWriter, r *http.Request) {
+func (g *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -79,7 +79,7 @@ func (g *Gateway) handleRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRunStream sends SSE events during a streaming run.
-func (g *Gateway) handleRunStream(w http.ResponseWriter, r *http.Request, req RunRequest) {
+func (g *Server) handleRunStream(w http.ResponseWriter, r *http.Request, req RunRequest) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		jsonError(w, "streaming not supported", http.StatusInternalServerError)
@@ -105,7 +105,7 @@ func (g *Gateway) handleRunStream(w http.ResponseWriter, r *http.Request, req Ru
 }
 
 // POST /api/spawn
-func (g *Gateway) handleSpawn(w http.ResponseWriter, r *http.Request) {
+func (g *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -130,7 +130,7 @@ func (g *Gateway) handleSpawn(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/fork-spawn
-func (g *Gateway) handleForkSpawn(w http.ResponseWriter, r *http.Request) {
+func (g *Server) handleForkSpawn(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -173,7 +173,7 @@ type SessionWithRequests struct {
 }
 
 // GET /api/sessions
-func (g *Gateway) handleSessions(w http.ResponseWriter, r *http.Request) {
+func (g *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -202,7 +202,7 @@ func (g *Gateway) handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET/DELETE /api/sessions/:key
-func (g *Gateway) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
+func (g *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 	if key == "" {
 		jsonError(w, "session key required", http.StatusBadRequest)
@@ -264,7 +264,7 @@ func (g *Gateway) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/requests/:session_key — get request history for a session
-func (g *Gateway) handleRequests(w http.ResponseWriter, r *http.Request) {
+func (g *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -290,7 +290,7 @@ func (g *Gateway) handleRequests(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/models — proxy to model store
-func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
+func (g *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if g.modelStore == nil {
 		jsonError(w, "model store not available", http.StatusServiceUnavailable)
 		return
@@ -304,7 +304,7 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/models/test
-func (g *Gateway) handleModelTest(w http.ResponseWriter, r *http.Request) {
+func (g *Server) handleModelTest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
