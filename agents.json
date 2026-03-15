@@ -37,7 +37,7 @@
     },
     "bran": {
       "name": "Bran",
-      "role": "secondary orchestrator \u2014 complex multi-agent campaigns",
+      "role": "secondary orchestrator (shelved \u2014 unassigned)",
       "model": "claude-sonnet-4-5",
       "thinking": 2048,
       "tools": [
@@ -63,7 +63,8 @@
         "maxTurns": 5,
         "maxInputTokens": 200000,
         "maxResponseTime": 20
-      }
+      },
+      "shelved": true
     },
     "fionn": {
       "name": "Fionn",
@@ -89,7 +90,10 @@
           "project"
         ],
         "budget": 50000
-      }
+      },
+      "projects": [
+        "inber"
+      ]
     },
     "brigid": {
       "name": "Brigid",
@@ -117,12 +121,15 @@
           "project"
         ],
         "budget": 50000
-      }
+      },
+      "projects": [
+        "kayushkin"
+      ]
     },
     "oisin": {
       "name": "Ois\u00edn",
       "project": "si",
-      "role": "si comms layer \u2014 the messenger between worlds",
+      "role": "communications \u2014 message bus, adapters, dashboard",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -145,12 +152,16 @@
           "project"
         ],
         "budget": 50000
-      }
+      },
+      "projects": [
+        "si",
+        "bus"
+      ]
     },
     "manannan": {
       "name": "Manann\u00e1n",
       "project": "downloadstack",
-      "role": "downloadstack \u2014 the sea god gathering treasures",
+      "role": "media \u2014 downloads, video, audio processing",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -172,7 +183,12 @@
           "project"
         ],
         "budget": 50000
-      }
+      },
+      "projects": [
+        "downloadstack",
+        "videostack",
+        "mediastack"
+      ]
     },
     "ogma": {
       "name": "Ogma",
@@ -271,7 +287,10 @@
           "project"
         ],
         "budget": 50000
-      }
+      },
+      "projects": [
+        "forge"
+      ]
     }
   }
 }
