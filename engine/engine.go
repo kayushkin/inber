@@ -35,6 +35,7 @@ type EngineConfig struct {
 	AgentName      string // load from registry
 	Raw            bool   // skip context/memory
 	NoTools        bool
+	ExtraTools     []agent.Tool // additional tools injected by gateway (spawn_agent, sessions_list, etc.)
 	NoHooks        bool   // skip post-request verification (git/deploy checks)
 	SystemOverride string
 	RepoRoot       string
@@ -347,6 +348,21 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	// Tools
 	if !cfg.NoTools {
 		e.agentTools = e.buildTools()
+
+		// Append gateway-injected tools (replace same-named tools).
+		for _, extra := range cfg.ExtraTools {
+			replaced := false
+			for i, t := range e.agentTools {
+				if t.Name == extra.Name {
+					e.agentTools[i] = extra
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				e.agentTools = append(e.agentTools, extra)
+			}
+		}
 		
 		// Load tool registry into memory so agent knows what tools are available
 		if e.MemStore != nil {

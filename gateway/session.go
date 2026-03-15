@@ -165,12 +165,17 @@ func (g *Gateway) createSession(key, agentName string, ac AgentConfig, onEvent f
 	injections := make(chan string, 10)
 
 	cfg := engine.EngineConfig{
-		AgentName:  agentName,
-		RepoRoot:   ac.Workspace,
-		Model:      ac.Model,
-		Thinking:   ac.Thinking,
+		AgentName:   agentName,
+		RepoRoot:    ac.Workspace,
+		Model:       ac.Model,
+		Thinking:    ac.Thinking,
 		CommandName: "serve",
-		Injections: injections,
+		Injections:  injections,
+		ExtraTools: []agent.Tool{
+			g.SpawnAgentTool(key),
+			g.SessionsListTool(key),
+			g.SteerAgentTool(),
+		},
 	}
 
 	// Pass shared model store.

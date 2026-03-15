@@ -60,6 +60,14 @@ func runServe() error {
 
 	cfg.ListenAddr = serveAddr
 
+	// Wire bus integration from env vars.
+	if busURL := os.Getenv("BUS_URL"); busURL != "" {
+		cfg.BusURL = busURL
+	}
+	if busToken := os.Getenv("BUS_TOKEN"); busToken != "" {
+		cfg.BusToken = busToken
+	}
+
 	g, err := gateway.New(cfg)
 	if err != nil {
 		return fmt.Errorf("create gateway: %w", err)

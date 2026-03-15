@@ -148,7 +148,11 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 			if text == "" {
 				continue
 			}
-			desc := fmt.Sprintf("%s (%.1f", m.ID[:8], m.Importance)
+			idPrefix := m.ID
+			if len(idPrefix) > 8 {
+				idPrefix = idPrefix[:8]
+			}
+			desc := fmt.Sprintf("%s (%.1f", idPrefix, m.Importance)
 			if len(m.Tags) > 0 {
 				desc += fmt.Sprintf(", tags: %s", strings.Join(m.Tags, ","))
 			}
