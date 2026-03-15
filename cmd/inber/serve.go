@@ -87,6 +87,13 @@ func runServe() error {
 		cancel()
 	}()
 
+	// Start bus listener in background (subscribes to inbound, routes to agents).
+	go func() {
+		if err := g.ListenBus(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("[server] bus listener stopped: %v", err)
+		}
+	}()
+
 	return g.Serve(ctx)
 }
 

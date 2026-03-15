@@ -60,6 +60,8 @@ type Server struct {
 	queue      *Queue
 	store      *Store            // session/request persistence
 	events     *EventPublisher   // bus event publisher (nil = disabled)
+	bus        *BusClient        // bus subscription client (nil = API-only mode)
+	routes     *RouteTable       // channel → agent routing
 	modelStore *modelstore.Store
 	forgeDB    WorkspaceManager             // workspace management
 	workspaces map[string]*forge.Workspace // active workspaces by ID
@@ -148,11 +150,23 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 
+	// Open route table for channel→agent resolution.
+	routesPath := filepath.Join(cfg.DataDir, "routes.db")
+	routeTable, err := NewRouteTable(routesPath)
+	if err != nil {
+		log.Printf("[server] warning: route table unavailable: %v", err)
+	}
+
+	// Create bus client for inbound subscription + outbound publishing.
+	busClient := NewBusClient(cfg.BusURL, cfg.BusToken, "inber-server")
+
 	return &Server{
 		config:     cfg,
 		queue:      q,
 		store:      store,
 		events:     events,
+		bus:        busClient,
+		routes:     routeTable,
 		modelStore: ms,
 		forgeDB:    forgeDB,
 		workspaces: make(map[string]*forge.Workspace),
@@ -172,10 +186,124 @@ func (g *Server) Close() error {
 	if g.modelStore != nil {
 		g.modelStore.Close()
 	}
+	if g.routes != nil {
+		g.routes.Close()
+	}
 	if g.forgeDB != nil {
 		g.forgeDB.Close()
 	}
 	return nil
+}
+
+// ListenBus subscribes to the bus and processes inbound messages.
+// Each message is routed to the appropriate agent and processed via Run().
+// Responses are published back to bus "outbound" topic.
+// Blocks until ctx is cancelled.
+func (g *Server) ListenBus(ctx context.Context) error {
+	if g.bus == nil {
+		log.Printf("[server] bus not configured, skipping bus listener")
+		return nil
+	}
+
+	inbound := g.bus.Subscribe(ctx, []string{"inbound"})
+	log.Printf("[server] listening for bus inbound messages")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case msg, ok := <-inbound:
+			if !ok {
+				return nil
+			}
+			go g.handleBusMessage(ctx, msg)
+		}
+	}
+}
+
+// handleBusMessage routes an inbound bus message to the correct agent.
+func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
+	// Resolve agent: explicit > route table > default.
+	agent := msg.Agent
+	if agent == "" && g.routes != nil {
+		agent = g.routes.Resolve(msg.Channel)
+	}
+	if agent == "" {
+		agent = g.config.DefaultAgent
+	}
+
+	if agent == "" {
+		log.Printf("[server] no agent for channel %q, dropping message", msg.Channel)
+		return
+	}
+
+	log.Printf("[server] bus → %s: %s", agent, truncate(msg.Text, 80))
+
+	req := RunRequest{
+		Agent:   agent,
+		Message: msg.Text,
+		Channel: msg.Channel,
+		Author:  msg.Author,
+	}
+
+	// Use streaming so we can publish deltas to bus in real-time.
+	streamID := fmt.Sprintf("s-%d", time.Now().UnixMilli())
+
+	var finalText string
+	var finalTokens TokenUsage
+
+	onEvent := func(ev StreamEvent) {
+		switch ev.Kind {
+		case "delta":
+			// Publish streaming delta to bus.
+			g.bus.PublishOutbound(OutboundMessage{
+				Text:     ev.Text,
+				Agent:    agent,
+				Author:   agent,
+				Channel:  msg.Channel,
+				Stream:   "delta",
+				StreamID: streamID,
+			})
+
+		case "done":
+			finalText = ev.Text
+			if data, ok := ev.Data.(map[string]any); ok {
+				if tokens, ok := data["tokens"].(TokenUsage); ok {
+					finalTokens = tokens
+				}
+			}
+		}
+	}
+
+	err := g.Stream(ctx, req, onEvent)
+	if err != nil {
+		log.Printf("[server] bus message error: %v", err)
+		// Publish error response.
+		g.bus.PublishOutbound(OutboundMessage{
+			Text:    fmt.Sprintf("error: %v", err),
+			Agent:   agent,
+			Author:  agent,
+			Channel: msg.Channel,
+		})
+		return
+	}
+
+	// Publish final "done" message.
+	g.bus.PublishOutbound(OutboundMessage{
+		Text:     finalText,
+		Agent:    agent,
+		Author:   agent,
+		Channel:  msg.Channel,
+		Stream:   "done",
+		StreamID: streamID,
+		Meta: &OutboundMeta{
+			InputTokens:         finalTokens.Input,
+			OutputTokens:        finalTokens.Output,
+			CacheReadTokens:     finalTokens.CacheRead,
+			CacheCreationTokens: finalTokens.CacheWrite,
+			Cost:                finalTokens.Cost,
+		},
+	})
 }
 
 // Route resolves which agent handles a message.
@@ -198,6 +326,7 @@ func (g *Server) GetAgentConfig(name string) (AgentConfig, bool) {
 type RunRequest struct {
 	Agent      string `json:"agent"`
 	Message    string `json:"message"`
+	Text       string `json:"text,omitempty"` // alias for message (backward compat with bus-agent)
 	SessionKey string `json:"session_key"`
 	Channel    string `json:"channel"`
 	Author     string `json:"author"`

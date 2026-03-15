@@ -21,6 +21,8 @@ func (g *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/requests/", g.handleRequests)
 	mux.HandleFunc("/api/models", g.handleModels)
 	mux.HandleFunc("/api/models/test", g.handleModelTest)
+	mux.HandleFunc("/api/routes", g.handleRoutes)
+	mux.HandleFunc("/api/agents", g.handleAgents)
 
 	server := &http.Server{
 		Addr:    g.config.ListenAddr,
@@ -58,6 +60,10 @@ func (g *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
+	}
+	// Accept "text" as alias for "message" (backward compat with bus-agent).
+	if req.Message == "" && req.Text != "" {
+		req.Message = req.Text
 	}
 	if req.Message == "" {
 		jsonError(w, "message required", http.StatusBadRequest)
@@ -316,6 +322,100 @@ func (g *Server) handleModelTest(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// GET /api/routes — list all routes
+// POST /api/routes — set a route {channel, agent}
+// DELETE /api/routes?channel=X — delete a route
+func (g *Server) handleRoutes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if r.Method == http.MethodOptions {
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if g.routes == nil {
+		jsonError(w, "route table not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		jsonResponse(w, g.routes.List())
+
+	case http.MethodPost:
+		var req struct {
+			Channel string `json:"channel"`
+			Agent   string `json:"agent"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Channel == "" || req.Agent == "" {
+			jsonError(w, "channel and agent required", http.StatusBadRequest)
+			return
+		}
+		// Validate agent exists.
+		if _, ok := g.GetAgentConfig(req.Agent); !ok {
+			jsonError(w, fmt.Sprintf("unknown agent: %s", req.Agent), http.StatusBadRequest)
+			return
+		}
+		if err := g.routes.Set(req.Channel, req.Agent); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("[server] route set: %s → %s", req.Channel, req.Agent)
+		jsonResponse(w, map[string]string{"ok": "true", "channel": req.Channel, "agent": req.Agent})
+
+	case http.MethodDelete:
+		channel := r.URL.Query().Get("channel")
+		if channel == "" {
+			jsonError(w, "channel query param required", http.StatusBadRequest)
+			return
+		}
+		if err := g.routes.Delete(channel); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("[server] route deleted: %s", channel)
+		jsonResponse(w, map[string]string{"ok": "true", "deleted": channel})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// GET /api/agents — list configured agents with status
+func (g *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type agentInfo struct {
+		Name      string   `json:"name"`
+		Model     string   `json:"model,omitempty"`
+		Project   string   `json:"project,omitempty"`
+		Projects  []string `json:"projects,omitempty"`
+		Workspace string   `json:"workspace,omitempty"`
+		Tools     []string `json:"tools,omitempty"`
+		IsDefault bool     `json:"is_default,omitempty"`
+	}
+
+	var agents []agentInfo
+	for name, ac := range g.config.Agents {
+		agents = append(agents, agentInfo{
+			Name:      name,
+			Model:     ac.Model,
+			Project:   ac.Project,
+			Projects:  ac.Projects,
+			Workspace: ac.Workspace,
+			Tools:     ac.Tools,
+			IsDefault: name == g.config.DefaultAgent,
+		})
+	}
+
+	jsonResponse(w, agents)
+}
 
 func jsonResponse(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
