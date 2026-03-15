@@ -238,9 +238,14 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 		}
 		
 		req := agent.OpenAIRequest{
-			Model:     client.Model,
-			Messages:  oaiMessages,
-			MaxTokens: 16384,
+			Model:    client.Model,
+			Messages: oaiMessages,
+		}
+		// o-series models (o1, o3, etc.) require max_completion_tokens instead of max_tokens.
+		if strings.HasPrefix(client.Model, "o1") || strings.HasPrefix(client.Model, "o3") {
+			req.MaxCompletionTokens = 16384
+		} else {
+			req.MaxTokens = 16384
 		}
 		if len(openAITools) > 0 {
 			req.Tools = openAITools

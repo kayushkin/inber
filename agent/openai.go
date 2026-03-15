@@ -70,12 +70,13 @@ type OpenAIFunctionSchema struct {
 }
 
 type OpenAIRequest struct {
-	Model       string          `json:"model"`
-	Messages    []OpenAIMessage `json:"messages"`
-	Tools       []OpenAITool    `json:"tools,omitempty"`
-	Temperature float64         `json:"temperature,omitempty"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Stream      bool            `json:"stream,omitempty"`
+	Model                string          `json:"model"`
+	Messages             []OpenAIMessage `json:"messages"`
+	Tools                []OpenAITool    `json:"tools,omitempty"`
+	Temperature          float64         `json:"temperature,omitempty"`
+	MaxTokens            int             `json:"max_tokens,omitempty"`
+	MaxCompletionTokens  int             `json:"max_completion_tokens,omitempty"`
+	Stream               bool            `json:"stream,omitempty"`
 }
 
 type OpenAIResponse struct {
