@@ -61,7 +61,7 @@ type Server struct {
 	store      *Store            // session/request persistence
 	events     *EventPublisher   // bus event publisher (nil = disabled)
 	modelStore *modelstore.Store
-	forgeDB    *forge.Forge                // workspace management
+	forgeDB    WorkspaceManager             // workspace management
 	workspaces map[string]*forge.Workspace // active workspaces by ID
 	mu         sync.RWMutex
 }
