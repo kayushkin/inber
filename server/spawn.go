@@ -94,6 +94,9 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 			// Set agent's working directory to the primary repo worktree.
 			ac.Workspace = w.Repos[w.Primary]
 			log.Printf("[server] workspace %s created → %s", w.ID, w.BaseDir)
+			g.mu.Lock()
+			g.workspaces[w.ID] = w
+			g.mu.Unlock()
 		}
 	}
 

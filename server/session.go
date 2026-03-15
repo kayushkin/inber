@@ -212,11 +212,7 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, onEvent fu
 		Thinking:    ac.Thinking,
 		CommandName: "serve",
 		Injections:  injections,
-		ExtraTools: []agent.Tool{
-			g.SpawnAgentTool(key),
-			g.SessionsListTool(key),
-			g.SteerAgentTool(),
-		},
+		ExtraTools: g.toolsForAgent(key, agentName),
 	}
 
 	// Pass shared model store.

@@ -61,7 +61,8 @@ type Server struct {
 	store      *Store            // session/request persistence
 	events     *EventPublisher   // bus event publisher (nil = disabled)
 	modelStore *modelstore.Store
-	forgeDB    *forge.Forge // workspace management
+	forgeDB    *forge.Forge                // workspace management
+	workspaces map[string]*forge.Workspace // active workspaces by ID
 	mu         sync.RWMutex
 }
 
@@ -154,6 +155,7 @@ func New(cfg Config) (*Server, error) {
 		events:     events,
 		modelStore: ms,
 		forgeDB:    forgeDB,
+		workspaces: make(map[string]*forge.Workspace),
 	}, nil
 }
 
