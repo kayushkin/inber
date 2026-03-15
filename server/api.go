@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -335,7 +333,7 @@ func (g *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 
 	var agents []registryAgent
 
-	// Inber agents from config.
+	// Inber agents from config — these are reachable via bus.
 	for name := range g.config.Agents {
 		agents = append(agents, registryAgent{
 			Name:         name,
@@ -344,25 +342,8 @@ func (g *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// OpenClaw agents from filesystem.
-	home, _ := os.UserHomeDir()
-	agentsDir := filepath.Join(home, ".openclaw", "agents")
-	if entries, err := os.ReadDir(agentsDir); err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			agentSubdir := filepath.Join(agentsDir, entry.Name(), "agent")
-			if _, err := os.Stat(agentSubdir); err != nil {
-				continue
-			}
-			agents = append(agents, registryAgent{
-				Name:         entry.Name(),
-				Orchestrator: "openclaw",
-				Enabled:      true,
-			})
-		}
-	}
+	// TODO: Add openclaw agents once openclaw has a bus subscriber.
+	// For now, only inber agents are reachable through bus.
 
 	jsonResponse(w, agents)
 }
