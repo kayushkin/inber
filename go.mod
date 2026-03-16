@@ -44,3 +44,4 @@ replace github.com/kayushkin/model-store => ../model-store
 replace github.com/kayushkin/agent-store => ../agent-store
 
 replace github.com/kayushkin/forge => ../forge
+replace github.com/kayushkin/agentkit => ../agentkit

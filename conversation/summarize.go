@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/google/uuid"
@@ -480,11 +479,3 @@ func stripOrphanedToolResults(messages []anthropic.MessageParam) []anthropic.Mes
 	return result
 }
 
-// ConversationCheckpoint represents a saved conversation state
-type ConversationCheckpoint struct {
-	SessionID   string    `json:"session_id"`
-	Timestamp   time.Time `json:"timestamp"`
-	TurnCount   int       `json:"turn_count"`
-	SummaryText string    `json:"summary_text"`
-	MemoryID    string    `json:"memory_id,omitempty"`
-}

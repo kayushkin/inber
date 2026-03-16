@@ -57,6 +57,15 @@ func RecentFiles(rootDir string) agent.Tool {
 	return wrap(agentkittools.RecentFiles(rootDir))
 }
 
+// Browser returns a tool that controls a browser via PinchTab.
+func Browser() agent.Tool { return wrap(agentkittools.Browser()) }
+
+// WebSearch returns a tool that searches the web via Brave Search API.
+func WebSearch() agent.Tool { return wrap(agentkittools.WebSearch()) }
+
+// WebFetch returns a tool that fetches a URL and extracts readable text.
+func WebFetch() agent.Tool { return wrap(agentkittools.WebFetch()) }
+
 // All returns standard file system tools.
 // Note: RepoMap and RecentFiles require configuration (rootDir, patterns) and must be added explicitly.
 func All() []agent.Tool {

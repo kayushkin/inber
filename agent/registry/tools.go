@@ -27,6 +27,9 @@ func NewToolRegistry() *ToolRegistry {
 	r.Register("write_file", tools.WriteFile())
 	r.Register("edit_file", tools.EditFile())
 	r.Register("list_files", tools.ListFiles())
+	r.Register("browser", tools.Browser())
+	r.Register("web_search", tools.WebSearch())
+	r.Register("web_fetch", tools.WebFetch())
 
 	return r
 }
