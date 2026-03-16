@@ -139,7 +139,45 @@ func (s *Store) BuildContext(req BuildContextRequest) ([]Memory, int, error) {
 		tokensUsed += m.Tokens
 	}
 
+	// Partition: stable memories first, volatile (file refs, recent) last.
+	// This preserves prompt cache hits — stable prefix doesn't change between turns.
+	result = partitionStableFirst(result)
+
 	return result, tokensUsed, nil
+}
+
+// partitionStableFirst moves volatile memories (file refs, recent files) to the end
+// while preserving relative order within each group (stable sort).
+func partitionStableFirst(memories []Memory) []Memory {
+	var stable, volatile []Memory
+	for _, m := range memories {
+		if isVolatileMemory(m) {
+			volatile = append(volatile, m)
+		} else {
+			stable = append(stable, m)
+		}
+	}
+	return append(stable, volatile...)
+}
+
+// isVolatileMemory returns true for memories that change between turns
+// (file references from tool calls, recent file scans).
+func isVolatileMemory(m Memory) bool {
+	if len(m.ID) > 8 && m.ID[:8] == "fileref:" {
+		return true
+	}
+	if len(m.ID) > 7 && m.ID[:7] == "recent:" {
+		return true
+	}
+	if len(m.ID) > 5 && m.ID[:5] == "file:" {
+		return true
+	}
+	for _, tag := range m.Tags {
+		if tag == "recent" {
+			return true
+		}
+	}
+	return false
 }
 
 // truncateMemoryToPreview replaces a large memory's content with a preview

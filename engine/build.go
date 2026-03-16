@@ -211,10 +211,21 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 		systemBlocks[i] = anthropic.TextBlockParam{Text: b.Text}
 	}
 	
-	// Enable prompt caching: add cache_control to last system block
-	// This caches the entire system prompt (all preceding blocks)
-	if len(systemBlocks) > 0 {
-		systemBlocks[len(systemBlocks)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
+	// Enable prompt caching: place cache_control at the stable/volatile boundary.
+	// Stable memories (identity, decisions, prefs) come first and rarely change.
+	// Volatile memories (file refs, recent files) come last and change every turn.
+	// Caching the stable prefix avoids re-processing it when volatile content shifts.
+	cacheIdx := len(systemBlocks) - 1 // default: last block
+	for i, b := range blocks {
+		if isVolatileBlock(b.ID) {
+			if i > 0 {
+				cacheIdx = i - 1 // last stable block
+			}
+			break
+		}
+	}
+	if cacheIdx >= 0 && cacheIdx < len(systemBlocks) {
+		systemBlocks[cacheIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
 	a := agent.NewWithSystemBlocks(e.Client, systemBlocks)
 	for _, t := range e.agentTools {
@@ -489,4 +500,13 @@ func (e *Engine) buildHooks() *agent.Hooks {
 	}
 
 	return hooks
+}
+
+// isVolatileBlock checks if a named block ID indicates volatile content
+// (file references, recent files) that changes between turns.
+func isVolatileBlock(id string) bool {
+	return strings.HasPrefix(id, "fileref:") ||
+		strings.HasPrefix(id, "recent:") ||
+		strings.HasPrefix(id, "file:") ||
+		id == "fleet-status"
 }
