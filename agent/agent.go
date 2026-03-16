@@ -4,9 +4,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -275,11 +273,6 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 
 		if a.hooks != nil && a.hooks.OnRequest != nil {
 			a.hooks.OnRequest(&params)
-		}
-
-		// DEBUG: dump request to file
-		if reqBytes, dumpErr := json.Marshal(params); dumpErr == nil {
-			os.WriteFile("/tmp/inber-last-request.json", reqBytes, 0644)
 		}
 
 		// Use streaming if OnTextDelta hook is set, otherwise use non-streaming.

@@ -47,15 +47,16 @@ type InboundMessage struct {
 
 // OutboundMessage is a response published back to bus for SI/adapters.
 type OutboundMessage struct {
-	Text      string       `json:"text"`
-	Agent     string       `json:"agent"`
-	Author    string       `json:"author"`
-	Channel   string       `json:"channel"`
-	Stream    string       `json:"stream,omitempty"`
-	StreamID  string       `json:"stream_id,omitempty"`
-	Tool      string       `json:"tool,omitempty"`
-	Timestamp time.Time    `json:"timestamp"`
-	Meta      *OutboundMeta `json:"meta,omitempty"`
+	Text         string        `json:"text"`
+	Agent        string        `json:"agent"`
+	Author       string        `json:"author"`
+	Channel      string        `json:"channel"`
+	Orchestrator string        `json:"orchestrator,omitempty"`
+	Stream       string        `json:"stream,omitempty"`
+	StreamID     string        `json:"stream_id,omitempty"`
+	Tool         string        `json:"tool,omitempty"`
+	Timestamp    time.Time     `json:"timestamp"`
+	Meta         *OutboundMeta `json:"meta,omitempty"`
 }
 
 // OutboundMeta holds token/cost stats for responses.
@@ -242,6 +243,9 @@ func (c *BusClient) Publish(topic string, payload any) error {
 // PublishOutbound publishes an agent response to the "outbound" topic.
 func (c *BusClient) PublishOutbound(msg OutboundMessage) error {
 	msg.Timestamp = time.Now()
+	if msg.Orchestrator == "" {
+		msg.Orchestrator = "inber"
+	}
 	return c.Publish("outbound", msg)
 }
 
