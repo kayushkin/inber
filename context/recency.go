@@ -97,7 +97,7 @@ func findRecentlyModifiedMtime(rootDir string, since time.Duration) ([]RecentFil
 		if info.IsDir() {
 			// Skip common ignore patterns
 			base := filepath.Base(path)
-			if base == ".git" || base == "node_modules" || base == "vendor" || base == ".openclaw" {
+			if base == ".git" || base == "node_modules" || base == "vendor" || base == ".openclaw" || base == ".inber" || base == "logs" || base == "test-results" {
 				return filepath.SkipDir
 			}
 			return nil

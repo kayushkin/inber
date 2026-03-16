@@ -124,6 +124,11 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			repoRoot, _ = os.Getwd()
 		}
 	}
+	// Safety: never use home directory as repo root — would walk entire home tree
+	if home, _ := os.UserHomeDir(); repoRoot == home {
+		Log.Warn("repo root resolved to home directory, refusing — set workspace in agent config")
+		repoRoot = ""
+	}
 
 	// Initialize configs with defaults if not provided
 	stashCfg := conversation.DefaultStashConfig()
@@ -186,13 +191,11 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		Log.Infof("loading context...")
 		
 		// Memory store
-		fmt.Fprintf(os.Stderr, "[ctx] opening memory store...\n")
 		ms, err := memory.OpenOrCreate(repoRoot)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open memory store: %w", err)
 		}
 		e.MemStore = ms
-		fmt.Fprintf(os.Stderr, "[ctx] memory store opened\n")
 
 		// Prepare session: load identity + recent files into memory
 		if identityText == "" {
@@ -207,11 +210,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			RecentFilesTTL: 10 * time.Minute,
 		}
 		
-		fmt.Fprintf(os.Stderr, "[ctx] preparing session...\n")
 		if err := ms.PrepareSession(prepCfg); err != nil {
 			Log.Warn("failed to prepare session: %v", err)
 		}
-		fmt.Fprintf(os.Stderr, "[ctx] session prepared\n")
 		// Count memories for logging
 		recentMems, _ := ms.ListRecent(100, 0.0)
 		fmt.Fprintf(os.Stderr, " done (%d memories)\n", len(recentMems))

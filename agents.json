@@ -33,7 +33,9 @@
         "maxTurns": 5,
         "maxInputTokens": 200000,
         "maxResponseTime": 20
-      }
+      },
+      "workspace": "/home/slava/life/repos/inber",
+      "project": "inber"
     },
     "bran": {
       "name": "Bran",
