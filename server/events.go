@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -36,8 +37,18 @@ func NewEventPublisher(busURL, busToken string) *EventPublisher {
 	if busURL == "" {
 		return nil
 	}
+	// Convert WebSocket URL to HTTP for REST calls
+	httpURL := busURL
+	if strings.HasPrefix(httpURL, "ws://") {
+		httpURL = "http://" + strings.TrimPrefix(httpURL, "ws://")
+	} else if strings.HasPrefix(httpURL, "wss://") {
+		httpURL = "https://" + strings.TrimPrefix(httpURL, "wss://")
+	}
+	// Strip /ws path suffix if present (bus WS endpoint vs REST endpoint)
+	httpURL = strings.TrimSuffix(httpURL, "/ws")
+
 	return &EventPublisher{
-		busURL:   busURL,
+		busURL:   httpURL,
 		busToken: busToken,
 		client:   &http.Client{Timeout: 5 * time.Second},
 	}
