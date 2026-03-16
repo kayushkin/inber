@@ -179,6 +179,13 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 			blocks = append(blocks, sessionMod.NamedBlock{ID: "fleet-status", Text: status})
 		}
 
+		// Inject server-provided context (live session status, workspace info, etc.)
+		for _, injector := range e.contextInjectors {
+			if extra := injector(); len(extra) > 0 {
+				blocks = append(blocks, extra...)
+			}
+		}
+
 		if e.workspace != nil {
 			e.workspace.WriteSystem(blocks)
 		}
@@ -508,5 +515,6 @@ func isVolatileBlock(id string) bool {
 	return strings.HasPrefix(id, "fileref:") ||
 		strings.HasPrefix(id, "recent:") ||
 		strings.HasPrefix(id, "file:") ||
-		id == "fleet-status"
+		id == "fleet-status" ||
+		id == "server-sessions"
 }

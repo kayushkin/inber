@@ -47,10 +47,15 @@ type EngineConfig struct {
 	StashConfig    *conversation.StashConfig      // Large message stashing config (nil = use defaults)
 	ExtractConfig  *conversation.ExtractionConfig // Background extraction config (nil = use defaults)
 	AutoWorkflow   AutoWorkflowConfig // Auto-branch, auto-commit, auto-format (Phase 1)
-	MaxTurns       int            // max API round-trips per RunTurn (0 = unlimited)
-	MaxInputTokens int            // max cumulative input tokens per RunTurn (0 = unlimited)
-	Injections     <-chan string  // channel for mid-run message injection (optional, from stdin)
+	MaxTurns         int            // max API round-trips per RunTurn (0 = unlimited)
+	MaxInputTokens   int            // max cumulative input tokens per RunTurn (0 = unlimited)
+	Injections       <-chan string  // channel for mid-run message injection (optional, from stdin)
+	ContextInjectors []ContextInjector // extra system prompt sections injected by server
 }
+
+// ContextInjector provides additional system prompt blocks at turn time.
+// Used by the server to inject live session status, workspace info, etc.
+type ContextInjector func() []sessionMod.NamedBlock
 
 // Engine encapsulates the shared setup and execution logic for chat and run.
 type Engine struct {
@@ -77,8 +82,9 @@ type Engine struct {
 	extractCfg      conversation.ExtractionConfig
 	consecutiveErrors  int  // track consecutive tool errors for context escalation
 	lastTurnHadError   bool
-	autoRefMgr      *memory.AutoReferenceManager // auto-creates references after tool calls
-	toolInputsCache map[string]string             // toolID -> input JSON for auto-reference creation
+	autoRefMgr        *memory.AutoReferenceManager // auto-creates references after tool calls
+	toolInputsCache   map[string]string             // toolID -> input JSON for auto-reference creation
+	contextInjectors  []ContextInjector              // extra system prompt sections from server
 	workflowHooks   *WorkflowHooks                // auto-commit, auto-format, build/test
 	forgeHook       *forge.Hook                   // workspace/preview automation
 	forgeDB         *forge.Forge                  // forge database handle
@@ -221,6 +227,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		autoRefConfig := memory.DefaultAutoReferenceConfig()
 		e.autoRefMgr = memory.NewAutoReferenceManager(ms, repoRoot, autoRefConfig)
 		e.toolInputsCache = make(map[string]string)
+		e.contextInjectors = cfg.ContextInjectors
 
 		// Keep a minimal context store for backward compatibility
 		// (some tools might still use it)
