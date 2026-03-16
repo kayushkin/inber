@@ -232,15 +232,25 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 
 	log.Printf("[server] bus → %s: %s", agent, truncate(msg.Text, 80))
 
+	// Use streaming so we can publish deltas to bus in real-time.
+	streamID := fmt.Sprintf("s-%d", time.Now().UnixMilli())
+
+	// Publish status: orchestrator received the message
+	g.bus.PublishOutbound(OutboundMessage{
+		Text:     "received",
+		Agent:    agent,
+		Author:   agent,
+		Channel:  msg.Channel,
+		Stream:   "status",
+		StreamID: streamID,
+	})
+
 	req := RunRequest{
 		Agent:   agent,
 		Message: msg.Text,
 		Channel: msg.Channel,
 		Author:  msg.Author,
 	}
-
-	// Use streaming so we can publish deltas to bus in real-time.
-	streamID := fmt.Sprintf("s-%d", time.Now().UnixMilli())
 
 	var finalText string
 	var finalTokens TokenUsage
@@ -298,6 +308,16 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 			}
 		}
 	}
+
+	// Publish status: calling API
+	g.bus.PublishOutbound(OutboundMessage{
+		Agent:    agent,
+		Author:   agent,
+		Channel:  msg.Channel,
+		Stream:   "status",
+		StreamID: streamID,
+		Text:     "api_call",
+	})
 
 	err := g.Stream(ctx, req, onEvent)
 	if err != nil {

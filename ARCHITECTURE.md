@@ -1,128 +1,214 @@
 # Inber Architecture
 
-Go-based agent orchestration framework. Runs agents, manages sessions, spawns sub-agents, connects to the bus for all external I/O.
+Multi-agent orchestrator for LLM-powered coding agents. Supports CLI interactive chat,
+headless runs, and a server mode with bus-based message routing.
 
-## Package Layout
+## Package Map
 
 ```
-cmd/inber/          CLI: chat, run, serve, sessions, memory
-server/             Server: sessions, bus, queue, spawn, API, events, store
-engine/             Engine: NewEngine → RunTurn → context/memory/tools/hooks
-agent/              Agent loop: API call → tool_use → collect → repeat
-  registry/         Agent config loading from agent-store
-memory/             Persistent memory: SQLite store, search, auto-references, prepare
-context/            File scanning, recency detection (used by memory)
-session/            Session JSONL logging, conversation repair, truncation/stash
-forge/              Git workspace management (separate repo, imported as library)
-agents/             Agent identity: soul.md, _principles.md, _values.md, _user.md
+cmd/inber/       CLI entry point (cobra commands: chat, run, server, etc.)
+engine/          Core turn loop — builds prompts, calls LLM, executes tools
+  engine.go      Engine struct, NewEngine (init: agent config, memory, tools, session)
+  turn.go        RunTurn (the main loop), runOpenAITurn (OpenAI-compat path)
+server/          Multi-session server with bus integration
+  server.go      Server struct, Run/Stream, session management, queue
+  bus.go         BusClient — WebSocket subscribe + HTTP publish to message bus
+agent/           LLM client abstraction, tool definitions, message conversion
+  registry/      Agent config store (agent-store), spawn management
+context/         Token-budgeted context assembly
+  builder.go     Builder — tag-based chunk selection within token budget
+  store.go       In-memory chunk store
+conversation/    Message repair, stashing, extraction, summarization
+memory/          SQLite-backed semantic memory (references, auto-indexing)
+session/         Session logging, workspace persistence, cost tracking
+deploy/          Deployment hooks
 ```
 
 ## Key Types
 
-**Server** (`server/server.go`) — Top-level process. Manages sessions, routes bus messages, runs queue, exposes HTTP API.
+### `engine.Engine`
+Central runtime. Holds:
+- `modelClient` — unified Anthropic/OpenAI client
+- `Agent` — tool-equipped LLM agent
+- `MemStore` — semantic memory (SQLite)
+- `ContextStore` — token-budgeted context chunks
+- `Session` — turn logger + cost tracker
+- `Messages` — conversation history (`[]anthropic.MessageParam`)
+- `agentTools` — registered tools (shell, file ops, memory, spawn, etc.)
+- `workflowHooks` — auto-commit, auto-format after tool calls
+- `forgeHook` — project build/preview tracking
 
-**Engine** (`engine/engine.go`) — Per-session. Loads context/memory, builds system prompt, calls Agent.Run(), handles hooks. `NewEngine(cfg) → RunTurn(input) → Close()`.
+### `engine.EngineConfig`
+Configuration passed to `NewEngine`: model, agent name, thinking budget,
+tool injection, max turns/tokens, context injectors, etc.
 
-**Agent** (`agent/agent.go`) — Stateless API loop. Takes messages + tools, calls Anthropic streaming API, executes tool calls, returns TurnResult.
+### `server.Server`
+Multi-agent session manager:
+- `sessions` — `sync.Map` of `sessionKey → *Session`
+- `queue` — lane-based concurrency limiter (main / subagent lanes)
+- `store` — SQLite persistence for sessions & requests
+- `bus` — `BusClient` for inbound/outbound message routing
+- `events` — event publisher for dashboard
 
-**Memory Store** (`memory/store.go`) — SQLite. Tag-based memories with importance scores, TTL, always-load flags. Auto-references track files read during tool calls.
+### `server.BusClient`
+WebSocket subscriber + HTTP publisher. Connects to a message bus for real-time
+chat routing between adapters (Discord, Telegram, etc.) and agent sessions.
 
-## Message Flow
+### `context.Builder`
+Token-budget-aware context assembler:
+1. Always-include chunks (identity, always tags)
+2. Tag-matched chunks (scored by match count, size-aware)
+3. Recent conversation chunks
+Deduplicates by ID and content similarity.
 
-```
-SI (dashboard) → Bus (inbound topic) → Server → Queue → Session → Engine → Agent → Anthropic API
-                                                                                          ↓
-SI (dashboard) ← Bus (outbound topic) ← Server ← onEvent hooks ← streaming deltas ←──────┘
-```
-
-All I/O flows through bus. Server does NOT expose HTTP for messaging — only for management API.
-
-### Inbound
-1. Bus delivers message on `inbound` topic via WebSocket
-2. Server filters by `orchestrator == "inber"` (skips openclaw messages)
-3. Resolves agent from message `agent` field
-4. Enqueues work (serialized per session, concurrent across sessions)
-5. Queue processor runs engine turn, streaming events published to bus
-
-### Outbound
-Server publishes to bus `outbound` topic with `orchestrator: "inber"`:
-- `stream: "delta"` — text chunks
-- `stream: "thinking"` — extended thinking
-- `stream: "tool_call"` — tool invocations  
-- `stream: "tool_result"` — tool outputs
-- `stream: "done"` — final text + token stats
-
-## Sessions
-
-- Key format: `agent:<name>:main` (primary), `agent:<name>:main:sub:<id>` (spawned)
-- Messages persisted to `~/.inber/server/sessions/<key>/messages.json`
-- Engine also persists to `<workspace>/.inber/workspace/<agent>/messages.json`
-- Session repair on resume: empty content → dangling tool_use → alternation → ID sanitization
-- Queue: per-session serialization, configurable lane concurrency (default 4 main, 2 spawn)
-
-## Context System
-
-Each turn, the engine builds a system prompt from memory entries:
-1. **Always-load** memories (identity, instructions, tool registry) — permanent
-2. **High-importance** memories (decisions, architecture notes, user prefs)
-3. **File references** from recent tool calls (auto-created, TTL-based)
-4. **Recent files** from filesystem (git log or mtime scan)
-
-Budget-based: 4K–6K tokens default, auto-truncates large memories (>500 tokens → preview + `memory_expand` tool).
-
-### Prompt Caching Strategy
-
-Anthropic caches based on prefix matching. Cache breakpoints:
-1. Last system block (context memories)
-2. Last tool definition
-3. Second-to-last message in conversation
-
-For best cache hit rates, system blocks should be **deterministically ordered** and **stable across turns**. Volatile content (file references, recent files) should come AFTER stable content (identity, instructions, architecture decisions).
-
-## Agent Fleet
-
-10 agents, Irish mythology themed, domain-based:
-
-| Agent | Role | Domain |
-|-------|------|--------|
-| claxon | Orchestrator | All repos, spawn/merge |
-| fionn | Builder | inber + agentkit |
-| brigid | Builder | kayushkin.com + bookstack |
-| oisin | Builder | si + bus + dashboard |
-| manannan | Builder | downloadstack + videostack + mediastack |
-| ogma | Builder | logstack |
-| goibniu | Builder | forge |
-| scathach | Builder | claxon-android |
-| bench | Evaluator | agent-bench |
-| bran | (shelved) | — |
-
-Config in `agents.json` (projects, tools) + agent-store SQLite (model, system prompt, tools list). Agent-store is single source of truth for runtime config.
-
-## Model Management
-
-**model-store** — standalone service (port 8150). SQLite DB with models, credentials, health tracking.
-- Multi-credential per provider with priority-based selection
-- Health-based failover: tracks response times + errors, tries fallbacks on unhealthy
-- OAuth auto-refresh via aiauth library
-- Auto-syncs to OpenClaw's auth-profiles.json
-
-## Spawn System
-
-`Server.Spawn()` creates ephemeral workspace (via forge) → runs agent turn on spawn branch → commits. Orchestrator (claxon) reviews and explicitly merges/rejects.
-
-Forge workspace API: `CreateWorkspace`, `CommitAll`, `MergeToMain`, `PushAll`, `Cleanup`.
-
-## External Connections
-
-```
-Server ↔ Bus (ws://localhost:8100, token auth)
-Server → Model APIs (Anthropic via model-store credentials)
-Server → Forge (library call, SQLite DB)
-Server → Agent-store (SQLite, shared with model-store)
+### `context.Chunk`
+```go
+type Chunk struct {
+    ID        string
+    Text      string
+    Tags      []string
+    Source    string
+    Tokens    int
+    CreatedAt time.Time
+}
 ```
 
-## Systemd
+### `agent.Tool`
+```go
+type Tool struct {
+    Name        string
+    Description string
+    InputSchema json.RawMessage
+    Run         func(ctx context.Context, input string) (string, error)
+}
+```
 
-`inber-server.service` — user service, auto-restart.
-Env: `BUS_URL`, `BUS_TOKEN`, `ANTHROPIC_API_KEY`.
-Binary: `~/bin/inber serve --addr :8200`.
+### `agent.TurnResult`
+```go
+type TurnResult struct {
+    Text                string
+    InputTokens         int
+    OutputTokens        int
+    CacheReadTokens     int
+    CacheCreationTokens int
+    ToolCalls           int
+}
+```
+
+## Data Flow
+
+### CLI Mode (`inber chat` / `inber run`)
+
+```
+User Input
+    │
+    ▼
+Engine.RunTurn(input)
+    │
+    ├─ 1. Stash large user messages (>threshold → memory store)
+    ├─ 2. Append to Messages[]
+    ├─ 3. Summarize/prune if conversation too long
+    ├─ 4. BuildSystemPrompt (memory + context + injectors)
+    ├─ 5. Select model (failover-aware)
+    │
+    ├─ 6a. Anthropic path: Agent.Run(ctx, model, &messages)
+    │       └─ Streaming API call → tool_use → execute → loop
+    │
+    ├─ 6b. OpenAI path: runOpenAITurn(ctx, systemBlocks)
+    │       └─ ChatCompletion → tool_calls → execute → loop
+    │
+    ├─ 7. Background memory extraction (async goroutine)
+    ├─ 8. Stash large assistant responses
+    ├─ 9. Save messages snapshot (workspace JSON)
+    └─ 10. Track tokens/cost in model-store
+```
+
+### Server Mode (`inber server`)
+
+```
+Bus (WebSocket)                    HTTP API
+    │                                  │
+    ▼                                  ▼
+Server.ListenBus()              Server.Run/Stream()
+    │                                  │
+    ▼                                  │
+handleBusMessage()                     │
+    │                                  │
+    ├─ openclaw? → proxyToOpenClaw()   │
+    │                                  │
+    └─ inber? ─────────────────────────┤
+                                       │
+                                       ▼
+                              Server.run(ctx, req, onEvent)
+                                       │
+                    ┌──────────────────┤
+                    │                  │
+                    ▼                  ▼
+              Session busy?      Queue.Enqueue()
+              → inject()              │
+                                      ▼
+                               getOrCreateSession()
+                                      │
+                                      ▼
+                               session.turn(input)
+                                      │
+                                      ▼
+                               Engine.RunTurn(input)
+                                      │
+                                      ▼
+                               PublishOutbound (deltas, done)
+```
+
+### Message Bus Protocol
+
+- **Inbound** (`inbound` topic): `InboundMessage{Text, Author, Agent, Channel, Orchestrator}`
+- **Outbound** (`outbound` topic): `OutboundMessage{Text, Agent, Channel, Stream, StreamID, Meta}`
+- Stream types: `status`, `delta`, `thinking`, `tool_call`, `tool_result`, `done`
+- Messages for `orchestrator != "inber"` are skipped (multi-orchestrator bus)
+
+## Session Management
+
+- **CLI**: Single session per workspace, persisted as `messages.json`
+- **Server**: Multiple concurrent sessions keyed by `agent:<name>:main`
+- **Queue lanes**: `main` (default 4 concurrent) and `subagent` (default 8)
+- **Injection**: Messages sent to a busy session are injected mid-turn (agent sees them between tool calls)
+- **Repair on load**: Empty content, dangling tool_use, alternation violations are auto-repaired
+
+## Context Budget System
+
+The `context.Builder` assembles the system prompt within a token budget:
+
+1. **Always-include**: chunks tagged `identity` or `always` (agent personality, core rules)
+2. **Tag-matched**: chunks whose tags overlap with the user message's tags, scored by match count. Size thresholds: <500 tokens = 1 tag match, 500-5000 = 2+, >5000 = 3+
+3. **Conversation**: recent user/assistant messages by recency
+
+Deduplication by ID and content similarity prevents bloat.
+
+## Memory System
+
+SQLite-backed (`memory.Store`):
+- **References**: auto-created after tool calls (file reads, shell output)
+- **PrepareSession**: loads identity + recent files into memory at startup
+- **Auto-extraction**: background goroutine extracts memories from completed turns
+- **Stashing**: large messages (>threshold tokens) are stashed to memory and replaced with pointers
+
+## Model Support
+
+- **Anthropic** (native): streaming, extended thinking, cache control
+- **OpenAI-compatible**: via `agent.ModelClient` — converts tools/messages between formats
+- **model-store**: SQLite registry of providers, credentials, usage tracking, OAuth refresh
+- **Failover**: `selectModel()` picks healthy model based on recent error/latency data
+
+## Agent Registry
+
+Agents are defined in agent-store (external SQLite). Each agent has:
+- Model, system prompt, tool allowlist, workspace path
+- Limits: max turns, max input tokens, max response time
+- Spawn capability: orchestrator agents can spawn sub-agents via registry
+
+## Workflow Hooks
+
+Post-tool-call automation:
+- **Auto-commit**: commit after file writes (configurable)
+- **Auto-format**: run formatters after code changes
+- **Forge integration**: project detection, build/preview tracking
