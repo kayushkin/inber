@@ -1,87 +1,40 @@
 # OpenClaw Integration
 
-Inber can delegate tasks to OpenClaw agents running on the gateway, treating them as specialist sub-agents.
+Inber and OpenClaw coexist as two orchestrators connected via the bus.
 
-## Configuration
+## Architecture
 
-Add an `openclaw` section to your `agents.json`:
-
-```json
-{
-    "default": "task-manager",
-    "agents": {
-        "task-manager": {
-            "name": "task-manager",
-            "tools": ["spawn_agent", "check_spawns"]
-        }
-    },
-    "openclaw": {
-        "url": "ws://localhost:18789/ws",
-        "token": "your-gateway-auth-token",
-        "agents": ["kayushkin", "downloadstack", "claxon-android"]
-    }
-}
+```
+Dashboard (SI) → Bus (inbound) → { inber-server, openclaw-bus } → agents
+                  Bus (outbound) ← { inber-server, openclaw-bus } ← responses
 ```
 
-### Fields
+Each message on the bus has an `orchestrator` field ("inber" or "openclaw"). Each runtime filters for its own messages.
 
-- `url`: WebSocket URL of the OpenClaw gateway (typically `ws://localhost:18789/ws`)
-- `token`: Authentication token for the gateway (found in `~/.openclaw/auth.json`)
-- `agents`: List of agent names that should route to OpenClaw instead of spawning locally
+## openclaw-bus Adapter
 
-## Usage
+Standalone Go service (`github.com/kayushkin/openclaw-bus`) that bridges OpenClaw to the bus:
 
-When an orchestrator agent uses `spawn_agent` with an agent name listed in the OpenClaw config, inber will automatically delegate to the OpenClaw gateway instead of spawning a local instance.
+1. **Bus → OpenClaw**: Subscribes to `inbound` (orchestrator:"openclaw"), forwards to OpenClaw chat completions API
+2. **OpenClaw → Bus**: Streams text deltas to `outbound` topic
+3. **JSONL tailing**: Watches OpenClaw session files for tool_call/thinking events (not exposed by SSE API)
+4. **Logpush**: Polls session files, pushes conversation history to logstack
 
-Example:
+Session key format: `agent:<agentId>:main`
 
-```javascript
-// In your orchestrator agent's conversation:
-{
-  "tool": "spawn_agent",
-  "input": {
-    "agent": "kayushkin",  // This agent is in the openclaw.agents list
-    "task": "Analyze this code pattern",
-    "wait": true
-  }
-}
-```
+## Agent Registry
 
-The task will be sent to the OpenClaw gateway, which will route it to the `kayushkin` agent. The response is returned as if it were a local sub-agent spawn.
+Both orchestrators register their agents with the bus. The dashboard (`/api/agents`) merges them:
+- Inber agents: from agent-store SQLite
+- OpenClaw agents: from OpenClaw gateway config
 
-## Protocol
+## Shared Resources
 
-The integration uses the OpenClaw gateway WebSocket protocol:
+**model-store** (port 8150) — shared model/credential management. Both orchestrators use it for API keys and health tracking.
 
-1. **Connect**: Establish WebSocket connection to gateway
-2. **Handshake**: Respond to `connect.challenge` with authentication
-3. **Agent Request**: Send agent invocation request
-4. **Stream Response**: Buffer assistant deltas until lifecycle end
-5. **Return Result**: Convert to inber's `TurnResult` format
+**agent-store** — shared agent registry SQLite. Contains agent names, roles, models, system prompts.
 
-## Testing
+## Systemd Services
 
-Run the OpenClaw integration tests:
-
-```bash
-cd cmd/inber
-go test -v -run TestOpenClawSubagent
-```
-
-Run the sí integration tests (which test sub-agent spawning end-to-end):
-
-```bash
-cd test
-go test -v -run TestSiPipeline
-```
-
-## Implementation
-
-- `cmd/inber/openclaw_feed.go`: OpenClaw gateway client implementation
-- `agent/registry/spawn_tool.go`: Routing logic (checks if agent is in OpenClaw config)
-- `agent/registry/config.go`: Configuration loading
-- `test/si_integration_test.go`: Integration tests for sub-agent spawning through sí
-
-## Token Tracking
-
-OpenClaw agents report token usage through the `usage` stream event. This is automatically tracked and included in the spawn result's `InputTokens` and `OutputTokens` fields.
+- `inber-server.service` — inber on port 8200
+- `openclaw-bus.service` — openclaw adapter (BUS_URL, OPENCLAW_URL, OPENCLAW_TOKEN, LOGSTACK_URL)

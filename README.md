@@ -1,36 +1,52 @@
 # Inber
 
-An agent orchestration framework in Go. Named after Inber Scéne — the bay where the Milesians first landed in Ireland.
+Go-based agent orchestration framework. Named after Inber Scéne — the bay where the Milesians first landed in Ireland.
 
-## Quick start
+Built on [anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go).
 
-### Running from project directory
+## Usage
+
 ```bash
-export ANTHROPIC_API_KEY=your-key
-go run ./cmd/inber "your prompt"
+# Interactive chat
+inber chat
+
+# Single-shot (pipe-friendly)
+echo "fix the bug in main.go" | inber run
+
+# Server mode (bus-connected, multi-agent)
+inber serve --addr :8200
+
+# Session management
+inber sessions list
+inber sessions timeline
+
+# Memory
+inber memory search "deployment process"
+inber memory stats
 ```
 
-### Installing for global use
-```bash
-go build -o inber ./cmd/inber/
-sudo mv inber /usr/local/bin/  # or add to your PATH
-
-# Set up user config (works from any directory)
-inber config user
-```
-
-See [User Configuration Guide](docs/user-config.md) for details on config locations and priority.
-
-## Test
+## Build & Test
 
 ```bash
-export ANTHROPIC_API_KEY=your-key
+go build -o ~/bin/inber ./cmd/inber/
 go test ./...
 ```
 
 ## Architecture
 
-- `agent/` — core agent loop (message → tool calls → response)
-- `cmd/inber/` — CLI entrypoint
+See [ARCHITECTURE.md](ARCHITECTURE.md) for full details.
 
-Built on [anthropic-sdk-go](https://github.com/anthropics/anthropic-sdk-go).
+```
+cmd/inber/    CLI (chat, run, serve, sessions, memory)
+server/       Multi-agent server with bus integration
+engine/       Per-session engine (context, memory, tools, hooks)
+agent/        Anthropic API loop (streaming, tool execution, failover)
+memory/       Persistent SQLite memory with tag-based retrieval
+agents/       Agent identity files (soul.md per agent)
+```
+
+## Agent Fleet
+
+10 agents with Irish mythology names, organized by domain:
+- **claxon** — orchestrator (Opus)
+- **fionn, brigid, oisin, manannan, ogma, goibniu, scathach, bench** — domain builders (Sonnet)

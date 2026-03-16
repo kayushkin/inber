@@ -1,94 +1,128 @@
 # Inber Architecture
 
-Inber is the **agent runtime**. It runs agents, manages sessions, spawns sub-agents, and connects to the bus for all external I/O.
+Go-based agent orchestration framework. Runs agents, manages sessions, spawns sub-agents, connects to the bus for all external I/O.
 
-## Role
-
-- Run agent turns (engine, context, tools)
-- Manage sessions (persistence, resume, repair)
-- Spawn sub-agents with workspace isolation (via forge)
-- Subscribe to bus for inbound messages, publish responses + events
-- Route inbound messages to the correct agent (routing table, formerly in bus-agent)
-
-## Connections
+## Package Layout
 
 ```
-Inber ↔ Bus (WS subscribe inbound, HTTP publish outbound + events)
-Inber → Forge (library call for workspace ops)
-Inber → Model APIs (Anthropic, OpenAI, etc. via model-store)
+cmd/inber/          CLI: chat, run, serve, sessions, memory
+server/             Server: sessions, bus, queue, spawn, API, events, store
+engine/             Engine: NewEngine → RunTurn → context/memory/tools/hooks
+agent/              Agent loop: API call → tool_use → collect → repeat
+  registry/         Agent config loading from agent-store
+memory/             Persistent memory: SQLite store, search, auto-references, prepare
+context/            File scanning, recency detection (used by memory)
+session/            Session JSONL logging, conversation repair, truncation/stash
+forge/              Git workspace management (separate repo, imported as library)
+agents/             Agent identity: soul.md, _principles.md, _values.md, _user.md
 ```
 
-Inber does NOT expose an HTTP API to SI or adapters. All I/O flows through bus.
+## Key Types
 
-## What Moves Here (from bus-agent)
+**Server** (`server/server.go`) — Top-level process. Manages sessions, routes bus messages, runs queue, exposes HTTP API.
 
-1. **Bus subscription** — subscribe to `inbound` topic directly
-2. **Agent routing** — resolve channel/metadata → agent (routing table in SQLite)
-3. **Per-agent queues** — sequential processing per agent, concurrent across agents
-4. **Backend execution** — run agent turns in-process (no more shelling out to `inber run`)
-5. **Response publishing** — publish to bus `outbound` topic
-6. **Event publishing** — publish spawn/status/deploy events to bus `events` topic
-7. **Model dashboard API** — model status, credential management (move to server API)
-8. **Agent registry** — agent list, routing table (merge with existing agents.json)
+**Engine** (`engine/engine.go`) — Per-session. Loads context/memory, builds system prompt, calls Agent.Run(), handles hooks. `NewEngine(cfg) → RunTurn(input) → Close()`.
 
-## What's Removed
+**Agent** (`agent/agent.go`) — Stateless API loop. Takes messages + tools, calls Anthropic streaming API, executes tool calls, returns TurnResult.
 
-- `cmd/bus-agent/` stays in the bus repo but is deprecated
-- `feed/inber_direct.go` in SI is removed (SI no longer calls inber)
-- No more INBER_SPAWN/INBER_META/INBER_DELTA stderr protocol — everything is in-process
+**Memory Store** (`memory/store.go`) — SQLite. Tag-based memories with importance scores, TTL, always-load flags. Auto-references track files read during tool calls.
 
 ## Message Flow
 
+```
+SI (dashboard) → Bus (inbound topic) → Server → Queue → Session → Engine → Agent → Anthropic API
+                                                                                          ↓
+SI (dashboard) ← Bus (outbound topic) ← Server ← onEvent hooks ← streaming deltas ←──────┘
+```
+
+All I/O flows through bus. Server does NOT expose HTTP for messaging — only for management API.
+
 ### Inbound
 1. Bus delivers message on `inbound` topic via WebSocket
-2. Server resolves agent from message metadata (agent field, or channel→agent route)
-3. Message enters per-agent queue
-4. Queue processor runs agent turn via engine
-5. Response published to bus `outbound` topic
+2. Server filters by `orchestrator == "inber"` (skips openclaw messages)
+3. Resolves agent from message `agent` field
+4. Enqueues work (serialized per session, concurrent across sessions)
+5. Queue processor runs engine turn, streaming events published to bus
 
-### Events
-Server publishes structured events to bus `events` topic:
-```json
-{"kind": "spawn.started", "agent": "oisin", "task": "...", "workspace": "..."}
-{"kind": "spawn.done", "agent": "oisin", "commits": 3, "branch": "spawn/oisin-..."}
-{"kind": "spawn.merged", "agent": "oisin", "workspace": "..."}
-{"kind": "deploy.started", "service": "si", "target": "prod"}
-{"kind": "deploy.done", "service": "si", "status": "ok"}
+### Outbound
+Server publishes to bus `outbound` topic with `orchestrator: "inber"`:
+- `stream: "delta"` — text chunks
+- `stream: "thinking"` — extended thinking
+- `stream: "tool_call"` — tool invocations  
+- `stream: "tool_result"` — tool outputs
+- `stream: "done"` — final text + token stats
+
+## Sessions
+
+- Key format: `agent:<name>:main` (primary), `agent:<name>:main:sub:<id>` (spawned)
+- Messages persisted to `~/.inber/server/sessions/<key>/messages.json`
+- Engine also persists to `<workspace>/.inber/workspace/<agent>/messages.json`
+- Session repair on resume: empty content → dangling tool_use → alternation → ID sanitization
+- Queue: per-session serialization, configurable lane concurrency (default 4 main, 2 spawn)
+
+## Context System
+
+Each turn, the engine builds a system prompt from memory entries:
+1. **Always-load** memories (identity, instructions, tool registry) — permanent
+2. **High-importance** memories (decisions, architecture notes, user prefs)
+3. **File references** from recent tool calls (auto-created, TTL-based)
+4. **Recent files** from filesystem (git log or mtime scan)
+
+Budget-based: 4K–6K tokens default, auto-truncates large memories (>500 tokens → preview + `memory_expand` tool).
+
+### Prompt Caching Strategy
+
+Anthropic caches based on prefix matching. Cache breakpoints:
+1. Last system block (context memories)
+2. Last tool definition
+3. Second-to-last message in conversation
+
+For best cache hit rates, system blocks should be **deterministically ordered** and **stable across turns**. Volatile content (file references, recent files) should come AFTER stable content (identity, instructions, architecture decisions).
+
+## Agent Fleet
+
+10 agents, Irish mythology themed, domain-based:
+
+| Agent | Role | Domain |
+|-------|------|--------|
+| claxon | Orchestrator | All repos, spawn/merge |
+| fionn | Builder | inber + agentkit |
+| brigid | Builder | kayushkin.com + bookstack |
+| oisin | Builder | si + bus + dashboard |
+| manannan | Builder | downloadstack + videostack + mediastack |
+| ogma | Builder | logstack |
+| goibniu | Builder | forge |
+| scathach | Builder | claxon-android |
+| bench | Evaluator | agent-bench |
+| bran | (shelved) | — |
+
+Config in `agents.json` (projects, tools) + agent-store SQLite (model, system prompt, tools list). Agent-store is single source of truth for runtime config.
+
+## Model Management
+
+**model-store** — standalone service (port 8150). SQLite DB with models, credentials, health tracking.
+- Multi-credential per provider with priority-based selection
+- Health-based failover: tracks response times + errors, tries fallbacks on unhealthy
+- OAuth auto-refresh via aiauth library
+- Auto-syncs to OpenClaw's auth-profiles.json
+
+## Spawn System
+
+`Server.Spawn()` creates ephemeral workspace (via forge) → runs agent turn on spawn branch → commits. Orchestrator (claxon) reviews and explicitly merges/rejects.
+
+Forge workspace API: `CreateWorkspace`, `CommitAll`, `MergeToMain`, `PushAll`, `Cleanup`.
+
+## External Connections
+
+```
+Server ↔ Bus (ws://localhost:8100, token auth)
+Server → Model APIs (Anthropic via model-store credentials)
+Server → Forge (library call, SQLite DB)
+Server → Agent-store (SQLite, shared with model-store)
 ```
 
-## Interfaces
+## Systemd
 
-### BusClient (new — connects server to bus)
-```go
-// BusClient handles bus pub/sub for the server.
-type BusClient struct {
-    busURL   string
-    token    string
-    consumer string
-}
-
-func (c *BusClient) Subscribe(ctx context.Context, topics []string) (<-chan BusMessage, error)
-func (c *BusClient) Publish(topic string, payload any) error
-```
-
-### Server (existing — gains bus integration)
-```go
-type Server struct {
-    // existing fields...
-    bus      *BusClient          // new: bus connection
-    routes   *RouteTable         // new: channel→agent routing (from bus-agent registry)
-    queues   map[string]*Queue   // new: per-agent message queues
-}
-```
-
-## Server API (HTTP — for dashboard/management only)
-
-The server still exposes HTTP for management, but NOT for message routing:
-```
-GET  /api/sessions          — list sessions
-GET  /api/sessions/:key     — session detail
-GET  /api/models            — model status
-POST /api/models/test       — test a model
-GET  /api/agents            — list agents + routes
-POST /api/agents/route      — update routing
-```
+`inber-server.service` — user service, auto-restart.
+Env: `BUS_URL`, `BUS_TOKEN`, `ANTHROPIC_API_KEY`.
+Binary: `~/bin/inber serve --addr :8200`.
