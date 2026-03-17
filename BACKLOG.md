@@ -13,7 +13,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 - [x] **pi-mono** (github.com/badlogic/pi-mono) — TypeScript monorepo. Clean package separation: `pi-ai` (unified LLM API), `pi-agent-core` (runtime + tools + state), `pi-coding-agent` (CLI), `pi-tui`, `pi-web-ui`. Study how they decouple the LLM provider from the agent runtime. Inber currently couples Anthropic SDK deeply — could we have a thin provider interface?
 - [x] **OpenClaw** (github.com/openclaw/openclaw) — Node.js. Study session management, tool policies, heartbeat system, channel abstractions. What does inber do better? What should inber steal?
-- [ ] **Claude Code** (Anthropic's CLI) — Study their tool permission model, session resume, and how they handle multi-file edits
+- [x] **Claude Code** (Anthropic's CLI) — Study their tool permission model, session resume, and how they handle multi-file edits
 - [ ] **Goose** (github.com/block/goose) — Rust agent. Study their extension/plugin system and how tools are modular
 - [ ] **Aider** (github.com/paul-gauthier/aider) — Python coding agent. Study their repo-map approach, git integration, and how they keep context lean
 - [ ] **Hermes Agent** (from skill-recommendations.md) — Study orchestration patterns
