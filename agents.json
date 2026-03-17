@@ -130,8 +130,8 @@
     },
     "oisin": {
       "name": "Ois\u00edn",
-      "project": "si",
-      "role": "communications \u2014 message bus, adapters, dashboard",
+      "project": "si,agent-dashboard",
+      "role": "si + bus + dashboard \u2014 the poet who sees everything",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -151,7 +151,8 @@
           "si",
           "discord",
           "websocket",
-          "project"
+          "project",
+          "dashboard"
         ],
         "budget": 50000
       },
@@ -296,8 +297,8 @@
     },
     "dagda": {
       "name": "Dagda",
-      "project": "noteboard",
-      "role": "noteboard \u2014 the good god, keeper of all notes",
+      "project": "noteboard,scheduler",
+      "role": "noteboard + scheduler \u2014 the good god, keeper of notes and time",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",
@@ -315,7 +316,9 @@
           "code",
           "go",
           "noteboard",
+          "scheduler",
           "notes",
+          "cron",
           "project"
         ],
         "budget": 50000

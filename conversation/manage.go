@@ -3,13 +3,16 @@ package conversation
 import (
 	"context"
 	"fmt"
+	"log"
+	"regexp"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/google/uuid"
 	"github.com/kayushkin/inber/memory"
 )
 
-// AgentRole represents different agent roles with different pruning needs
+// AgentRole represents different agent roles with different management needs
 type AgentRole string
 
 const (
@@ -19,9 +22,9 @@ const (
 	RoleDefault      AgentRole = "default"
 )
 
-// PruneConfig configures conversation pruning behavior
-type PruneConfig struct {
-	Role                    AgentRole // Agent role determines pruning strategy
+// ManagementConfig configures conversation management behavior (pruning + stashing)
+type ManagementConfig struct {
+	Role                    AgentRole // Agent role determines strategy
 	KeepRecentTurns         int       // Keep last N conversation turns in full
 	AssistantTruncateAfter  int       // Truncate assistant messages older than N turns
 	ToolResultKeepFull      int       // Keep tool results in full for last N turns
@@ -31,13 +34,27 @@ type PruneConfig struct {
 	AutoSaveThreshold       int       // Token count threshold for auto-saving to memory
 	AggressiveTruncation    bool      // Legacy field for backwards compatibility
 	MemorySaveThreshold     int       // Auto-save to memory if pruning would remove this many turns
-	TokenBudget             int       // Target token budget for pruned conversation
+	TokenBudget             int       // Target token budget for managed conversation
 	MinimumImportance       float64   // Minimum importance score for auto-saving memories
+	
+	// Stashing configuration (merged from StashConfig)
+	StashEnabled            bool      // Enable stashing of large content blocks
+	Enabled                bool      // Alias for StashEnabled for backward compatibility
+	UserMessageThreshold    int       // Stash user messages larger than this (tokens)
+	AssistantThreshold      int       // Stash assistant responses larger than this (tokens)
+	MinBlockSize           int       // Minimum block size to consider stashing (tokens)
+	DefaultImportance      float64   // Default importance for stashed content
 }
 
-// OrchestratorPruneConfig returns pruning config optimized for orchestrator agents
-func OrchestratorPruneConfig() PruneConfig {
-	return PruneConfig{
+// PruneConfig is an alias for backward compatibility
+type PruneConfig = ManagementConfig
+
+// StashConfig is an alias for backward compatibility  
+type StashConfig = ManagementConfig
+
+// OrchestratorManagementConfig returns config optimized for orchestrator agents
+func OrchestratorManagementConfig() ManagementConfig {
+	return ManagementConfig{
 		Role:                   RoleOrchestrator,
 		KeepRecentTurns:        40,
 		AssistantTruncateAfter: 8,
@@ -50,12 +67,18 @@ func OrchestratorPruneConfig() PruneConfig {
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
 		MinimumImportance:      0.3,
+		StashEnabled:           true,
+		Enabled:               true,
+		UserMessageThreshold:   1000,
+		AssistantThreshold:     1500,
+		MinBlockSize:           1000,
+		DefaultImportance:      0.6,
 	}
 }
 
-// CoderPruneConfig returns pruning config optimized for coder/implementer agents
-func CoderPruneConfig() PruneConfig {
-	return PruneConfig{
+// CoderManagementConfig returns config optimized for coder/implementer agents
+func CoderManagementConfig() ManagementConfig {
+	return ManagementConfig{
 		Role:                   RoleCoder,
 		KeepRecentTurns:        20,
 		AssistantTruncateAfter: 15,
@@ -68,12 +91,18 @@ func CoderPruneConfig() PruneConfig {
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
 		MinimumImportance:      0.3,
+		StashEnabled:           true,
+		Enabled:               true,
+		UserMessageThreshold:   800,
+		AssistantThreshold:     1200,
+		MinBlockSize:           800,
+		DefaultImportance:      0.6,
 	}
 }
 
-// TesterPruneConfig returns pruning config optimized for tester/validator agents
-func TesterPruneConfig() PruneConfig {
-	return PruneConfig{
+// TesterManagementConfig returns config optimized for tester/validator agents
+func TesterManagementConfig() ManagementConfig {
+	return ManagementConfig{
 		Role:                   RoleTester,
 		KeepRecentTurns:        20,
 		AssistantTruncateAfter: 10,
@@ -86,12 +115,18 @@ func TesterPruneConfig() PruneConfig {
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
 		MinimumImportance:      0.3,
+		StashEnabled:           true,
+		Enabled:               true,
+		UserMessageThreshold:   1000,
+		AssistantThreshold:     1500,
+		MinBlockSize:           1000,
+		DefaultImportance:      0.6,
 	}
 }
 
-// DefaultPruneConfig returns sensible defaults for conversation pruning
-func DefaultPruneConfig() PruneConfig {
-	return PruneConfig{
+// DefaultManagementConfig returns sensible defaults for conversation management
+func DefaultManagementConfig() ManagementConfig {
+	return ManagementConfig{
 		Role:                   RoleDefault,
 		KeepRecentTurns:        35,
 		AssistantTruncateAfter: 10,
@@ -104,105 +139,204 @@ func DefaultPruneConfig() PruneConfig {
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
 		MinimumImportance:      0.3,
+		StashEnabled:           true,
+		Enabled:               true,
+		UserMessageThreshold:   1000,
+		AssistantThreshold:     1500,
+		MinBlockSize:           1000,
+		DefaultImportance:      0.6,
 	}
 }
 
-// PruneConfigForRole returns the appropriate pruning config for the given role string
-func PruneConfigForRole(roleStr string) PruneConfig {
+// Backward compatibility functions
+func OrchestratorPruneConfig() PruneConfig { return OrchestratorManagementConfig() }
+func CoderPruneConfig() PruneConfig { return CoderManagementConfig() }
+func TesterPruneConfig() PruneConfig { return TesterManagementConfig() }
+func DefaultPruneConfig() PruneConfig { return DefaultManagementConfig() }
+func DefaultStashConfig() StashConfig { return DefaultManagementConfig() }
+
+// ManagementConfigForRole returns the appropriate config for the given role string
+func ManagementConfigForRole(roleStr string) ManagementConfig {
 	lower := strings.ToLower(roleStr)
 	
 	// Check for orchestrator patterns
 	if strings.Contains(lower, "orchestrat") || strings.Contains(lower, "coordinat") || 
 	   strings.Contains(lower, "dispatch") || strings.Contains(lower, "delegat") {
-		return OrchestratorPruneConfig()
+		return OrchestratorManagementConfig()
 	}
 	
 	// Check for coder patterns
 	if strings.Contains(lower, "code") || strings.Contains(lower, "implement") || 
 	   strings.Contains(lower, "scholar") || strings.Contains(lower, "develop") {
-		return CoderPruneConfig()
+		return CoderManagementConfig()
 	}
 	
 	// Check for tester patterns
 	if strings.Contains(lower, "test") || strings.Contains(lower, "validat") || 
 	   strings.Contains(lower, "sentinel") {
-		return TesterPruneConfig()
+		return TesterManagementConfig()
 	}
 	
-	return DefaultPruneConfig()
+	return DefaultManagementConfig()
 }
 
-// PruneResult contains statistics about what was pruned
-type PruneResult struct {
+// Backward compatibility function
+func PruneConfigForRole(roleStr string) PruneConfig {
+	return ManagementConfigForRole(roleStr)
+}
+
+// ManagementResult contains statistics about what was managed (pruned/stashed)
+type ManagementResult struct {
 	OriginalMessages   int
-	PrunedMessages     int
+	ManagedMessages    int
+	PrunedMessages     int // Alias for ManagedMessages for backward compatibility
 	TokensFreed        int
 	MemoriesSaved      int
 	Strategy           string
 	TruncatedToolCalls int
 	TruncatedAssistant int
 	DroppedToolResults int
+	StashedBlocks      int
 }
 
-// PruneConversation intelligently prunes conversation history while preserving important information.
-// It applies role-specific pruning strategies based on message type and age.
-// Before pruning, it auto-saves important decisions/facts to memory.
-func PruneConversation(
+// PruneResult is an alias for backward compatibility
+type PruneResult = ManagementResult
+
+// ContentType represents the type of large content detected (for stashing)
+type ContentType string
+
+const (
+	ContentTypeErrorDump   ContentType = "error-dump"
+	ContentTypeCodeBlock   ContentType = "code-block"
+	ContentTypeLogOutput   ContentType = "log-output"
+	ContentTypeFileContent ContentType = "file-contents"
+	ContentTypeLargeText   ContentType = "large-text"
+)
+
+// StashResult describes what was stashed
+type StashResult struct {
+	MemoryID    string
+	ContentType ContentType
+	Tokens      int
+	Summary     string
+}
+
+// ManageConversation applies unified conversation management including both
+// pruning (truncating old content) and stashing (moving large content to memory).
+// It replaces the separate PruneConversation and stashing logic.
+func ManageConversation(
 	ctx context.Context,
 	messages []anthropic.MessageParam,
 	memStore *memory.Store,
 	sessionID string,
-	cfg PruneConfig,
-) ([]anthropic.MessageParam, *PruneResult, error) {
-	result := &PruneResult{
+	cfg ManagementConfig,
+) ([]anthropic.MessageParam, *ManagementResult, error) {
+	result := &ManagementResult{
 		OriginalMessages: len(messages),
-		Strategy:         fmt.Sprintf("role-based-%s", cfg.Role),
+		Strategy:         fmt.Sprintf("unified-%s", cfg.Role),
 	}
 
-	// If we have fewer messages than the threshold, no pruning needed
+	// If we have fewer messages than the threshold, no management needed
 	if len(messages) <= cfg.KeepRecentTurns {
 		return messages, result, nil
 	}
 
-	// Calculate message ages (turns from the end)
-	messageAges := make([]int, len(messages))
+	// Step 1: Apply stashing first (move large content blocks to memory)
+	var managedMessages []anthropic.MessageParam
+	totalStashed := 0
+	
+	for _, msg := range messages {
+		managedMsg := msg
+		
+		// Apply stashing to each content block if enabled
+		if (cfg.StashEnabled || cfg.Enabled) && memStore != nil {
+			var newContent []anthropic.ContentBlockParamUnion
+			stashedInMsg := false
+			
+			for _, block := range msg.Content {
+				if block.OfText != nil {
+					text := block.OfText.Text
+					tokens := memory.EstimateTokens(text)
+					
+					// Check if this text block should be stashed
+					shouldStash := false
+					if msg.Role == anthropic.MessageParamRoleUser && tokens >= cfg.UserMessageThreshold {
+						shouldStash = true
+					} else if msg.Role == anthropic.MessageParamRoleAssistant && tokens >= cfg.AssistantThreshold {
+						shouldStash = true
+					} else if tokens >= cfg.MinBlockSize {
+						shouldStash = true
+					}
+					
+					if shouldStash {
+						// Stash large content
+						modifiedText, stashResults, err := DetectAndStashLargeBlocks(text, sessionID, memStore, cfg)
+						if err != nil {
+							log.Printf("[warn] stashing failed: %v", err)
+							newContent = append(newContent, block)
+						} else if len(stashResults) > 0 {
+							// Replace with stashed summary
+							newContent = append(newContent, anthropic.ContentBlockParamUnion{
+								OfText: &anthropic.TextBlockParam{Text: modifiedText},
+							})
+							stashedInMsg = true
+							totalStashed += len(stashResults)
+						} else {
+							newContent = append(newContent, block)
+						}
+					} else {
+						newContent = append(newContent, block)
+					}
+				} else {
+					newContent = append(newContent, block)
+				}
+			}
+			
+			if stashedInMsg {
+				managedMsg.Content = newContent
+			}
+		}
+		
+		managedMessages = append(managedMessages, managedMsg)
+	}
+	
+	result.StashedBlocks = totalStashed
+
+	// Step 2: Apply pruning logic (truncate old content)
+	messageAges := make([]int, len(managedMessages))
 	turnsFromEnd := 0
-	for i := len(messages) - 1; i >= 0; i-- {
+	for i := len(managedMessages) - 1; i >= 0; i-- {
 		messageAges[i] = turnsFromEnd
-		// Count turns by user messages
-		if messages[i].Role == anthropic.MessageParamRoleUser {
+		if managedMessages[i].Role == anthropic.MessageParamRoleUser {
 			turnsFromEnd++
 		}
 	}
 
 	// Auto-save important content to memory before pruning
 	if memStore != nil {
-		saved, err := autoSaveToMemory(ctx, messages, memStore, sessionID, cfg, messageAges)
+		saved, err := autoSaveToMemory(ctx, managedMessages, memStore, sessionID, cfg, messageAges)
 		if err != nil {
-			// Log error but continue with pruning
-			fmt.Printf("warning: failed to auto-save memories: %v\n", err)
+			log.Printf("[warn] failed to auto-save memories: %v", err)
 		} else {
 			result.MemoriesSaved = saved
 		}
 	}
 
 	// Apply role-based pruning per message
-	var prunedMessages []anthropic.MessageParam
+	var finalMessages []anthropic.MessageParam
 	tokensFreed := 0
 	
-	for i, msg := range messages {
+	for i, msg := range managedMessages {
 		age := messageAges[i]
-		prunedMsg := msg
+		managedMsg := msg
 		pruned := false
 
 		switch msg.Role {
 		case anthropic.MessageParamRoleUser:
-			// User messages: always keep full (they're small)
-			// But process tool results within them
+			// User messages: keep full text, but process tool results within them
 			var prunedContent []anthropic.ContentBlockParamUnion
 			for _, block := range msg.Content {
 				if block.OfToolResult != nil {
-					// Apply tool result pruning
 					prunedBlock, wasPruned := pruneToolResult(block, age, cfg)
 					prunedContent = append(prunedContent, prunedBlock)
 					if wasPruned {
@@ -218,7 +352,7 @@ func PruneConversation(
 				}
 			}
 			if pruned {
-				prunedMsg.Content = prunedContent
+				managedMsg.Content = prunedContent
 			}
 
 		case anthropic.MessageParamRoleAssistant:
@@ -230,9 +364,7 @@ func PruneConversation(
 						// Truncate to first 2-3 sentences
 						truncated := truncateToSummary(block.OfText.Text)
 						prunedContent = append(prunedContent, anthropic.ContentBlockParamUnion{
-							OfText: &anthropic.TextBlockParam{
-								Text: truncated,
-							},
+							OfText: &anthropic.TextBlockParam{Text: truncated},
 						})
 						pruned = true
 						result.TruncatedAssistant++
@@ -250,7 +382,7 @@ func PruneConversation(
 					}
 				}
 				if pruned {
-					prunedMsg.Content = prunedContent
+					managedMsg.Content = prunedContent
 				}
 			} else {
 				// Recent assistant messages: still check tool calls
@@ -265,24 +397,247 @@ func PruneConversation(
 					}
 				}
 				if pruned {
-					prunedMsg.Content = prunedContent
+					managedMsg.Content = prunedContent
 				}
 			}
 		}
 
 		if pruned {
-			tokensFreed += estimateMessageTokens(msg) - estimateMessageTokens(prunedMsg)
+			tokensFreed += estimateMessageTokens(msg) - estimateMessageTokens(managedMsg)
 		}
-		prunedMessages = append(prunedMessages, prunedMsg)
+		finalMessages = append(finalMessages, managedMsg)
 	}
 
-	result.PrunedMessages = len(messages) - len(prunedMessages)
+	result.ManagedMessages = len(messages) - len(finalMessages)
+	result.PrunedMessages = result.ManagedMessages // Backward compatibility
 	result.TokensFreed = tokensFreed
-	return prunedMessages, result, nil
+	return finalMessages, result, nil
 }
 
+// PruneConversation is a backward compatibility wrapper
+func PruneConversation(
+	ctx context.Context,
+	messages []anthropic.MessageParam,
+	memStore *memory.Store,
+	sessionID string,
+	cfg PruneConfig,
+) ([]anthropic.MessageParam, *PruneResult, error) {
+	return ManageConversation(ctx, messages, memStore, sessionID, cfg)
+}
+
+// ShouldManage determines if conversation should be managed based on current size
+func ShouldManage(messages []anthropic.MessageParam, cfg ManagementConfig) bool {
+	return ShouldPrune(messages, cfg)
+}
+
+// ShouldPrune determines if conversation should be pruned (backward compatibility)
+func ShouldPrune(messages []anthropic.MessageParam, cfg PruneConfig) bool {
+	// Message count check — prune if we have too many messages regardless of
+	// token estimate (the estimator is known to undercount by 3-4x)
+	if len(messages) > cfg.KeepRecentTurns*2 {
+		return true
+	}
+
+	if len(messages) <= cfg.KeepRecentTurns {
+		return false
+	}
+
+	// Token budget check for borderline cases
+	totalTokens := 0
+	for _, msg := range messages {
+		totalTokens += estimateMessageTokens(msg)
+	}
+
+	return totalTokens > cfg.TokenBudget
+}
+
+// === Stashing functions (moved from stash.go) ===
+
+// DetectContentType identifies what type of content a large block contains
+func DetectContentType(content string) ContentType {
+	lower := strings.ToLower(content)
+
+	// Error dump detection
+	errorPatterns := []string{
+		"error:", "exception:", "panic:", "traceback", "stack trace",
+		"fatal:", "segmentation fault", "core dumped",
+	}
+	for _, pattern := range errorPatterns {
+		if strings.Contains(lower, pattern) {
+			return ContentTypeErrorDump
+		}
+	}
+
+	// Code block detection (lots of code fences)
+	codeFenceCount := strings.Count(content, "```")
+	if codeFenceCount >= 4 { // At least 2 code blocks
+		return ContentTypeCodeBlock
+	}
+
+	// Log output detection (timestamps + repeated patterns)
+	timestampPatterns := []*regexp.Regexp{
+		regexp.MustCompile(`\d{4}-\d{2}-\d{2}`),                    // 2024-01-15
+		regexp.MustCompile(`\d{2}:\d{2}:\d{2}`),                    // 12:34:56
+		regexp.MustCompile(`\[.*?\]`),                              // [INFO], [ERROR]
+		regexp.MustCompile(`(?i)(DEBUG|INFO|WARN|ERROR|FATAL):`),  // Log levels
+	}
+	timestampMatches := 0
+	for _, pattern := range timestampPatterns {
+		if pattern.MatchString(content) {
+			timestampMatches++
+		}
+	}
+	if timestampMatches >= 2 {
+		return ContentTypeLogOutput
+	}
+
+	// File contents detection (file paths + line numbers)
+	hasFilePaths := strings.Contains(content, "/") || strings.Contains(content, "\\")
+	lineNumberPattern := regexp.MustCompile(`:\d+:`)
+	hasLineNumbers := lineNumberPattern.MatchString(content)
+	if hasFilePaths && hasLineNumbers {
+		return ContentTypeFileContent
+	}
+
+	return ContentTypeLargeText
+}
+
+// StashLargeContent saves large content to memory and returns a summary
+func StashLargeContent(
+	content string,
+	sessionID string,
+	memStore *memory.Store,
+	cfg ManagementConfig,
+) (*StashResult, error) {
+	tokens := memory.EstimateTokens(content)
+
+	if tokens < cfg.MinBlockSize {
+		return nil, nil // Too small to stash
+	}
+
+	// Detect content type
+	contentType := DetectContentType(content)
+
+	// Generate tags
+	tags := []string{"large-input", "stashed", sessionID, string(contentType)}
+
+	// Save to memory
+	memID := uuid.New().String()
+	mem := memory.Memory{
+		ID:         memID,
+		Content:    content,
+		Tags:       tags,
+		Importance: cfg.DefaultImportance,
+		Source:     "system",
+	}
+
+	if err := memStore.Save(mem); err != nil {
+		return nil, fmt.Errorf("save stashed content: %w", err)
+	}
+
+	// Generate summary
+	summary := fmt.Sprintf("[Large content stashed — %s, ~%d tokens. Use memory_search or memory_expand(id=\"%s\") to recall full content]",
+		contentType, tokens, memID[:8])
+
+	return &StashResult{
+		MemoryID:    memID,
+		ContentType: contentType,
+		Tokens:      tokens,
+		Summary:     summary,
+	}, nil
+}
+
+// DetectAndStashLargeBlocks scans text for large blocks and stashes them
+func DetectAndStashLargeBlocks(
+	text string,
+	sessionID string,
+	memStore *memory.Store,
+	cfg ManagementConfig,
+) (string, []StashResult, error) {
+	if (!cfg.StashEnabled && !cfg.Enabled) || memStore == nil {
+		return text, nil, nil
+	}
+
+	var stashed []StashResult
+
+	// Strategy: detect code blocks first (they're explicit)
+	// Then detect large paragraphs
+
+	// 1. Extract code blocks
+	codeBlockPattern := regexp.MustCompile("(?s)```[a-z]*\n(.*?)```")
+	matches := codeBlockPattern.FindAllStringSubmatch(text, -1)
+	
+	modifiedText := text
+	for _, match := range matches {
+		fullMatch := match[0]
+		codeContent := match[1]
+
+		tokens := memory.EstimateTokens(codeContent)
+		if tokens >= cfg.MinBlockSize {
+			result, err := StashLargeContent(codeContent, sessionID, memStore, cfg)
+			if err != nil {
+				log.Printf("[warn] failed to stash code block: %v", err)
+				continue
+			}
+			if result != nil {
+				stashed = append(stashed, *result)
+				modifiedText = strings.Replace(modifiedText, fullMatch, result.Summary, 1)
+			}
+		}
+	}
+
+	// 2. Check overall text size after code block stashing
+	remainingTokens := memory.EstimateTokens(modifiedText)
+	if remainingTokens >= cfg.MinBlockSize {
+		// The remaining text is still large - check if it's a single large block
+		// Split by double newlines to detect large paragraphs
+		paragraphs := strings.Split(modifiedText, "\n\n")
+		
+		var rebuiltText []string
+		for _, para := range paragraphs {
+			paraTokens := memory.EstimateTokens(para)
+			if paraTokens >= cfg.MinBlockSize {
+				result, err := StashLargeContent(para, sessionID, memStore, cfg)
+				if err != nil {
+					log.Printf("[warn] failed to stash paragraph: %v", err)
+					rebuiltText = append(rebuiltText, para)
+					continue
+				}
+				if result != nil {
+					stashed = append(stashed, *result)
+					rebuiltText = append(rebuiltText, result.Summary)
+				} else {
+					rebuiltText = append(rebuiltText, para)
+				}
+			} else {
+				rebuiltText = append(rebuiltText, para)
+			}
+		}
+		modifiedText = strings.Join(rebuiltText, "\n\n")
+	}
+
+	// 3. Fallback: if total message is still large and nothing was stashed,
+	// stash the entire message (e.g., repetitive error dumps with small paragraphs)
+	if len(stashed) == 0 {
+		totalTokens := memory.EstimateTokens(modifiedText)
+		if totalTokens >= cfg.UserMessageThreshold {
+			result, err := StashLargeContent(modifiedText, sessionID, memStore, cfg)
+			if err != nil {
+				log.Printf("[warn] failed to stash entire large message: %v", err)
+			} else if result != nil {
+				stashed = append(stashed, *result)
+				modifiedText = result.Summary
+			}
+		}
+	}
+
+	return modifiedText, stashed, nil
+}
+
+// === Pruning utility functions (moved from prune.go) ===
+
 // pruneToolResult applies age-based pruning to a tool result block
-func pruneToolResult(block anthropic.ContentBlockParamUnion, age int, cfg PruneConfig) (anthropic.ContentBlockParamUnion, bool) {
+func pruneToolResult(block anthropic.ContentBlockParamUnion, age int, cfg ManagementConfig) (anthropic.ContentBlockParamUnion, bool) {
 	if block.OfToolResult == nil {
 		return block, false
 	}
@@ -463,7 +818,7 @@ func autoSaveToMemory(
 	messages []anthropic.MessageParam,
 	memStore *memory.Store,
 	sessionID string,
-	cfg PruneConfig,
+	cfg ManagementConfig,
 	messageAges []int,
 ) (int, error) {
 	saved := 0
@@ -613,29 +968,7 @@ func estimateMessageTokens(msg anthropic.MessageParam) int {
 	return memory.EstimateTokens(content)
 }
 
-// ShouldPrune determines if conversation should be pruned based on current size.
-// Triggers on EITHER message count exceeding KeepRecentTurns OR token budget exceeded.
-func ShouldPrune(messages []anthropic.MessageParam, cfg PruneConfig) bool {
-	// Message count check — prune if we have too many messages regardless of
-	// token estimate (the estimator is known to undercount by 3-4x)
-	if len(messages) > cfg.KeepRecentTurns*2 {
-		return true
-	}
-
-	if len(messages) <= cfg.KeepRecentTurns {
-		return false
-	}
-
-	// Token budget check for borderline cases
-	totalTokens := 0
-	for _, msg := range messages {
-		totalTokens += estimateMessageTokens(msg)
-	}
-
-	return totalTokens > cfg.TokenBudget
-}
-
-// PruningStrategy describes how messages were pruned
+// PruningStrategy describes how messages were managed (backward compatibility)
 type PruningStrategy struct {
 	Name        string
 	Description string
@@ -657,5 +990,9 @@ var (
 	StrategyRoleBased = PruningStrategy{
 		Name:        "role-based",
 		Description: "Apply role-specific pruning rules based on message type and age",
+	}
+	StrategyUnified = PruningStrategy{
+		Name:        "unified",
+		Description: "Apply unified management including stashing and pruning",
 	}
 )
