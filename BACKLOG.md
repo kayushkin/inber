@@ -16,12 +16,12 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Claude Code** (Anthropic's CLI) — Study their tool permission model, session resume, and how they handle multi-file edits
 - [x] **Goose** (github.com/block/goose) — Rust agent. Study their extension/plugin system and how tools are modular
 - [x] **Aider** (github.com/paul-gauthier/aider) — Python coding agent. Study their repo-map approach, git integration, and how they keep context lean
-- [ ] **Hermes Agent** (from skill-recommendations.md) — Study orchestration patterns
+- [x] **Hermes Agent** (from skill-recommendations.md) — Study orchestration patterns
 
 ## 🔧 Simplification
 
-- [ ] **Extract LLM provider interface** — Create a thin `Provider` interface (`Complete(messages) → response`) that wraps Anthropic SDK. This unblocks future provider swaps (OpenAI, local models) without touching agent logic. Start in `agent/provider.go`.
-- [ ] **Extract tool interface** — Ensure tools are fully self-contained (name, description, schema, execute). Should be possible to register a tool with zero knowledge of inber internals. Check current `agentkit/tools/` — how close are we?
+- [~] **Extract LLM provider interface** — Create a thin `Provider` interface (`Complete(messages) → response`) that wraps Anthropic SDK. This unblocks future provider swaps (OpenAI, local models) without touching agent logic. Start in `agent/provider.go`.
+- [~] **Extract tool interface** — Ensure tools are fully self-contained (name, description, schema, execute). Should be possible to register a tool with zero knowledge of inber internals. Check current `agentkit/tools/` — how close are we?
 - [ ] **Simplify engine/build.go** — After the context/memory merge, this file may have dead branches or unnecessary complexity. Audit and trim.
 - [ ] **Reduce engine/ file count** — Currently ~15 files in engine/. Can any be merged? (e.g., lifecycle.go + turn.go? display.go + log.go?)
 - [ ] **Simplify conversation package** — `summarize.go`, `prune.go`, `stash.go`, `extract.go` — are all 4 needed? Can prune+stash merge?

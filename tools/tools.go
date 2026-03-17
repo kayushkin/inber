@@ -1,5 +1,6 @@
 // Package tools provides built-in tools for the inber agent.
-// Each tool is a function returning an agent.Tool, so callers pick what to enable.
+// Tools are now interface-based for modularity and swappability.
+// Legacy functions still work for backward compatibility.
 package tools
 
 import (
@@ -19,6 +20,22 @@ func wrap(t agentkit.Tool) agent.Tool {
 		InputSchema: t.InputSchema,
 		Run:         t.Run,
 	}
+}
+
+// Default registry for built-in tools
+var DefaultRegistry = NewRegistry()
+
+// init populates the default registry with built-in tools
+func init() {
+	// Register all built-in tools in the default registry
+	DefaultRegistry.Register(NewAgentToolAdapter(Shell()))
+	DefaultRegistry.Register(NewAgentToolAdapter(ReadFile()))
+	DefaultRegistry.Register(NewAgentToolAdapter(WriteFile()))
+	DefaultRegistry.Register(NewAgentToolAdapter(EditFile()))
+	DefaultRegistry.Register(NewAgentToolAdapter(ListFiles()))
+	DefaultRegistry.Register(NewAgentToolAdapter(Browser()))
+	DefaultRegistry.Register(NewAgentToolAdapter(WebSearch()))
+	DefaultRegistry.Register(NewAgentToolAdapter(WebFetch()))
 }
 
 // File system tools
@@ -76,4 +93,44 @@ func All() []agent.Tool {
 		EditFile(),
 		ListFiles(),
 	}
+}
+
+// Registry-based functions for the new interface approach
+
+// GetTool returns a tool by name from the default registry.
+func GetTool(name string) Tool {
+	return DefaultRegistry.Get(name)
+}
+
+// RegisterTool adds a tool to the default registry.
+func RegisterTool(tool Tool) {
+	DefaultRegistry.Register(tool)
+}
+
+// AllFromRegistry returns all tools from the default registry as agent.Tool slice.
+// This provides a bridge between the new interface and existing engine code.
+func AllFromRegistry() []agent.Tool {
+	tools := DefaultRegistry.List()
+	result := make([]agent.Tool, len(tools))
+	for i, tool := range tools {
+		result[i] = ToAgentTool(tool)
+	}
+	return result
+}
+
+// ByNames returns tools by their names from the default registry.
+// Unknown tool names are silently ignored.
+func ByNames(names []string) []agent.Tool {
+	var result []agent.Tool
+	for _, name := range names {
+		if tool := DefaultRegistry.Get(name); tool != nil {
+			result = append(result, ToAgentTool(tool))
+		}
+	}
+	return result
+}
+
+// ListToolNames returns the names of all tools in the default registry.
+func ListToolNames() []string {
+	return DefaultRegistry.Names()
 }

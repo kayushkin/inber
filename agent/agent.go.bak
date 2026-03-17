@@ -50,7 +50,7 @@ type Hooks struct {
 
 // Agent runs the conversation loop with Claude.
 type Agent struct {
-	provider       Provider
+	client         *anthropic.Client
 	system         string
 	systemBlocks   []anthropic.TextBlockParam
 	tools          []Tool
@@ -78,29 +78,19 @@ type Agent struct {
 }
 
 // New creates an agent with the given system prompt.
-func New(provider Provider, system string) *Agent {
+func New(client *anthropic.Client, system string) *Agent {
 	return &Agent{
-		provider: provider,
-		system:   system,
+		client: client,
+		system: system,
 	}
 }
 
 // NewWithSystemBlocks creates an agent with pre-built system blocks.
-func NewWithSystemBlocks(provider Provider, blocks []anthropic.TextBlockParam) *Agent {
+func NewWithSystemBlocks(client *anthropic.Client, blocks []anthropic.TextBlockParam) *Agent {
 	return &Agent{
-		provider:     provider,
+		client:       client,
 		systemBlocks: blocks,
 	}
-}
-
-// NewWithClient creates an agent with an Anthropic client (backward compatibility).
-func NewWithClient(client *anthropic.Client, system string) *Agent {
-	return New(NewAnthropicProvider(client), system)
-}
-
-// NewWithClientAndSystemBlocks creates an agent with client and system blocks (backward compatibility).
-func NewWithClientAndSystemBlocks(client *anthropic.Client, blocks []anthropic.TextBlockParam) *Agent {
-	return NewWithSystemBlocks(NewAnthropicProvider(client), blocks)
 }
 
 // SetHooks attaches observation hooks for tool calls/results.
@@ -291,32 +281,29 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 
 		if a.hooks != nil && a.hooks.OnTextDelta != nil {
 			// Streaming API call
-			streamResp, err := a.provider.CompleteStreaming(ctx, &params)
-			if err != nil {
-				apiErr = err
-			} else {
-				var accumulated anthropic.Message
-				for streamResp.Next() {
-					event := streamResp.Current()
-					if err := accumulated.Accumulate(event); err != nil {
-						continue
-					}
-					// Emit text deltas
-					if delta, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
-						if textDelta, ok := delta.Delta.AsAny().(anthropic.TextDelta); ok && textDelta.Text != "" {
-							a.hooks.OnTextDelta(textDelta.Text)
-						}
-					}
+			stream := a.client.Messages.NewStreaming(ctx, params)
+			var accumulated anthropic.Message
+			for stream.Next() {
+				event := stream.Current()
+				if err := accumulated.Accumulate(event); err != nil {
+					continue
 				}
-				if err := streamResp.Err(); err != nil {
-					apiErr = err
-				} else {
-					resp = &accumulated
+				// Emit text deltas
+				if delta, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+					if textDelta, ok := delta.Delta.AsAny().(anthropic.TextDelta); ok && textDelta.Text != "" {
+						a.hooks.OnTextDelta(textDelta.Text)
+					}
 				}
 			}
+			if err := stream.Err(); err != nil {
+				apiErr = err
+			} else {
+				resp = &accumulated
+			}
+			stream.Close()
 		} else {
 			// Non-streaming API call
-			resp, apiErr = a.provider.Complete(ctx, &params)
+			resp, apiErr = a.client.Messages.New(ctx, params)
 		}
 
 		if apiErr != nil {
@@ -326,7 +313,7 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 				if len(pruned) < len(*messages) {
 					*messages = pruned
 					params.Messages = *messages
-					resp, apiErr = a.provider.Complete(ctx, &params)
+					resp, apiErr = a.client.Messages.New(ctx, params)
 				}
 			}
 			if apiErr != nil {

@@ -22,7 +22,8 @@ func skipIfNoKey(t *testing.T) *anthropic.Client {
 
 func TestSimpleResponse(t *testing.T) {
 	client := skipIfNoKey(t)
-	a := agent.New(client, "You are a helpful assistant. Be very brief.")
+	provider := agent.NewAnthropicProvider(client)
+	a := agent.New(provider, "You are a helpful assistant. Be very brief.")
 
 	messages := []anthropic.MessageParam{
 		anthropic.NewUserMessage(anthropic.NewTextBlock("What is 2+2? Reply with just the number.")),
@@ -51,7 +52,8 @@ func TestSimpleResponse(t *testing.T) {
 
 func TestToolCall(t *testing.T) {
 	client := skipIfNoKey(t)
-	a := agent.New(client, "You are a helpful assistant. Use the add tool to add numbers. Be very brief.")
+	provider := agent.NewAnthropicProvider(client)
+	a := agent.New(provider, "You are a helpful assistant. Use the add tool to add numbers. Be very brief.")
 
 	a.AddTool(agent.Tool{
 		Name:        "add",
@@ -96,7 +98,8 @@ func TestToolCall(t *testing.T) {
 
 func TestMultipleToolCalls(t *testing.T) {
 	client := skipIfNoKey(t)
-	a := agent.New(client, "You are a calculator. Use tools for all math. Be very brief.")
+	provider := agent.NewAnthropicProvider(client)
+	a := agent.New(provider, "You are a calculator. Use tools for all math. Be very brief.")
 
 	a.AddTool(agent.Tool{
 		Name:        "multiply",
@@ -138,7 +141,8 @@ func TestMultipleToolCalls(t *testing.T) {
 
 func TestConversationContinuity(t *testing.T) {
 	client := skipIfNoKey(t)
-	a := agent.New(client, "You are a helpful assistant. Be very brief.")
+	provider := agent.NewAnthropicProvider(client)
+	a := agent.New(provider, "You are a helpful assistant. Be very brief.")
 
 	messages := []anthropic.MessageParam{
 		anthropic.NewUserMessage(anthropic.NewTextBlock("My name is Inber. Just say hi.")),
@@ -166,7 +170,8 @@ func TestConversationContinuity(t *testing.T) {
 
 func TestSameAgentDifferentModels(t *testing.T) {
 	client := skipIfNoKey(t)
-	a := agent.New(client, "You are a helpful assistant. Be very brief.")
+	provider := agent.NewAnthropicProvider(client)
+	a := agent.New(provider, "You are a helpful assistant. Be very brief.")
 
 	// First run with Sonnet
 	messages1 := []anthropic.MessageParam{

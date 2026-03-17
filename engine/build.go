@@ -228,7 +228,8 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	if cacheIdx >= 0 && cacheIdx < len(systemBlocks) {
 		systemBlocks[cacheIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
-	a := agent.NewWithSystemBlocks(e.Client, systemBlocks)
+	provider := agent.NewAnthropicProvider(e.Client)
+	a := agent.NewWithSystemBlocks(provider, systemBlocks)
 	for _, t := range e.agentTools {
 		a.AddTool(t)
 	}

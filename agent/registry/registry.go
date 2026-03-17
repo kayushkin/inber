@@ -213,7 +213,8 @@ func (r *Registry) CloseAll() {
 
 // createAgent creates an agent instance from config
 func (r *Registry) createAgent(cfg *AgentConfig) (*agent.Agent, error) {
-	a := agent.New(r.client, cfg.System)
+	provider := agent.NewAnthropicProvider(r.client)
+	a := agent.New(provider, cfg.System)
 
 	// Set thinking budget if specified
 	if cfg.Thinking > 0 {
