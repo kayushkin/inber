@@ -10,7 +10,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/google/uuid"
 	"github.com/kayushkin/inber/agent"
-	inbercontext "github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/memory"
 )
 
@@ -109,8 +108,8 @@ func BackgroundExtractMemories(
 	}()
 
 	// Check if exchange is substantive enough
-	combinedTokens := inbercontext.EstimateTokens(userMessage) + 
-		inbercontext.EstimateTokens(assistantResponse)
+	combinedTokens := memory.EstimateTokens(userMessage) + 
+		memory.EstimateTokens(assistantResponse)
 	
 	if combinedTokens < cfg.MinExchangeTokens {
 		return // Too trivial
@@ -134,10 +133,10 @@ func BackgroundExtractMemories(
 	exchange := exchangeText.String()
 
 	// Keep prompt small (<500 tokens)
-	promptTokens := inbercontext.EstimateTokens(extractionPrompt + exchange)
+	promptTokens := memory.EstimateTokens(extractionPrompt + exchange)
 	if promptTokens > 500 {
 		// Truncate exchange to fit budget
-		maxExchangeTokens := 500 - inbercontext.EstimateTokens(extractionPrompt)
+		maxExchangeTokens := 500 - memory.EstimateTokens(extractionPrompt)
 		exchangeChars := (maxExchangeTokens * 4) // ~4 chars per token
 		if len(exchange) > exchangeChars {
 			exchange = exchange[:exchangeChars] + "..."

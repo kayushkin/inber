@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	inbercontext "github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/memory"
 )
 
@@ -485,7 +484,7 @@ func autoSaveToMemory(
 			continue
 		}
 
-		tokens := inbercontext.EstimateTokens(content)
+		tokens := memory.EstimateTokens(content)
 		if tokens < cfg.AutoSaveThreshold {
 			continue // Too short to bother saving
 		}
@@ -611,7 +610,7 @@ func extractTextContent(content []anthropic.ContentBlockParamUnion) string {
 // estimateMessageTokens estimates token count for a message
 func estimateMessageTokens(msg anthropic.MessageParam) int {
 	content := extractTextContent(msg.Content)
-	return inbercontext.EstimateTokens(content)
+	return memory.EstimateTokens(content)
 }
 
 // ShouldPrune determines if conversation should be pruned based on current size.

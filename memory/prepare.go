@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/kayushkin/inber/context"
 )
 
 // PrepareSessionConfig configures what gets loaded into memory for a session
@@ -114,7 +113,7 @@ Guidelines:
 // loadRecentFiles loads recently modified file references into memory with TTL
 func (s *Store) loadRecentFiles(cfg PrepareSessionConfig) error {
 	// Find recently modified files
-	recentFiles, err := context.FindRecentlyModified(cfg.RootDir, cfg.RecencyWindow)
+	recentFiles, err := FindRecentlyModified(cfg.RootDir, cfg.RecencyWindow)
 	if err != nil {
 		return err
 	}

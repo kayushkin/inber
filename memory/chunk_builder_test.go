@@ -1,11 +1,11 @@
-package context
+package memory
 
 import (
 	"testing"
 )
 
 func TestBuilder_BasicBuild(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	chunks := []Chunk{
 		{ID: "1", Text: "Identity chunk", Tokens: 100, Tags: []string{"identity"}},
@@ -17,7 +17,7 @@ func TestBuilder_BasicBuild(t *testing.T) {
 		store.Add(chunk)
 	}
 	
-	builder := NewBuilder(store, 1000)
+	builder := NewChunkBuilder(store, 1000)
 	result := builder.Build([]string{"question"})
 	
 	// Should include identity and tag-matched chunk
@@ -38,7 +38,7 @@ func TestBuilder_BasicBuild(t *testing.T) {
 }
 
 func TestBuilder_BudgetRespected(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	chunks := []Chunk{
 		{ID: "1", Text: "A", Tokens: 100, Tags: []string{"match"}},
@@ -52,7 +52,7 @@ func TestBuilder_BudgetRespected(t *testing.T) {
 	}
 	
 	// Budget only allows 2.5 chunks
-	builder := NewBuilder(store, 250)
+	builder := NewChunkBuilder(store, 250)
 	result := builder.Build([]string{"match"})
 	
 	totalTokens := 0
@@ -66,7 +66,7 @@ func TestBuilder_BudgetRespected(t *testing.T) {
 }
 
 func TestBuilder_AlwaysInclude(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	chunks := []Chunk{
 		{ID: "identity", Text: "I am a bot", Tokens: 100, Tags: []string{"identity"}},
@@ -78,7 +78,7 @@ func TestBuilder_AlwaysInclude(t *testing.T) {
 		store.Add(chunk)
 	}
 	
-	builder := NewBuilder(store, 1000)
+	builder := NewChunkBuilder(store, 1000)
 	result := builder.Build([]string{"unrelated"})
 	
 	// Should include identity and always tags even with no match
@@ -103,7 +103,7 @@ func TestBuilder_AlwaysInclude(t *testing.T) {
 }
 
 func TestBuilder_SizeAwareFiltering(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	chunks := []Chunk{
 		// Small chunk, single tag match - should be included
@@ -126,7 +126,7 @@ func TestBuilder_SizeAwareFiltering(t *testing.T) {
 		store.Add(chunk)
 	}
 	
-	builder := NewBuilder(store, 50000) // Large budget
+	builder := NewChunkBuilder(store, 50000) // Large budget
 	result := builder.Build([]string{"test-tag", "another-tag", "third-tag"})
 	
 	included := make(map[string]bool)
@@ -156,7 +156,7 @@ func TestBuilder_SizeAwareFiltering(t *testing.T) {
 }
 
 func TestBuilder_TestFileExclusion(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	chunks := []Chunk{
 		{ID: "main.go", Text: "package main", Tokens: 100, Tags: []string{"file", "code", "go"}},
@@ -168,7 +168,7 @@ func TestBuilder_TestFileExclusion(t *testing.T) {
 		store.Add(chunk)
 	}
 	
-	builder := NewBuilder(store, 1000)
+	builder := NewChunkBuilder(store, 1000)
 	
 	// Without "test" tag - test files should be excluded
 	result := builder.Build([]string{"code", "go"})
@@ -200,7 +200,7 @@ func TestBuilder_TestFileExclusion(t *testing.T) {
 }
 
 func TestBuilder_ConversationRecency(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	// Create conversation chunks with different timestamps
 	old := Chunk{
@@ -224,7 +224,7 @@ func TestBuilder_ConversationRecency(t *testing.T) {
 	store.Add(old)
 	store.Add(recent)
 	
-	builder := NewBuilder(store, 100) // Budget for 2 chunks max
+	builder := NewChunkBuilder(store, 100) // Budget for 2 chunks max
 	result := builder.Build([]string{})
 	
 	// Recent message should be prioritized
@@ -241,8 +241,8 @@ func TestBuilder_ConversationRecency(t *testing.T) {
 }
 
 func TestBuilder_EmptyStore(t *testing.T) {
-	store := NewStore()
-	builder := NewBuilder(store, 1000)
+	store := NewChunkStore()
+	builder := NewChunkBuilder(store, 1000)
 	
 	result := builder.Build([]string{"anything"})
 	

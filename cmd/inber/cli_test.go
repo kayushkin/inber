@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	inbercontext "github.com/kayushkin/inber/context"
-	"github.com/kayushkin/inber/engine"
 	"github.com/kayushkin/inber/memory"
+	"github.com/kayushkin/inber/engine"
 	"github.com/kayushkin/inber/session"
 )
 
@@ -549,8 +548,8 @@ func TestBuildSystemPrompt(t *testing.T) {
 	os.Chdir(dir)
 
 	// Create a minimal context store
-	store := inbercontext.NewStore()
-	store.Add(inbercontext.Chunk{
+	store := memory.NewChunkStore()
+	store.Add(memory.Chunk{
 		ID:     "test-identity",
 		Text:   "You are a test agent.",
 		Tags:   []string{"identity"},

@@ -9,7 +9,6 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
-	inbercontext "github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/conversation"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
@@ -105,7 +104,7 @@ func (e *Engine) needsSpawnTools(tools []string) bool {
 
 // contextBudget returns the token budget for memory context loading.
 func (e *Engine) contextBudget(userMessage string) (minImportance float64, tokenBudget int) {
-	msgTokens := inbercontext.EstimateTokens(userMessage)
+	msgTokens := memory.EstimateTokens(userMessage)
 	baseBudget := 4000
 
 	switch {
@@ -131,7 +130,7 @@ func (e *Engine) contextBudget(userMessage string) (minImportance float64, token
 // BuildSystemPrompt builds a context-aware system prompt as individual named blocks.
 func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 	if e.MemStore != nil {
-		messageTags := inbercontext.AutoTag(userMessage, "user")
+		messageTags := memory.AutoTag(userMessage, "user")
 		minImportance, tokenBudget := e.contextBudget(userMessage)
 
 		req := memory.BuildContextRequest{
@@ -195,8 +194,8 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 	if e.ContextStore == nil {
 		return nil
 	}
-	messageTags := inbercontext.AutoTag(userMessage, "user")
-	builder := inbercontext.NewBuilder(e.ContextStore, 50000)
+	messageTags := memory.AutoTag(userMessage, "user")
+	builder := memory.NewChunkBuilder(e.ContextStore, 50000)
 	chunks := builder.Build(messageTags)
 
 	blocks := make([]sessionMod.NamedBlock, len(chunks))

@@ -1,4 +1,4 @@
-package context
+package memory
 
 import (
 	"sync"
@@ -7,7 +7,7 @@ import (
 )
 
 func TestStore_AddAndGet(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	chunk := Chunk{
 		ID:     "test-1",
@@ -36,7 +36,7 @@ func TestStore_AddAndGet(t *testing.T) {
 }
 
 func TestStore_AddWithoutID(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	chunk := Chunk{
 		Text: "No ID",
@@ -49,7 +49,7 @@ func TestStore_AddWithoutID(t *testing.T) {
 }
 
 func TestStore_AutoTokenEstimate(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	chunk := Chunk{
 		ID:   "test-tokens",
@@ -70,7 +70,7 @@ func TestStore_AutoTokenEstimate(t *testing.T) {
 }
 
 func TestStore_Delete(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	chunk := Chunk{
 		ID:   "delete-me",
@@ -96,7 +96,7 @@ func TestStore_Delete(t *testing.T) {
 }
 
 func TestStore_ListByTags(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	chunks := []Chunk{
 		{ID: "1", Text: "A", Tags: []string{"alpha", "beta"}},
@@ -129,7 +129,7 @@ func TestStore_ListByTags(t *testing.T) {
 }
 
 func TestStore_Expiration(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	
 	past := time.Now().Add(-1 * time.Hour)
 	future := time.Now().Add(1 * time.Hour)
@@ -170,7 +170,7 @@ func TestStore_Expiration(t *testing.T) {
 }
 
 func TestStore_ThreadSafety(t *testing.T) {
-	store := NewStore()
+	store := NewChunkStore()
 	var wg sync.WaitGroup
 	
 	// Concurrent writes

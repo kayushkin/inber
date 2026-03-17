@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	inbercontext "github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/memory"
 )
 
@@ -106,7 +105,7 @@ func StashLargeContent(
 	memStore *memory.Store,
 	cfg StashConfig,
 ) (*StashResult, error) {
-	tokens := inbercontext.EstimateTokens(content)
+	tokens := memory.EstimateTokens(content)
 
 	if tokens < cfg.MinBlockSize {
 		return nil, nil // Too small to stash
@@ -170,7 +169,7 @@ func DetectAndStashLargeBlocks(
 		fullMatch := match[0]
 		codeContent := match[1]
 
-		tokens := inbercontext.EstimateTokens(codeContent)
+		tokens := memory.EstimateTokens(codeContent)
 		if tokens >= cfg.MinBlockSize {
 			result, err := StashLargeContent(codeContent, sessionID, memStore, cfg)
 			if err != nil {
@@ -185,7 +184,7 @@ func DetectAndStashLargeBlocks(
 	}
 
 	// 2. Check overall text size after code block stashing
-	remainingTokens := inbercontext.EstimateTokens(modifiedText)
+	remainingTokens := memory.EstimateTokens(modifiedText)
 	if remainingTokens >= cfg.MinBlockSize {
 		// The remaining text is still large - check if it's a single large block
 		// Split by double newlines to detect large paragraphs
@@ -193,7 +192,7 @@ func DetectAndStashLargeBlocks(
 		
 		var rebuiltText []string
 		for _, para := range paragraphs {
-			paraTokens := inbercontext.EstimateTokens(para)
+			paraTokens := memory.EstimateTokens(para)
 			if paraTokens >= cfg.MinBlockSize {
 				result, err := StashLargeContent(para, sessionID, memStore, cfg)
 				if err != nil {
@@ -217,7 +216,7 @@ func DetectAndStashLargeBlocks(
 	// 3. Fallback: if total message is still large and nothing was stashed,
 	// stash the entire message (e.g., repetitive error dumps with small paragraphs)
 	if len(stashed) == 0 {
-		totalTokens := inbercontext.EstimateTokens(modifiedText)
+		totalTokens := memory.EstimateTokens(modifiedText)
 		if totalTokens >= cfg.UserMessageThreshold {
 			result, err := StashLargeContent(modifiedText, sessionID, memStore, cfg)
 			if err != nil {

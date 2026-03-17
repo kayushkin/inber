@@ -8,7 +8,6 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/google/uuid"
-	inbercontext "github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/memory"
 )
 
@@ -104,7 +103,7 @@ func SummarizeConversation(
 
 	// Build text representation of old conversation for summarization
 	oldText := messagesToText(oldMessages)
-	oldTokens := inbercontext.EstimateTokens(oldText)
+	oldTokens := memory.EstimateTokens(oldText)
 
 	// Save full old conversation to memory before summarizing
 	if cfg.SaveToMemory && memStore != nil {
@@ -140,7 +139,7 @@ func SummarizeConversation(
 	}
 
 	result.Summarized = true
-	result.SummaryTokens = inbercontext.EstimateTokens(summary)
+	result.SummaryTokens = memory.EstimateTokens(summary)
 	result.KeptMessages = len(recentMessages) + 2 // +2 for summary user+assistant pair
 
 	// Build new message list: summary + recent messages

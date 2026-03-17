@@ -22,7 +22,7 @@ func (g *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/sessions/", g.handleSessionDetail)
 	mux.HandleFunc("/api/requests/", g.handleRequests)
 	mux.HandleFunc("/api/models", g.handleModels)
-	mux.HandleFunc("/api/models/test", g.handleModelTest)
+	// mux.HandleFunc("/api/models/test", g.handleModelTest) // removed: stub
 	mux.HandleFunc("/api/agents", g.handleAgents)
 
 	server := &http.Server{
@@ -311,14 +311,7 @@ func (g *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/models/test
-func (g *Server) handleModelTest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	// TODO: implement model testing
-	jsonError(w, "not implemented", http.StatusNotImplemented)
-}
+// handleModelTest removed (was a stub)
 
 // ---------------------------------------------------------------------------
 // Helpers

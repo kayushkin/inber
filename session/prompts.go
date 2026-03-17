@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	inbercontext "github.com/kayushkin/inber/context"
+	"github.com/kayushkin/inber/memory"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -100,7 +100,7 @@ func writeSystemFiles(promptsDir string, blocks []anthropic.TextBlockParam, bloc
 
 	totalTokens := 0
 	for i, block := range blocks {
-		tokens := inbercontext.EstimateTokens(block.Text)
+		tokens := memory.EstimateTokens(block.Text)
 		totalTokens += tokens
 
 		// Determine block name/slug
@@ -187,10 +187,10 @@ func estimateToolTokens(tools []anthropic.ToolUnionParam) int {
 		total += 50
 		if tool.OfTool != nil {
 			desc := tool.OfTool.Description.Or("")
-			total += inbercontext.EstimateTokens(desc)
+			total += memory.EstimateTokens(desc)
 			// Rough schema estimate from JSON size
 			if data, err := json.Marshal(tool.OfTool.InputSchema); err == nil {
-				total += inbercontext.EstimateTokens(string(data))
+				total += memory.EstimateTokens(string(data))
 			}
 		}
 	}
@@ -203,7 +203,7 @@ func writeSystemPrompt(sb *strings.Builder, blocks []anthropic.TextBlockParam, b
 	}
 	sb.WriteString("## System Prompt\n\n")
 	for i, block := range blocks {
-		tokens := inbercontext.EstimateTokens(block.Text)
+		tokens := memory.EstimateTokens(block.Text)
 		label := ""
 		if i < len(blockNames) && blockNames[i].ID != "" {
 			label = " — " + blockNames[i].ID
@@ -229,7 +229,7 @@ func writeAllMessages(sb *strings.Builder, messages []anthropic.MessageParam, st
 		for _, block := range msg.Content {
 			if block.OfText != nil {
 				text := block.OfText.Text
-				msgTokens += inbercontext.EstimateTokens(text)
+				msgTokens += memory.EstimateTokens(text)
 				if len(text) > 80 {
 					contentPreview = strings.ReplaceAll(text[:80], "|", "\\|") + "..."
 				} else {
@@ -251,7 +251,7 @@ func writeAllMessages(sb *strings.Builder, messages []anthropic.MessageParam, st
 func estimateSystemTokens(blocks []anthropic.TextBlockParam) int {
 	total := 0
 	for _, b := range blocks {
-		total += inbercontext.EstimateTokens(b.Text)
+		total += memory.EstimateTokens(b.Text)
 	}
 	return total
 }
@@ -262,7 +262,7 @@ func estimateMessageTokens(messages []anthropic.MessageParam) int {
 		total += 4
 		for _, block := range msg.Content {
 			if block.OfText != nil {
-				total += inbercontext.EstimateTokens(block.OfText.Text)
+				total += memory.EstimateTokens(block.OfText.Text)
 			} else if block.OfToolUse != nil || block.OfToolResult != nil {
 				total += 50
 			}

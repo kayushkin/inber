@@ -1,4 +1,4 @@
-package context
+package memory
 
 import (
 	"fmt"
@@ -156,10 +156,5 @@ func FormatRecentFiles(files []RecentFile) string {
 	return builder.String()
 }
 
-// plural returns "s" if n != 1
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
-}
+// plural is defined in prepare.go
+

@@ -117,7 +117,7 @@ func TestPrepareSession(t *testing.T) {
 		// Should NOT find old.txt (older than 24h)
 		recentCount := 0
 		for _, m := range results {
-			if hasTag(m.Tags, "recent") {
+			if testHasTag(m.Tags, "recent") {
 				recentCount++
 				
 				// Verify it has an expiration
@@ -151,7 +151,7 @@ func TestPrepareSession(t *testing.T) {
 		}
 
 		for _, m := range results {
-			if hasTag(m.Tags, "file:old.txt") {
+			if testHasTag(m.Tags, "file:old.txt") {
 				t.Error("old.txt should not be loaded (older than recency window)")
 			}
 		}
@@ -207,7 +207,7 @@ func TestPrepareSession_WithIdentityFile(t *testing.T) {
 	}
 }
 
-func hasTag(tags []string, tag string) bool {
+func testHasTag(tags []string, tag string) bool {
 	for _, t := range tags {
 		if t == tag {
 			return true

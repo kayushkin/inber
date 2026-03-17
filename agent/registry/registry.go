@@ -7,7 +7,6 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
-	"github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/memory"
 	"github.com/kayushkin/inber/session"
 	modelstore "github.com/kayushkin/model-store"
@@ -23,7 +22,7 @@ type Registry struct {
 	default_      string
 	configs       map[string]*AgentConfig
 	agents        map[string]*agent.Agent
-	contexts      map[string]*context.Store
+	contexts      map[string]*memory.ChunkStore
 	sessions      map[string]*session.Session
 	tools         *ToolRegistry
 	openclawURL   string   // OpenClaw gateway URL
@@ -44,7 +43,7 @@ func New(client *anthropic.Client, logsDir string) (*Registry, error) {
 		default_:     cfg.Default,
 		configs:      cfg.Agents,
 		agents:       make(map[string]*agent.Agent),
-		contexts:     make(map[string]*context.Store),
+		contexts:     make(map[string]*memory.ChunkStore),
 		sessions:     make(map[string]*session.Session),
 		tools:        NewToolRegistry(),
 	}
@@ -168,7 +167,7 @@ func (r *Registry) Get(name string) (*agent.Agent, error) {
 }
 
 // GetContext returns the context store for the named agent
-func (r *Registry) GetContext(name string) (*context.Store, error) {
+func (r *Registry) GetContext(name string) (*memory.ChunkStore, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -183,7 +182,7 @@ func (r *Registry) GetContext(name string) (*context.Store, error) {
 		return nil, fmt.Errorf("agent %q not found", name)
 	}
 
-	ctx := context.NewStore()
+	ctx := memory.NewChunkStore()
 	r.contexts[name] = ctx
 	return ctx, nil
 }

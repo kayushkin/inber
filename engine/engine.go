@@ -13,7 +13,7 @@ import (
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
-	inbercontext "github.com/kayushkin/inber/context"
+	
 	"github.com/kayushkin/inber/conversation"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
@@ -61,7 +61,7 @@ type ContextInjector func() []sessionMod.NamedBlock
 type Engine struct {
 	Client       *anthropic.Client
 	Agent        *agent.Agent
-	ContextStore *inbercontext.Store
+	ContextStore *memory.ChunkStore
 	MemStore     *memory.Store
 	Session      *sessionMod.Session
 	SessionDB    *sessionMod.DB
@@ -231,7 +231,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 		// Keep a minimal context store for backward compatibility
 		// (some tools might still use it)
-		e.ContextStore = inbercontext.NewStore()
+		e.ContextStore = memory.NewChunkStore()
 	} else if cfg.Raw && identityText == "" {
 		identityText = "You are a helpful assistant."
 	}
@@ -425,16 +425,16 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	// Store system override for raw/override modes
 	if cfg.SystemOverride != "" {
 		// Create a minimal context store with just the override
-		e.ContextStore = inbercontext.NewStore()
-		e.ContextStore.Add(inbercontext.Chunk{
+		e.ContextStore = memory.NewChunkStore()
+		e.ContextStore.Add(memory.Chunk{
 			ID:     "system-override",
 			Text:   cfg.SystemOverride,
 			Tags:   []string{"identity"},
 			Source: "override",
 		})
 	} else if cfg.Raw {
-		e.ContextStore = inbercontext.NewStore()
-		e.ContextStore.Add(inbercontext.Chunk{
+		e.ContextStore = memory.NewChunkStore()
+		e.ContextStore.Add(memory.Chunk{
 			ID:     "identity",
 			Text:   identityText,
 			Tags:   []string{"identity"},

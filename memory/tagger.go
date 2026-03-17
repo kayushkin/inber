@@ -1,4 +1,4 @@
-package context
+package memory
 
 import (
 	"path/filepath"

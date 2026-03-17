@@ -1,19 +1,19 @@
-package context
+package memory
 
 import (
 	"sort"
 	"strings"
 )
 
-// Builder assembles context from a store based on tags and token budget
-type Builder struct {
-	store       *Store
+// ChunkBuilder assembles context from a store based on tags and token budget
+type ChunkBuilder struct {
+	store       *ChunkStore
 	tokenBudget int
 }
 
 // NewBuilder creates a new context builder
-func NewBuilder(store *Store, tokenBudget int) *Builder {
-	return &Builder{
+func NewChunkBuilder(store *ChunkStore, tokenBudget int) *ChunkBuilder {
+	return &ChunkBuilder{
 		store:       store,
 		tokenBudget: tokenBudget,
 	}
@@ -24,7 +24,7 @@ func NewBuilder(store *Store, tokenBudget int) *Builder {
 // 1. Always-include chunks ("identity", "always" tags)
 // 2. Tag-matched chunks (size-aware, with minimum relevance threshold)
 // 3. Recent conversation chunks
-func (b *Builder) Build(messageTags []string) []Chunk {
+func (b *ChunkBuilder) Build(messageTags []string) []Chunk {
 	allChunks := b.store.ListAll()
 	
 	// Deduplicate chunks by content hash

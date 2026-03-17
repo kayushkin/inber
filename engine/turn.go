@@ -9,8 +9,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
-	inbercontext "github.com/kayushkin/inber/context"
 	"github.com/kayushkin/inber/conversation"
+	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
@@ -31,7 +31,7 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	// 1. STASH LARGE USER MESSAGES (before sending to LLM)
 	processedInput := input
 	if e.stashCfg.Enabled && e.MemStore != nil {
-		tokens := inbercontext.EstimateTokens(input)
+		tokens := memory.EstimateTokens(input)
 		if tokens > e.stashCfg.UserMessageThreshold {
 			modifiedInput, stashed, err := conversation.DetectAndStashLargeBlocks(input, sessionID, e.MemStore, e.stashCfg)
 			if err != nil {
@@ -151,7 +151,7 @@ func (e *Engine) stashAssistantResponse(sessionID string, result *agent.TurnResu
 	if !e.stashCfg.Enabled || e.MemStore == nil {
 		return
 	}
-	responseTokens := inbercontext.EstimateTokens(result.Text)
+	responseTokens := memory.EstimateTokens(result.Text)
 	if responseTokens <= e.stashCfg.AssistantThreshold {
 		return
 	}
@@ -166,7 +166,7 @@ func (e *Engine) stashAssistantResponse(sessionID string, result *agent.TurnResu
 	for _, block := range lastMsg.Content {
 		if block.OfText != nil {
 			text := block.OfText.Text
-			textTokens := inbercontext.EstimateTokens(text)
+			textTokens := memory.EstimateTokens(text)
 
 			if textTokens > e.stashCfg.MinBlockSize {
 				modifiedText, stashed, err := conversation.DetectAndStashLargeBlocks(text, sessionID, e.MemStore, e.stashCfg)

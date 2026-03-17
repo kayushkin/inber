@@ -1,4 +1,4 @@
-package context
+package memory
 
 import (
 	"fmt"
@@ -19,21 +19,21 @@ type Chunk struct {
 	StubPath  string     // file path for lazy loading (if IsStub=true)
 }
 
-// Store is a thread-safe in-memory chunk store
-type Store struct {
+// ChunkStore is a thread-safe in-memory chunk store
+type ChunkStore struct {
 	mu     sync.RWMutex
 	chunks map[string]Chunk
 }
 
 // NewStore creates a new chunk store
-func NewStore() *Store {
-	return &Store{
+func NewChunkStore() *ChunkStore {
+	return &ChunkStore{
 		chunks: make(map[string]Chunk),
 	}
 }
 
 // Add adds or updates a chunk in the store
-func (s *Store) Add(chunk Chunk) error {
+func (s *ChunkStore) Add(chunk Chunk) error {
 	if chunk.ID == "" {
 		return fmt.Errorf("chunk ID cannot be empty")
 	}
@@ -56,7 +56,7 @@ func (s *Store) Add(chunk Chunk) error {
 }
 
 // Get retrieves a chunk by ID
-func (s *Store) Get(id string) (Chunk, bool) {
+func (s *ChunkStore) Get(id string) (Chunk, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
@@ -74,7 +74,7 @@ func (s *Store) Get(id string) (Chunk, bool) {
 }
 
 // Delete removes a chunk by ID
-func (s *Store) Delete(id string) bool {
+func (s *ChunkStore) Delete(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
@@ -86,7 +86,7 @@ func (s *Store) Delete(id string) bool {
 }
 
 // ListByTags returns all non-expired chunks that have at least one of the given tags
-func (s *Store) ListByTags(tags []string) []Chunk {
+func (s *ChunkStore) ListByTags(tags []string) []Chunk {
 	if len(tags) == 0 {
 		return s.ListAll()
 	}
@@ -120,7 +120,7 @@ func (s *Store) ListByTags(tags []string) []Chunk {
 }
 
 // ListAll returns all non-expired chunks
-func (s *Store) ListAll() []Chunk {
+func (s *ChunkStore) ListAll() []Chunk {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
@@ -139,7 +139,7 @@ func (s *Store) ListAll() []Chunk {
 }
 
 // Count returns the number of non-expired chunks in the store
-func (s *Store) Count() int {
+func (s *ChunkStore) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
