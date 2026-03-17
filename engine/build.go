@@ -16,78 +16,119 @@ import (
 
 // buildTools resolves tools from agent config or defaults.
 func (e *Engine) buildTools() []agent.Tool {
-	var result []agent.Tool
-
 	if e.AgentConfig != nil && len(e.AgentConfig.Tools) > 0 {
-		for _, toolName := range e.AgentConfig.Tools {
-			if toolName == "repo_map" {
-				ignorePatterns := []string{
-					"*.log", "*.tmp", ".git/*", "vendor/*",
-					"node_modules/*", ".openclaw/*", "logs/*",
-				}
-				result = append(result, tools.RepoMap(e.repoRoot, ignorePatterns))
-				continue
-			}
-			if toolName == "recent_files" {
-				result = append(result, tools.RecentFiles(e.repoRoot))
-				continue
-			}
-			if toolName == "deploy" {
-				result = append(result, tools.Deploy())
-				continue
-			}
-			if toolName == "spawn_agent" {
-				if e.agentRegistry != nil {
-					result = append(result, e.agentRegistry.SpawnAgentTool())
-				}
-				continue
-			}
-			for _, t := range tools.All() {
-				if t.Name == toolName {
-					// Use workspace-scoped shell when repoRoot is set.
-					if t.Name == "shell" && e.repoRoot != "" {
-						result = append(result, tools.ShellInDir(e.repoRoot))
-					} else {
-						result = append(result, t)
-					}
-					break
-				}
+		return e.buildConfiguredTools()
+	}
+	return e.buildDefaultTools()
+}
+
+// buildConfiguredTools builds tools from the agent config.
+func (e *Engine) buildConfiguredTools() []agent.Tool {
+	var result []agent.Tool
+	
+	for _, toolName := range e.AgentConfig.Tools {
+		if tool := e.buildSpecialTool(toolName); tool != nil {
+			result = append(result, *tool)
+			continue
+		}
+		
+		if tool := e.findStandardTool(toolName); tool != nil {
+			result = append(result, *tool)
+			continue
+		}
+	}
+	
+	// Add memory tools
+	if e.MemStore != nil {
+		result = append(result, e.buildMemoryTools()...)
+	}
+	
+	return result
+}
+
+// buildDefaultTools returns all available tools with workspace adaptations.
+func (e *Engine) buildDefaultTools() []agent.Tool {
+	result := tools.All()
+	
+	// Replace shell with workspace-scoped version
+	if e.repoRoot != "" {
+		for i, t := range result {
+			if t.Name == "shell" {
+				result[i] = tools.ShellInDir(e.repoRoot)
+				break
 			}
 		}
-		if e.MemStore != nil {
-			for _, toolName := range e.AgentConfig.Tools {
-				if strings.HasPrefix(toolName, "memory_") {
-					for _, t := range memory.AllMemoryTools(e.MemStore) {
-						if t.Name == toolName {
-							result = append(result, t)
-							break
-						}
-					}
-				}
-			}
-		}
-	} else {
-		result = tools.All()
-		// Replace shell with workspace-scoped version.
-		if e.repoRoot != "" {
-			for i, t := range result {
-				if t.Name == "shell" {
-					result[i] = tools.ShellInDir(e.repoRoot)
-					break
-				}
-			}
-		}
-		if e.MemStore != nil {
-			result = append(result, memory.AllMemoryTools(e.MemStore)...)
-		}
+	}
+	
+	// Add memory tools
+	if e.MemStore != nil {
+		result = append(result, memory.AllMemoryTools(e.MemStore)...)
+	}
+	
+	// Add workspace tools
+	ignorePatterns := []string{
+		"*.log", "*.tmp", ".git/*", "vendor/*",
+		"node_modules/*", ".openclaw/*", "logs/*",
+	}
+	result = append(result, tools.RepoMap(e.repoRoot, ignorePatterns))
+	result = append(result, tools.RecentFiles(e.repoRoot))
+	
+	return result
+}
+
+// buildSpecialTool creates workspace-specific or special tools.
+func (e *Engine) buildSpecialTool(toolName string) *agent.Tool {
+	switch toolName {
+	case "repo_map":
 		ignorePatterns := []string{
 			"*.log", "*.tmp", ".git/*", "vendor/*",
 			"node_modules/*", ".openclaw/*", "logs/*",
 		}
-		result = append(result, tools.RepoMap(e.repoRoot, ignorePatterns))
-		result = append(result, tools.RecentFiles(e.repoRoot))
+		tool := tools.RepoMap(e.repoRoot, ignorePatterns)
+		return &tool
+	case "recent_files":
+		tool := tools.RecentFiles(e.repoRoot)
+		return &tool
+	case "deploy":
+		tool := tools.Deploy()
+		return &tool
+	case "spawn_agent":
+		if e.agentRegistry != nil {
+			tool := e.agentRegistry.SpawnAgentTool()
+			return &tool
+		}
 	}
+	return nil
+}
 
+// findStandardTool looks for a tool in the standard tools list.
+func (e *Engine) findStandardTool(toolName string) *agent.Tool {
+	for _, t := range tools.All() {
+		if t.Name == toolName {
+			// Use workspace-scoped shell when repoRoot is set
+			if t.Name == "shell" && e.repoRoot != "" {
+				tool := tools.ShellInDir(e.repoRoot)
+				return &tool
+			}
+			return &t
+		}
+	}
+	return nil
+}
+
+// buildMemoryTools returns memory tools matching configured tool names.
+func (e *Engine) buildMemoryTools() []agent.Tool {
+	var result []agent.Tool
+	for _, toolName := range e.AgentConfig.Tools {
+		if strings.HasPrefix(toolName, "memory_") {
+			for _, t := range memory.AllMemoryTools(e.MemStore) {
+				if t.Name == toolName {
+					result = append(result, t)
+					break
+				}
+			}
+		}
+	}
 	return result
 }
 
@@ -104,26 +145,35 @@ func (e *Engine) needsSpawnTools(tools []string) bool {
 // contextBudget returns the token budget for memory context loading.
 func (e *Engine) contextBudget(userMessage string) (minImportance float64, tokenBudget int) {
 	msgTokens := memory.EstimateTokens(userMessage)
-	baseBudget := 4000
-
-	switch {
-	case e.TurnCounter == 0:
-		return 0, baseBudget
-	case e.consecutiveErrors >= 5:
+	
+	// Use larger context budget for error recovery
+	if e.consecutiveErrors >= 5 {
 		return 0, 50000
-	case e.consecutiveErrors >= 3:
-		return 0, 35000
-	case e.consecutiveErrors >= 1 || e.lastTurnHadError:
-		return 0, 20000
-	case msgTokens > 1000:
-		return 0, 15000
-	case msgTokens > 300:
-		return 0, 10000
-	case e.TurnCounter > 15:
-		return 0, 8000
-	default:
-		return 0, 6000
 	}
+	if e.consecutiveErrors >= 3 {
+		return 0, 35000
+	}
+	if e.consecutiveErrors >= 1 || e.lastTurnHadError {
+		return 0, 20000
+	}
+	
+	// First turn gets base budget
+	if e.TurnCounter == 0 {
+		return 0, 4000
+	}
+	
+	// Scale budget based on message complexity
+	if msgTokens > 1000 {
+		return 0, 15000
+	}
+	if msgTokens > 300 {
+		return 0, 10000
+	}
+	if e.TurnCounter > 15 {
+		return 0, 8000
+	}
+	
+	return 0, 6000
 }
 
 // BuildSystemPrompt builds a context-aware system prompt as individual named blocks.
@@ -207,6 +257,20 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 // buildAgent creates a fresh Agent with current system prompt, tools, and hooks.
 // Automatically adds cache_control to system blocks for prompt caching.
 func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
+	systemBlocks := e.buildSystemBlocks(blocks)
+	
+	provider := agent.NewAnthropicProvider(e.Client)
+	a := agent.NewWithSystemBlocks(provider, systemBlocks)
+	
+	e.configureAgent(a)
+	e.configureContextPruning(a)
+	
+	e.Agent = a
+	return a
+}
+
+// buildSystemBlocks converts named blocks to anthropic system blocks with cache control.
+func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.TextBlockParam {
 	systemBlocks := make([]anthropic.TextBlockParam, len(blocks))
 	for i, b := range blocks {
 		systemBlocks[i] = anthropic.TextBlockParam{Text: b.Text}
@@ -228,14 +292,20 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	if cacheIdx >= 0 && cacheIdx < len(systemBlocks) {
 		systemBlocks[cacheIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
-	provider := agent.NewAnthropicProvider(e.Client)
-	a := agent.NewWithSystemBlocks(provider, systemBlocks)
+	
+	return systemBlocks
+}
+
+// configureAgent sets up tools, hooks, limits, and other agent settings.
+func (e *Engine) configureAgent(a *agent.Agent) {
 	for _, t := range e.agentTools {
 		a.AddTool(t)
 	}
+	
 	if e.thinkingBud > 0 {
 		a.SetThinking(e.thinkingBud)
 	}
+	
 	a.SetHooks(e.buildHooks())
 
 	// Wire up mid-run message injection
@@ -248,12 +318,17 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 		a.SetLimitCheck(e.buildLimitCheck())
 	}
 
+	// Set context window based on model or default
 	modelInfo, ok := agent.Models[e.Model]
 	if ok {
 		a.SetContextWindow(modelInfo.ContextWindow)
 	} else {
 		a.SetContextWindow(200000)
 	}
+}
+
+// configureContextPruning sets up automatic context pruning when approaching token limits.
+func (e *Engine) configureContextPruning(a *agent.Agent) {
 	a.SetBeforeRequest(func(messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam {
 		cfg := e.pruneConfig()
 		cfg.TokenBudget = contextWindow / 2
@@ -285,9 +360,6 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 
 		return messages
 	})
-
-	e.Agent = a
-	return a
 }
 
 // hasToolResult checks if a message contains any tool_result content blocks.
