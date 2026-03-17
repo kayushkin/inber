@@ -166,16 +166,6 @@ func (e *Engine) Close() {
 		}
 	}
 
-	// Post-request: ensure changes are committed and pushed
-	if !e.noHooks && e.repoRoot != "" && len(e.Messages) > 0 {
-		verifier := NewPostRequestVerifier(e.repoRoot, nil, nil)
-		if result, err := verifier.Verify(context.Background()); err == nil {
-			if output := result.Format(); output != "" {
-				fmt.Fprint(os.Stderr, output)
-			}
-		}
-	}
-
 	if e.MemStore != nil && len(e.Messages) > 0 {
 		SaveSessionSummary(e.MemStore, e.Messages, e.AgentName)
 	}

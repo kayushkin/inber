@@ -5,8 +5,42 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// compactGoError extracts the first few meaningful error lines from go build/test output.
+var goErrorLine = regexp.MustCompile(`^(.+\.go:\d+:\d+:.+)$`)
+
+func compactGoError(phase string, output string) string {
+	lines := strings.Split(output, "\n")
+	var errors []string
+	seen := make(map[string]bool)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if goErrorLine.MatchString(line) {
+			if !seen[line] {
+				seen[line] = true
+				errors = append(errors, line)
+			}
+			if len(errors) >= 5 {
+				break
+			}
+		}
+	}
+	if len(errors) == 0 {
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				errors = append(errors, line)
+				if len(errors) >= 3 {
+					break
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("⚠️ %s failed:\n%s", phase, strings.Join(errors, "\n"))
+}
 
 // WorkflowHooks orchestrates auto-commit, auto-format, and auto-test.
 type WorkflowHooks struct {
@@ -242,10 +276,42 @@ func (h *WorkflowHooks) commitFile(toolName, filePath string) string {
 // FinishSession returns a summary of work done.
 func (h *WorkflowHooks) FinishSession() string {
 	fileCount := len(h.changedFiles)
-	if fileCount == 0 {
+
+	var parts []string
+
+	// Ensure any uncommitted changes are committed
+	status, err := h.git("status", "--porcelain")
+	if err == nil && strings.TrimSpace(status) != "" {
+		h.git("add", "-A")
+		out, err := h.git("commit", "-m", "auto: session work")
+		if err == nil && !strings.Contains(out, "nothing to commit") {
+			parts = append(parts, "✅ Committed uncommitted changes")
+		}
+	}
+
+	// Push if there are unpushed commits
+	branch, err := h.git("rev-parse", "--abbrev-ref", "HEAD")
+	if err == nil && strings.TrimSpace(branch) != "" {
+		branch = strings.TrimSpace(branch)
+		ahead, err := h.git("rev-list", "--count", "@{u}..")
+		if err == nil && strings.TrimSpace(ahead) != "" && strings.TrimSpace(ahead) != "0" {
+			out, err := h.git("push", "--set-upstream", "origin", branch)
+			if err != nil {
+				parts = append(parts, fmt.Sprintf("❌ Push failed: %s", strings.TrimSpace(out)))
+			} else {
+				parts = append(parts, fmt.Sprintf("✅ Pushed to %s", branch))
+			}
+		}
+	}
+
+	if fileCount > 0 {
+		parts = append(parts, fmt.Sprintf("Session complete (%d file%s changed).", fileCount, plural(fileCount)))
+	}
+
+	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("Session complete (%d file%s changed).", fileCount, plural(fileCount))
+	return strings.Join(parts, "\n")
 }
 
 func plural(n int) string {
