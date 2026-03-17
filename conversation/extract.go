@@ -97,7 +97,7 @@ func BackgroundExtractMemories(
 	assistantResponse string,
 	toolCalls []ToolCallSummary,
 	sessionID string,
-	memStore *memory.Store,
+	memStore memory.MemoryStore,
 	cfg ExtractionConfig,
 ) {
 	// Defer recovery to prevent goroutine panics from crashing the app

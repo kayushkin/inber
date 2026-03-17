@@ -227,7 +227,7 @@ type StashResult struct {
 func ManageConversation(
 	ctx context.Context,
 	messages []anthropic.MessageParam,
-	memStore *memory.Store,
+	memStore memory.MemoryStore,
 	sessionID string,
 	cfg ManagementConfig,
 ) ([]anthropic.MessageParam, *ManagementResult, error) {
@@ -418,7 +418,7 @@ func ManageConversation(
 func PruneConversation(
 	ctx context.Context,
 	messages []anthropic.MessageParam,
-	memStore *memory.Store,
+	memStore memory.MemoryStore,
 	sessionID string,
 	cfg PruneConfig,
 ) ([]anthropic.MessageParam, *PruneResult, error) {
@@ -506,7 +506,7 @@ func DetectContentType(content string) ContentType {
 func StashLargeContent(
 	content string,
 	sessionID string,
-	memStore *memory.Store,
+	memStore memory.MemoryStore,
 	cfg ManagementConfig,
 ) (*StashResult, error) {
 	tokens := memory.EstimateTokens(content)
@@ -551,7 +551,7 @@ func StashLargeContent(
 func DetectAndStashLargeBlocks(
 	text string,
 	sessionID string,
-	memStore *memory.Store,
+	memStore memory.MemoryStore,
 	cfg ManagementConfig,
 ) (string, []StashResult, error) {
 	if (!cfg.StashEnabled && !cfg.Enabled) || memStore == nil {
@@ -816,7 +816,7 @@ func truncateToSummary(text string) string {
 func autoSaveToMemory(
 	ctx context.Context,
 	messages []anthropic.MessageParam,
-	memStore *memory.Store,
+	memStore memory.MemoryStore,
 	sessionID string,
 	cfg ManagementConfig,
 	messageAges []int,

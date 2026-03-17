@@ -90,7 +90,7 @@ func (r *Registry) Default() string {
 }
 
 // SetMemoryStore registers memory tools with the given memory store
-func (r *Registry) SetMemoryStore(store *memory.Store) {
+func (r *Registry) SetMemoryStore(store memory.MemoryStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools.RegisterMemoryTools(store)

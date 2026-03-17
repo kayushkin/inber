@@ -43,7 +43,7 @@ func array(desc, itemType string) map[string]any {
 }
 
 // SearchTool returns a tool for searching memories.
-func SearchTool(store *Store) agent.Tool {
+func SearchTool(store MemoryStore) agent.Tool {
 	type input struct {
 		Query string `json:"query"`
 		Limit int    `json:"limit"`
@@ -87,7 +87,7 @@ func SearchTool(store *Store) agent.Tool {
 }
 
 // SaveTool returns a tool for saving new memories.
-func SaveTool(store *Store) agent.Tool {
+func SaveTool(store MemoryStore) agent.Tool {
 	type input struct {
 		Content    string   `json:"content"`
 		Tags       []string `json:"tags"`
@@ -142,7 +142,7 @@ func SaveTool(store *Store) agent.Tool {
 }
 
 // ExpandTool returns a tool for retrieving detailed memory content.
-func ExpandTool(store *Store) agent.Tool {
+func ExpandTool(store MemoryStore) agent.Tool {
 	type input struct {
 		ID string `json:"id"`
 	}
@@ -181,7 +181,7 @@ func ExpandTool(store *Store) agent.Tool {
 }
 
 // ForgetTool returns a tool for marking memories as forgotten.
-func ForgetTool(store *Store) agent.Tool {
+func ForgetTool(store MemoryStore) agent.Tool {
 	type input struct {
 		ID string `json:"id"`
 	}
@@ -207,7 +207,7 @@ func ForgetTool(store *Store) agent.Tool {
 }
 
 // AllMemoryTools returns all memory tools for the given store.
-func AllMemoryTools(store *Store) []agent.Tool {
+func AllMemoryTools(store MemoryStore) []agent.Tool {
 	return []agent.Tool{
 		SearchTool(store),
 		SaveTool(store),

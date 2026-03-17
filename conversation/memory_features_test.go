@@ -58,7 +58,7 @@ func TestStashLargeContent(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test_memory.db")
 
 	// Create memory store
-	memStore, err := memory.NewStore(dbPath)
+	memStore, err := memory.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("failed to create memory store: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestDetectAndStashLargeBlocks(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "test_memory.db")
 
 	// Create memory store
-	memStore, err := memory.NewStore(dbPath)
+	memStore, err := memory.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("failed to create memory store: %v", err)
 	}

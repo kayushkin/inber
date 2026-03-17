@@ -35,7 +35,7 @@ func NewToolRegistry() *ToolRegistry {
 }
 
 // RegisterMemoryTools adds memory tools to the registry using the given memory store
-func (r *ToolRegistry) RegisterMemoryTools(store *memory.Store) {
+func (r *ToolRegistry) RegisterMemoryTools(store memory.MemoryStore) {
 	r.Register("memory_search", memory.SearchTool(store))
 	r.Register("memory_save", memory.SaveTool(store))
 	r.Register("memory_expand", memory.ExpandTool(store))

@@ -77,7 +77,7 @@ func SummarizeConversation(
 	ctx context.Context,
 	client *anthropic.Client,
 	messages []anthropic.MessageParam,
-	memStore *memory.Store,
+	memStore memory.MemoryStore,
 	sessionID string,
 	cfg SummarizeConfig,
 	model string,

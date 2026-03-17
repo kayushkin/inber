@@ -61,7 +61,7 @@ type ContextInjector func() []sessionMod.NamedBlock
 type Engine struct {
 	Client       *anthropic.Client
 	Agent        *agent.Agent
-	MemStore          *memory.Store
+	MemStore          memory.MemoryStore
 	IdentityOverride  string // for raw/override modes (no SQLite memory)
 	Session      *sessionMod.Session
 	SessionDB    *sessionMod.DB

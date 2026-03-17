@@ -108,7 +108,7 @@ func init() {
 	memoryPruneCmd.Flags().BoolVar(&memoryPruneDryRun, "dry-run", false, "Show what would be pruned without pruning")
 }
 
-func getMemoryStore() *memory.Store {
+func getMemoryStore() memory.MemoryStore {
 	repoRoot, _ := engine.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()

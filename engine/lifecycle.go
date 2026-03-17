@@ -189,7 +189,7 @@ func (e *Engine) Close() {
 }
 
 // SaveSessionSummary generates a brief session summary and saves it to memory.
-func SaveSessionSummary(store *memory.Store, messages []anthropic.MessageParam, agentName string) {
+func SaveSessionSummary(store memory.MemoryStore, messages []anthropic.MessageParam, agentName string) {
 	var parts []string
 	for _, msg := range messages {
 		role := string(msg.Role)
