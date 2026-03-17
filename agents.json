@@ -130,8 +130,8 @@
     },
     "oisin": {
       "name": "Ois\u00edn",
-      "project": "si,agent-dashboard",
-      "role": "si + bus + dashboard \u2014 the poet who sees everything",
+      "project": "si,dash",
+      "role": "si + dash \u2014 the poet who sees everything",
       "model": "claude-sonnet-4-5",
       "tools": [
         "shell",

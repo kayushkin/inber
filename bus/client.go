@@ -1,4 +1,7 @@
-package server
+// Package bus provides a client for communicating with the message bus,
+// handling WebSocket subscriptions for inbound messages and HTTP publishing
+// for outbound responses and events.
+package bus
 
 import (
 	"bytes"
@@ -13,10 +16,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// BusClient subscribes to the bus for inbound messages and publishes
+// Client subscribes to the bus for inbound messages and publishes
 // outbound responses and events. This replaces bus-agent as the bridge
 // between bus and the agent runtime.
-type BusClient struct {
+type Client struct {
 	busURL   string
 	wsURL    string
 	token    string
@@ -71,8 +74,8 @@ type OutboundMeta struct {
 	Model               string  `json:"model,omitempty"`
 }
 
-// NewBusClient creates a bus client. Returns nil if busURL is empty.
-func NewBusClient(busURL, token, consumer string) *BusClient {
+// NewClient creates a bus client. Returns nil if busURL is empty.
+func NewClient(busURL, token, consumer string) *Client {
 	if busURL == "" {
 		return nil
 	}
@@ -88,7 +91,7 @@ func NewBusClient(busURL, token, consumer string) *BusClient {
 		consumer = "inber-server"
 	}
 
-	return &BusClient{
+	return &Client{
 		busURL:   httpURL,
 		wsURL:    wsURL,
 		token:    token,
@@ -99,7 +102,7 @@ func NewBusClient(busURL, token, consumer string) *BusClient {
 
 // Subscribe connects to the bus and delivers inbound messages to the returned channel.
 // Reconnects automatically on failure. Blocks until ctx is cancelled.
-func (c *BusClient) Subscribe(ctx context.Context, topics []string) <-chan InboundMessage {
+func (c *Client) Subscribe(ctx context.Context, topics []string) <-chan InboundMessage {
 	ch := make(chan InboundMessage, 64)
 
 	go func() {
@@ -125,7 +128,7 @@ func (c *BusClient) Subscribe(ctx context.Context, topics []string) <-chan Inbou
 	return ch
 }
 
-func (c *BusClient) subscribeLoop(ctx context.Context, topics []string, ch chan<- InboundMessage) error {
+func (c *Client) subscribeLoop(ctx context.Context, topics []string, ch chan<- InboundMessage) error {
 	url := fmt.Sprintf("%s/subscribe?consumer=%s&topics=%s&token=%s",
 		c.wsURL, c.consumer, strings.Join(topics, ","), c.token)
 
@@ -214,7 +217,7 @@ func (c *BusClient) subscribeLoop(ctx context.Context, topics []string, ch chan<
 }
 
 // Publish sends a message to a bus topic.
-func (c *BusClient) Publish(topic string, payload any) error {
+func (c *Client) Publish(topic string, payload any) error {
 	if c == nil {
 		return nil
 	}
@@ -241,7 +244,7 @@ func (c *BusClient) Publish(topic string, payload any) error {
 }
 
 // PublishOutbound publishes an agent response to the "outbound" topic.
-func (c *BusClient) PublishOutbound(msg OutboundMessage) error {
+func (c *Client) PublishOutbound(msg OutboundMessage) error {
 	msg.Timestamp = time.Now()
 	if msg.Orchestrator == "" {
 		msg.Orchestrator = "inber"
@@ -250,11 +253,11 @@ func (c *BusClient) PublishOutbound(msg OutboundMessage) error {
 }
 
 // PublishEvent publishes a system event to the "events" topic.
-func (c *BusClient) PublishEvent(event any) error {
+func (c *Client) PublishEvent(event any) error {
 	return c.Publish("events", event)
 }
 
-func (c *BusClient) ack(topic string, id int64) {
+func (c *Client) ack(topic string, id int64) {
 	body := map[string]interface{}{
 		"consumer":   c.consumer,
 		"topic":      topic,

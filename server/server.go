@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kayushkin/forge"
+	"github.com/kayushkin/inber/bus"
 	modelstore "github.com/kayushkin/model-store"
 	sessionMod "github.com/kayushkin/inber/session"
 )
@@ -64,7 +65,7 @@ type Server struct {
 	queue      *Queue
 	store      *Store            // session/request persistence
 	events     *EventPublisher   // bus event publisher (nil = disabled)
-	bus        *BusClient        // bus subscription client (nil = API-only mode)
+	bus        *bus.Client       // bus subscription client (nil = API-only mode)
 	modelStore *modelstore.Store
 	forgeDB    WorkspaceManager             // workspace management
 	workspaces map[string]*forge.Workspace // active workspaces by ID
@@ -154,7 +155,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	// Create bus client for inbound subscription + outbound publishing.
-	busClient := NewBusClient(cfg.BusURL, cfg.BusToken, "inber-server")
+	busClient := bus.NewClient(cfg.BusURL, cfg.BusToken, "inber-server")
 
 	return &Server{
 		config:     cfg,
@@ -214,7 +215,7 @@ func (g *Server) ListenBus(ctx context.Context) error {
 }
 
 // handleBusMessage routes an inbound bus message to the correct agent.
-func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
+func (g *Server) handleBusMessage(ctx context.Context, msg bus.InboundMessage) {
 	// Proxy openclaw messages to OpenClaw API.
 	if msg.Orchestrator == "openclaw" {
 		g.proxyToOpenClaw(ctx, msg)
@@ -236,7 +237,7 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 	streamID := fmt.Sprintf("s-%d", time.Now().UnixMilli())
 
 	// Publish status: orchestrator received the message
-	g.bus.PublishOutbound(OutboundMessage{
+	g.bus.PublishOutbound(bus.OutboundMessage{
 		Text:     "received",
 		Agent:    agent,
 		Author:   agent,
@@ -258,7 +259,7 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 	onEvent := func(ev StreamEvent) {
 		switch ev.Kind {
 		case "delta":
-			g.bus.PublishOutbound(OutboundMessage{
+			g.bus.PublishOutbound(bus.OutboundMessage{
 				Text:     ev.Text,
 				Agent:    agent,
 				Author:   agent,
@@ -268,7 +269,7 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 			})
 
 		case "thinking":
-			g.bus.PublishOutbound(OutboundMessage{
+			g.bus.PublishOutbound(bus.OutboundMessage{
 				Text:     ev.Text,
 				Agent:    agent,
 				Author:   agent,
@@ -278,7 +279,7 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 			})
 
 		case "tool_call":
-			g.bus.PublishOutbound(OutboundMessage{
+			g.bus.PublishOutbound(bus.OutboundMessage{
 				Text:     ev.Text,
 				Agent:    agent,
 				Author:   agent,
@@ -289,7 +290,7 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 			})
 
 		case "tool_result":
-			g.bus.PublishOutbound(OutboundMessage{
+			g.bus.PublishOutbound(bus.OutboundMessage{
 				Text:     ev.Text,
 				Agent:    agent,
 				Author:   agent,
@@ -310,7 +311,7 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 	}
 
 	// Publish status: calling API
-	g.bus.PublishOutbound(OutboundMessage{
+	g.bus.PublishOutbound(bus.OutboundMessage{
 		Agent:    agent,
 		Author:   agent,
 		Channel:  msg.Channel,
@@ -323,7 +324,7 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 	if err != nil {
 		log.Printf("[server] bus message error: %v", err)
 		// Publish error response.
-		g.bus.PublishOutbound(OutboundMessage{
+		g.bus.PublishOutbound(bus.OutboundMessage{
 			Text:    fmt.Sprintf("error: %v", err),
 			Agent:   agent,
 			Author:  agent,
@@ -333,14 +334,14 @@ func (g *Server) handleBusMessage(ctx context.Context, msg InboundMessage) {
 	}
 
 	// Publish final "done" message.
-	g.bus.PublishOutbound(OutboundMessage{
+	g.bus.PublishOutbound(bus.OutboundMessage{
 		Text:     finalText,
 		Agent:    agent,
 		Author:   agent,
 		Channel:  msg.Channel,
 		Stream:   "done",
 		StreamID: streamID,
-		Meta: &OutboundMeta{
+		Meta: &bus.OutboundMeta{
 			InputTokens:         finalTokens.Input,
 			OutputTokens:        finalTokens.Output,
 			CacheReadTokens:     finalTokens.CacheRead,

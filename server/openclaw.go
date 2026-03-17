@@ -13,11 +13,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/kayushkin/inber/bus"
 )
 
 // proxyToOpenClaw forwards a bus message to OpenClaw's chat completions API
 // and publishes the response back to bus outbound.
-func (g *Server) proxyToOpenClaw(ctx context.Context, msg InboundMessage) {
+func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	if g.config.OpenClawURL == "" {
 		log.Printf("[openclaw] no OpenClaw URL configured, dropping message for %s", msg.Agent)
 		return
@@ -109,7 +111,7 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg InboundMessage) {
 			delta := chunk.Choices[0].Delta.Content
 			if delta != "" {
 				fullText += delta
-				g.bus.PublishOutbound(OutboundMessage{
+				g.bus.PublishOutbound(bus.OutboundMessage{
 					Text:     delta,
 					Agent:    agent,
 					Author:   agent,
@@ -134,14 +136,14 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg InboundMessage) {
 		agent, truncate(fullText, 80), duration.Seconds(), usage.PromptTokens, usage.CompletionTokens)
 
 	// Publish final done message.
-	g.bus.PublishOutbound(OutboundMessage{
+	g.bus.PublishOutbound(bus.OutboundMessage{
 		Text:     fullText,
 		Agent:    agent,
 		Author:   agent,
 		Channel:  msg.Channel,
 		Stream:   "done",
 		StreamID: streamID,
-		Meta: &OutboundMeta{
+		Meta: &bus.OutboundMeta{
 			InputTokens:  usage.PromptTokens,
 			OutputTokens: usage.CompletionTokens,
 			DurationMs:   duration.Milliseconds(),
@@ -149,8 +151,8 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg InboundMessage) {
 	})
 }
 
-func (g *Server) publishOpenClawError(msg InboundMessage, errMsg string) {
-	g.bus.PublishOutbound(OutboundMessage{
+func (g *Server) publishOpenClawError(msg bus.InboundMessage, errMsg string) {
+	g.bus.PublishOutbound(bus.OutboundMessage{
 		Text:    "⚠️ " + errMsg,
 		Agent:   msg.Agent,
 		Author:  msg.Agent,
