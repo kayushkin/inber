@@ -22,7 +22,6 @@ type Registry struct {
 	default_      string
 	configs       map[string]*AgentConfig
 	agents        map[string]*agent.Agent
-	contexts      map[string]*memory.ChunkStore
 	sessions      map[string]*session.Session
 	tools         *ToolRegistry
 	openclawURL   string   // OpenClaw gateway URL
@@ -43,7 +42,6 @@ func New(client *anthropic.Client, logsDir string) (*Registry, error) {
 		default_:     cfg.Default,
 		configs:      cfg.Agents,
 		agents:       make(map[string]*agent.Agent),
-		contexts:     make(map[string]*memory.ChunkStore),
 		sessions:     make(map[string]*session.Session),
 		tools:        NewToolRegistry(),
 	}
@@ -164,27 +162,6 @@ func (r *Registry) Get(name string) (*agent.Agent, error) {
 
 	r.agents[name] = a
 	return a, nil
-}
-
-// GetContext returns the context store for the named agent
-func (r *Registry) GetContext(name string) (*memory.ChunkStore, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Return existing context
-	if ctx, ok := r.contexts[name]; ok {
-		return ctx, nil
-	}
-
-	// Create new context store
-	_, ok := r.configs[name]
-	if !ok {
-		return nil, fmt.Errorf("agent %q not found", name)
-	}
-
-	ctx := memory.NewChunkStore()
-	r.contexts[name] = ctx
-	return ctx, nil
 }
 
 // GetSession returns the session for the named agent (creates if needed)

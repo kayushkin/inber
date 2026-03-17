@@ -256,6 +256,16 @@ func calculateScore(m Memory, tagSet map[string]bool) float64 {
 	return score
 }
 
+// hasTag checks if a tag list contains a specific tag
+func hasTag(tags []string, target string) bool {
+	for _, tag := range tags {
+		if tag == target {
+			return true
+		}
+	}
+	return false
+}
+
 // join is a simple string join helper
 func join(strs []string, sep string) string {
 	if len(strs) == 0 {

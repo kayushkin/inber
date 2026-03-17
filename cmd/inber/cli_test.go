@@ -547,16 +547,9 @@ func TestBuildSystemPrompt(t *testing.T) {
 	defer os.Chdir(orig)
 	os.Chdir(dir)
 
-	// Create a minimal context store
-	store := memory.NewChunkStore()
-	store.Add(memory.Chunk{
-		ID:     "test-identity",
-		Text:   "You are a test agent.",
-		Tags:   []string{"identity"},
-		Tokens: 20,
-	})
-
-	eng := &engine.Engine{ContextStore: store}
+	eng := &engine.Engine{}
+	// Use exported method to set identity override for raw/override mode testing
+	eng.IdentityOverride = "You are a test agent."
 	blocks := eng.BuildSystemPrompt("hello")
 	found := false
 	for _, b := range blocks {

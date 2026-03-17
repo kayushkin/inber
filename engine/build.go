@@ -191,16 +191,12 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 		return blocks
 	}
 	
-	if e.ContextStore == nil {
+	if e.IdentityOverride == "" {
 		return nil
 	}
-	messageTags := memory.AutoTag(userMessage, "user")
-	builder := memory.NewChunkBuilder(e.ContextStore, 50000)
-	chunks := builder.Build(messageTags)
 
-	blocks := make([]sessionMod.NamedBlock, len(chunks))
-	for i, chunk := range chunks {
-		blocks[i] = sessionMod.NamedBlock{ID: chunk.ID, Text: chunk.Text}
+	blocks := []sessionMod.NamedBlock{
+		{ID: "identity", Text: e.IdentityOverride},
 	}
 
 	if e.workspace != nil {

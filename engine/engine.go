@@ -61,8 +61,8 @@ type ContextInjector func() []sessionMod.NamedBlock
 type Engine struct {
 	Client       *anthropic.Client
 	Agent        *agent.Agent
-	ContextStore *memory.ChunkStore
-	MemStore     *memory.Store
+	MemStore          *memory.Store
+	IdentityOverride  string // for raw/override modes (no SQLite memory)
 	Session      *sessionMod.Session
 	SessionDB    *sessionMod.DB
 	Model        string
@@ -229,9 +229,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		e.toolInputsCache = make(map[string]string)
 		e.contextInjectors = cfg.ContextInjectors
 
-		// Keep a minimal context store for backward compatibility
-		// (some tools might still use it)
-		e.ContextStore = memory.NewChunkStore()
+		// No identity override needed — MemStore handles context
 	} else if cfg.Raw && identityText == "" {
 		identityText = "You are a helpful assistant."
 	}
@@ -424,22 +422,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 	// Store system override for raw/override modes
 	if cfg.SystemOverride != "" {
-		// Create a minimal context store with just the override
-		e.ContextStore = memory.NewChunkStore()
-		e.ContextStore.Add(memory.Chunk{
-			ID:     "system-override",
-			Text:   cfg.SystemOverride,
-			Tags:   []string{"identity"},
-			Source: "override",
-		})
+		e.IdentityOverride = cfg.SystemOverride
 	} else if cfg.Raw {
-		e.ContextStore = memory.NewChunkStore()
-		e.ContextStore.Add(memory.Chunk{
-			ID:     "identity",
-			Text:   identityText,
-			Tags:   []string{"identity"},
-			Source: "identity",
-		})
+		e.IdentityOverride = identityText
 	}
 
 	// Write tools list to workspace for reference
