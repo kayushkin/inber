@@ -73,4 +73,5 @@ func init() {
 	rootCmd.AddCommand(modelsCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(btwCmd)
 }
