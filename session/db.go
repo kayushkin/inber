@@ -10,10 +10,15 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DB wraps a SQLite database for session and turn tracking.
-type DB struct {
+// SQLiteStore wraps a SQLite database for session and turn tracking.
+// Implements the Store interface.
+type SQLiteStore struct {
 	db *sql.DB
 }
+
+// DB is an alias for SQLiteStore to maintain backwards compatibility.
+// Deprecated: Use SQLiteStore directly.
+type DB = SQLiteStore
 
 // SessionRow represents a session record.
 type SessionRow struct {
@@ -56,7 +61,7 @@ type SessionSummary struct {
 }
 
 // OpenDB opens or creates the sessions database at .inber/sessions.db.
-func OpenDB(repoRoot string) (*DB, error) {
+func OpenDB(repoRoot string) (*SQLiteStore, error) {
 	dir := filepath.Join(repoRoot, ".inber")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create .inber dir: %w", err)
@@ -73,7 +78,7 @@ func OpenDB(repoRoot string) (*DB, error) {
 		return nil, fmt.Errorf("migrate sessions db: %w", err)
 	}
 
-	return &DB{db: db}, nil
+	return &SQLiteStore{db: db}, nil
 }
 
 func migrate(db *sql.DB) error {
@@ -120,7 +125,7 @@ func migrate(db *sql.DB) error {
 }
 
 // InsertSession creates a new session record.
-func (d *DB) InsertSession(s *SessionRow) error {
+func (d *SQLiteStore) InsertSession(s *SessionRow) error {
 	_, err := d.db.Exec(`
 		INSERT INTO sessions (id, agent, model, command, parent_id, pid, started_at, status, log_file)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)`,
@@ -130,7 +135,7 @@ func (d *DB) InsertSession(s *SessionRow) error {
 }
 
 // EndSession marks a session as completed or errored.
-func (d *DB) EndSession(id, status, errMsg string) error {
+func (d *SQLiteStore) EndSession(id, status, errMsg string) error {
 	_, err := d.db.Exec(`
 		UPDATE sessions SET ended_at = ?, status = ?, error = ?
 		WHERE id = ?`,
@@ -140,11 +145,12 @@ func (d *DB) EndSession(id, status, errMsg string) error {
 }
 
 // SetTask sets the task description for a session (first user message, truncated).
-func (d *DB) SetTask(sessionID, task string) {
+func (d *SQLiteStore) SetTask(sessionID, task string) error {
 	if len(task) > 200 {
 		task = task[:200] + "…"
 	}
-	d.db.Exec(`UPDATE sessions SET task = ? WHERE id = ?`, task, sessionID)
+	_, err := d.db.Exec(`UPDATE sessions SET task = ? WHERE id = ?`, task, sessionID)
+	return err
 }
 
 // ActiveAgentStatus represents a running agent for status display.
@@ -161,7 +167,7 @@ type ActiveAgentStatus struct {
 
 // ListActiveStatus returns running agents with their latest turn time and task.
 // Cleans up stale sessions (dead PIDs) as a side effect.
-func (d *DB) ListActiveStatus() ([]ActiveAgentStatus, error) {
+func (d *SQLiteStore) ListActiveStatus() ([]ActiveAgentStatus, error) {
 	rows, err := d.db.Query(`
 		SELECT s.id, s.agent, s.model, COALESCE(s.task,''), s.pid,
 			strftime('%s', s.started_at),
@@ -207,7 +213,7 @@ func (d *DB) ListActiveStatus() ([]ActiveAgentStatus, error) {
 }
 
 // InsertTurn creates a new turn record (called when an API request starts).
-func (d *DB) InsertTurn(t *TurnRow) error {
+func (d *SQLiteStore) InsertTurn(t *TurnRow) error {
 	_, err := d.db.Exec(`
 		INSERT INTO turns (session_id, turn, started_at)
 		VALUES (?, ?, ?)`,
@@ -217,7 +223,7 @@ func (d *DB) InsertTurn(t *TurnRow) error {
 }
 
 // EndTurn updates a turn with response data.
-func (d *DB) EndTurn(sessionID string, turn int, inTokens, outTokens, toolCalls int, cost float64, stopReason, errMsg string) error {
+func (d *SQLiteStore) EndTurn(sessionID string, turn int, inTokens, outTokens, toolCalls int, cost float64, stopReason, errMsg string) error {
 	_, err := d.db.Exec(`
 		UPDATE turns SET ended_at = ?, in_tokens = ?, out_tokens = ?, cost = ?,
 			tool_calls = ?, stop_reason = ?, error = ?
@@ -229,7 +235,7 @@ func (d *DB) EndTurn(sessionID string, turn int, inTokens, outTokens, toolCalls 
 }
 
 // IncrementToolCalls bumps the tool_calls counter for the current turn.
-func (d *DB) IncrementToolCalls(sessionID string, turn int) error {
+func (d *SQLiteStore) IncrementToolCalls(sessionID string, turn int) error {
 	_, err := d.db.Exec(`
 		UPDATE turns SET tool_calls = tool_calls + 1
 		WHERE session_id = ? AND turn = ?`,
@@ -239,7 +245,7 @@ func (d *DB) IncrementToolCalls(sessionID string, turn int) error {
 }
 
 // ListSessions returns sessions with aggregated turn data, newest first.
-func (d *DB) ListSessions(limit int) ([]SessionSummary, error) {
+func (d *SQLiteStore) ListSessions(limit int) ([]SessionSummary, error) {
 	rows, err := d.db.Query(`
 		SELECT s.id, s.agent, s.model, s.command, COALESCE(s.parent_id,''), s.pid,
 			s.started_at, s.ended_at, s.status, COALESCE(s.error,''), COALESCE(s.log_file,''),
@@ -279,7 +285,7 @@ func (d *DB) ListSessions(limit int) ([]SessionSummary, error) {
 }
 
 // GetTurns returns all turns for a session.
-func (d *DB) GetTurns(sessionID string) ([]TurnRow, error) {
+func (d *SQLiteStore) GetTurns(sessionID string) ([]TurnRow, error) {
 	rows, err := d.db.Query(`
 		SELECT session_id, turn, started_at, ended_at, in_tokens, out_tokens,
 			cost, tool_calls, COALESCE(stop_reason,''), COALESCE(error,'')
@@ -310,7 +316,7 @@ func (d *DB) GetTurns(sessionID string) ([]TurnRow, error) {
 
 // ListActive returns sessions with status 'running' whose PID is still alive.
 // Stale sessions are marked as 'interrupted'.
-func (d *DB) ListActive() ([]SessionSummary, error) {
+func (d *SQLiteStore) ListActive() ([]SessionSummary, error) {
 	all, err := d.listByStatus("running")
 	if err != nil {
 		return nil, err
@@ -328,7 +334,7 @@ func (d *DB) ListActive() ([]SessionSummary, error) {
 }
 
 // DetectInterrupted marks any 'running' sessions with dead PIDs as 'interrupted'.
-func (d *DB) DetectInterrupted() (int, error) {
+func (d *SQLiteStore) DetectInterrupted() (int, error) {
 	all, err := d.listByStatus("running")
 	if err != nil {
 		return 0, err
@@ -344,7 +350,7 @@ func (d *DB) DetectInterrupted() (int, error) {
 	return count, nil
 }
 
-func (d *DB) listByStatus(status string) ([]SessionSummary, error) {
+func (d *SQLiteStore) listByStatus(status string) ([]SessionSummary, error) {
 	rows, err := d.db.Query(`
 		SELECT s.id, s.agent, s.model, s.command, COALESCE(s.parent_id,''), s.pid,
 			s.started_at, s.ended_at, s.status, COALESCE(s.error,''), COALESCE(s.log_file,''),
@@ -384,7 +390,7 @@ func (d *DB) listByStatus(status string) ([]SessionSummary, error) {
 }
 
 // Close closes the database.
-func (d *DB) Close() error {
+func (d *SQLiteStore) Close() error {
 	return d.db.Close()
 }
 

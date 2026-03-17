@@ -97,7 +97,7 @@ type Session struct {
 	turn         int             // current API round-trip number
 	totalIn      int
 	totalOut     int
-	db           *DB             // session tracking DB (nil if unavailable)
+	store        Store           // session tracking store (nil if unavailable)
 	truncateCfg  TruncateConfig  // truncation config for tool results
 	truncateRefs map[string]string // map of tool_id -> full output for references
 	logstack     *logstackclient.Client // optional logstack client for centralized logging
@@ -188,16 +188,32 @@ func (s *Session) AgentName() string {
 	return s.agentName
 }
 
-// AttachDB attaches a session tracking database and registers this session.
-// DB returns the attached session database, or nil.
-func (s *Session) DB() *DB {
-	return s.db
+// AttachStore attaches a session tracking store and registers this session.
+// Store returns the attached session store, or nil.
+func (s *Session) Store() Store {
+	return s.store
 }
 
+// AttachDB is a deprecated alias for AttachStore that accepts a *DB (which is an alias for *SQLiteStore).
+// Deprecated: Use AttachStore with a Store interface instead.
 func (s *Session) AttachDB(db *DB, command string) {
-	s.db = db
-	if db != nil {
-		db.InsertSession(&SessionRow{
+	s.AttachStore(db, command)
+}
+
+// DB returns the attached session store cast as *DB for backwards compatibility.
+// Returns nil if no store is attached or if the store is not a *SQLiteStore.
+// Deprecated: Use Store() instead.
+func (s *Session) DB() *DB {
+	if store, ok := s.store.(*SQLiteStore); ok {
+		return store
+	}
+	return nil
+}
+
+func (s *Session) AttachStore(store Store, command string) {
+	s.store = store
+	if store != nil {
+		store.InsertSession(&SessionRow{
 			ID:        s.sessionID,
 			Agent:     s.agentName,
 			Model:     s.model,
@@ -242,8 +258,9 @@ func (s *Session) LogUser(text string) {
 		Content:   text,
 	})
 	// Set task on first user message (turn is 0 before LogRequest increments it)
-	if turn == 0 && s.db != nil {
-		s.db.SetTask(s.sessionID, text)
+	if turn == 0 && s.store != nil {
+		// Ignore error - this is a best-effort operation for task tracking
+		s.store.SetTask(s.sessionID, text)
 	}
 }
 
@@ -274,9 +291,9 @@ func (s *Session) EndTurn(inTokens, outTokens, toolCalls int, stopReason, errMsg
 	turn := s.turn
 	s.mu.Unlock()
 	
-	if s.db != nil {
+	if s.store != nil {
 		cost := CalcCost(s.model, inTokens, outTokens)
-		s.db.EndTurn(s.sessionID, turn, inTokens, outTokens, toolCalls, cost, stopReason, errMsg)
+		s.store.EndTurn(s.sessionID, turn, inTokens, outTokens, toolCalls, cost, stopReason, errMsg)
 	}
 	
 	// Append to timeline.md after each turn completes
@@ -361,8 +378,8 @@ func (s *Session) LogRequest(payload json.RawMessage) {
 		Request:   payload,
 	})
 
-	if s.db != nil {
-		s.db.InsertTurn(&TurnRow{
+	if s.store != nil {
+		s.store.InsertTurn(&TurnRow{
 			SessionID: s.sessionID,
 			Turn:      turn,
 			StartedAt: now,
@@ -451,8 +468,8 @@ func (s *Session) Close() {
 	})
 	s.file.Close()
 
-	if s.db != nil {
-		s.db.EndSession(s.sessionID, "completed", "")
+	if s.store != nil {
+		s.store.EndSession(s.sessionID, "completed", "")
 	}
 }
 
@@ -477,8 +494,8 @@ func (s *Session) CloseWithError(err error) {
 	})
 	s.file.Close()
 
-	if s.db != nil {
-		s.db.EndSession(s.sessionID, "error", errMsg)
+	if s.store != nil {
+		s.store.EndSession(s.sessionID, "error", errMsg)
 	}
 }
 
