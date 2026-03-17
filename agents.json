@@ -293,6 +293,33 @@
       "projects": [
         "forge"
       ]
+    },
+    "dagda": {
+      "name": "Dagda",
+      "project": "noteboard",
+      "role": "noteboard \u2014 the good god, keeper of all notes",
+      "model": "claude-sonnet-4-5",
+      "tools": [
+        "shell",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_files",
+        "memory_search",
+        "memory_save",
+        "memory_expand",
+        "memory_forget"
+      ],
+      "context": {
+        "tags": [
+          "code",
+          "go",
+          "noteboard",
+          "notes",
+          "project"
+        ],
+        "budget": 50000
+      }
     }
   }
 }

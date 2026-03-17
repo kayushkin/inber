@@ -11,7 +11,7 @@ Pick the top unclaimed item, do it, push. Mark `[x]` when done, `[~]` in progres
 
 Study these projects for architectural ideas. For each, write a brief comparison note in `docs/comparisons/<name>.md` — what they do well, what inber could adopt, what's different.
 
-- [ ] **pi-mono** (github.com/badlogic/pi-mono) — TypeScript monorepo. Clean package separation: `pi-ai` (unified LLM API), `pi-agent-core` (runtime + tools + state), `pi-coding-agent` (CLI), `pi-tui`, `pi-web-ui`. Study how they decouple the LLM provider from the agent runtime. Inber currently couples Anthropic SDK deeply — could we have a thin provider interface?
+- [x] **pi-mono** (github.com/badlogic/pi-mono) — TypeScript monorepo. Clean package separation: `pi-ai` (unified LLM API), `pi-agent-core` (runtime + tools + state), `pi-coding-agent` (CLI), `pi-tui`, `pi-web-ui`. Study how they decouple the LLM provider from the agent runtime. Inber currently couples Anthropic SDK deeply — could we have a thin provider interface?
 - [ ] **OpenClaw** (github.com/openclaw/openclaw) — Node.js. Study session management, tool policies, heartbeat system, channel abstractions. What does inber do better? What should inber steal?
 - [ ] **Claude Code** (Anthropic's CLI) — Study their tool permission model, session resume, and how they handle multi-file edits
 - [ ] **Goose** (github.com/block/goose) — Rust agent. Study their extension/plugin system and how tools are modular
