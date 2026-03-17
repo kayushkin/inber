@@ -82,8 +82,7 @@ type Engine struct {
 	extractCfg      conversation.ExtractionConfig
 	consecutiveErrors  int  // track consecutive tool errors for context escalation
 	lastTurnHadError   bool
-	autoRefMgr        *memory.AutoReferenceManager // auto-creates references after tool calls
-	toolInputsCache   map[string]string             // toolID -> input JSON for auto-reference creation
+	toolInputsCache   map[string]string             // toolID -> input JSON for workflow hooks
 	contextInjectors  []ContextInjector              // extra system prompt sections from server
 	workflowHooks   *WorkflowHooks                // auto-commit, auto-format, build/test
 	forgeHook       *forge.Hook                   // workspace/preview automation
@@ -223,9 +222,6 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		recentMems, _ := ms.ListRecent(100, 0.0)
 		fmt.Fprintf(os.Stderr, " done (%d memories)\n", len(recentMems))
 
-		// Initialize auto-reference manager for creating references after tool calls
-		autoRefConfig := memory.DefaultAutoReferenceConfig()
-		e.autoRefMgr = memory.NewAutoReferenceManager(ms, repoRoot, autoRefConfig)
 		e.toolInputsCache = make(map[string]string)
 		e.contextInjectors = cfg.ContextInjectors
 

@@ -356,13 +356,6 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 				
 				toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, finalOutput, false))
 				
-				if e.autoRefMgr != nil && e.toolInputsCache != nil {
-					inputJSON := e.toolInputsCache[block.ID]
-					if err := e.autoRefMgr.OnToolResult(block.ID, block.Name, inputJSON, output); err != nil {
-						fmt.Fprintf(os.Stderr, "warning: failed to auto-create reference for %s: %v\n", block.Name, err)
-					}
-				}
-				
 				if e.workflowHooks != nil {
 					toolInput := e.toolInputsCache[block.ID]
 					if injection := e.workflowHooks.OnToolResult(block.Name, toolInput, output, false); injection != "" {

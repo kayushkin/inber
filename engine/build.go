@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -395,7 +394,7 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			}
 		}
 		hooks.OnToolCall = func(toolID, name string, input []byte) {
-			if e.autoRefMgr != nil && e.toolInputsCache != nil {
+			if e.toolInputsCache != nil {
 				e.toolInputsCache[toolID] = string(input)
 			}
 			if logHooks.OnToolCall != nil {
@@ -415,12 +414,6 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			if isError {
 				e.consecutiveErrors++
 				e.lastTurnHadError = true
-			}
-			if !isError && e.autoRefMgr != nil && e.toolInputsCache != nil {
-				inputJSON := e.toolInputsCache[toolID]
-				if err := e.autoRefMgr.OnToolResult(toolID, name, inputJSON, output); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to auto-create reference for %s: %v\n", name, err)
-				}
 			}
 		}
 		hooks.ModifyToolResult = func(toolID, name, output string, isError bool) string {
