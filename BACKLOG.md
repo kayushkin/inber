@@ -61,6 +61,12 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ---
 
+## 🧹 Code Quality (Continued)
+
+- [x] **Split server/spawn.go** — 626 lines combining spawning logic, result delivery, memory management, and tool definitions. Extract tool definitions into `spawn_tools.go` and delivery logic into `spawn_delivery.go`. Keep core spawning logic in `spawn.go`. Better separation of concerns.
+
+---
+
 ## 💡 Ideas
 
 - Benchmark inber's startup time — how fast from `inber run` to first API call?
