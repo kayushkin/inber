@@ -54,7 +54,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Define package boundaries** — Write a brief "who calls whom" rule. engine → memory ✓, memory → engine ✗, etc.
 - [x] **Evaluate splitting into Go modules** — Could `memory/`, `agent/`, `engine/` be separate Go modules? Pros/cons of mono-module vs multi-module.
 
-- [~] **Extract session management from memory/memory.go** — The memory.go file contains both memory storage/retrieval and session management (SaveSession, TrackMemoryUsage, Session struct). Extract session-related code into memory/sessions.go to improve separation of concerns and reduce the size of memory.go from 736 lines.
+- [x] **Extract session management from memory/memory.go** — The memory.go file contains both memory storage/retrieval and session management (SaveSession, TrackMemoryUsage, Session struct). Extract session-related code into memory/sessions.go to improve separation of concerns and reduce the size of memory.go from 736 lines.
 
 ---
 
