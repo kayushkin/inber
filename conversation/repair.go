@@ -11,13 +11,9 @@ import (
 //
 // Fix: append a synthetic tool_result with an error message for each
 // dangling tool_use.
-// repairCount tracks how many repairs were made in the last call
-var LastRepairCount int
-
-func RepairDanglingToolUse(messages []anthropic.MessageParam) []anthropic.MessageParam {
-	LastRepairCount = 0
+func RepairDanglingToolUse(messages []anthropic.MessageParam) ([]anthropic.MessageParam, int) {
 	if len(messages) == 0 {
-		return messages
+		return messages, 0
 	}
 
 	// Collect tool_use IDs from each assistant message, check if next
@@ -99,8 +95,7 @@ func RepairDanglingToolUse(messages []anthropic.MessageParam) []anthropic.Messag
 	repaired, extraRepairs := RepairMissingToolResults(repaired)
 	repairsNeeded += extraRepairs
 
-	LastRepairCount = repairsNeeded
-	return repaired
+	return repaired, repairsNeeded
 }
 
 // repairAlternation fixes consecutive messages with the same role.

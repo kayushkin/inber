@@ -82,8 +82,9 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	} else {
 		// Filter out OpenAI-sourced tool_use/tool_result pairs for Anthropic
 		originalLen := len(e.Messages)
-		e.Messages = agent.FilterMessagesForAnthropic(e.Messages)
-		if stats := agent.LastFilterStats(); stats.ToolUseFiltered > 0 || stats.ToolResultFiltered > 0 {
+		var stats agent.FilterStats
+		e.Messages, stats = agent.FilterMessagesForAnthropic(e.Messages)
+		if stats.ToolUseFiltered > 0 || stats.ToolResultFiltered > 0 {
 			Log.Info("filtered %d tool_use, %d tool_result blocks from OpenAI provider (%d→%d messages)",
 				stats.ToolUseFiltered, stats.ToolResultFiltered, originalLen, len(e.Messages))
 		}

@@ -117,8 +117,7 @@ func TestFilterMessagesForAnthropic(t *testing.T) {
 		},
 	}
 
-	filtered := FilterMessagesForAnthropic(messages)
-	stats := LastFilterStats()
+	filtered, stats := FilterMessagesForAnthropic(messages)
 
 	// Should have filtered 1 tool_use and 1 tool_result
 	if stats.ToolUseFiltered != 1 {

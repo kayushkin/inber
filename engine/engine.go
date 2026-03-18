@@ -243,16 +243,16 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		if !cfg.NewSession {
 			if msgs, err := ws.LoadMessages(); err == nil && len(msgs) > 0 {
 				repaired := conversation.RepairEmptyContent(msgs)
-				repaired = conversation.RepairDanglingToolUse(repaired)
+				repaired, repairCount := conversation.RepairDanglingToolUse(repaired)
 				repaired = conversation.RepairAlternation(repaired)
 				repaired = agent.SanitizeMessageToolIDs(repaired)
 				e.Messages = repaired
 				// Save repaired messages back so we don't re-repair every time
-				if conversation.LastRepairCount > 0 || len(repaired) != len(msgs) {
+				if repairCount > 0 || len(repaired) != len(msgs) {
 					if data, err := json.Marshal(repaired); err == nil {
 						ws.SaveMessages(data)
 						Log.Info("repaired session messages (%d tool calls, %d→%d messages)",
-							conversation.LastRepairCount, len(msgs), len(repaired))
+							repairCount, len(msgs), len(repaired))
 					}
 				}
 				Log.Info("resuming session (%d messages)", len(e.Messages))

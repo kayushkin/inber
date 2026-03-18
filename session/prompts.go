@@ -19,9 +19,6 @@ type NamedBlock struct {
 	Text string
 }
 
-// promptState tracks what was in the previous turn so we can diff.
-var prevMessageCount int
-
 // WritePromptBreakdown writes prompt files for a given turn.
 //
 // Turn 1 writes:
@@ -31,7 +28,11 @@ var prevMessageCount int
 //
 // Turn 2+ writes:
 //   - prompts/turn-N.md   — new messages only (diff) + token summary
-func WritePromptBreakdown(logFilePath string, sessionID string, turn int, params *anthropic.MessageNewParams, blockNames []NamedBlock) error {
+func (s *Session) WritePromptBreakdown(turn int, params *anthropic.MessageNewParams, blockNames []NamedBlock) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	logFilePath := s.FilePath()
 	sessionDir := filepath.Dir(logFilePath)
 	promptsDir := filepath.Join(sessionDir, "prompts")
 	if err := os.MkdirAll(promptsDir, 0755); err != nil {
@@ -60,7 +61,7 @@ func WritePromptBreakdown(logFilePath string, sessionID string, turn int, params
 	if turn == 1 {
 		writeAllMessages(&sb, params.Messages, 0)
 	} else {
-		newStart := prevMessageCount
+		newStart := s.prevMessageCount
 		if newStart > len(params.Messages) {
 			newStart = 0
 		}
@@ -79,7 +80,7 @@ func WritePromptBreakdown(logFilePath string, sessionID string, turn int, params
 	sb.WriteString(fmt.Sprintf("| Messages | ~%d (%d messages) |\n", messageTokens, len(params.Messages)))
 	sb.WriteString(fmt.Sprintf("| **Total** | **~%d** |\n", systemTokens+messageTokens+toolTokens))
 
-	prevMessageCount = len(params.Messages)
+	s.prevMessageCount = len(params.Messages)
 	return os.WriteFile(path, []byte(sb.String()), 0644)
 }
 

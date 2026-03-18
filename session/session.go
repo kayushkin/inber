@@ -86,21 +86,22 @@ func (e Entry) toLogstackEntry(agentName, sessionID string) logstackmodels.LogEn
 
 // Session tracks and logs a conversation.
 type Session struct {
-	mu           sync.Mutex
-	file         *os.File
-	enc          *json.Encoder
-	start        time.Time
-	model        string
-	agentName    string          // agent name for multi-agent support
-	parentID     string          // parent session ID (empty for root)
-	sessionID    string          // unique session ID
-	turn         int             // current API round-trip number
-	totalIn      int
-	totalOut     int
-	store        Store           // session tracking store (nil if unavailable)
-	truncateCfg  TruncateConfig  // truncation config for tool results
-	truncateRefs map[string]string // map of tool_id -> full output for references
-	logstack     *logstackclient.Client // optional logstack client for centralized logging
+	mu               sync.Mutex
+	file             *os.File
+	enc              *json.Encoder
+	start            time.Time
+	model            string
+	agentName        string          // agent name for multi-agent support
+	parentID         string          // parent session ID (empty for root)
+	sessionID        string          // unique session ID
+	turn             int             // current API round-trip number
+	totalIn          int
+	totalOut         int
+	store            Store           // session tracking store (nil if unavailable)
+	truncateCfg      TruncateConfig  // truncation config for tool results
+	truncateRefs     map[string]string // map of tool_id -> full output for references
+	logstack         *logstackclient.Client // optional logstack client for centralized logging
+	prevMessageCount int             // tracks message count for prompt breakdown diffs
 }
 
 // shortID generates a 4-character hex random string for session uniqueness.

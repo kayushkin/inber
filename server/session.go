@@ -232,7 +232,7 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, onEvent fu
 	if len(msgs) > 0 {
 		// Repair interrupted sessions.
 		msgs = conversation.RepairEmptyContent(msgs)
-		msgs = conversation.RepairDanglingToolUse(msgs)
+		msgs, _ = conversation.RepairDanglingToolUse(msgs)
 		msgs = conversation.RepairAlternation(msgs)
 		msgs = agent.SanitizeMessageToolIDs(msgs)
 		log.Printf("[server] resumed session %s (%d messages)", key, len(msgs))

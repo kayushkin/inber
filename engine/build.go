@@ -460,7 +460,7 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			if logHooks.OnRequest != nil {
 				logHooks.OnRequest(params)
 			}
-			sessionMod.WritePromptBreakdown(e.Session.FilePath(), e.Session.SessionID(), e.TurnCounter, params, e.lastNamedBlocks)
+			e.Session.WritePromptBreakdown(e.TurnCounter, params, e.lastNamedBlocks)
 		}
 		hooks.OnThinking = func(text string) {
 			if logHooks.OnThinking != nil {

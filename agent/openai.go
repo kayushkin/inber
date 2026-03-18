@@ -407,7 +407,7 @@ func isOpenAIToolID(id string) bool {
 // FilterMessagesForAnthropic removes tool_use/tool_result pairs that originated
 // from OpenAI-compatible APIs. This prevents ID confusion when sending messages
 // to Anthropic after a provider switch.
-func FilterMessagesForAnthropic(messages []anthropic.MessageParam) []anthropic.MessageParam {
+func FilterMessagesForAnthropic(messages []anthropic.MessageParam) ([]anthropic.MessageParam, FilterStats) {
 	filtered := make([]anthropic.MessageParam, 0, len(messages))
 	filteredToolUse := 0
 	filteredToolResult := 0
@@ -457,28 +457,16 @@ func FilterMessagesForAnthropic(messages []anthropic.MessageParam) []anthropic.M
 		}
 	}
 
-	// Log if any filtering occurred (caller can check)
-	if filteredToolUse > 0 || filteredToolResult > 0 {
-		// Return stats via a package-level variable for logging
-		lastFilterStats = FilterStats{
-			ToolUseFiltered:   filteredToolUse,
-			ToolResultFiltered: filteredToolResult,
-		}
+	stats := FilterStats{
+		ToolUseFiltered:    filteredToolUse,
+		ToolResultFiltered: filteredToolResult,
 	}
 
-	return filtered
+	return filtered, stats
 }
 
 // FilterStats tracks how many blocks were filtered
 type FilterStats struct {
 	ToolUseFiltered    int
 	ToolResultFiltered int
-}
-
-// lastFilterStats stores the most recent filter operation stats
-var lastFilterStats FilterStats
-
-// LastFilterStats returns stats from the most recent filter operation
-func LastFilterStats() FilterStats {
-	return lastFilterStats
 }

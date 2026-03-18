@@ -11,7 +11,13 @@ import (
 
 func TestWritePromptBreakdown(t *testing.T) {
 	dir := t.TempDir()
-	logFile := filepath.Join(dir, "test-session.jsonl")
+
+	// Create a test session
+	session, err := New(dir, "claude-sonnet-4-20250514", "test", "")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+	defer session.Close()
 
 	params := anthropic.MessageNewParams{
 		Model: "claude-sonnet-4-20250514",
@@ -23,13 +29,14 @@ func TestWritePromptBreakdown(t *testing.T) {
 		},
 	}
 
-	err := WritePromptBreakdown(logFile, "test-session", 1, &params, nil)
+	err = session.WritePromptBreakdown(1, &params, nil)
 	if err != nil {
 		t.Fatalf("WritePromptBreakdown failed: %v", err)
 	}
 
 	// Check file exists
-	path := filepath.Join(dir, "prompts", "turn-1.md")
+	sessionDir := filepath.Dir(session.FilePath())
+	path := filepath.Join(sessionDir, "prompts", "turn-1.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("failed to read breakdown: %v", err)
@@ -46,7 +53,7 @@ func TestWritePromptBreakdown(t *testing.T) {
 		t.Error("expected 'Tokens' in breakdown")
 	}
 	// Check system.md index was written
-	sysPath := filepath.Join(dir, "prompts", "system.md")
+	sysPath := filepath.Join(sessionDir, "prompts", "system.md")
 	sysData, err := os.ReadFile(sysPath)
 	if err != nil {
 		t.Fatalf("system.md not written: %v", err)
@@ -55,12 +62,12 @@ func TestWritePromptBreakdown(t *testing.T) {
 		t.Error("expected 'System Prompt' in system.md")
 	}
 	// Check individual block file was written
-	blockFiles, _ := filepath.Glob(filepath.Join(dir, "prompts", "system-01-*.md"))
+	blockFiles, _ := filepath.Glob(filepath.Join(sessionDir, "prompts", "system-01-*.md"))
 	if len(blockFiles) == 0 {
 		t.Error("expected system block file to be written")
 	}
 	// Check tools.md was written
-	toolsPath := filepath.Join(dir, "prompts", "tools.md")
+	toolsPath := filepath.Join(sessionDir, "prompts", "tools.md")
 	if _, err := os.ReadFile(toolsPath); err != nil {
 		t.Fatalf("tools.md not written: %v", err)
 	}
