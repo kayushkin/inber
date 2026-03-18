@@ -74,6 +74,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 ## 🧹 Code Quality (New)
 
 - [x] **Split engine/build.go** — Extracted tool building logic into `build_tools.go` (112 lines), system prompt logic into `build_prompts.go` (150 lines), and hook building logic into `build_hooks.go` (188 lines). Reduced build.go from 586 to 78 lines (87% reduction). Better separation of concerns between tool configuration, prompt construction, hook setup, and core agent building.
+- [~] **Split conversation/summarize.go** — 480 lines combining configuration, core summarization logic, message analysis, text conversion, and summary generation. Extract configuration into `summarize_config.go`, message utilities into `message_utils.go`, and summary generation into `summary_generation.go`. Better separation of concerns.
 
 ---
 
