@@ -29,10 +29,19 @@ Lightweight Go + SQLite message bus. Pub/sub backbone for all agent communicatio
 - **bus-agent**: subscribes to inbound, routes to inber/openclaw backends
 - SQLite WAL mode, hourly compaction
 
-### agent-dashboard
-Web dashboard for monitoring agent sessions, spawns, and message flow.
-- WebSocket connection to si for real-time updates
-- Spawn cards, sub-agent sidebar, session timeline
+### dash (`github.com/kayushkin/dash`)
+Centralized dashboard at dash.kayushkin.com. Go backend + React frontend.
+- Agent monitoring, model status, usage stats, forge deploys, topology
+- WebSocket for real-time agent activity, spawn cards, sub-agent sidebar
+- Auth via httpOnly cookie (token-based)
+- Proxies to bus-agent, logstack, forge, inber, openclaw gateway
+- **Repo:** `~/life/repos/dash`
+- **Binary:** `~/bin/dash-server`
+- **Build:** `go build -o ~/bin/dash-server ./server/` (backend), `npm run build` (frontend)
+- **Deploy:** `./deploy.sh` — builds, pushes, syncs dist + binary to server
+- **Port:** 8101 (WSL, tunneled to kayushkin.com:8101)
+- **Systemd:** `dash-server.service` (user service)
+- **DB:** `~/.config/dash/agents.db` (SQLite agent registry)
 
 ## Cross-repo work
 

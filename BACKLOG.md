@@ -71,6 +71,12 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ---
 
+## 🧹 Code Quality (New)
+
+- [~] **Split engine/build.go** — 586 lines combining tool building, system prompt construction, agent configuration, and hook building. Extract tool building logic into `build_tools.go`, system prompt logic into `build_prompts.go`, and hook building into `build_hooks.go`. Keep core agent building in `build.go`. Better separation of concerns.
+
+---
+
 ## 💡 Ideas
 
 - Benchmark inber's startup time — how fast from `inber run` to first API call?
