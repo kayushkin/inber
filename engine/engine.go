@@ -43,6 +43,7 @@ type EngineConfig struct {
 	NoHooks        bool   // skip post-request verification (git/deploy checks)
 	SystemOverride string
 	RepoRoot       string
+	ModelStore     *modelstore.Store // shared model store (optional - engine opens its own if nil)
 	CommandName    string // "chat" or "run" for session registration
 	NewSession     bool   // start fresh instead of continuing default session
 	Detach         bool   // one-off session, don't save to workspace
@@ -308,27 +309,31 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 	}
 
-	// Open model-store once for the lifetime of the engine
-	store, err := modelstore.Open("")
-	if err == nil {
-		e.modelStore = store
-		// Register OAuth providers for token refresh
-		store.RegisterDefaultOAuthProviders()
-		// Enable auto-sync to OpenClaw's auth-profiles.json
-		store.EnableAuthProfileSync("")
-		// Seed if empty (one-time init)
-		providers, _ := store.Providers()
-		if len(providers) == 0 {
-			if err := store.Seed(); err != nil {
-				Log.Warn("failed to seed model-store: %v", err)
-			}
-		}
-		// Initial sync to ensure OpenClaw has latest credentials
-		if syncErr := store.SyncToAuthProfiles(""); syncErr != nil {
-			Log.Warn("initial auth-profiles sync: %v", syncErr)
-		}
+	// Use shared model-store if provided, otherwise open our own
+	if cfg.ModelStore != nil {
+		e.modelStore = cfg.ModelStore
 	} else {
-		Log.Warn("model-store unavailable: %v", err)
+		store, err := modelstore.Open("")
+		if err == nil {
+			e.modelStore = store
+			// Register OAuth providers for token refresh
+			store.RegisterDefaultOAuthProviders()
+			// Enable auto-sync to OpenClaw's auth-profiles.json
+			store.EnableAuthProfileSync("")
+			// Seed if empty (one-time init)
+			providers, _ := store.Providers()
+			if len(providers) == 0 {
+				if err := store.Seed(); err != nil {
+					Log.Warn("failed to seed model-store: %v", err)
+				}
+			}
+			// Initial sync to ensure OpenClaw has latest credentials
+			if syncErr := store.SyncToAuthProfiles(""); syncErr != nil {
+				Log.Warn("initial auth-profiles sync: %v", syncErr)
+			}
+		} else {
+			Log.Warn("model-store unavailable: %v", err)
+		}
 	}
 	
 	modelClient, err := agent.NewModelClient(e.Model, e.modelStore)

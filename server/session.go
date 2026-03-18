@@ -220,8 +220,7 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, onEvent fu
 	// Pass shared model store.
 	if g.modelStore != nil {
 		// Engine will use this instead of opening its own.
-		// TODO: Add ModelStore field to EngineConfig.
-		// For now, engine opens its own. This is fine initially.
+		cfg.ModelStore = g.modelStore
 	}
 
 	// Display hooks are set dynamically per-request via setOnEvent/updateHooks.
