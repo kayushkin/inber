@@ -42,7 +42,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Consistent error handling** — Audit for bare `fmt.Errorf` vs `%w` wrapping, ensure errors are traceable
 - [x] **Reduce global state** — Check for package-level vars that should be struct fields
 - [x] **Test coverage audit** — Which packages have 0% coverage? Add basic tests for untested code paths
-- [~] **Dependency audit** — `go mod tidy`, check for unused or heavy deps that could be replaced
+- [x] **Dependency audit** — Replaced mattn/go-sqlite3 (CGO) with modernc.org/sqlite (pure Go). This eliminates the need for CGO in builds, making the binary more portable and simplifying compilation. The Anthropics SDK pulls in heavy cloud dependencies but those are necessary for functionality.
 
 ## 📐 Architecture
 
