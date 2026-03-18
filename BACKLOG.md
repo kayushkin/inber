@@ -67,7 +67,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 - [x] **Split memory/memory.go** — Extracted search logic into `search.go` (145 lines), memory management into `management.go` (132 lines), and utility functions into `util.go` (52 lines). Reduced memory.go from 646 to 335 lines (48% reduction). Better separation of concerns: core store operations, search functionality, memory management, and utilities are now in focused modules.
 
-- [~] **Split session/session.go** — 612 lines combining Entry types, Session struct, logging methods, file I/O, and logstack integration. Extract logstack-related functionality into `session/logstack.go` to improve separation of concerns.
+- [x] **Split session/session.go** — Extracted logstack integration into `session/logstack.go`. Created LogstackAdapter to encapsulate logstack functionality. Reduced session.go from 612 to 557 lines (55-line reduction). Better separation of concerns between session logging and logstack integration.
 
 ---
 
