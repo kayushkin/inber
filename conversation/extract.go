@@ -1,3 +1,6 @@
+// Package conversation manages the conversation lifecycle, including
+// memory extraction, summarization, conversation pruning, and role-based
+// management for different agent types (orchestrator, coder, tester).
 package conversation
 
 import (

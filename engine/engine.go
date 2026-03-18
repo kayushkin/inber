@@ -1,3 +1,6 @@
+// Package engine provides the core inber engine that orchestrates
+// agent conversations: building system prompts, managing context budgets,
+// running conversation turns, and coordinating memory and tool integration.
 package engine
 
 import (

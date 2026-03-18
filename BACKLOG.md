@@ -38,7 +38,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ## 🧹 Code Quality
 
-- [ ] **Add package-level doc comments** — Every package should have a doc.go or comment explaining its purpose
+- [x] **Add package-level doc comments** — Every package should have a doc.go or comment explaining its purpose
 - [ ] **Consistent error handling** — Audit for bare `fmt.Errorf` vs `%w` wrapping, ensure errors are traceable
 - [ ] **Reduce global state** — Check for package-level vars that should be struct fields
 - [ ] **Test coverage audit** — Which packages have 0% coverage? Add basic tests for untested code paths

@@ -1,3 +1,6 @@
+// Package server provides the HTTP API server for inber, exposing endpoints
+// for running agents, spawning isolated sessions, managing models, and
+// interfacing with the message bus for distributed operation.
 package server
 
 import (
