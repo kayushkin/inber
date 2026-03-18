@@ -133,8 +133,8 @@ func TestEmbedding(t *testing.T) {
 	}
 
 	// Similar sentences should have higher similarity
-	sim12 := cosineSimilarity(emb1, emb2)
-	sim13 := cosineSimilarity(emb1, emb3)
+	sim12 := CosineSimilarity(emb1, emb2)
+	sim13 := CosineSimilarity(emb1, emb3)
 
 	if sim12 <= sim13 {
 		t.Errorf("Similar sentences should have higher similarity: sim12=%f, sim13=%f", sim12, sim13)

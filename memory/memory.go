@@ -428,7 +428,7 @@ func (s *Store) Search(query string, limit int) ([]Memory, error) {
 		}
 
 		// Calculate similarity
-		similarity := cosineSimilarity(queryEmb, m.Embedding)
+		similarity := CosineSimilarity(queryEmb, m.Embedding)
 
 		// Calculate recency boost (decays over time)
 		daysSinceAccess := now.Sub(m.LastAccessed).Hours() / 24
@@ -626,25 +626,7 @@ func (s *Store) ListRecent(limit int, minImportance float64) ([]Memory, error) {
 	return result, nil
 }
 
-// cosineSimilarity computes the cosine similarity between two vectors.
-func cosineSimilarity(a, b []float64) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-
-	var dotProduct, normA, normB float64
-	for i := range a {
-		dotProduct += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-
-	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
-}
+// CosineSimilarity function moved to embedding.go for better modularity
 
 // CompactionResult describes what was compacted.
 type CompactionResult struct {
