@@ -39,7 +39,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 ## 🧹 Code Quality
 
 - [x] **Move CosineSimilarity to embedding.go** — Moved the cosineSimilarity function from memory.go (897→879 lines) to embedding.go where it belongs logically. Better modularity and cleaner separation of concerns.
-- [~] **Extract memory compaction logic** — Move the compaction functionality (~148 lines) from memory.go into memory/compaction.go. This includes CompactionResult struct, Compact method, and related helpers. Reduces memory.go from 879 to ~731 lines and improves modularity.
+- [x] **Extract memory compaction logic** — Moved the compaction functionality (CompactionResult struct, Compact method) from memory.go into memory/compaction.go. Reduced memory.go from 879 to 735 lines (~144 line reduction) and improved modularity by separating distinct compaction concern.
 - [x] **Add package-level doc comments** — Every package should have a doc.go or comment explaining its purpose
 - [x] **Consistent error handling** — Audit for bare `fmt.Errorf` vs `%w` wrapping, ensure errors are traceable
 - [x] **Reduce global state** — Check for package-level vars that should be struct fields
