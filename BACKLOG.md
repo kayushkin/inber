@@ -38,7 +38,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ## 🧹 Code Quality
 
-- [~] **Extract turn lifecycle helpers from engine/turn.go** — 618 lines, combines main turn execution with summarization, pruning, checkpointing, and message persistence. Extract `turnLifecycle.go` with summarizeIfNeeded, pruneIfNeeded, checkpointIfNeeded, and saveMessages functions. Keep core RunTurn logic in turn.go. Should reduce turn.go to ~300-400 lines and improve separation of concerns.
+- [x] **Extract turn lifecycle helpers from engine/turn.go** — Extracted summarizeIfNeeded, pruneConfig, pruneIfNeeded, checkpointIfNeeded, saveMessages, LogUser, LogAssistant, SaveSessionSummary, and FindRepoRoot functions into turnLifecycle.go. Reduced turn.go from 618 to 413 lines (~205 line reduction). Improved separation of concerns: turn.go focuses on core turn execution while turnLifecycle.go handles conversation lifecycle management.
 - [x] **Move CosineSimilarity to embedding.go** — Moved the cosineSimilarity function from memory.go (897→879 lines) to embedding.go where it belongs logically. Better modularity and cleaner separation of concerns.
 - [x] **Extract memory compaction logic** — Moved the compaction functionality (CompactionResult struct, Compact method) from memory.go into memory/compaction.go. Reduced memory.go from 879 to 735 lines (~144 line reduction) and improved modularity by separating distinct compaction concern.
 - [x] **Add package-level doc comments** — Every package should have a doc.go or comment explaining its purpose
@@ -56,6 +56,8 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Evaluate splitting into Go modules** — Could `memory/`, `agent/`, `engine/` be separate Go modules? Pros/cons of mono-module vs multi-module.
 
 - [x] **Extract session management from memory/memory.go** — The memory.go file contains both memory storage/retrieval and session management (SaveSession, TrackMemoryUsage, Session struct). Extract session-related code into memory/sessions.go to improve separation of concerns and reduce the size of memory.go from 736 lines.
+- [x] **Split conversation/manage.go** — 737 lines combining configuration, core management logic, and utilities. Extract configuration types/functions into `manage_config.go`, keep core logic in `manage.go`, and move helper functions to `manage_utils.go`. Better separation of concerns and easier to maintain.
+- [x] **Extract configuration from server/server.go** — Extracted Config, AgentConfig types and LoadConfig, ConfigFromAgents functions into `server/config.go`. Reduced server.go from 651 to 590 lines (~61 line reduction). Better separation of concerns between server logic and configuration handling.
 
 ---
 
