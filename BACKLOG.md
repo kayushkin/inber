@@ -76,6 +76,8 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Split engine/build.go** — Extracted tool building logic into `build_tools.go` (112 lines), system prompt logic into `build_prompts.go` (150 lines), and hook building logic into `build_hooks.go` (188 lines). Reduced build.go from 586 to 78 lines (87% reduction). Better separation of concerns between tool configuration, prompt construction, hook setup, and core agent building.
 - [x] **Split conversation/summarize.go** — Extracted configuration into `summarize_config.go` (51 lines), message utilities into `message_utils.go` (217 lines), and summary generation into `summary_generation.go` (125 lines). Reduced main summarize.go from 480 to 118 lines (75% reduction). Better separation of concerns between configuration, core logic, message analysis, and summary generation.
 
+- [~] **Split agent/openai.go** — 472 lines combining OpenAI client, type definitions, message conversion, and tool conversion. Extract types into `openai_types.go`, conversion logic into `openai_conversion.go`, and utilities into `openai_utils.go`. Keep core client in `openai.go`. Better separation of concerns and easier maintenance.
+
 ---
 
 ## 💡 Ideas
