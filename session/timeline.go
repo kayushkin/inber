@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kayushkin/inber/agent"
+	modelstore "github.com/kayushkin/model-store"
 )
 
 // TimelineEvent represents a single event in the session timeline.
@@ -41,11 +42,14 @@ type TimelineEvent struct {
 }
 
 // CalcCost calculates cost from model and token counts (without cache adjustment).
+// Uses model-store if available, falls back to defaults.
 func CalcCost(model string, inTok, outTok int) float64 {
-	info, ok := agent.Models[model]
-	if !ok {
-		return 0
-	}
+	return CalcCostWithStore(model, inTok, outTok, nil)
+}
+
+// CalcCostWithStore calculates cost using model-store if provided.
+func CalcCostWithStore(model string, inTok, outTok int, store *modelstore.Store) float64 {
+	info := agent.GetModelInfo(model, store)
 	return (float64(inTok)*info.InputCostPer1M + float64(outTok)*info.OutputCostPer1M) / 1_000_000
 }
 
@@ -53,10 +57,11 @@ func CalcCost(model string, inTok, outTok int) float64 {
 // Cache reads cost 10% of normal input. Cache writes cost 125% of normal input.
 // "Fresh" input = inTok - cacheRead - cacheWrite (the uncached portion).
 func CalcCostWithCache(model string, inTok, outTok, cacheRead, cacheWrite int) float64 {
-	info, ok := agent.Models[model]
-	if !ok {
-		return 0
-	}
+	return CalcCostWithCacheAndStore(model, inTok, outTok, cacheRead, cacheWrite, nil)
+}
+
+func CalcCostWithCacheAndStore(model string, inTok, outTok, cacheRead, cacheWrite int, store *modelstore.Store) float64 {
+	info := agent.GetModelInfo(model, store)
 	freshInput := inTok - cacheRead - cacheWrite
 	if freshInput < 0 {
 		freshInput = 0

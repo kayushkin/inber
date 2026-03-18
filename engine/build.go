@@ -328,12 +328,8 @@ func (e *Engine) configureAgent(a *agent.Agent) {
 	}
 
 	// Set context window based on model or default
-	modelInfo, ok := agent.Models[e.Model]
-	if ok {
-		a.SetContextWindow(modelInfo.ContextWindow)
-	} else {
-		a.SetContextWindow(200000)
-	}
+	modelInfo := agent.GetModelInfo(e.Model, e.modelStore)
+	a.SetContextWindow(modelInfo.ContextWindow)
 }
 
 // configureContextPruning sets up automatic context pruning when approaching token limits.

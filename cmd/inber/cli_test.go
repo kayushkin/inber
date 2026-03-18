@@ -477,7 +477,7 @@ func TestSessionsActive(t *testing.T) {
 	os.Chdir(dir)
 
 	// Create a session and register it as active
-	sess, err := session.New(filepath.Join(dir, "logs"), "test-model", "claxon", "")
+	sess, err := session.New(filepath.Join(dir, "logs"), "test-model", "claxon", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}

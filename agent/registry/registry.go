@@ -180,7 +180,7 @@ func (r *Registry) GetSession(name string) (*session.Session, error) {
 		return nil, fmt.Errorf("agent %q not found", name)
 	}
 
-	sess, err := session.New(r.logsDir, cfg.Model, name, "")
+	sess, err := session.New(r.logsDir, cfg.Model, name, "", r.modelStore)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}

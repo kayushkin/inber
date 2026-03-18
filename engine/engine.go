@@ -273,7 +273,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		}
 	}
 
-	sess, err := sessionMod.New("logs", e.Model, e.AgentName, "")
+	sess, err := sessionMod.New("logs", e.Model, e.AgentName, "", e.modelStore)
 	if err != nil {
 		Log.Warn("logging disabled: %v", err)
 	} else {

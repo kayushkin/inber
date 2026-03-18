@@ -13,7 +13,7 @@ func TestWritePromptBreakdown(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create a test session
-	session, err := New(dir, "claude-sonnet-4-20250514", "test", "")
+	session, err := New(dir, "claude-sonnet-4-20250514", "test", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}

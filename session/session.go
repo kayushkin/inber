@@ -16,6 +16,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
+	modelstore "github.com/kayushkin/model-store"
 	logstackclient "github.com/kayushkin/logstack/client"
 	logstackmodels "github.com/kayushkin/logstack/models"
 )
@@ -98,6 +99,7 @@ type Session struct {
 	totalIn          int
 	totalOut         int
 	store            Store           // session tracking store (nil if unavailable)
+	modelStore       *modelstore.Store // model store for cost calculation (nil if unavailable)
 	truncateCfg      TruncateConfig  // truncation config for tool results
 	truncateRefs     map[string]string // map of tool_id -> full output for references
 	logstack         *logstackclient.Client // optional logstack client for centralized logging
@@ -114,7 +116,8 @@ func shortID() string {
 // New creates a session logger. Logs go to logsDir/agentName/YYYY-MM-DD_HHMMSS[-subN].jsonl.
 // agentName identifies the agent (for multi-agent support).
 // parentID is the parent session ID (empty string for root sessions).
-func New(logsDir, model, agentName, parentID string) (*Session, error) {
+// modelStore provides model cost information (can be nil).
+func New(logsDir, model, agentName, parentID string, modelStore *modelstore.Store) (*Session, error) {
 	// Create agent-specific subdirectory
 	agentDir := logsDir
 	if agentName != "" {
@@ -152,6 +155,7 @@ func New(logsDir, model, agentName, parentID string) (*Session, error) {
 		agentName:    agentName,
 		parentID:     parentID,
 		sessionID:    sessionID,
+		modelStore:   modelStore,
 		truncateCfg:  DefaultTruncateConfig(),
 		truncateRefs: make(map[string]string),
 	}
@@ -293,7 +297,9 @@ func (s *Session) EndTurn(inTokens, outTokens, toolCalls int, stopReason, errMsg
 	s.mu.Unlock()
 	
 	if s.store != nil {
-		cost := CalcCost(s.model, inTokens, outTokens)
+		// Calculate cost for just this turn
+		info := agent.GetModelInfo(s.model, s.modelStore)
+		cost := (float64(inTokens)*info.InputCostPer1M + float64(outTokens)*info.OutputCostPer1M) / 1_000_000
 		s.store.EndTurn(s.sessionID, turn, inTokens, outTokens, toolCalls, cost, stopReason, errMsg)
 	}
 	
@@ -522,10 +528,7 @@ func (s *Session) write(e Entry) {
 }
 
 func (s *Session) cost() float64 {
-	info, ok := agent.Models[s.model]
-	if !ok {
-		return 0
-	}
+	info := agent.GetModelInfo(s.model, s.modelStore)
 	return (float64(s.totalIn) * info.InputCostPer1M / 1_000_000) +
 		(float64(s.totalOut) * info.OutputCostPer1M / 1_000_000)
 }

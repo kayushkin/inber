@@ -10,7 +10,7 @@ import (
 // Example showing automatic truncation of large tool results
 func ExampleSession_LogToolResult_truncation() {
 	// Create a session
-	sess, _ := session.New("./logs", "claude-3-5-sonnet-20241022", "example", "")
+	sess, _ := session.New("./logs", "claude-3-5-sonnet-20241022", "example", "", nil)
 	defer sess.Close()
 
 	// Configure aggressive truncation for demo

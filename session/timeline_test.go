@@ -256,14 +256,16 @@ func TestFormatTerminalStats(t *testing.T) {
 }
 
 func TestCalcCost(t *testing.T) {
-	// Just verify it returns 0 for unknown model
-	if CalcCost("nonexistent-model", 1000, 1000) != 0 {
-		t.Error("expected 0 for unknown model")
+	// Verify it returns reasonable default cost for unknown model (no longer 0)
+	cost := CalcCost("nonexistent-model", 1000, 1000)
+	if cost <= 0 {
+		t.Error("expected positive default cost for unknown model")
 	}
-	// If claude-sonnet-4-20250514 is in agent.Models, it should return > 0
-	cost := CalcCost("claude-sonnet-4-20250514", 10000, 1000)
-	// Don't assert exact value since model pricing may change
-	_ = cost
+	// Known or unknown models should return > 0
+	cost2 := CalcCost("claude-sonnet-4-20250514", 10000, 1000)
+	if cost2 <= 0 {
+		t.Error("expected positive cost for any model")
+	}
 }
 
 func TestSummarizeToolInput(t *testing.T) {

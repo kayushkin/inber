@@ -9,7 +9,7 @@ import (
 
 func TestContextManagementLogging(t *testing.T) {
 	tmpDir := t.TempDir()
-	s, err := New(tmpDir, "claude-sonnet-4-5-20250929", "test-agent", "")
+	s, err := New(tmpDir, "claude-sonnet-4-5-20250929", "test-agent", "", nil)
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}

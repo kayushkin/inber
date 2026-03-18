@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/engine"
 	modelstore "github.com/kayushkin/model-store"
 	"github.com/spf13/cobra"
@@ -42,13 +41,30 @@ func init() {
 }
 
 func runModelsList(cmd *cobra.Command, args []string) {
-	fmt.Printf("%sAvailable Claude models:%s\n\n", engine.Bold+engine.Blue, engine.Reset)
+	store, err := modelstore.Open("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	defer store.Close()
 
-	for id, info := range agent.Models {
-		fmt.Printf("%s%-35s%s\n", engine.Bold, id, engine.Reset)
-		fmt.Printf("  Context window: %dk tokens\n", info.ContextWindow/1000)
-		fmt.Printf("  Input cost:     $%.2f per 1M tokens\n", info.InputCostPer1M)
-		fmt.Printf("  Output cost:    $%.2f per 1M tokens\n", info.OutputCostPer1M)
+	models, err := store.AllModelsWithStatus()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("%sAvailable models:%s\n\n", engine.Bold+engine.Blue, engine.Reset)
+
+	for _, model := range models {
+		if !model.Enabled {
+			continue // Skip disabled models
+		}
+		
+		fmt.Printf("%s%-35s%s\n", engine.Bold, model.Name, engine.Reset)
+		fmt.Printf("  Input cost:     $%.2f per 1M tokens\n", model.InputCost)
+		fmt.Printf("  Output cost:    $%.2f per 1M tokens\n", model.OutputCost)
+		fmt.Printf("  Priority:       %d\n", model.Priority)
 		fmt.Println()
 	}
 }
