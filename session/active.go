@@ -44,12 +44,12 @@ func RegisterActive(repoRoot string, sess *Session, command string) (string, err
 
 	data, err := json.MarshalIndent(active, "", "  ")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal active session data: %w", err)
 	}
 
 	path := filepath.Join(dir, sess.SessionID()+".json")
 	if err := os.WriteFile(path, data, 0644); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to write active session file %s: %w", path, err)
 	}
 	return path, nil
 }
@@ -68,7 +68,7 @@ func ListActive(repoRoot string) ([]ActiveSession, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("failed to read active session directory %s: %w", dir, err)
 	}
 
 	var active []ActiveSession

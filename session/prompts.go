@@ -295,7 +295,10 @@ func ListPromptBreakdowns(logsDir, sessionID string) ([]string, error) {
 		return nil
 	})
 
-	return files, err
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk logs directory %s looking for session %s prompts: %w", logsDir, sessionID, err)
+	}
+	return files, nil
 }
 
 // ReadPromptBreakdown reads a specific prompt breakdown.
@@ -322,7 +325,7 @@ func ReadPromptBreakdown(logsDir, sessionID string, turn int) (string, error) {
 
 	data, err := os.ReadFile(found)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read prompt breakdown file %s: %w", found, err)
 	}
 	return string(data), nil
 }

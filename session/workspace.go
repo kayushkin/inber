@@ -42,7 +42,7 @@ func (w *Workspace) WriteSystem(blocks []NamedBlock) error {
 	// Remove old system dir and recreate
 	os.RemoveAll(sysDir)
 	if err := os.MkdirAll(sysDir, 0755); err != nil {
-		return err
+		return fmt.Errorf("failed to create system directory %s: %w", sysDir, err)
 	}
 
 	for i, block := range blocks {
@@ -53,7 +53,7 @@ func (w *Workspace) WriteSystem(blocks []NamedBlock) error {
 		filename := fmt.Sprintf("%02d-%s.md", i+1, slug)
 		path := filepath.Join(sysDir, filename)
 		if err := os.WriteFile(path, []byte(block.Text), 0644); err != nil {
-			return err
+			return fmt.Errorf("failed to write system block file %s: %w", path, err)
 		}
 	}
 	return nil
@@ -69,7 +69,7 @@ func (w *Workspace) ReadSystem() ([]NamedBlock, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("failed to read system directory %s: %w", sysDir, err)
 	}
 
 	// Sort by name for stable ordering

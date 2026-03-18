@@ -57,7 +57,7 @@ func LoadMessages(logFile string) ([]anthropic.MessageParam, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to scan session log %s: %w", logFile, err)
 	}
 
 	// Reconstruct messages:

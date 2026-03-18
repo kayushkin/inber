@@ -171,13 +171,13 @@ func (c *Client) call(ctx context.Context, method string, params interface{}) (j
 
 	// Send request
 	if err := c.sendRequest(request); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to send MCP request: %w", err)
 	}
 
 	// Wait for response
 	response, err := c.waitForResponse(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to wait for MCP response: %w", err)
 	}
 
 	if response.Error != nil {
@@ -273,7 +273,7 @@ func (c *Client) CallTool(ctx context.Context, name string, input string) (strin
 		"arguments": args,
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to call MCP tool %q: %w", name, err)
 	}
 
 	// Parse the result
@@ -337,7 +337,7 @@ func (c *Client) Close() error {
 	// Return first error encountered
 	for _, err := range errs {
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to close MCP client resources: %w", err)
 		}
 	}
 	return nil

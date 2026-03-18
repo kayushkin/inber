@@ -297,7 +297,7 @@ func ReadTimelineFromJSONL(logsDir, sessionID string) (string, error) {
 
 	events, startTime, err := ReconstructTimelineFromJSONL(logFile)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to reconstruct timeline from %s: %w", logFile, err)
 	}
 
 	return FormatTimeline(events, startTime), nil

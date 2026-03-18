@@ -135,7 +135,7 @@ func ListCheckpoints(sessionDir string) ([]string, error) {
 		if os.IsNotExist(err) {
 			return []string{}, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("failed to stat checkpoint file %s: %w", checkpointPath, err)
 	}
 
 	return []string{checkpointPath}, nil
