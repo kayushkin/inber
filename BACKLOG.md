@@ -46,6 +46,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Test coverage audit** — Which packages have 0% coverage? Add basic tests for untested code paths
 - [x] **Dependency audit** — Replaced mattn/go-sqlite3 (CGO) with modernc.org/sqlite (pure Go). This eliminates the need for CGO in builds, making the binary more portable and simplifying compilation. The Anthropics SDK pulls in heavy cloud dependencies but those are necessary for functionality.
 - [x] **Split conversation/manage.go** — 997 lines, combines pruning + stashing responsibilities. Extract stashing logic into separate `stash.go` file with clear interface boundaries. Keep pruning logic in `manage.go` or rename to `prune.go`.
+- [x] **Add ModelStore field to EngineConfig** — Added ModelStore field to EngineConfig to enable sharing model store instances between server and engine. Engine now uses provided ModelStore instead of always opening its own. Resolves TODO in server/session.go and improves resource efficiency.
 
 ## 📐 Architecture
 
