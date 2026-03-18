@@ -7,15 +7,23 @@ import (
 	"github.com/kayushkin/inber/agent"
 )
 
+// MCPClient defines the interface that MCP clients must implement
+type MCPClient interface {
+	ListTools() []ToolInfo
+	HasTool(name string) bool
+	CallTool(ctx context.Context, name string, input string) (string, error)
+	Close() error
+}
+
 // MCPToolAdapter bridges an MCP tool to the agent.Tool interface
 type MCPToolAdapter struct {
 	name   string
-	client *Client
+	client MCPClient
 	info   ToolInfo
 }
 
 // NewMCPToolAdapter creates a new adapter for an MCP tool
-func NewMCPToolAdapter(client *Client, toolName string) (*MCPToolAdapter, error) {
+func NewMCPToolAdapter(client MCPClient, toolName string) (*MCPToolAdapter, error) {
 	tools := client.ListTools()
 	for _, tool := range tools {
 		if tool.Name == toolName {
@@ -47,18 +55,18 @@ func (a *MCPToolAdapter) run(ctx context.Context, input string) (string, error) 
 
 // MCPToolRegistry manages multiple MCP clients and their tools
 type MCPToolRegistry struct {
-	clients map[string]*Client
+	clients map[string]MCPClient
 }
 
 // NewMCPToolRegistry creates a new registry for MCP tools
 func NewMCPToolRegistry() *MCPToolRegistry {
 	return &MCPToolRegistry{
-		clients: make(map[string]*Client),
+		clients: make(map[string]MCPClient),
 	}
 }
 
 // AddClient adds an MCP client to the registry
-func (r *MCPToolRegistry) AddClient(name string, client *Client) {
+func (r *MCPToolRegistry) AddClient(name string, client MCPClient) {
 	r.clients[name] = client
 }
 
