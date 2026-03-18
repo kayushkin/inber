@@ -34,7 +34,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Make session store swappable** — Same pattern. Interface + SQLite impl. Enables future Postgres or distributed backends.
 - [x] **Extract bus client** — `server/bus.go` could be its own small package or even a separate module. Other tools (logpush, dashboard) also need bus access.
 - [x] **Extract forge/workspace interface** — `server/forge_iface.go` is already an interface — verify it's clean and could be swapped for a different workspace isolation strategy.
-- [ ] **Plugin/extension system** — Can tools be loaded dynamically? (Go plugins, or exec-based like MCP?) Research feasibility.
+- [x] **Plugin/extension system** — Can tools be loaded dynamically? (Go plugins, or exec-based like MCP?) Research feasibility.
 
 ## 🧹 Code Quality
 
