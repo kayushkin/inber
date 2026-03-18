@@ -20,7 +20,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ## 🔧 Simplification
 
-- [~] **Extract LLM provider interface** — Create a thin `Provider` interface (`Complete(messages) → response`) that wraps Anthropic SDK. This unblocks future provider swaps (OpenAI, local models) without touching agent logic. Start in `agent/provider.go`.
+- [x] **Extract LLM provider interface** — Create a thin `Provider` interface (`Complete(messages) → response`) that wraps Anthropic SDK. This unblocks future provider swaps (OpenAI, local models) without touching agent logic. Start in `agent/provider.go`.
 - [x] **Extract tool interface** — Ensure tools are fully self-contained (name, description, schema, execute). Should be possible to register a tool with zero knowledge of inber internals. Check current `agentkit/tools/` — how close are we?
 - [x] **Simplify engine/build.go** — After the context/memory merge, this file may have dead branches or unnecessary complexity. Audit and trim.
 - [~] **Reduce engine/ file count** — Currently ~15 files in engine/. Can any be merged? (e.g., lifecycle.go + turn.go? display.go + log.go?)

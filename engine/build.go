@@ -259,7 +259,16 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	systemBlocks := e.buildSystemBlocks(blocks)
 	
-	provider := agent.NewAnthropicProvider(e.Client)
+	// Use the model client to get the appropriate provider
+	// Currently only Anthropic is supported via the Provider interface
+	var provider agent.Provider
+	if e.modelClient != nil && e.modelClient.AnthropicClient != nil {
+		provider = agent.NewAnthropicProvider(e.modelClient.AnthropicClient)
+	} else {
+		// Fallback for backward compatibility
+		provider = agent.NewAnthropicProvider(e.Client)
+	}
+	
 	a := agent.NewWithSystemBlocks(provider, systemBlocks)
 	
 	e.configureAgent(a)
