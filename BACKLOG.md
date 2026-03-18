@@ -38,6 +38,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ## 🧹 Code Quality
 
+- [~] **Extract turn lifecycle helpers from engine/turn.go** — 618 lines, combines main turn execution with summarization, pruning, checkpointing, and message persistence. Extract `turnLifecycle.go` with summarizeIfNeeded, pruneIfNeeded, checkpointIfNeeded, and saveMessages functions. Keep core RunTurn logic in turn.go. Should reduce turn.go to ~300-400 lines and improve separation of concerns.
 - [x] **Move CosineSimilarity to embedding.go** — Moved the cosineSimilarity function from memory.go (897→879 lines) to embedding.go where it belongs logically. Better modularity and cleaner separation of concerns.
 - [x] **Extract memory compaction logic** — Moved the compaction functionality (CompactionResult struct, Compact method) from memory.go into memory/compaction.go. Reduced memory.go from 879 to 735 lines (~144 line reduction) and improved modularity by separating distinct compaction concern.
 - [x] **Add package-level doc comments** — Every package should have a doc.go or comment explaining its purpose
