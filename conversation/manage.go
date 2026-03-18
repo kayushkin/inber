@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/google/uuid"
 	"github.com/kayushkin/inber/memory"
 )
 
@@ -37,20 +35,12 @@ type ManagementConfig struct {
 	TokenBudget             int       // Target token budget for managed conversation
 	MinimumImportance       float64   // Minimum importance score for auto-saving memories
 	
-	// Stashing configuration (merged from StashConfig)
-	StashEnabled            bool      // Enable stashing of large content blocks
-	Enabled                bool      // Alias for StashEnabled for backward compatibility
-	UserMessageThreshold    int       // Stash user messages larger than this (tokens)
-	AssistantThreshold      int       // Stash assistant responses larger than this (tokens)
-	MinBlockSize           int       // Minimum block size to consider stashing (tokens)
-	DefaultImportance      float64   // Default importance for stashed content
+	// Stashing configuration
+	Stash                   StashConfig // Configuration for stashing large content
 }
 
 // PruneConfig is an alias for backward compatibility
 type PruneConfig = ManagementConfig
-
-// StashConfig is an alias for backward compatibility  
-type StashConfig = ManagementConfig
 
 // OrchestratorManagementConfig returns config optimized for orchestrator agents
 func OrchestratorManagementConfig() ManagementConfig {
@@ -67,12 +57,13 @@ func OrchestratorManagementConfig() ManagementConfig {
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
 		MinimumImportance:      0.3,
-		StashEnabled:           true,
-		Enabled:               true,
-		UserMessageThreshold:   1000,
-		AssistantThreshold:     1500,
-		MinBlockSize:           1000,
-		DefaultImportance:      0.6,
+		Stash: StashConfig{
+			Enabled:               true,
+			UserMessageThreshold:  1000,
+			AssistantThreshold:    1500,
+			MinBlockSize:         1000,
+			DefaultImportance:    0.6,
+		},
 	}
 }
 
@@ -91,12 +82,13 @@ func CoderManagementConfig() ManagementConfig {
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
 		MinimumImportance:      0.3,
-		StashEnabled:           true,
-		Enabled:               true,
-		UserMessageThreshold:   800,
-		AssistantThreshold:     1200,
-		MinBlockSize:           800,
-		DefaultImportance:      0.6,
+		Stash: StashConfig{
+			Enabled:               true,
+			UserMessageThreshold:  800,
+			AssistantThreshold:    1200,
+			MinBlockSize:         800,
+			DefaultImportance:    0.6,
+		},
 	}
 }
 
@@ -115,12 +107,13 @@ func TesterManagementConfig() ManagementConfig {
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
 		MinimumImportance:      0.3,
-		StashEnabled:           true,
-		Enabled:               true,
-		UserMessageThreshold:   1000,
-		AssistantThreshold:     1500,
-		MinBlockSize:           1000,
-		DefaultImportance:      0.6,
+		Stash: StashConfig{
+			Enabled:               true,
+			UserMessageThreshold:  1000,
+			AssistantThreshold:    1500,
+			MinBlockSize:         1000,
+			DefaultImportance:    0.6,
+		},
 	}
 }
 
@@ -139,12 +132,13 @@ func DefaultManagementConfig() ManagementConfig {
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
 		MinimumImportance:      0.3,
-		StashEnabled:           true,
-		Enabled:               true,
-		UserMessageThreshold:   1000,
-		AssistantThreshold:     1500,
-		MinBlockSize:           1000,
-		DefaultImportance:      0.6,
+		Stash: StashConfig{
+			Enabled:               true,
+			UserMessageThreshold:  1000,
+			AssistantThreshold:    1500,
+			MinBlockSize:         1000,
+			DefaultImportance:    0.6,
+		},
 	}
 }
 
@@ -153,7 +147,7 @@ func OrchestratorPruneConfig() PruneConfig { return OrchestratorManagementConfig
 func CoderPruneConfig() PruneConfig { return CoderManagementConfig() }
 func TesterPruneConfig() PruneConfig { return TesterManagementConfig() }
 func DefaultPruneConfig() PruneConfig { return DefaultManagementConfig() }
-func DefaultStashConfig() StashConfig { return DefaultManagementConfig() }
+// Removed: Use DefaultStashConfig() from stash.go instead
 
 // ManagementConfigForRole returns the appropriate config for the given role string
 func ManagementConfigForRole(roleStr string) ManagementConfig {
@@ -202,24 +196,7 @@ type ManagementResult struct {
 // PruneResult is an alias for backward compatibility
 type PruneResult = ManagementResult
 
-// ContentType represents the type of large content detected (for stashing)
-type ContentType string
-
-const (
-	ContentTypeErrorDump   ContentType = "error-dump"
-	ContentTypeCodeBlock   ContentType = "code-block"
-	ContentTypeLogOutput   ContentType = "log-output"
-	ContentTypeFileContent ContentType = "file-contents"
-	ContentTypeLargeText   ContentType = "large-text"
-)
-
-// StashResult describes what was stashed
-type StashResult struct {
-	MemoryID    string
-	ContentType ContentType
-	Tokens      int
-	Summary     string
-}
+// Types moved to stash.go
 
 // ManageConversation applies unified conversation management including both
 // pruning (truncating old content) and stashing (moving large content to memory).
@@ -242,62 +219,9 @@ func ManageConversation(
 	}
 
 	// Step 1: Apply stashing first (move large content blocks to memory)
-	var managedMessages []anthropic.MessageParam
-	totalStashed := 0
-	
-	for _, msg := range messages {
-		managedMsg := msg
-		
-		// Apply stashing to each content block if enabled
-		if (cfg.StashEnabled || cfg.Enabled) && memStore != nil {
-			var newContent []anthropic.ContentBlockParamUnion
-			stashedInMsg := false
-			
-			for _, block := range msg.Content {
-				if block.OfText != nil {
-					text := block.OfText.Text
-					tokens := memory.EstimateTokens(text)
-					
-					// Check if this text block should be stashed
-					shouldStash := false
-					if msg.Role == anthropic.MessageParamRoleUser && tokens >= cfg.UserMessageThreshold {
-						shouldStash = true
-					} else if msg.Role == anthropic.MessageParamRoleAssistant && tokens >= cfg.AssistantThreshold {
-						shouldStash = true
-					} else if tokens >= cfg.MinBlockSize {
-						shouldStash = true
-					}
-					
-					if shouldStash {
-						// Stash large content
-						modifiedText, stashResults, err := DetectAndStashLargeBlocks(text, sessionID, memStore, cfg)
-						if err != nil {
-							log.Printf("[warn] stashing failed: %v", err)
-							newContent = append(newContent, block)
-						} else if len(stashResults) > 0 {
-							// Replace with stashed summary
-							newContent = append(newContent, anthropic.ContentBlockParamUnion{
-								OfText: &anthropic.TextBlockParam{Text: modifiedText},
-							})
-							stashedInMsg = true
-							totalStashed += len(stashResults)
-						} else {
-							newContent = append(newContent, block)
-						}
-					} else {
-						newContent = append(newContent, block)
-					}
-				} else {
-					newContent = append(newContent, block)
-				}
-			}
-			
-			if stashedInMsg {
-				managedMsg.Content = newContent
-			}
-		}
-		
-		managedMessages = append(managedMessages, managedMsg)
+	managedMessages, totalStashed, err := ApplyStashing(messages, sessionID, memStore, cfg.Stash)
+	if err != nil {
+		return nil, nil, fmt.Errorf("apply stashing: %w", err)
 	}
 	
 	result.StashedBlocks = totalStashed
@@ -450,190 +374,6 @@ func ShouldPrune(messages []anthropic.MessageParam, cfg PruneConfig) bool {
 
 	return totalTokens > cfg.TokenBudget
 }
-
-// === Stashing functions (moved from stash.go) ===
-
-// DetectContentType identifies what type of content a large block contains
-func DetectContentType(content string) ContentType {
-	lower := strings.ToLower(content)
-
-	// Error dump detection
-	errorPatterns := []string{
-		"error:", "exception:", "panic:", "traceback", "stack trace",
-		"fatal:", "segmentation fault", "core dumped",
-	}
-	for _, pattern := range errorPatterns {
-		if strings.Contains(lower, pattern) {
-			return ContentTypeErrorDump
-		}
-	}
-
-	// Code block detection (lots of code fences)
-	codeFenceCount := strings.Count(content, "```")
-	if codeFenceCount >= 4 { // At least 2 code blocks
-		return ContentTypeCodeBlock
-	}
-
-	// Log output detection (timestamps + repeated patterns)
-	timestampPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`\d{4}-\d{2}-\d{2}`),                    // 2024-01-15
-		regexp.MustCompile(`\d{2}:\d{2}:\d{2}`),                    // 12:34:56
-		regexp.MustCompile(`\[.*?\]`),                              // [INFO], [ERROR]
-		regexp.MustCompile(`(?i)(DEBUG|INFO|WARN|ERROR|FATAL):`),  // Log levels
-	}
-	timestampMatches := 0
-	for _, pattern := range timestampPatterns {
-		if pattern.MatchString(content) {
-			timestampMatches++
-		}
-	}
-	if timestampMatches >= 2 {
-		return ContentTypeLogOutput
-	}
-
-	// File contents detection (file paths + line numbers)
-	hasFilePaths := strings.Contains(content, "/") || strings.Contains(content, "\\")
-	lineNumberPattern := regexp.MustCompile(`:\d+:`)
-	hasLineNumbers := lineNumberPattern.MatchString(content)
-	if hasFilePaths && hasLineNumbers {
-		return ContentTypeFileContent
-	}
-
-	return ContentTypeLargeText
-}
-
-// StashLargeContent saves large content to memory and returns a summary
-func StashLargeContent(
-	content string,
-	sessionID string,
-	memStore memory.MemoryStore,
-	cfg ManagementConfig,
-) (*StashResult, error) {
-	tokens := memory.EstimateTokens(content)
-
-	if tokens < cfg.MinBlockSize {
-		return nil, nil // Too small to stash
-	}
-
-	// Detect content type
-	contentType := DetectContentType(content)
-
-	// Generate tags
-	tags := []string{"large-input", "stashed", sessionID, string(contentType)}
-
-	// Save to memory
-	memID := uuid.New().String()
-	mem := memory.Memory{
-		ID:         memID,
-		Content:    content,
-		Tags:       tags,
-		Importance: cfg.DefaultImportance,
-		Source:     "system",
-	}
-
-	if err := memStore.Save(mem); err != nil {
-		return nil, fmt.Errorf("save stashed content: %w", err)
-	}
-
-	// Generate summary
-	summary := fmt.Sprintf("[Large content stashed — %s, ~%d tokens. Use memory_search or memory_expand(id=\"%s\") to recall full content]",
-		contentType, tokens, memID[:8])
-
-	return &StashResult{
-		MemoryID:    memID,
-		ContentType: contentType,
-		Tokens:      tokens,
-		Summary:     summary,
-	}, nil
-}
-
-// DetectAndStashLargeBlocks scans text for large blocks and stashes them
-func DetectAndStashLargeBlocks(
-	text string,
-	sessionID string,
-	memStore memory.MemoryStore,
-	cfg ManagementConfig,
-) (string, []StashResult, error) {
-	if (!cfg.StashEnabled && !cfg.Enabled) || memStore == nil {
-		return text, nil, nil
-	}
-
-	var stashed []StashResult
-
-	// Strategy: detect code blocks first (they're explicit)
-	// Then detect large paragraphs
-
-	// 1. Extract code blocks
-	codeBlockPattern := regexp.MustCompile("(?s)```[a-z]*\n(.*?)```")
-	matches := codeBlockPattern.FindAllStringSubmatch(text, -1)
-	
-	modifiedText := text
-	for _, match := range matches {
-		fullMatch := match[0]
-		codeContent := match[1]
-
-		tokens := memory.EstimateTokens(codeContent)
-		if tokens >= cfg.MinBlockSize {
-			result, err := StashLargeContent(codeContent, sessionID, memStore, cfg)
-			if err != nil {
-				log.Printf("[warn] failed to stash code block: %v", err)
-				continue
-			}
-			if result != nil {
-				stashed = append(stashed, *result)
-				modifiedText = strings.Replace(modifiedText, fullMatch, result.Summary, 1)
-			}
-		}
-	}
-
-	// 2. Check overall text size after code block stashing
-	remainingTokens := memory.EstimateTokens(modifiedText)
-	if remainingTokens >= cfg.MinBlockSize {
-		// The remaining text is still large - check if it's a single large block
-		// Split by double newlines to detect large paragraphs
-		paragraphs := strings.Split(modifiedText, "\n\n")
-		
-		var rebuiltText []string
-		for _, para := range paragraphs {
-			paraTokens := memory.EstimateTokens(para)
-			if paraTokens >= cfg.MinBlockSize {
-				result, err := StashLargeContent(para, sessionID, memStore, cfg)
-				if err != nil {
-					log.Printf("[warn] failed to stash paragraph: %v", err)
-					rebuiltText = append(rebuiltText, para)
-					continue
-				}
-				if result != nil {
-					stashed = append(stashed, *result)
-					rebuiltText = append(rebuiltText, result.Summary)
-				} else {
-					rebuiltText = append(rebuiltText, para)
-				}
-			} else {
-				rebuiltText = append(rebuiltText, para)
-			}
-		}
-		modifiedText = strings.Join(rebuiltText, "\n\n")
-	}
-
-	// 3. Fallback: if total message is still large and nothing was stashed,
-	// stash the entire message (e.g., repetitive error dumps with small paragraphs)
-	if len(stashed) == 0 {
-		totalTokens := memory.EstimateTokens(modifiedText)
-		if totalTokens >= cfg.UserMessageThreshold {
-			result, err := StashLargeContent(modifiedText, sessionID, memStore, cfg)
-			if err != nil {
-				log.Printf("[warn] failed to stash entire large message: %v", err)
-			} else if result != nil {
-				stashed = append(stashed, *result)
-				modifiedText = result.Summary
-			}
-		}
-	}
-
-	return modifiedText, stashed, nil
-}
-
 // === Pruning utility functions (moved from prune.go) ===
 
 // pruneToolResult applies age-based pruning to a tool result block

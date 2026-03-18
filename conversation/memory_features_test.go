@@ -229,7 +229,7 @@ func TestExtractionConfig(t *testing.T) {
 func TestStashConfig(t *testing.T) {
 	cfg := DefaultStashConfig()
 
-	if !cfg.StashEnabled {
+	if !cfg.Enabled {
 		t.Error("Expected stashing to be enabled by default")
 	}
 
