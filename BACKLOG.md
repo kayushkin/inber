@@ -42,7 +42,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Consistent error handling** — Audit for bare `fmt.Errorf` vs `%w` wrapping, ensure errors are traceable
 - [x] **Reduce global state** — Check for package-level vars that should be struct fields
 - [x] **Test coverage audit** — Which packages have 0% coverage? Add basic tests for untested code paths
-- [ ] **Dependency audit** — `go mod tidy`, check for unused or heavy deps that could be replaced
+- [~] **Dependency audit** — `go mod tidy`, check for unused or heavy deps that could be replaced
 
 ## 📐 Architecture
 

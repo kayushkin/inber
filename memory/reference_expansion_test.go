@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 // TestReferenceExpansionFlow tests the end-to-end flow of reference expansion

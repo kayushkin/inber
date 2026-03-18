@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // SQLiteStore wraps a SQLite database for session and turn tracking.
@@ -68,7 +68,7 @@ func OpenDB(repoRoot string) (*SQLiteStore, error) {
 	}
 
 	dbPath := filepath.Join(dir, "sessions.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_journal=wal&_timeout=5000")
+	db, err := sql.Open("sqlite", dbPath+"?_journal=wal&_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open sessions db: %w", err)
 	}

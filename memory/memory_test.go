@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	_ "modernc.org/sqlite"
 )
 
 func TestStore(t *testing.T) {

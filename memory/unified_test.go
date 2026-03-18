@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	_ "modernc.org/sqlite"
 )
 
 func TestUnifiedFields(t *testing.T) {

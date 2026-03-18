@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // Memory represents a single persistent memory entry.
@@ -47,7 +47,7 @@ type Store struct {
 
 // NewStore creates or opens a memory store at the given path.
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kayushkin/inber/memory"
+	_ "modernc.org/sqlite"
 )
 
 func TestDetectContentType(t *testing.T) {
