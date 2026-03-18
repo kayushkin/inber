@@ -47,7 +47,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 ## 📐 Architecture
 
 - [x] **Document the actual data flow** — From user input → engine → provider → tool execution → response. A single clear diagram in docs/
-- [ ] **Define package boundaries** — Write a brief "who calls whom" rule. engine → memory ✓, memory → engine ✗, etc.
+- [x] **Define package boundaries** — Write a brief "who calls whom" rule. engine → memory ✓, memory → engine ✗, etc.
 - [ ] **Evaluate splitting into Go modules** — Could `memory/`, `agent/`, `engine/` be separate Go modules? Pros/cons of mono-module vs multi-module.
 
 ---
