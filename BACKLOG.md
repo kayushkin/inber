@@ -65,6 +65,8 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 - [x] **Split server/spawn.go** — 626 lines combining spawning logic, result delivery, memory management, and tool definitions. Extract tool definitions into `spawn_tools.go` and delivery logic into `spawn_delivery.go`. Keep core spawning logic in `spawn.go`. Better separation of concerns.
 
+- [~] **Split memory/memory.go** — 646 lines combining multiple concerns: core types, database operations, search functionality, memory management, and utilities. Extract search logic into `search.go`, memory management (decay, cleanup) into `management.go`, and utility functions into `util.go`. Keep core Store type and basic operations in `memory.go`. Better separation of concerns.
+
 ---
 
 ## 💡 Ideas
