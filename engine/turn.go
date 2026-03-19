@@ -56,7 +56,17 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 		}
 	}
 
-	e.Messages = append(e.Messages, anthropic.NewUserMessage(anthropic.NewTextBlock(processedInput)))
+	// Repair alternation before appending: if last message is also user role
+	// (e.g. previous turn errored after appending user but before assistant response),
+	// merge into the existing user message to maintain alternation.
+	if len(e.Messages) > 0 && e.Messages[len(e.Messages)-1].Role == anthropic.MessageParamRoleUser {
+		e.Messages[len(e.Messages)-1].Content = append(
+			e.Messages[len(e.Messages)-1].Content,
+			anthropic.NewTextBlock(processedInput),
+		)
+	} else {
+		e.Messages = append(e.Messages, anthropic.NewUserMessage(anthropic.NewTextBlock(processedInput)))
+	}
 
 	// 1a. Summarize if conversation is very long (compress old turns into summary)
 	e.summarizeIfNeeded()

@@ -121,6 +121,9 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 				Stream:   "tool_call",
 				StreamID: streamID,
 				Tool:     ev.Tool,
+				Meta: &bus.OutboundMeta{
+					Tools: []bus.ToolEventMeta{{Tool: ev.Tool, Input: ev.Text}},
+				},
 			})
 
 		case "tool_result":
@@ -132,6 +135,9 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 				Stream:   "tool_result",
 				StreamID: streamID,
 				Tool:     ev.Tool,
+				Meta: &bus.OutboundMeta{
+					Tools: []bus.ToolEventMeta{{Tool: ev.Tool, Output: ev.Text}},
+				},
 			})
 
 		case "done":

@@ -23,6 +23,7 @@ type BusMessage = messages.BusEnvelope
 type InboundMessage = messages.ChatInbound
 type OutboundMessage = messages.ChatOutbound
 type OutboundMeta = messages.OutboundMeta
+type ToolEventMeta = messages.ToolEventMeta
 
 // NewClient creates a bus client. Returns nil if natsURL is empty.
 func NewClient(natsURL, consumer string) *Client {
@@ -107,7 +108,33 @@ func (c *Client) PublishOutbound(msg OutboundMessage) error {
 	if msg.Orchestrator == "" {
 		msg.Orchestrator = "inber"
 	}
-	return c.Publish("chat.outbound", msg)
+
+	agent := msg.Agent
+	if agent == "" {
+		agent = "unknown"
+	}
+
+	// Route to subject based on stream type, matching openclaw-adapter conventions.
+	switch msg.Stream {
+	case "delta", "thinking", "tool_call", "tool_result":
+		// Ephemeral streaming events → chat.stream.{agent}
+		return c.Publish("chat.stream."+agent, msg)
+	case "status":
+		return c.Publish("chat.status."+agent, msg)
+	case "done":
+		// Final completed message → JetStream chat.completed
+		// Also publish to webchat.completed if channel is webchat
+		if err := c.Publish("chat.completed", msg); err != nil {
+			return err
+		}
+		if msg.Channel == "webchat" {
+			return c.Publish("webchat.completed", msg)
+		}
+		return nil
+	default:
+		// Fallback for other/unset stream types
+		return c.Publish("chat.completed", msg)
+	}
 }
 
 // PublishEvent publishes a system event to the "events" subject.

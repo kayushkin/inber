@@ -82,10 +82,16 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ---
 
+## 🧹 Code Quality (Latest)
+
+- [x] **Extract bus handling from server/server.go** — Created server/bus.go with BusManager for bus message handling. Moved ListenBus and handleBusMessage functionality to dedicated BusManager struct. Reduced server.go from 593 to 439 lines (154-line/26% reduction). Better separation of concerns between HTTP API handling and message bus integration.
+
+---
+
 ## 💡 Ideas
 
 - [x] **Benchmark inber's startup time** — Added `inber benchmark-startup` command that measures complete initialization time. Current baseline: ~4.1s average startup time with 100 memories, session resume, and full tool loading. Shows ~1% variability between runs. Foundation ready for detailed phase timing instrumentation.
-- [~] **Add detailed phase timing to startup benchmark** — Instrument NewEngine initialization phases for performance analysis: config resolution, memory store setup, session preparation, model client creation, tool building, etc. Enable identification of bottlenecks in startup sequence.
+- [x] **Add detailed phase timing to startup benchmark** — Created engine_benchmark.go with NewEngineBenchmark function that instruments each initialization phase. Updated benchmark_startup.go to use detailed timing instead of just total time. Now shows breakdown: config resolution, memory store, session prep, model store/client, agent registry, tools building, hooks setup. Reveals memory store initialization as main bottleneck (97.1% of startup time with 100 memories). Model client creation is 57.5% of startup time in raw mode, 1.0% with full context. Enables targeted optimization by identifying specific slow phases.
 - [x] **Profile memory usage during long sessions** — Added comprehensive memory profiling system: MemoryProfiler with snapshot collection every 30s, tracking heap allocation/GC activity/goroutine counts, CLI commands (`inber profile memory`, `--memory-profile` flags), environment variable support (INBER_MEMORY_PROFILING, INBER_MEMORY_LOG), and detailed memory reports. Enables monitoring memory patterns, identifying leaks, and tracking RSS growth during extended conversations.
 - [x] **Compare inber's token efficiency against pi-mono and openclaw** — Run identical multi-turn tasks across frameworks, measure total tokens used, context management effectiveness, and cost per task completion.
 - [x] **Extract memory system as standalone library** — Evaluated feasibility of extracting inber's memory store as standalone Go module. Created comprehensive evaluation in `docs/memory-extraction-evaluation.md`. Conclusion: **FEASIBLE** with minimal changes. Memory system is already well-architected with clean `MemoryStore` interface, minimal external dependencies, and clear separation of concerns. Recommended approach: Extract core memory system (excluding agent-specific tools) as `github.com/inbernos/memory-store` module. Benefits: reusability across agent frameworks, cleaner boundaries, potential for community-contributed backends (Redis, PostgreSQL, etc.).
