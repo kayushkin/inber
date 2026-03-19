@@ -29,6 +29,7 @@ type Server struct {
 	store      *Store            // session/request persistence
 	events     *EventPublisher   // bus event publisher (nil = disabled)
 	bus        *bus.Client       // bus subscription client (nil = API-only mode)
+	busManager *BusManager       // bus message handling
 	modelStore *modelstore.Store
 	forgeDB    WorkspaceManager             // workspace management
 	workspaces map[string]*forge.Workspace // active workspaces by ID
@@ -120,7 +121,7 @@ func New(cfg Config) (*Server, error) {
 	// Create bus client for inbound subscription + outbound publishing.
 	busClient := bus.NewClient(cfg.NatsURL, "inber-server")
 
-	return &Server{
+	server := &Server{
 		config:     cfg,
 		queue:      q,
 		store:      store,
@@ -129,7 +130,12 @@ func New(cfg Config) (*Server, error) {
 		modelStore: ms,
 		forgeDB:    forgeDB,
 		workspaces: make(map[string]*forge.Workspace),
-	}, nil
+	}
+
+	// Create bus manager for handling bus messages.
+	server.busManager = NewBusManager(server)
+
+	return server, nil
 }
 
 // Close shuts down all sessions and releases resources.
@@ -152,169 +158,9 @@ func (g *Server) Close() error {
 }
 
 // ListenBus subscribes to the bus and processes inbound messages.
-// Each message is routed to the appropriate agent and processed via Run().
-// Responses are published back to bus "outbound" topic.
-// Blocks until ctx is cancelled.
+// Delegates to the BusManager for actual implementation.
 func (g *Server) ListenBus(ctx context.Context) error {
-	if g.bus == nil {
-		log.Printf("[server] bus not configured, skipping bus listener")
-		return nil
-	}
-
-	// Set up NATS request/reply handlers.
-	g.setupAgentRunHandler()
-
-	inbound := g.bus.Subscribe(ctx, []string{"chat.inbound"})
-	log.Printf("[server] listening for bus inbound messages")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case msg, ok := <-inbound:
-			if !ok {
-				return nil
-			}
-			go g.handleBusMessage(ctx, msg)
-		}
-	}
-}
-
-// handleBusMessage routes an inbound bus message to the correct agent.
-func (g *Server) handleBusMessage(ctx context.Context, msg bus.InboundMessage) {
-	// Proxy openclaw messages to OpenClaw API.
-	if msg.Orchestrator == "openclaw" {
-		g.proxyToOpenClaw(ctx, msg)
-		return
-	}
-
-	agent := msg.Agent
-	if agent == "" {
-		agent = g.config.DefaultAgent
-	}
-	if agent == "" {
-		log.Printf("[server] no agent specified and no default, dropping message")
-		return
-	}
-
-	log.Printf("[server] bus → %s: %s", agent, truncate(msg.Text, 80))
-
-	// Use streaming so we can publish deltas to bus in real-time.
-	streamID := fmt.Sprintf("s-%d", time.Now().UnixMilli())
-
-	// Publish status: orchestrator received the message
-	g.bus.PublishOutbound(bus.OutboundMessage{
-		Text:     "received",
-		Agent:    agent,
-		Author:   agent,
-		Channel:  msg.Channel,
-		Stream:   "status",
-		StreamID: streamID,
-	})
-
-	req := RunRequest{
-		Agent:   agent,
-		Message: msg.Text,
-		Channel: msg.Channel,
-		Author:  msg.Author,
-	}
-
-	var finalText string
-	var finalTokens TokenUsage
-
-	onEvent := func(ev StreamEvent) {
-		switch ev.Kind {
-		case "delta":
-			g.bus.PublishOutbound(bus.OutboundMessage{
-				Text:     ev.Text,
-				Agent:    agent,
-				Author:   agent,
-				Channel:  msg.Channel,
-				Stream:   "delta",
-				StreamID: streamID,
-			})
-
-		case "thinking":
-			g.bus.PublishOutbound(bus.OutboundMessage{
-				Text:     ev.Text,
-				Agent:    agent,
-				Author:   agent,
-				Channel:  msg.Channel,
-				Stream:   "thinking",
-				StreamID: streamID,
-			})
-
-		case "tool_call":
-			g.bus.PublishOutbound(bus.OutboundMessage{
-				Text:     ev.Text,
-				Agent:    agent,
-				Author:   agent,
-				Channel:  msg.Channel,
-				Stream:   "tool_call",
-				StreamID: streamID,
-				Tool:     ev.Tool,
-			})
-
-		case "tool_result":
-			g.bus.PublishOutbound(bus.OutboundMessage{
-				Text:     ev.Text,
-				Agent:    agent,
-				Author:   agent,
-				Channel:  msg.Channel,
-				Stream:   "tool_result",
-				StreamID: streamID,
-				Tool:     ev.Tool,
-			})
-
-		case "done":
-			finalText = ev.Text
-			if data, ok := ev.Data.(map[string]any); ok {
-				if tokens, ok := data["tokens"].(TokenUsage); ok {
-					finalTokens = tokens
-				}
-			}
-		}
-	}
-
-	// Publish status: calling API
-	g.bus.PublishOutbound(bus.OutboundMessage{
-		Agent:    agent,
-		Author:   agent,
-		Channel:  msg.Channel,
-		Stream:   "status",
-		StreamID: streamID,
-		Text:     "api_call",
-	})
-
-	err := g.Stream(ctx, req, onEvent)
-	if err != nil {
-		log.Printf("[server] bus message error: %v", err)
-		// Publish error response.
-		g.bus.PublishOutbound(bus.OutboundMessage{
-			Text:    fmt.Sprintf("error: %v", err),
-			Agent:   agent,
-			Author:  agent,
-			Channel: msg.Channel,
-		})
-		return
-	}
-
-	// Publish final "done" message.
-	g.bus.PublishOutbound(bus.OutboundMessage{
-		Text:     finalText,
-		Agent:    agent,
-		Author:   agent,
-		Channel:  msg.Channel,
-		Stream:   "done",
-		StreamID: streamID,
-		Meta: &bus.OutboundMeta{
-			InputTokens:         finalTokens.Input,
-			OutputTokens:        finalTokens.Output,
-			CacheReadTokens:     finalTokens.CacheRead,
-			CacheCreationTokens: finalTokens.CacheWrite,
-			Cost:                finalTokens.Cost,
-		},
-	})
+	return g.busManager.ListenBus(ctx)
 }
 
 // Route resolves which agent handles a message.
