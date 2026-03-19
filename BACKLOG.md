@@ -95,7 +95,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ## 🧹 Code Quality (Active)
 
-- [~] **Extract session management from server/server.go** — The ListSessions(), StopSession(), persistMessages(), and Inject() methods handle session collection management but are mixed with core HTTP server logic. Extract these into `server/session_management.go` to create better separation of concerns between request orchestration and session lifecycle management.
+- [x] **Extract session management from server/server.go** — Extracted ListSessions(), StopSession(), persistMessages(), and Inject() methods into `server/session_management.go`. Reduced server.go from 439 to 344 lines (22% reduction). Better separation of concerns between request orchestration and session lifecycle management. Removed unused encoding/json import.
 
 ---
 
