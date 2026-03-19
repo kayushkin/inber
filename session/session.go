@@ -250,8 +250,7 @@ func (s *Session) EndTurn(inTokens, outTokens, toolCalls int, stopReason, errMsg
 	
 	if s.store != nil {
 		// Calculate cost for just this turn
-		info := agent.GetModelInfo(s.model, s.modelStore)
-		cost := (float64(inTokens)*info.InputCostPer1M + float64(outTokens)*info.OutputCostPer1M) / 1_000_000
+		cost := s.calculateTurnCost(inTokens, outTokens)
 		s.store.EndTurn(s.sessionID, turn, inTokens, outTokens, toolCalls, cost, stopReason, errMsg)
 	}
 	
@@ -413,19 +412,7 @@ func (s *Session) LogPrune(removed int, tokensFreed int, strategy string) {
 
 // Close finalizes the session log and marks it completed in the DB.
 func (s *Session) Close() {
-	s.mu.Lock()
-	cost := s.cost()
-	s.mu.Unlock()
-
-	s.write(Entry{
-		Timestamp:    time.Now(),
-		Role:         "system",
-		Content:      fmt.Sprintf("session ended — total tokens: in=%d out=%d — cost: $%.4f", s.totalIn, s.totalOut, cost),
-		InputTokens:  s.totalIn,
-		OutputTokens: s.totalOut,
-		TotalCost:    cost,
-	})
-	s.file.Close()
+	s.closeJSONLWithCompletion()
 
 	if s.store != nil {
 		s.store.EndSession(s.sessionID, "completed", "")
@@ -434,24 +421,12 @@ func (s *Session) Close() {
 
 // CloseWithError finalizes the session log and marks it as errored in the DB.
 func (s *Session) CloseWithError(err error) {
-	s.mu.Lock()
-	cost := s.cost()
-	s.mu.Unlock()
+	s.closeJSONLWithError(err)
 
 	errMsg := ""
 	if err != nil {
 		errMsg = err.Error()
 	}
-
-	s.write(Entry{
-		Timestamp:    time.Now(),
-		Role:         "system",
-		Content:      fmt.Sprintf("session error — %s — total tokens: in=%d out=%d — cost: $%.4f", errMsg, s.totalIn, s.totalOut, cost),
-		InputTokens:  s.totalIn,
-		OutputTokens: s.totalOut,
-		TotalCost:    cost,
-	})
-	s.file.Close()
 
 	if s.store != nil {
 		s.store.EndSession(s.sessionID, "error", errMsg)
@@ -470,12 +445,6 @@ func (s *Session) write(e Entry) {
 
 	// Send copy to logstack if available (async, best-effort)
 	s.logstack.Log(e)
-}
-
-func (s *Session) cost() float64 {
-	info := agent.GetModelInfo(s.model, s.modelStore)
-	return (float64(s.totalIn) * info.InputCostPer1M / 1_000_000) +
-		(float64(s.totalOut) * info.OutputCostPer1M / 1_000_000)
 }
 
 // appendTimelineEntry appends the current turn's timeline entry to timeline.md.

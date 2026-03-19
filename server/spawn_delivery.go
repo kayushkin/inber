@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/bus"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
 )
@@ -84,15 +86,61 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 	if isRunning {
 		parent.inject(msg)
 	} else {
-		// Parent finished its turn. Queue for delivery on next turn.
-		parent.queuePending(msg)
-		log.Printf("[server] result queued (parent %s idle), will deliver on next turn", parentKey)
+		// Parent finished its turn. Trigger a new turn to deliver the result
+		// so the agent can process it and respond to the user.
+		log.Printf("[server] delivering spawn result to idle parent %s", parentKey)
 
 		// Publish the result directly to the bus outbound topic
 		// so the dashboard shows it immediately.
 		if g.events != nil {
 			g.events.PublishOutbound(parent.AgentName, result)
 		}
+
+		// Trigger a turn on the parent session with the spawn result
+		go func() {
+			ac, ok := g.GetAgentConfig(parent.AgentName)
+			if !ok {
+				log.Printf("[server] cannot deliver spawn result: unknown agent %s", parent.AgentName)
+				return
+			}
+
+			// Set up streaming to bus if available
+			var onEvent func(StreamEvent)
+			if g.bus != nil {
+				streamID := fmt.Sprintf("s-%d", time.Now().UnixMilli())
+				onEvent = func(ev StreamEvent) {
+					switch ev.Kind {
+					case "delta":
+						g.bus.PublishOutbound(bus.OutboundMessage{
+							Text: ev.Text, Agent: parent.AgentName, Author: parent.AgentName,
+							Channel: "webchat", Stream: "delta", StreamID: streamID,
+						})
+					case "thinking":
+						g.bus.PublishOutbound(bus.OutboundMessage{
+							Text: ev.Text, Agent: parent.AgentName, Author: parent.AgentName,
+							Channel: "webchat", Stream: "thinking", StreamID: streamID,
+						})
+					case "done":
+						g.bus.PublishOutbound(bus.OutboundMessage{
+							Text: ev.Text, Agent: parent.AgentName, Author: parent.AgentName,
+							Channel: "webchat", Stream: "done", StreamID: streamID,
+						})
+					}
+				}
+			}
+
+			req := RunRequest{
+				Agent:      parent.AgentName,
+				Message:    msg,
+				Channel:    "webchat",
+				SessionKey: parentKey,
+			}
+			_, err := g.run(context.Background(), req, onEvent)
+			if err != nil {
+				log.Printf("[server] failed to deliver spawn result to %s: %v", parentKey, err)
+			}
+			_ = ac // suppress unused
+		}()
 	}
 }
 
