@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/kayushkin/inber/agent/registry"
@@ -36,18 +35,9 @@ func init() {
 }
 
 func runAgentsList(cmd *cobra.Command, args []string) {
-	repoRoot, _ := engine.FindRepoRoot()
-	if repoRoot == "" {
-		repoRoot, _ = os.Getwd()
-	}
-
-	// Try agent-store first, fall back to file-based config
-	cfg, fromStore := registry.LoadConfigWithFallback(
-		filepath.Join(repoRoot, "agents.json"),
-		filepath.Join(repoRoot, "agents"),
-	)
-	if cfg == nil {
-		engine.Log.Error("no agent configuration found (agent-store or agents.json)")
+	cfg, err := registry.LoadConfig()
+	if err != nil || cfg == nil {
+		engine.Log.Error("no agent configuration found: %v", err)
 		os.Exit(1)
 	}
 
@@ -56,11 +46,7 @@ func runAgentsList(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	source := "agents.json"
-	if fromStore {
-		source = "agent-store"
-	}
-	fmt.Printf("Configured agents (%d, from %s):\n\n", len(cfg.Agents), source)
+	fmt.Printf("Configured agents (%d, from agent-store):\n\n", len(cfg.Agents))
 	if cfg.Default != "" {
 		fmt.Printf("  Default: %s%s%s\n\n", engine.Bold+engine.Blue, cfg.Default, engine.Reset)
 	}
@@ -84,17 +70,8 @@ func runAgentsList(cmd *cobra.Command, args []string) {
 func runAgentsShow(cmd *cobra.Command, args []string) {
 	agentName := args[0]
 	
-	repoRoot, _ := engine.FindRepoRoot()
-	if repoRoot == "" {
-		repoRoot, _ = os.Getwd()
-	}
-
-	// Try agent-store first, fall back to file-based config
-	registryCfg, _ := registry.LoadConfigWithFallback(
-		filepath.Join(repoRoot, "agents.json"),
-		filepath.Join(repoRoot, "agents"),
-	)
-	if registryCfg == nil {
+	registryCfg, err := registry.LoadConfig()
+	if err != nil || registryCfg == nil {
 		engine.Log.Error("no agent configuration found")
 		os.Exit(1)
 	}

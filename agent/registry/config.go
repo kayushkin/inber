@@ -2,6 +2,8 @@ package registry
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	agentstore "github.com/kayushkin/agent-store"
@@ -9,15 +11,18 @@ import (
 
 // AgentConfig defines an agent's configuration
 type AgentConfig struct {
-	Name     string        `json:"name"`
-	Role     string        `json:"role"`
-	Project  string        `json:"project,omitempty"` // forge project name (e.g. "kayushkin.com")
-	System   string        `json:"-"`                 // loaded from agent-store nature
-	Model    string        `json:"model"`
-	Thinking int64         `json:"thinking"`
-	Tools    []string      `json:"tools"`
-	Context  ContextConfig `json:"context"`
-	Limits   *AgentLimits  `json:"limits,omitempty"`
+	Name      string        `json:"name"`
+	Role      string        `json:"role"`
+	Project   string        `json:"project,omitempty"`   // primary project name
+	Projects  []string      `json:"projects,omitempty"`  // all assigned projects
+	System    string        `json:"-"`                   // system prompt (soul + shared identity)
+	Model     string        `json:"model"`
+	Thinking  int64         `json:"thinking"`
+	Tools     []string      `json:"tools"`
+	Context   ContextConfig `json:"context"`
+	Limits    *AgentLimits  `json:"limits,omitempty"`
+	Workspace string        `json:"workspace,omitempty"` // workspace path
+	Shelved   bool          `json:"shelved,omitempty"`
 }
 
 // AgentLimits defines per-agent safety limits for token/turn usage
@@ -57,99 +62,114 @@ type RegistryConfig struct {
 	OpenClaw *OpenClawConfig
 }
 
+// agentStoreDBPath returns the path to the agent-store database.
+// Uses AGENT_STORE_PATH env var, or defaults to ~/.config/agent-store/agents.db.
+func agentStoreDBPath(override string) string {
+	if override != "" {
+		return override
+	}
+	if p := os.Getenv("AGENT_STORE_PATH"); p != "" {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "agent-store", "agents.db")
+}
+
 // LoadFromAgentStore loads agent configs from the agent-store database.
 // This is the only source of truth for agent configuration.
 func LoadFromAgentStore(dbPath string) (*RegistryConfig, error) {
+	dbPath = agentStoreDBPath(dbPath)
+
 	store, err := agentstore.Open(dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("open agent-store: %w", err)
+		return nil, fmt.Errorf("open agent-store at %s: %w", dbPath, err)
 	}
 	defer store.Close()
 
-	// Get orchestrator config for inber
-	orch, err := store.GetOrchestrator("inber")
+	allConfigs, defaultSlug, err := store.GetAllAgentConfigs("inber")
 	if err != nil {
-		return nil, fmt.Errorf("get inber orchestrator: %w", err)
+		return nil, fmt.Errorf("get all agent configs: %w", err)
 	}
 
-	// Get all agents
-	agents, err := store.ListAgents()
-	if err != nil {
-		return nil, fmt.Errorf("list agents: %w", err)
+	if len(allConfigs) == 0 {
+		return nil, fmt.Errorf("no agents registered with inber orchestrator in agent-store")
 	}
 
-	if len(agents) == 0 {
-		return nil, fmt.Errorf("no agents in agent-store")
-	}
+	configs := make(map[string]*AgentConfig, len(allConfigs))
+	for _, fc := range allConfigs {
+		// Build system prompt from nature content
+		var systemParts []string
+		if fc.Soul != "" {
+			systemParts = append(systemParts, fc.Soul)
+		}
+		if fc.Principles != "" {
+			systemParts = append(systemParts, fc.Principles)
+		}
+		if fc.Values != "" {
+			systemParts = append(systemParts, fc.Values)
+		}
+		if fc.UserContext != "" {
+			systemParts = append(systemParts, fc.UserContext)
+		}
+		// If agent has a custom system prompt override, use that instead
+		systemPrompt := strings.Join(systemParts, "\n\n")
+		if fc.SystemPrompt != "" {
+			systemPrompt = fc.SystemPrompt
+		}
 
-	// Build config map
-	configs := make(map[string]*AgentConfig)
-	for _, a := range agents {
+		// Parse projects from comma-separated string
+		var projects []string
+		if fc.Projects != "" {
+			for _, p := range strings.Split(fc.Projects, ",") {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					projects = append(projects, p)
+				}
+			}
+		}
+
 		cfg := &AgentConfig{
-			Name: a.DisplayName,
-			Role: a.Role,
+			Name:      fc.DisplayName,
+			Role:      fc.Role,
+			Project:   fc.Project,
+			Projects:  projects,
+			System:    systemPrompt,
+			Model:     fc.Model,
+			Thinking:  int64(fc.Thinking),
+			Tools:     fc.Tools,
+			Workspace: fc.Workspace,
+			Shelved:   fc.Shelved,
+			Context: ContextConfig{
+				Tags:   fc.ContextTags,
+				Budget: fc.ContextBudget,
+			},
 		}
 
-		// Get agent nature (identity, principles, values, user)
-		natures, err := store.ListAgentNature(a.ID)
-		if err == nil && len(natures) > 0 {
-			var systemParts []string
-			for _, n := range natures {
-				if n.Content != "" {
-					systemParts = append(systemParts, n.Content)
-				}
-			}
-			cfg.System = strings.Join(systemParts, "\n\n")
-		}
-
-		// Get agent-orchestrator config for model/workspace
-		aos, err := store.GetAgentOrchestrators(a.ID)
-		if err == nil {
-			for _, ao := range aos {
-				if ao.OrchestratorID == "inber" {
-					if ao.ModelPrimary != "" {
-						cfg.Model = ao.ModelPrimary
-					}
-					if ao.WorkspacePath != "" {
-						cfg.Project = ao.WorkspacePath
-					}
-					break
-				}
+		// Set limits if any are non-zero
+		if fc.MaxTurns > 0 || fc.MaxInputTokens > 0 || fc.MaxResponseTime > 0 {
+			cfg.Limits = &AgentLimits{
+				MaxTurns:        fc.MaxTurns,
+				MaxInputTokens:  fc.MaxInputTokens,
+				MaxResponseTime: fc.MaxResponseTime,
 			}
 		}
 
-		// Set default model if not specified
+		// Default model
 		if cfg.Model == "" {
 			cfg.Model = "claude-sonnet-4-5"
 		}
 
-		configs[a.Slug] = cfg
-	}
-
-	// Resolve default agent from orchestrator's DefaultAgentID
-	var defaultAgent string
-	if orch.DefaultAgentID != nil {
-		for _, a := range agents {
-			if a.ID == *orch.DefaultAgentID {
-				defaultAgent = a.Slug
-				break
-			}
-		}
+		configs[fc.Slug] = cfg
 	}
 
 	return &RegistryConfig{
-		Default: defaultAgent,
+		Default: defaultSlug,
 		Agents:  configs,
 	}, nil
 }
 
-// LoadConfigWithFallback loads agent config from agent-store.
-// The configPath and identityDir parameters are no longer used but kept for API compatibility.
-// Returns the config and true (always from agent-store now).
-func LoadConfigWithFallback(configPath, identityDir string) (*RegistryConfig, bool) {
-	cfg, err := LoadFromAgentStore("")
-	if err != nil {
-		return nil, false
-	}
-	return cfg, true
+// LoadConfig loads agent configuration from agent-store.
+// This is the primary entry point for loading config.
+func LoadConfig() (*RegistryConfig, error) {
+	return LoadFromAgentStore("")
 }

@@ -225,7 +225,7 @@ func TestRegistry_Creation(t *testing.T) {
 	}
 }
 
-func TestRegistry_NewWithFallback(t *testing.T) {
+func TestRegistry_New(t *testing.T) {
 	// Create a mock client
 	client := &anthropic.Client{}
 	
@@ -237,16 +237,11 @@ func TestRegistry_NewWithFallback(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Test the API - agent-store may or may not be available
-	_, fromAgentStore, err := NewWithFallback(client, "unused", tmpDir)
+	_, err = New(client, tmpDir)
 	
 	if err != nil {
 		// Expected when agent-store is not available
 		t.Logf("Expected error when agent-store is not available: %v", err)
-	}
-	
-	// The function should indicate it tried to use agent-store
-	if !fromAgentStore {
-		t.Error("Expected fromAgentStore to be true (function always tries agent-store)")
 	}
 }
 

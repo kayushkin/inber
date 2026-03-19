@@ -93,13 +93,7 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 	} else {
 		fmt.Printf("\nRepo root: %s\n", repoRoot)
 		
-		// Check for agents.json
-		agentsPath := filepath.Join(repoRoot, "agents.json")
-		if _, err := os.Stat(agentsPath); err == nil {
-			fmt.Printf("Agents config: %s\n", agentsPath)
-		} else {
-			fmt.Printf("Agents config: %snot found%s\n", engine.Dim, engine.Reset)
-		}
+		fmt.Printf("Agents config: agent-store\n")
 		
 		// Check for .inber directory
 		inberDir := filepath.Join(repoRoot, ".inber")
@@ -127,52 +121,7 @@ func runConfigInit(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Create agents.json if it doesn't exist
-	agentsPath := filepath.Join(repoRoot, "agents.json")
-	if _, err := os.Stat(agentsPath); os.IsNotExist(err) {
-		example := `{
-  "agents": [
-    {
-      "name": "default",
-      "model": "claude-sonnet-4",
-      "tools": [],
-      "tags": ["general"]
-    }
-  ]
-}
-`
-		if err := os.WriteFile(agentsPath, []byte(example), 0644); err != nil {
-			engine.Log.Error("creating agents.json: %v", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Created %s\n", agentsPath)
-	}
-
-	// Create agents directory
-	agentsDir := filepath.Join(repoRoot, "agents")
-	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		engine.Log.Error("creating agents/: %v", err)
-		os.Exit(1)
-	}
-
-	// Create default agent identity
-	defaultIdentity := filepath.Join(agentsDir, "default.md")
-	if _, err := os.Stat(defaultIdentity); os.IsNotExist(err) {
-		identity := `# Default Agent
-
-You are a helpful coding assistant with access to tools for:
-- Shell command execution
-- File reading, writing, and editing
-- Directory listing
-
-Use these tools to help the user accomplish their tasks.
-`
-		if err := os.WriteFile(defaultIdentity, []byte(identity), 0644); err != nil {
-			engine.Log.Error("creating default.md: %v", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Created %s\n", defaultIdentity)
-	}
+	fmt.Println("Agent config is managed via agent-store. Use 'agent-store' CLI to add agents.")
 
 	// Create .env if it doesn't exist
 	envPath := filepath.Join(repoRoot, ".env")

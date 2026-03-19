@@ -57,12 +57,6 @@ func TestConfigInit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".inber")); os.IsNotExist(err) {
 		t.Error("expected .inber directory to be created")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "agents.json")); os.IsNotExist(err) {
-		t.Error("expected agents.json to be created")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "agents", "default.md")); os.IsNotExist(err) {
-		t.Error("expected agents/default.md to be created")
-	}
 	if _, err := os.Stat(filepath.Join(dir, ".env")); os.IsNotExist(err) {
 		t.Error("expected .env to be created")
 	}

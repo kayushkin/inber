@@ -58,9 +58,9 @@ func loadAgentConfig(agentName string, commandName string, modelExplicitlySet bo
 	var agentConfig *registry.AgentConfig
 
 	// Load from agent-store (the only source of truth)
-	registryCfg, fromStore := registry.LoadConfigWithFallback("", "")
-	if !fromStore || registryCfg == nil {
-		return "", "", nil, fmt.Errorf("failed to load agent config from agent-store")
+	registryCfg, err := registry.LoadConfig()
+	if err != nil || registryCfg == nil {
+		return "", "", nil, fmt.Errorf("failed to load agent config from agent-store: %v", err)
 	}
 	Log.Info("loaded config from agent-store")
 
@@ -232,7 +232,7 @@ func setupAgentRegistry(agentConfig *registry.AgentConfig, client *anthropic.Cli
 		return nil, nil
 	}
 
-	reg, _, err := registry.NewWithFallback(client, "", filepath.Join(repoRoot, "logs"))
+	reg, err := registry.New(client, filepath.Join(repoRoot, "logs"))
 	if err != nil {
 		Log.Warn("failed to create agent registry: %v", err)
 		return nil, err

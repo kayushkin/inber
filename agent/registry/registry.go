@@ -59,16 +59,6 @@ func New(client *anthropic.Client, logsDir string) (*Registry, error) {
 	return r, nil
 }
 
-// NewWithFallback creates a registry using agent-store.
-// The configDir parameter is no longer used but kept for API compatibility.
-// Always returns true (from agent-store) for the second return value.
-func NewWithFallback(client *anthropic.Client, configDir, logsDir string) (*Registry, bool, error) {
-	r, err := New(client, logsDir)
-	if err != nil {
-		return nil, false, err
-	}
-	return r, true, nil
-}
 
 // List returns the names of all configured agents
 func (r *Registry) List() []string {

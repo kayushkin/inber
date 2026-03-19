@@ -60,7 +60,7 @@ func LoadConfig(path string) (Config, error) {
 }
 
 // ConfigFromAgents builds a Config from agent registry data.
-// This bridges the existing agents.json / agent-store system.
+// This bridges the agent-store system.
 func ConfigFromAgents(agents map[string]AgentConfig, defaultAgent string) Config {
 	return Config{
 		Agents:       agents,
