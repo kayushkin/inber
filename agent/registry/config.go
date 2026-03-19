@@ -1,9 +1,7 @@
 package registry
 
 import (
-	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	agentstore "github.com/kayushkin/agent-store"
@@ -31,9 +29,9 @@ type AgentLimits struct {
 
 // ContextConfig defines context settings for an agent
 type ContextConfig struct {
-	Tags         []string `json:"tags"`
-	Budget       int      `json:"budget"`         // token budget for context
-	InheritParent bool    `json:"inherit_parent"` // inherit parent's context
+	Tags          []string `json:"tags"`
+	Budget        int      `json:"budget"`         // token budget for context
+	InheritParent bool     `json:"inherit_parent"` // inherit parent's context
 }
 
 // OpenClawConfig defines OpenClaw gateway configuration
@@ -88,12 +86,12 @@ func LoadFromAgentStore(dbPath string) (*RegistryConfig, error) {
 	configs := make(map[string]*AgentConfig)
 	for _, a := range agents {
 		cfg := &AgentConfig{
-			Name: a.Name,
+			Name: a.DisplayName,
 			Role: a.Role,
 		}
 
 		// Get agent nature (identity, principles, values, user)
-		natures, err := store.GetAgentNature(a.ID)
+		natures, err := store.ListAgentNature(a.ID)
 		if err == nil && len(natures) > 0 {
 			var systemParts []string
 			for _, n := range natures {
@@ -104,46 +102,18 @@ func LoadFromAgentStore(dbPath string) (*RegistryConfig, error) {
 			cfg.System = strings.Join(systemParts, "\n\n")
 		}
 
-		// Get agent-specific config for inber
-		agentCfg, err := store.GetAgentConfig(a.ID, "inber")
+		// Get agent-orchestrator config for model/workspace
+		aos, err := store.GetAgentOrchestrators(a.ID)
 		if err == nil {
-			// Model
-			if model, ok := agentCfg.Values["model"]; ok && model != "" {
-				cfg.Model = model
-			}
-			// Thinking budget
-			if thinking, ok := agentCfg.Values["thinking"]; ok {
-				if t, err := strconv.ParseInt(thinking, 10, 64); err == nil {
-					cfg.Thinking = t
-				}
-			}
-			// Context budget
-			if budget, ok := agentCfg.Values["context_budget"]; ok {
-				if b, err := strconv.Atoi(budget); err == nil {
-					cfg.Context.Budget = b
-				}
-			}
-			// Project (forge workspace)
-			if project, ok := agentCfg.Values["project"]; ok && project != "" {
-				cfg.Project = project
-			}
-			// Tools
-			for _, tc := range agentCfg.Tools {
-				if tc.Enabled {
-					cfg.Tools = append(cfg.Tools, tc.Tool)
-				}
-			}
-			// Limits
-			if len(agentCfg.Limits) > 0 {
-				cfg.Limits = &AgentLimits{}
-				if maxTurns, ok := agentCfg.Limits["max_turns"]; ok {
-					cfg.Limits.MaxTurns = maxTurns
-				}
-				if maxInputTokens, ok := agentCfg.Limits["max_input_tokens"]; ok {
-					cfg.Limits.MaxInputTokens = maxInputTokens
-				}
-				if maxResponseTime, ok := agentCfg.Limits["max_response_time"]; ok {
-					cfg.Limits.MaxResponseTime = maxResponseTime
+			for _, ao := range aos {
+				if ao.OrchestratorID == "inber" {
+					if ao.ModelPrimary != "" {
+						cfg.Model = ao.ModelPrimary
+					}
+					if ao.WorkspacePath != "" {
+						cfg.Project = ao.WorkspacePath
+					}
+					break
 				}
 			}
 		}
@@ -153,42 +123,23 @@ func LoadFromAgentStore(dbPath string) (*RegistryConfig, error) {
 			cfg.Model = "claude-sonnet-4-5"
 		}
 
-		configs[a.ID] = cfg
+		configs[a.Slug] = cfg
 	}
 
-	// Get orchestrator settings (tiers)
-	var tiers *TiersConfig
-	settings, err := store.GetOrchestratorSettings("inber")
-	if err == nil && len(settings) > 0 {
-		tiers = &TiersConfig{}
-		if highJSON, ok := settings["tier_high"]; ok {
-			var high []string
-			if err := json.Unmarshal([]byte(highJSON), &high); err == nil {
-				tiers.High = high
-			}
-		}
-		if lowJSON, ok := settings["tier_low"]; ok {
-			var low []string
-			if err := json.Unmarshal([]byte(lowJSON), &low); err == nil {
-				tiers.Low = low
-			}
-		}
-		if delay, ok := settings["tier_delay"]; ok {
-			if d, err := strconv.Atoi(delay); err == nil {
-				tiers.Delay = d
-			}
-		}
-		if grace, ok := settings["tier_grace"]; ok {
-			if g, err := strconv.Atoi(grace); err == nil {
-				tiers.Grace = g
+	// Resolve default agent from orchestrator's DefaultAgentID
+	var defaultAgent string
+	if orch.DefaultAgentID != nil {
+		for _, a := range agents {
+			if a.ID == *orch.DefaultAgentID {
+				defaultAgent = a.Slug
+				break
 			}
 		}
 	}
 
 	return &RegistryConfig{
-		Default:  orch.DefaultAgent,
-		Agents:   configs,
-		Tiers:    tiers,
+		Default: defaultAgent,
+		Agents:  configs,
 	}, nil
 }
 

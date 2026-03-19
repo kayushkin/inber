@@ -39,13 +39,33 @@ type MemoryStore interface {
 }
 
 // OpenOrCreate opens an existing memory store or creates a new one.
-// Returns the default SQLite implementation, but callers should treat this as a MemoryStore.
+//
+// If AGENT_STORE_PATH is set, uses a RemoteStore backed by agent-store's database,
+// with a local SQLite for search/context operations not yet supported by agent-store.
+// The AGENT_SLUG env var controls which agent's memories to access (default: "inber").
+//
+// Otherwise, falls back to a pure local SQLite store.
 func OpenOrCreate(rootDir string) (MemoryStore, error) {
-	dbPath := DefaultMemoryPath(rootDir)
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+	localDBPath := DefaultMemoryPath(rootDir)
+	if err := os.MkdirAll(filepath.Dir(localDBPath), 0755); err != nil {
 		return nil, fmt.Errorf("create memory directory: %w", err)
 	}
-	return NewStore(dbPath)
+
+	// Check for agent-store integration
+	if agentStorePath := os.Getenv("AGENT_STORE_PATH"); agentStorePath != "" {
+		agentSlug := os.Getenv("AGENT_SLUG")
+		if agentSlug == "" {
+			agentSlug = "inber"
+		}
+		return NewRemoteStore(agentStorePath, localDBPath, agentSlug)
+	}
+
+	// Future: AGENT_STORE_URL for HTTP client
+	// if url := os.Getenv("AGENT_STORE_URL"); url != "" {
+	//     return NewHTTPStore(url, localDBPath, agentSlug)
+	// }
+
+	return NewStore(localDBPath)
 }
 
 // NewSQLiteStore creates a new SQLite-backed memory store at the given path.
