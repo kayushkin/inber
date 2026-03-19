@@ -131,3 +131,5 @@ Study these projects for architectural ideas. For each, write a brief comparison
 ## 🧹 Code Quality (Active)
 
 - [x] **Split engine/workflow_hooks.go** — Extracted git operations into `workflow_git.go` (97 lines), file formatting into `workflow_format.go` (30 lines), build/test logic into `workflow_build.go` (113 lines), and deployment verification into `workflow_deploy.go` (98 lines). Reduced main workflow_hooks.go from 420 to 162 lines (61% reduction). Better separation of concerns: git operations, formatting, build/test, deployment verification, and core coordination are now in focused modules.
+
+- [x] **Split session/db.go** — Extracted type definitions into `db_types.go` (67 lines), database setup into `db_migration.go` (73 lines), session operations into `db_sessions.go` (196 lines), and turn operations into `db_turns.go` (67 lines). Reduced main db.go from 404 to 18 lines (96% reduction). Better separation of concerns: data modeling, schema management, session operations, turn operations, and core utilities are now in focused modules.
