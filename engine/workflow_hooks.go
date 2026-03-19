@@ -3,44 +3,9 @@ package engine
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
-
-// compactGoError extracts the first few meaningful error lines from go build/test output.
-var goErrorLine = regexp.MustCompile(`^(.+\.go:\d+:\d+:.+)$`)
-
-func compactGoError(phase string, output string) string {
-	lines := strings.Split(output, "\n")
-	var errors []string
-	seen := make(map[string]bool)
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if goErrorLine.MatchString(line) {
-			if !seen[line] {
-				seen[line] = true
-				errors = append(errors, line)
-			}
-			if len(errors) >= 5 {
-				break
-			}
-		}
-	}
-	if len(errors) == 0 {
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				errors = append(errors, line)
-				if len(errors) >= 3 {
-					break
-				}
-			}
-		}
-	}
-	return fmt.Sprintf("⚠️ %s failed:\n%s", phase, strings.Join(errors, "\n"))
-}
 
 // WorkflowHooks orchestrates auto-commit, auto-format, and auto-test.
 type WorkflowHooks struct {
@@ -75,6 +40,7 @@ func NewWorkflowHooks(repoRoot, sessionID, agentName string, cfg AutoWorkflowCon
 	return h
 }
 
+// detectProject determines the project type based on files in the repo.
 func (h *WorkflowHooks) detectProject() {
 	if _, err := os.Stat(filepath.Join(h.repoRoot, "go.mod")); err == nil {
 		h.projectType = "go"
@@ -89,13 +55,6 @@ func (h *WorkflowHooks) detectProject() {
 		return
 	}
 	h.projectType = ""
-}
-
-// git runs a git command and returns combined output. Never panics.
-func (h *WorkflowHooks) git(args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", h.repoRoot}, args...)...)
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
 }
 
 // OnToolResult runs after a tool completes.
@@ -143,6 +102,7 @@ func (h *WorkflowHooks) OnToolResult(toolName, toolInput, output string, isError
 	return strings.Join(messages, "\n")
 }
 
+// extractFilePath extracts the file path from tool input JSON.
 func (h *WorkflowHooks) extractFilePath(toolName, input string) string {
 	if idx := strings.Index(input, `"path"`); idx != -1 {
 		rest := input[idx+7:]
@@ -156,153 +116,15 @@ func (h *WorkflowHooks) extractFilePath(toolName, input string) string {
 	return ""
 }
 
-func (h *WorkflowHooks) formatFile(filePath string) string {
-	absPath := filepath.Join(h.repoRoot, filePath)
-
-	var cmd *exec.Cmd
-	switch h.projectType {
-	case "go":
-		cmd = exec.Command("gofmt", "-w", absPath)
-	case "node":
-		cmd = exec.Command("npx", "prettier", "--write", absPath)
-	case "rust":
-		cmd = exec.Command("rustfmt", absPath)
-	default:
-		return ""
-	}
-
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Sprintf("⚠️ format failed for %s:\n%s", filePath, strings.TrimSpace(string(out)))
-	}
-	return ""
-}
-
-func (h *WorkflowHooks) buildAndTest(filePath string) string {
-	switch h.projectType {
-	case "go":
-		return h.buildAndTestGo(filePath)
-	case "node":
-		return h.buildAndTestNode()
-	case "rust":
-		return h.buildAndTestRust()
-	default:
-		return ""
-	}
-}
-
-func (h *WorkflowHooks) buildAndTestGo(filePath string) string {
-	cmd := exec.Command("go", "build", "./...")
-	cmd.Dir = h.repoRoot
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return h.dedup(compactGoError("build", string(output)))
-	}
-
-	testCmd := []string{"test"}
-	if h.smartTests && strings.HasSuffix(filePath, ".go") {
-		pkg := "./" + filepath.Dir(filePath)
-		testCmd = append(testCmd, pkg)
-	} else {
-		testCmd = append(testCmd, "./...")
-	}
-
-	cmd = exec.Command("go", testCmd...)
-	cmd.Dir = h.repoRoot
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		return h.dedup(compactGoError("test", string(output)))
-	}
-
-	return ""
-}
-
-func (h *WorkflowHooks) buildAndTestNode() string {
-	cmd := exec.Command("npm", "test")
-	cmd.Dir = h.repoRoot
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return h.dedup(fmt.Sprintf("⚠️ npm test failed:\n%s", strings.TrimSpace(string(output))))
-	}
-	return ""
-}
-
-func (h *WorkflowHooks) buildAndTestRust() string {
-	cmd := exec.Command("cargo", "test")
-	cmd.Dir = h.repoRoot
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return h.dedup(fmt.Sprintf("⚠️ cargo test failed:\n%s", strings.TrimSpace(string(output))))
-	}
-	return ""
-}
-
-func (h *WorkflowHooks) dedup(msg string) string {
-	if msg == h.lastError {
-		return "⚠️ same error as last build"
-	}
-	h.lastError = msg
-	return msg
-}
-
-func (h *WorkflowHooks) commitFile(toolName, filePath string) string {
-	var msg string
-	if toolName == "write_file" {
-		msg = fmt.Sprintf("Create %s", filepath.Base(filePath))
-	} else {
-		msg = fmt.Sprintf("Update %s", filepath.Base(filePath))
-	}
-
-	// Stage file
-	out, err := h.git("add", filePath)
-	if err != nil {
-		return fmt.Sprintf("⚠️ git add failed for %s:\n%s\nFix this before continuing.", filePath, out)
-	}
-
-	// Commit
-	out, err = h.git("commit", "-m", msg)
-	if err != nil {
-		outStr := strings.TrimSpace(out)
-		if strings.Contains(outStr, "nothing to commit") ||
-			strings.Contains(outStr, "no changes added") {
-			return ""
-		}
-		return fmt.Sprintf("⚠️ git commit failed:\n%s\nFix this git issue before continuing.", outStr)
-	}
-
-	return ""
-}
-
 // FinishSession returns a summary of work done.
 func (h *WorkflowHooks) FinishSession() string {
 	fileCount := len(h.changedFiles)
 
+	// Handle git operations (commit, push)
+	gitParts := h.finishSessionGit()
+
 	var parts []string
-
-	// Ensure any uncommitted changes are committed
-	status, err := h.git("status", "--porcelain")
-	if err == nil && strings.TrimSpace(status) != "" {
-		h.git("add", "-A")
-		out, err := h.git("commit", "-m", "auto: session work")
-		if err == nil && !strings.Contains(out, "nothing to commit") {
-			parts = append(parts, "✅ Committed uncommitted changes")
-		}
-	}
-
-	// Push if there are unpushed commits
-	branch, err := h.git("rev-parse", "--abbrev-ref", "HEAD")
-	if err == nil && strings.TrimSpace(branch) != "" {
-		branch = strings.TrimSpace(branch)
-		ahead, err := h.git("rev-list", "--count", "@{u}..")
-		if err == nil && strings.TrimSpace(ahead) != "" && strings.TrimSpace(ahead) != "0" {
-			out, err := h.git("push", "--set-upstream", "origin", branch)
-			if err != nil {
-				parts = append(parts, fmt.Sprintf("❌ Push failed: %s", strings.TrimSpace(out)))
-			} else {
-				parts = append(parts, fmt.Sprintf("✅ Pushed to %s", branch))
-			}
-		}
-	}
+	parts = append(parts, gitParts...)
 
 	if fileCount > 0 {
 		parts = append(parts, fmt.Sprintf("Session complete (%d file%s changed).", fileCount, plural(fileCount)))
@@ -314,91 +136,12 @@ func (h *WorkflowHooks) FinishSession() string {
 	return strings.Join(parts, "\n")
 }
 
+// plural returns "s" for pluralization if n != 1.
 func plural(n int) string {
 	if n == 1 {
 		return ""
 	}
 	return "s"
-}
-
-// VerifyDeployment checks if changes are pushed and deployed, returns issues if any.
-func (h *WorkflowHooks) VerifyDeployment() (bool, string) {
-	if !h.verifyDeployed {
-		return false, ""
-	}
-
-	if len(h.changedFiles) == 0 {
-		return false, ""
-	}
-
-	var issues []string
-
-	// Check 1: Uncommitted changes?
-	status, err := h.git("status", "--porcelain")
-	if err == nil && status != "" {
-		issues = append(issues, fmt.Sprintf("Uncommitted changes:\n%s", status))
-	}
-
-	// Check 2: Unpushed commits?
-	currentBranch, err := h.git("rev-parse", "--abbrev-ref", "HEAD")
-	if err == nil && currentBranch != "" {
-		ahead, err := h.git("rev-list", "--count", "@{u}..")
-		if err == nil && ahead != "" && ahead != "0" {
-			issues = append(issues, fmt.Sprintf("Branch '%s' has %s unpushed commits", currentBranch, ahead))
-		}
-	}
-
-	// Check 3: Deployment script?
-	deployScript := ""
-	for _, candidate := range []string{"update.sh", "deploy.sh", "scripts/deploy.sh"} {
-		fullPath := filepath.Join(h.repoRoot, candidate)
-		if _, err := os.Stat(fullPath); err == nil {
-			deployScript = candidate
-			break
-		}
-	}
-
-	// Check for systemd services (common for Go projects)
-	serviceName := ""
-	if h.projectType == "go" {
-		modPath := filepath.Join(h.repoRoot, "go.mod")
-		if content, err := os.ReadFile(modPath); err == nil {
-			lines := strings.Split(string(content), "\n")
-			if len(lines) > 0 {
-				parts := strings.Fields(lines[0])
-				if len(parts) >= 2 {
-					serviceName = filepath.Base(parts[1])
-				}
-			}
-		}
-	}
-
-	var deploymentChecks []string
-	if deployScript != "" {
-		deploymentChecks = append(deploymentChecks, fmt.Sprintf("Deployment script found: %s", deployScript))
-	}
-	if serviceName != "" {
-		cmd := exec.Command("systemctl", "is-active", serviceName)
-		if err := cmd.Run(); err != nil {
-			deploymentChecks = append(deploymentChecks, fmt.Sprintf("Service '%s' is not active", serviceName))
-		}
-	}
-
-	if len(deploymentChecks) > 0 {
-		issues = append(issues, strings.Join(deploymentChecks, "\n"))
-	}
-
-	if len(issues) == 0 {
-		return false, ""
-	}
-
-	description := fmt.Sprintf("Deployment verification found issues:\n\n%s\n\n"+
-		"Changed files in this session:\n%s",
-		strings.Join(issues, "\n\n"),
-		strings.Join(h.changedFiles, "\n"),
-	)
-
-	return true, description
 }
 
 // AutoWorkflowConfig controls which auto-workflows are enabled.
