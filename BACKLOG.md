@@ -99,6 +99,12 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ---
 
+## 🧹 Code Quality (New Round)
+
+- [x] **Improve test coverage for agent/registry package** — Improved coverage from 7.5% to 74.1% (10x improvement). Added comprehensive tests for Registry and ToolRegistry: agent management (Get, List, Default), session management (GetSession, CloseSession, CloseAll), configuration handling (GetConfig), registry creation (New, NewWithFallback), setter methods (SetMemoryStore, SetModelClient, SetModelStore, SetOpenClawConfig), tool registration and retrieval, memory tools registration, spawn tool registration, and built-in tools initialization. All 15 tests passing.
+
+---
+
 ## 💡 Ideas
 
 - [x] **Benchmark inber's startup time** — Added `inber benchmark-startup` command that measures complete initialization time. Current baseline: ~4.1s average startup time with 100 memories, session resume, and full tool loading. Shows ~1% variability between runs. Foundation ready for detailed phase timing instrumentation.
