@@ -74,4 +74,5 @@ func init() {
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(btwCmd)
+	rootCmd.AddCommand(benchmarkStartupCmd)
 }

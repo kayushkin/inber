@@ -82,7 +82,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ## 💡 Ideas
 
-- Benchmark inber's startup time — how fast from `inber run` to first API call?
+- [~] **Benchmark inber's startup time** — Create benchmark measuring time from `inber run` to first API call readiness. Include timing of key startup phases: config load, database init, model store init, agent setup.
 - Profile memory usage during long sessions
 - Compare inber's token efficiency against pi-mono and openclaw on identical tasks
 - Could inber's memory system work as a standalone library?
