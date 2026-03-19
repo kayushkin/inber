@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/kayushkin/bus/messages"
 )
 
 // Client subscribes to the bus for inbound messages and publishes
@@ -27,52 +28,11 @@ type Client struct {
 	http     *http.Client
 }
 
-// BusMessage is a raw message from the bus WebSocket.
-type BusMessage struct {
-	ID      int64           `json:"id"`
-	Topic   string          `json:"topic"`
-	Payload json.RawMessage `json:"payload"`
-	Source  string          `json:"source"`
-}
-
-// InboundMessage is a chat message arriving via bus from SI or adapters.
-type InboundMessage struct {
-	ID           string    `json:"id,omitempty"`
-	Text         string    `json:"text"`
-	Author       string    `json:"author,omitempty"`
-	Agent        string    `json:"agent,omitempty"`
-	Orchestrator string    `json:"orchestrator,omitempty"` // "inber", "openclaw", etc.
-	Channel      string    `json:"channel,omitempty"`
-	ReplyTo      string    `json:"reply_to,omitempty"`
-	MediaURL     string    `json:"media_url,omitempty"`
-	Timestamp    time.Time `json:"timestamp"`
-}
-
-// OutboundMessage is a response published back to bus for SI/adapters.
-type OutboundMessage struct {
-	Text         string        `json:"text"`
-	Agent        string        `json:"agent"`
-	Author       string        `json:"author"`
-	Channel      string        `json:"channel"`
-	Orchestrator string        `json:"orchestrator,omitempty"`
-	Stream       string        `json:"stream,omitempty"`
-	StreamID     string        `json:"stream_id,omitempty"`
-	Tool         string        `json:"tool,omitempty"`
-	Timestamp    time.Time     `json:"timestamp"`
-	Meta         *OutboundMeta `json:"meta,omitempty"`
-}
-
-// OutboundMeta holds token/cost stats for responses.
-type OutboundMeta struct {
-	InputTokens         int     `json:"input_tokens,omitempty"`
-	OutputTokens        int     `json:"output_tokens,omitempty"`
-	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
-	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
-	ToolCalls           int     `json:"tool_calls,omitempty"`
-	Cost                float64 `json:"cost,omitempty"`
-	DurationMs          int64   `json:"duration_ms,omitempty"`
-	Model               string  `json:"model,omitempty"`
-}
+// Type aliases — keep existing names for backward compatibility within inber.
+type BusMessage = messages.BusEnvelope
+type InboundMessage = messages.ChatInbound
+type OutboundMessage = messages.ChatOutbound
+type OutboundMeta = messages.OutboundMeta
 
 // NewClient creates a bus client. Returns nil if busURL is empty.
 func NewClient(busURL, token, consumer string) *Client {
