@@ -109,7 +109,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 - [x] **Clean up root-level draft files** — `bus-client-draft.go` (356 lines) and `bus-topics-draft.md` are sitting in the repo root. Either move them to a proper `drafts/` directory, integrate them into the codebase as a `bus/` package, or remove them if obsolete. Root-level drafts violate clean repo organization principles. COMPLETED: Draft files were moved to `bus/` package and properly integrated.
 
-- [~] **Split engine/turn.go** — Currently 438 lines combining main turn execution, response stashing logic, OpenAI-specific execution, and cleanup. Extract `stashAssistantResponse` function and related stashing logic into `turn_stashing.go`, and `runOpenAITurn` into `turn_openai.go`. Keep core `RunTurn` logic in main file. Better separation of concerns.
+- [x] **Split engine/turn.go** — Currently 438 lines combining main turn execution, response stashing logic, OpenAI-specific execution, and cleanup. Extract `stashAssistantResponse` function and related stashing logic into `turn_stashing.go`, and `runOpenAITurn` into `turn_openai.go`. Keep core `RunTurn` logic in main file. Better separation of concerns. COMPLETED: Extracted stashing logic into turn_stashing.go (63 lines) and OpenAI logic into turn_openai.go (190 lines). Reduced main turn.go from 438 to 201 lines (54% reduction).
 
 ---
 
