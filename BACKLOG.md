@@ -91,7 +91,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 ## 🧹 Code Quality (Current)
 
 - [x] **Split session/session.go** — Extracted cost calculation logic into `session/cost.go` (19 lines) and JSONL file operations into `session/jsonl.go` (58 lines). Reduced main session.go from 557 to 526 lines (31-line/6% reduction). Better separation of concerns: core session management vs cost calculation vs file I/O operations. Note: Truncation logic was already properly modularized in existing `session/truncate.go`.
-- [~] **Extract logging methods from session/session.go** — Extract logging methods (LogUser, LogAssistant, LogToolCall, LogToolResult, LogThinking, LogRequest, LogCompaction, LogSummarize, LogStash, LogPrune, EndTurn) into `session/logging.go`. These methods total ~169+ lines and represent a clear functional boundary. Reduce session.go size and improve separation of concerns between session lifecycle management and logging operations.
+- [x] **Extract logging methods from session/session.go** — Extracted 11 logging methods (LogUser, LogAssistant, LogToolCall, LogToolResult, LogThinking, LogRequest, LogCompaction, LogSummarize, LogStash, LogPrune, EndTurn) into `session/session_logging.go`. Reduced session.go from 526 to 333 lines (193-line/37% reduction). Better separation of concerns: session lifecycle management vs logging operations. All methods remain as Session methods, preserving API compatibility.
 
 ## 💡 Ideas
 
