@@ -56,7 +56,7 @@ func (c *Client) Subscribe(ctx context.Context, topics []string) <-chan InboundM
 	go func() {
 		defer close(ch)
 
-		sub, err := c.nc.Subscribe("chat.inbound", func(subject string, data []byte) {
+		handler := func(subject string, data []byte) {
 			var msg InboundMessage
 			if err := json.Unmarshal(data, &msg); err != nil {
 				log.Printf("[bus] unmarshal error: %v", err)
@@ -76,9 +76,11 @@ func (c *Client) Subscribe(ctx context.Context, topics []string) <-chan InboundM
 			default:
 				log.Printf("[bus] warning: inbound channel full, dropping message")
 			}
-		})
+		}
+
+		sub, err := c.nc.Subscribe("chat.inbound", handler)
 		if err != nil {
-			log.Printf("[bus] subscribe error: %v", err)
+			log.Printf("[bus] subscribe chat.inbound error: %v", err)
 			return
 		}
 		defer sub.Unsubscribe()

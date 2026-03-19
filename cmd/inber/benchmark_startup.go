@@ -68,8 +68,6 @@ func (br BenchmarkResult) String() string {
 ├─ Config resolution:   %8.2f ms  (%.1f%%)
 ├─ Memory store:        %8.2f ms  (%.1f%%)
 ├─ Session preparation: %8.2f ms  (%.1f%%)
-├─ Workspace setup:     %8.2f ms  (%.1f%%)
-├─ Session DB:          %8.2f ms  (%.1f%%)
 ├─ Model store:         %8.2f ms  (%.1f%%)
 ├─ Model client:        %8.2f ms  (%.1f%%)
 ├─ Agent registry:      %8.2f ms  (%.1f%%)
@@ -80,8 +78,6 @@ func (br BenchmarkResult) String() string {
 		br.ConfigTime.Seconds()*1000, br.ConfigTime.Seconds()/br.TotalTime.Seconds()*100,
 		br.MemoryStoreTime.Seconds()*1000, br.MemoryStoreTime.Seconds()/br.TotalTime.Seconds()*100,
 		br.SessionPrepTime.Seconds()*1000, br.SessionPrepTime.Seconds()/br.TotalTime.Seconds()*100,
-		br.WorkspaceTime.Seconds()*1000, br.WorkspaceTime.Seconds()/br.TotalTime.Seconds()*100,
-		br.SessionDBTime.Seconds()*1000, br.SessionDBTime.Seconds()/br.TotalTime.Seconds()*100,
 		br.ModelStoreTime.Seconds()*1000, br.ModelStoreTime.Seconds()/br.TotalTime.Seconds()*100,
 		br.ModelClientTime.Seconds()*1000, br.ModelClientTime.Seconds()/br.TotalTime.Seconds()*100,
 		br.AgentRegistryTime.Seconds()*1000, br.AgentRegistryTime.Seconds()/br.TotalTime.Seconds()*100,
@@ -130,11 +126,6 @@ func runBenchmarkStartup(cmd *cobra.Command, args []string) {
 }
 
 func measureSingleStartup() BenchmarkResult {
-	startTime := time.Now()
-
-	// Measure each phase by creating the engine config and calling NewEngine
-	// We'll need to hook into the engine creation process to get detailed timing
-	
 	cfg := engine.EngineConfig{
 		Model:       benchModel,
 		AgentName:   benchAgent,
@@ -145,36 +136,30 @@ func measureSingleStartup() BenchmarkResult {
 		Display: &engine.DisplayHooks{},
 	}
 
-	// This creates the engine and measures total time
-	// For detailed phase timing, we'd need to modify engine.NewEngine() 
-	// or create a wrapper that measures each step
-	eng, err := engine.NewEngine(cfg)
+	// Use the instrumented NewEngineBenchmark to get detailed phase timing
+	eng, timing, err := engine.NewEngineBenchmark(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Engine creation failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	totalTime := time.Since(startTime)
-	
 	// Clean up
 	eng.Close()
 
-	// For now, return with total time measured
-	// TODO: Add detailed phase timing by instrumenting NewEngine
+	// Convert engine.BenchmarkTiming to BenchmarkResult
 	return BenchmarkResult{
-		TotalTime: totalTime,
-		// These would be filled in with detailed instrumentation:
-		ConfigTime:        time.Duration(0), 
-		MemoryStoreTime:   time.Duration(0),
-		SessionPrepTime:   time.Duration(0),
-		WorkspaceTime:     time.Duration(0),
-		SessionDBTime:     time.Duration(0),
-		ModelStoreTime:    time.Duration(0),
-		ModelClientTime:   time.Duration(0),
-		AgentRegistryTime: time.Duration(0),
-		ToolsBuildingTime: time.Duration(0),
-		HooksSetupTime:    time.Duration(0),
-		OverheadTime:      totalTime, // All overhead for now
+		TotalTime:         timing.TotalTime,
+		ConfigTime:        timing.ConfigTime,
+		MemoryStoreTime:   timing.MemoryStoreTime,
+		SessionPrepTime:   timing.SessionPrepTime,
+		WorkspaceTime:     time.Duration(0), // Combined into SessionPrepTime
+		SessionDBTime:     time.Duration(0), // Combined into SessionPrepTime  
+		ModelStoreTime:    timing.ModelStoreTime,
+		ModelClientTime:   timing.ModelClientTime,
+		AgentRegistryTime: timing.AgentRegistryTime,
+		ToolsBuildingTime: timing.ToolsBuildingTime,
+		HooksSetupTime:    timing.HooksSetupTime,
+		OverheadTime:      timing.OverheadTime,
 	}
 }
 
