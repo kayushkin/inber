@@ -130,4 +130,4 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ## 🧹 Code Quality (Active)
 
-- [~] **Split engine/workflow_hooks.go** — Currently 420 lines combining multiple distinct responsibilities: error handling utilities, project detection, git operations, file formatting, building/testing, file change tracking, session finishing, and deployment verification. Extract into focused modules: `workflow_git.go` (git operations), `workflow_format.go` (formatting logic), `workflow_build.go` (build/test logic), `workflow_deploy.go` (deployment verification), and keep core coordination in main file. Better separation of concerns and easier maintenance.
+- [x] **Split engine/workflow_hooks.go** — Extracted git operations into `workflow_git.go` (97 lines), file formatting into `workflow_format.go` (30 lines), build/test logic into `workflow_build.go` (113 lines), and deployment verification into `workflow_deploy.go` (98 lines). Reduced main workflow_hooks.go from 420 to 162 lines (61% reduction). Better separation of concerns: git operations, formatting, build/test, deployment verification, and core coordination are now in focused modules.
