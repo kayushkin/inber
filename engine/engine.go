@@ -55,6 +55,8 @@ type EngineConfig struct {
 	MaxInputTokens   int            // max cumulative input tokens per RunTurn (0 = unlimited)
 	Injections       <-chan string  // channel for mid-run message injection (optional, from stdin)
 	ContextInjectors []ContextInjector // extra system prompt sections injected by server
+	MemoryProfiling  bool           // enable memory usage profiling
+	MemoryLogPath    string         // path to memory profile log file (optional)
 }
 
 // ContextInjector provides additional system prompt blocks at turn time.
@@ -106,6 +108,9 @@ type Engine struct {
 	SessionInputTokens  int
 	SessionOutputTokens int
 	SessionCost         float64
+	
+	// Memory profiling
+	memoryProfiler      *MemoryProfiler
 }
 
 // NewEngine creates and fully initializes an Engine: context, memory, tools, session, hooks.
@@ -472,6 +477,31 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	// Mid-run injection channel
 	e.injections = cfg.Injections
 
+	// Memory profiling
+	if cfg.MemoryProfiling {
+		memoryProfiler, err := NewMemoryProfiler(true, cfg.MemoryLogPath)
+		if err != nil {
+			Log.Warn("failed to initialize memory profiler: %v", err)
+		} else {
+			e.memoryProfiler = memoryProfiler
+			e.memoryProfiler.Start()
+			Log.Info("memory profiling enabled")
+		}
+	}
+
 	return e, nil
+}
+
+// GetMemoryReport returns the current memory profiling report.
+func (e *Engine) GetMemoryReport() MemoryReport {
+	if e.memoryProfiler == nil {
+		return MemoryReport{Enabled: false}
+	}
+	return e.memoryProfiler.GenerateReport()
+}
+
+// IsMemoryProfilingEnabled returns whether memory profiling is active.
+func (e *Engine) IsMemoryProfilingEnabled() bool {
+	return e.memoryProfiler != nil
 }
 

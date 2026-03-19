@@ -23,6 +23,10 @@ var (
 	chatNoHooks  bool
 	chatSystem   string
 	chatNew      bool
+	
+	// Memory profiling
+	chatMemoryProfile bool
+	chatMemoryLogPath string
 )
 
 var chatCmd = &cobra.Command{
@@ -51,9 +55,21 @@ func init() {
 	chatCmd.Flags().BoolVar(&chatNoHooks, "no-hooks", false, "Skip post-request hooks")
 	chatCmd.Flags().StringVar(&chatSystem, "system", "", "Override system prompt")
 	chatCmd.Flags().BoolVarP(&chatNew, "new", "n", false, "Start a new session")
+	
+	// Memory profiling
+	chatCmd.Flags().BoolVar(&chatMemoryProfile, "memory-profile", false, "Enable memory usage profiling during session")
+	chatCmd.Flags().StringVar(&chatMemoryLogPath, "memory-log", "", "Path to memory profile log file (optional)")
 }
 
 func runChat(cmd *cobra.Command, args []string) {
+	// Check environment variables for memory profiling (overrides flags)
+	if os.Getenv("INBER_MEMORY_PROFILING") == "true" {
+		chatMemoryProfile = true
+	}
+	if envPath := os.Getenv("INBER_MEMORY_LOG"); envPath != "" {
+		chatMemoryLogPath = envPath
+	}
+
 	cfg := engine.EngineConfig{
 		Model:              chatModel,
 		ModelExplicitlySet: cmd.Flags().Changed("model"),
@@ -65,6 +81,8 @@ func runChat(cmd *cobra.Command, args []string) {
 		SystemOverride:     chatSystem,
 		CommandName:        "chat",
 		NewSession:         chatNew,
+		MemoryProfiling:    chatMemoryProfile,
+		MemoryLogPath:      chatMemoryLogPath,
 		Display: &engine.DisplayHooks{
 			OnThinking: func(text string) {
 				engine.DisplayThinking(text)

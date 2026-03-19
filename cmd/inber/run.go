@@ -25,7 +25,7 @@ var (
 	runSystem   string
 	runNew      bool
 	runDetach   bool
-	
+
 	// Auto-workflow flags (Phase 1)
 	runAutoCommit bool
 	runAutoFormat bool
@@ -33,6 +33,10 @@ var (
 	// Safety limits
 	runMaxTurns       int
 	runMaxInputTokens int
+
+	// Memory profiling
+	runMemoryProfile bool
+	runMemoryLogPath string
 )
 
 var runCmd = &cobra.Command{
@@ -62,15 +66,19 @@ func init() {
 	runCmd.Flags().BoolVar(&runNoHooks, "no-hooks", false, "Skip post-request hooks (git/deploy verification)")
 	runCmd.Flags().StringVar(&runSystem, "system", "", "Override system prompt")
 	runCmd.Flags().BoolVarP(&runNew, "new", "n", false, "Start a new session instead of continuing the default")
-	
+
 	// Auto-workflow flags (defaults to true for all Phase 1 features)
 	runCmd.Flags().BoolVar(&runAutoCommit, "auto-commit", true, "Auto-commit after successful writes")
 	runCmd.Flags().BoolVar(&runAutoFormat, "auto-format", true, "Auto-format code after writes")
 	runCmd.Flags().BoolVarP(&runDetach, "detach", "d", false, "Run in a one-off session without affecting the main session")
 
-	// Safety limits
+	// Safety limits  
 	runCmd.Flags().IntVar(&runMaxTurns, "max-turns", 0, "Max API round-trips per run (0=unlimited, default 25 for --detach)")
 	runCmd.Flags().IntVar(&runMaxInputTokens, "max-input-tokens", 0, "Max cumulative input tokens per run (0=unlimited, default 500k for --detach)")
+	
+	// Memory profiling
+	runCmd.Flags().BoolVar(&runMemoryProfile, "memory-profile", false, "Enable memory usage profiling during session")
+	runCmd.Flags().StringVar(&runMemoryLogPath, "memory-log", "", "Path to memory profile log file (optional)")
 }
 
 // stdinMessage is the JSON line format for bus-agent → inber communication.
@@ -131,6 +139,14 @@ func runRun(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Check environment variables for memory profiling (overrides flags)
+	if os.Getenv("INBER_MEMORY_PROFILING") == "true" {
+		runMemoryProfile = true
+	}
+	if envPath := os.Getenv("INBER_MEMORY_LOG"); envPath != "" {
+		runMemoryLogPath = envPath
+	}
+
 	cfg := engine.EngineConfig{
 		Model:              runModel,
 		ModelExplicitlySet: cmd.Flags().Changed("model"),
@@ -143,10 +159,12 @@ func runRun(cmd *cobra.Command, args []string) {
 		CommandName:        "run",
 		NewSession:         runNew,
 		Detach:             runDetach,
+		MemoryProfiling:    runMemoryProfile,
+		MemoryLogPath:      runMemoryLogPath,
 		Display: &engine.DisplayHooks{
 			OnThinking: func(text string) {
 				engine.DisplayThinking(text)
-				// Emit thinking for bus-agent — escape newlines for line-based parsing
+				// Emit thinking for bus-agent - escape newlines for line-based parsing
 				encoded := strings.ReplaceAll(text, "\n", "\\n")
 				encoded = strings.ReplaceAll(encoded, "\r", "\\r")
 				fmt.Fprintf(os.Stderr, "INBER_THINK:%s\n", encoded)
@@ -201,7 +219,7 @@ func runRun(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Print response to stdout — clean, no ANSI
+	// Print response to stdout - clean, no ANSI
 	fmt.Print(result.Text)
 
 	// Stats to stderr - more prominent token logging

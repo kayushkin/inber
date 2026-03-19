@@ -21,6 +21,11 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	e.turnStartTime = time.Now()
 	fmt.Fprintf(os.Stderr, "\n%s━━━ Turn %d ━━━%s\n", cyan+bold, e.TurnCounter, reset)
 	
+	// Take memory snapshot at start of turn
+	if e.memoryProfiler != nil {
+		e.memoryProfiler.TakeSnapshot(e.TurnCounter)
+	}
+	
 	// Get session ID for tagging
 	sessionID := ""
 	if e.Session != nil {
@@ -142,6 +147,11 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 		if err := e.modelStore.TrackUsage(agentName, e.Model, int64(result.InputTokens), int64(result.OutputTokens)); err != nil {
 			Log.Warn("failed to track usage in model-store: %v", err)
 		}
+	}
+
+	// Take memory snapshot at end of turn
+	if e.memoryProfiler != nil {
+		e.memoryProfiler.TakeSnapshot(e.TurnCounter)
 	}
 
 	return result, nil
@@ -410,5 +420,10 @@ func (e *Engine) Close() {
 
 	if e.forgeDB != nil {
 		e.forgeDB.Close()
+	}
+
+	// Close memory profiler
+	if e.memoryProfiler != nil {
+		e.memoryProfiler.Close()
 	}
 }
