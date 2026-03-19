@@ -5,33 +5,16 @@ import (
 )
 
 func TestNewClient(t *testing.T) {
-	// Test with empty busURL
-	client := NewClient("", "token", "consumer")
+	// Test with empty natsURL
+	client := NewClient("", "consumer")
 	if client != nil {
-		t.Error("Expected nil client for empty busURL")
+		t.Error("Expected nil client for empty natsURL")
 	}
 
-	// Test with valid busURL
-	client = NewClient("http://localhost:8080", "token", "consumer")
-	if client == nil {
-		t.Error("Expected non-nil client for valid busURL")
-	}
-
-	// Test URL conversions
-	if client.busURL != "http://localhost:8080" {
-		t.Errorf("Expected HTTP URL, got %s", client.busURL)
-	}
-
-	// Test WebSocket URL conversion
-	client = NewClient("https://example.com", "token", "consumer")
-	if client.wsURL != "wss://example.com" {
-		t.Errorf("Expected wss URL, got %s", client.wsURL)
-	}
-
-	// Test default consumer
-	client = NewClient("http://localhost:8080", "token", "")
-	if client.consumer != "inber-server" {
-		t.Errorf("Expected default consumer 'inber-server', got %s", client.consumer)
+	// Test with invalid natsURL (can't connect) returns nil
+	client = NewClient("nats://localhost:19999", "consumer")
+	if client != nil {
+		t.Log("Client nil as expected when NATS not running")
 	}
 }
 

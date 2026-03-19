@@ -28,9 +28,9 @@ type Config struct {
 	// Data directory for session persistence.
 	DataDir string `json:"data_dir"` // default ~/.inber/server
 
-	// Bus integration for dashboard events.
-	BusURL   string `json:"bus_url,omitempty"`
-	BusToken string `json:"bus_token,omitempty"`
+	// NATS bus integration.
+	NatsURL  string `json:"nats_url,omitempty"`  // default nats://localhost:4222
+	BusToken string `json:"bus_token,omitempty"` // kept for event publisher compat
 
 	// OpenClaw proxy — forward bus messages where orchestrator=openclaw.
 	OpenClawURL   string `json:"openclaw_url,omitempty"`   // e.g. "http://localhost:18789"

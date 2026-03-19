@@ -62,8 +62,10 @@ func runServe() error {
 	cfg.ListenAddr = serveAddr
 
 	// Wire bus integration from env vars.
-	if busURL := os.Getenv("BUS_URL"); busURL != "" {
-		cfg.BusURL = busURL
+	if natsURL := os.Getenv("NATS_URL"); natsURL != "" {
+		cfg.NatsURL = natsURL
+	} else if cfg.NatsURL == "" {
+		cfg.NatsURL = "nats://localhost:4222"
 	}
 	if busToken := os.Getenv("BUS_TOKEN"); busToken != "" {
 		cfg.BusToken = busToken

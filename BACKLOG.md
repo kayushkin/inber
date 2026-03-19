@@ -63,6 +63,8 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ## 🧹 Code Quality (Continued)
 
+- [x] **Extract initialization logic from engine/engine.go** — Extracted complex NewEngine function into focused initialization functions in engine_init.go. Created specific setup functions: setupRepoRoot, initializeConfigs, loadAgentConfig, setupMemoryStore, setupSession, setupModelStore, createModelClient, setupAgentRegistry, setupForgeHook, loadToolsIntoMemory, setupLimits, setupMemoryProfiling. Reduced NewEngine from ~363 to ~160 lines (56% reduction). Better separation of concerns and easier testing.
+
 - [x] **Split server/spawn.go** — 626 lines combining spawning logic, result delivery, memory management, and tool definitions. Extract tool definitions into `spawn_tools.go` and delivery logic into `spawn_delivery.go`. Keep core spawning logic in `spawn.go`. Better separation of concerns.
 
 - [x] **Split memory/memory.go** — Extracted search logic into `search.go` (145 lines), memory management into `management.go` (132 lines), and utility functions into `util.go` (52 lines). Reduced memory.go from 646 to 335 lines (48% reduction). Better separation of concerns: core store operations, search functionality, memory management, and utilities are now in focused modules.

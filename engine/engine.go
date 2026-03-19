@@ -4,11 +4,7 @@
 package engine
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,7 +12,6 @@ import (
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
-	
 	"github.com/kayushkin/inber/conversation"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
@@ -130,31 +125,16 @@ func (e *Engine) GetDisplayHooks() *DisplayHooks {
 }
 
 func NewEngine(cfg EngineConfig) (*Engine, error) {
-	repoRoot := cfg.RepoRoot
-	if repoRoot == "" {
-		var err error
-		repoRoot, err = FindRepoRoot()
-		if err != nil {
-			repoRoot, _ = os.Getwd()
-		}
-	}
-	// Safety: never use home directory as repo root — would walk entire home tree
-	if home, _ := os.UserHomeDir(); repoRoot == home {
-		Log.Warn("repo root resolved to home directory, refusing — set workspace in agent config")
-		repoRoot = ""
+	// Setup repository root and validation
+	repoRoot, err := setupRepoRoot(cfg.RepoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup repo root: %w", err)
 	}
 
-	// Initialize configs with defaults if not provided
-	stashCfg := conversation.DefaultStashConfig()
-	if cfg.StashConfig != nil {
-		stashCfg = *cfg.StashConfig
-	}
+	// Initialize default configurations
+	stashCfg, extractCfg := initializeConfigs(cfg)
 
-	extractCfg := conversation.DefaultExtractionConfig()
-	if cfg.ExtractConfig != nil {
-		extractCfg = *cfg.ExtractConfig
-	}
-
+	// Create engine instance with basic configuration
 	e := &Engine{
 		Model:              cfg.Model,
 		repoRoot:           repoRoot,
@@ -163,229 +143,100 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		stashCfg:           stashCfg,
 		extractCfg:         extractCfg,
 		modelExplicitlySet: cfg.ModelExplicitlySet,
+		toolInputsCache:    make(map[string]string),
+		contextInjectors:   cfg.ContextInjectors,
+		noHooks:            cfg.NoHooks,
+		injections:         cfg.Injections,
 	}
 
-	// Load agent config — resolve agent name from flag, config default, or fallback
-	agentName := cfg.AgentName
-	var identityText string
-
-	// Load from agent-store (the only source of truth)
-	registryCfg, fromStore := registry.LoadConfigWithFallback("", "")
-	if !fromStore || registryCfg == nil {
-		return nil, fmt.Errorf("failed to load agent config from agent-store")
+	// Load agent configuration from registry
+	agentName, identityText, agentConfig, err := loadAgentConfig(cfg.AgentName, cfg.CommandName, cfg.ModelExplicitlySet)
+	if err != nil {
+		return nil, err
 	}
-	Log.Info("loaded config from agent-store")
+	e.AgentName = agentName
+	e.AgentConfig = agentConfig
 
-	// If no agent specified, use the default from config
-	if agentName == "" && registryCfg.Default != "" {
-		agentName = registryCfg.Default
+	// Update model from agent config if not explicitly set
+	if agentConfig != nil && agentConfig.Model != "" && !cfg.ModelExplicitlySet {
+		e.Model = agentConfig.Model
 	}
 
-	if agentName != "" && registryCfg != nil {
-		ac, ok := registryCfg.Agents[agentName]
-		if !ok {
-			return nil, fmt.Errorf("agent not found: %s", agentName)
-		}
-		e.AgentConfig = ac
-		// Only use agent config model if user didn't explicitly set --model flag
-		if ac.Model != "" && !cfg.ModelExplicitlySet {
-			e.Model = ac.Model
-		}
-		identityText = ac.System
-		e.AgentName = agentName
-	} else if agentName == "" {
-		e.AgentName = cfg.CommandName
-		if e.AgentName == "" {
-			e.AgentName = "default"
-		}
-	}
-
-	// Context & memory
+	// Setup memory store and context (only if not in raw mode)
 	if cfg.SystemOverride == "" && !cfg.Raw {
-		Log.Infof("loading context...")
-		
-		// Memory store
-		ms, err := memory.OpenOrCreate(repoRoot)
+		memStore, err := setupMemoryStore(repoRoot, identityText, e.AgentName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open memory store: %w", err)
+			return nil, err
 		}
-		e.MemStore = ms
-
-		// Prepare session: load identity + recent files into memory
-		if identityText == "" {
-			identityText = "You are Claxon 🦀, the main orchestrator agent. Casual, direct, not flowery. You have shell access, file tools, memory, and can spawn project agents. Get to the point."
-		}
-		
-		prepCfg := memory.PrepareSessionConfig{
-			RootDir:        repoRoot,
-			IdentityText:   identityText,
-			AgentName:      e.AgentName,
-			RecencyWindow:  24 * time.Hour,
-			RecentFilesTTL: 10 * time.Minute,
-		}
-		
-		if err := ms.PrepareSession(prepCfg); err != nil {
-			Log.Warn("failed to prepare session: %v", err)
-		}
-		// Count memories for logging
-		recentMems, _ := ms.ListRecent(100, 0.0)
-		fmt.Fprintf(os.Stderr, " done (%d memories)\n", len(recentMems))
-
-		e.toolInputsCache = make(map[string]string)
-		e.contextInjectors = cfg.ContextInjectors
-
-		// No identity override needed — MemStore handles context
+		e.MemStore = memStore
 	} else if cfg.Raw && identityText == "" {
 		identityText = "You are a helpful assistant."
 	}
 
-	// Session continuity: resume by default, --new to start fresh, --detach for one-off
-	ws := sessionMod.NewWorkspace(repoRoot, e.AgentName)
-	if cfg.Detach {
-		// Detached: don't load or save workspace messages
-		e.workspace = nil
-	} else {
-		e.workspace = ws
-		if !cfg.NewSession {
-			if msgs, err := ws.LoadMessages(); err == nil && len(msgs) > 0 {
-				repaired := conversation.RepairEmptyContent(msgs)
-				repaired, repairCount := conversation.RepairDanglingToolUse(repaired)
-				repaired = conversation.RepairAlternation(repaired)
-				repaired = agent.SanitizeMessageToolIDs(repaired)
-				e.Messages = repaired
-				// Save repaired messages back so we don't re-repair every time
-				if repairCount > 0 || len(repaired) != len(msgs) {
-					if data, err := json.Marshal(repaired); err == nil {
-						ws.SaveMessages(data)
-						Log.Info("repaired session messages (%d tool calls, %d→%d messages)",
-							repairCount, len(msgs), len(repaired))
-					}
-				}
-				Log.Info("resuming session (%d messages)", len(e.Messages))
-			}
-		} else {
-			ws.ClearMessages()
-		}
-	}
-
-	// Session DB (tracks sessions/turns in SQLite)
-	sdb, err := sessionMod.OpenDB(repoRoot)
+	// Setup session management and workspace
+	session, sessionDB, workspace, messages, err := setupSession(repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach)
 	if err != nil {
-		Log.Warn("session tracking disabled: %v", err)
-	} else {
-		e.SessionDB = sdb
-		if n, _ := sdb.DetectInterrupted(); n > 0 {
-			Log.Warn("detected %d interrupted session(s) from previous runs", n)
-		}
+		return nil, fmt.Errorf("failed to setup session: %w", err)
 	}
+	e.Session = session
+	e.SessionDB = sessionDB
+	e.workspace = workspace
+	e.Messages = messages
 
-	sess, err := sessionMod.New("logs", e.Model, e.AgentName, "", e.modelStore)
+	// Setup model store and client
+	modelStore, err := setupModelStore(cfg.ModelStore)
 	if err != nil {
-		Log.Warn("logging disabled: %v", err)
-	} else {
-		e.Session = sess
-		Log.Info("logging to %s", sess.FilePath())
-		if sdb != nil {
-			sess.AttachDB(sdb, cfg.CommandName)
+		return nil, fmt.Errorf("failed to setup model store: %w", err)
+	}
+	e.modelStore = modelStore
+
+	// Create model client
+	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore)
+	if err != nil {
+		return nil, err
+	}
+	e.Model = resolvedModel
+	e.modelClient = modelClient
+	e.Client = anthropicClient
+
+	// Setup session logging and workflow hooks
+	if e.Session != nil {
+		Log.Info("logging to %s", e.Session.FilePath())
+		if e.SessionDB != nil {
+			e.Session.AttachDB(e.SessionDB, cfg.CommandName)
 		}
 		
 		// Configure automatic truncation of large tool results
 		truncCfg := sessionMod.TruncateConfigForRole(e.AgentName)
-		sess.SetTruncateConfig(truncCfg)
+		e.Session.SetTruncateConfig(truncCfg)
 		
 		// Initialize workflow automation (auto-commit, auto-format)
 		workflowCfg := cfg.AutoWorkflow
 		if workflowCfg == (AutoWorkflowConfig{}) {
 			workflowCfg = DefaultAutoWorkflowConfig()
 		}
-		e.workflowHooks = NewWorkflowHooks(repoRoot, sess.SessionID(), e.AgentName, workflowCfg)
+		e.workflowHooks = NewWorkflowHooks(repoRoot, e.Session.SessionID(), e.AgentName, workflowCfg)
 	}
 
-	// Initialize forge hook (project detection for build/preview tracking)
-	if f, err := forge.Open(""); err == nil {
-		e.forgeDB = f
-		if proj := f.FindProjectByPath(repoRoot); proj != nil {
-			e.forgeHook = f.NewHook(forge.HookConfig{
-				Project:     proj.ID,
-				AutoBuild:   false,
-				AutoPreview: false,
-			})
-			Log.Info("forge: project %q detected", proj.ID)
-		}
+	// Setup forge hook for project detection
+	forgeDB, forgeHook, err := setupForgeHook(repoRoot, "", e.AgentName, AutoWorkflowConfig{})
+	if err == nil {
+		e.forgeDB = forgeDB
+		e.forgeHook = forgeHook
 	}
 
-	// Use shared model-store if provided, otherwise open our own
-	if cfg.ModelStore != nil {
-		e.modelStore = cfg.ModelStore
-	} else {
-		store, err := modelstore.Open("")
-		if err == nil {
-			e.modelStore = store
-			// Register OAuth providers for token refresh
-			store.RegisterDefaultOAuthProviders()
-			// Enable auto-sync to OpenClaw's auth-profiles.json
-			store.EnableAuthProfileSync("")
-			// Seed if empty (one-time init)
-			providers, _ := store.Providers()
-			if len(providers) == 0 {
-				if err := store.Seed(); err != nil {
-					Log.Warn("failed to seed model-store: %v", err)
-				}
-			}
-			// Initial sync to ensure OpenClaw has latest credentials
-			if syncErr := store.SyncToAuthProfiles(""); syncErr != nil {
-				Log.Warn("initial auth-profiles sync: %v", syncErr)
-			}
-		} else {
-			Log.Warn("model-store unavailable: %v", err)
-		}
-	}
-	
-	modelClient, err := agent.NewModelClient(e.Model, e.modelStore)
+	// Setup agent registry for spawn tools
+	agentRegistry, err := setupAgentRegistry(e.AgentConfig, e.Client, repoRoot, modelClient, e.modelStore, e.MemStore)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create model client: %w", err)
+		return nil, err
 	}
-	Log.Info("model: %s (provider=%s, openai=%v)", e.Model, modelClient.Provider, modelClient.IsOpenAI())
-	
-	// Update e.Model with the resolved model ID (in case it was an alias)
-	if modelClient.Model != nil {
-		e.Model = modelClient.Model.ID
-	}
-	
-	// Store the model client for later use in RunTurn
-	e.modelClient = modelClient
-	
-	// For Anthropic, set the client field (for backward compatibility)
-	if modelClient.AnthropicClient != nil {
-		e.Client = modelClient.AnthropicClient
-	}
+	e.agentRegistry = agentRegistry
 
-	// Create agent registry if spawn tools are needed
-	if e.AgentConfig != nil && e.needsSpawnTools(e.AgentConfig.Tools) {
-		reg, _, err := registry.NewWithFallback(e.Client, "", filepath.Join(repoRoot, "logs"))
-		if err != nil {
-			Log.Warn("failed to create agent registry: %v", err)
-		} else {
-			e.agentRegistry = reg
-			// Set model client for OpenAI-compatible providers
-			reg.SetModelClient(modelClient)
-			// Set model store for creating per-agent model clients
-			if e.modelStore != nil {
-				reg.SetModelStore(e.modelStore)
-			}
-			// Set memory store for memory tools in spawned agents
-			if e.MemStore != nil {
-				reg.SetMemoryStore(e.MemStore)
-			}
-			Log.Info("agent registry enabled for spawn tools (from agent-store)")
-		}
-	}
-
-	// Tools
+	// Build and configure tools
 	if !cfg.NoTools {
 		e.agentTools = e.buildTools()
 
-		// Append gateway-injected tools (replace same-named tools).
+		// Append gateway-injected tools (replace same-named tools)
 		for _, extra := range cfg.ExtraTools {
 			replaced := false
 			for i, t := range e.agentTools {
@@ -400,32 +251,18 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			}
 		}
 		
-		// Load tool registry into memory so agent knows what tools are available
-		if e.MemStore != nil {
-			toolMetas := make([]memory.ToolMetadata, 0, len(e.agentTools))
-			for _, t := range e.agentTools {
-				category := "general"
-				if strings.HasPrefix(t.Name, "read_") || strings.HasPrefix(t.Name, "write_") || 
-				   strings.HasPrefix(t.Name, "edit_") || strings.HasPrefix(t.Name, "list_") {
-					category = "filesystem"
-				} else if t.Name == "repo_map" || t.Name == "recent_files" {
-					category = "code-introspection"
-				} else if strings.HasPrefix(t.Name, "memory_") {
-					category = "memory"
-				} else if t.Name == "shell" {
-					category = "execution"
-				}
-				
-				toolMetas = append(toolMetas, memory.ToolMetadata{
-					Name:        t.Name,
-					Description: t.Description,
-					Category:    category,
-				})
+		// Load tool registry into memory
+		if err := loadToolsIntoMemory(e.MemStore, e.agentTools); err != nil {
+			Log.Warn("failed to load tool registry: %v", err)
+		}
+
+		// Write tools list to workspace for reference
+		if e.workspace != nil && len(e.agentTools) > 0 {
+			toolInfos := make([]sessionMod.ToolInfo, len(e.agentTools))
+			for i, t := range e.agentTools {
+				toolInfos[i] = sessionMod.ToolInfo{Name: t.Name, Description: t.Description}
 			}
-			
-			if err := e.MemStore.LoadToolRegistry(toolMetas); err != nil {
-				Log.Warn("failed to load tool registry: %v", err)
-			}
+			e.workspace.WriteToolsList(toolInfos)
 		}
 	}
 
@@ -436,58 +273,15 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		e.IdentityOverride = identityText
 	}
 
-	// Write tools list to workspace for reference
-	if e.workspace != nil && len(e.agentTools) > 0 {
-		toolInfos := make([]sessionMod.ToolInfo, len(e.agentTools))
-		for i, t := range e.agentTools {
-			toolInfos[i] = sessionMod.ToolInfo{Name: t.Name, Description: t.Description}
-		}
-		e.workspace.WriteToolsList(toolInfos)
-	}
+	// Setup limits and profiling
+	e.maxTurns, e.maxInputTokens, e.maxResponseTime = setupLimits(cfg, e.AgentConfig)
 
-	// Hooks
-	e.noHooks = cfg.NoHooks
-
-	// Initialize turn/token limits
-	e.maxTurns = cfg.MaxTurns
-	e.maxInputTokens = cfg.MaxInputTokens
-	if e.AgentConfig != nil && e.AgentConfig.Limits != nil {
-		if e.maxTurns == 0 {
-			e.maxTurns = e.AgentConfig.Limits.MaxTurns
-		}
-		if e.maxInputTokens == 0 {
-			e.maxInputTokens = e.AgentConfig.Limits.MaxInputTokens
-		}
-		if e.maxResponseTime == 0 {
-			e.maxResponseTime = e.AgentConfig.Limits.MaxResponseTime
-		}
+	// Setup memory profiling
+	memoryProfiler, err := setupMemoryProfiling(cfg.MemoryProfiling, cfg.MemoryLogPath)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.Detach {
-		if e.maxTurns == 0 {
-			e.maxTurns = 25
-		}
-		if e.maxInputTokens == 0 {
-			e.maxInputTokens = 500000
-		}
-	}
-	if e.maxTurns > 0 || e.maxInputTokens > 0 || e.maxResponseTime > 0 {
-		Log.Info("limits: maxTurns=%d, maxInputTokens=%d, maxResponseTime=%ds", e.maxTurns, e.maxInputTokens, e.maxResponseTime)
-	}
-
-	// Mid-run injection channel
-	e.injections = cfg.Injections
-
-	// Memory profiling
-	if cfg.MemoryProfiling {
-		memoryProfiler, err := NewMemoryProfiler(true, cfg.MemoryLogPath)
-		if err != nil {
-			Log.Warn("failed to initialize memory profiler: %v", err)
-		} else {
-			e.memoryProfiler = memoryProfiler
-			e.memoryProfiler.Start()
-			Log.Info("memory profiling enabled")
-		}
-	}
+	e.memoryProfiler = memoryProfiler
 
 	return e, nil
 }

@@ -102,7 +102,7 @@ func New(cfg Config) (*Server, error) {
 		"subagent": cfg.SubagentConcurrency,
 	})
 
-	events := NewEventPublisher(cfg.BusURL, cfg.BusToken)
+	events := NewEventPublisher(cfg.NatsURL, cfg.BusToken)
 
 	// Open forge DB for workspace management.
 	var forgeDB *forge.Forge
@@ -118,7 +118,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	// Create bus client for inbound subscription + outbound publishing.
-	busClient := bus.NewClient(cfg.BusURL, cfg.BusToken, "inber-server")
+	busClient := bus.NewClient(cfg.NatsURL, "inber-server")
 
 	return &Server{
 		config:     cfg,
@@ -161,7 +161,10 @@ func (g *Server) ListenBus(ctx context.Context) error {
 		return nil
 	}
 
-	inbound := g.bus.Subscribe(ctx, []string{"inbound"})
+	// Set up NATS request/reply handlers.
+	g.setupAgentRunHandler()
+
+	inbound := g.bus.Subscribe(ctx, []string{"chat.inbound"})
 	log.Printf("[server] listening for bus inbound messages")
 
 	for {

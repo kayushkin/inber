@@ -1,60 +1,52 @@
 package server
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
-	"strings"
 	"time"
+
+	natsbus "github.com/kayushkin/bus"
 )
 
 // EventPublisher sends server events to the bus so dashboards can display them.
 type EventPublisher struct {
-	busURL   string
-	busToken string
-	client   *http.Client
+	nc *natsbus.Client
 }
 
 // GatewayEvent is published to the bus for dashboard consumption.
 type GatewayEvent struct {
-	Kind       string    `json:"kind"`        // "spawn_started", "spawn_progress", "spawn_completed", "session_active", "session_idle"
-	SessionKey string    `json:"session_key"`
-	Agent      string    `json:"agent"`
-	ParentKey  string    `json:"parent_key,omitempty"`
-	Task       string    `json:"task,omitempty"`
-	Status     string    `json:"status,omitempty"`
-	Summary    string    `json:"summary,omitempty"`
+	Kind       string      `json:"kind"`        // "spawn_started", "spawn_progress", "spawn_completed", "session_active", "session_idle"
+	SessionKey string      `json:"session_key"`
+	Agent      string      `json:"agent"`
+	ParentKey  string      `json:"parent_key,omitempty"`
+	Task       string      `json:"task,omitempty"`
+	Status     string      `json:"status,omitempty"`
+	Summary    string      `json:"summary,omitempty"`
 	Tokens     *TokenUsage `json:"tokens,omitempty"`
-	DurationMs int64     `json:"duration_ms,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	Timestamp  time.Time `json:"timestamp"`
+	DurationMs int64       `json:"duration_ms,omitempty"`
+	Error      string      `json:"error,omitempty"`
+	Timestamp  time.Time   `json:"timestamp"`
 }
 
-// NewEventPublisher creates a publisher. Pass empty busURL to disable.
-func NewEventPublisher(busURL, busToken string) *EventPublisher {
-	if busURL == "" {
+// NewEventPublisher creates a publisher. Pass empty natsURL to disable.
+func NewEventPublisher(natsURL, _ string) *EventPublisher {
+	if natsURL == "" {
 		return nil
 	}
-	// Convert WebSocket URL to HTTP for REST calls
-	httpURL := busURL
-	if strings.HasPrefix(httpURL, "ws://") {
-		httpURL = "http://" + strings.TrimPrefix(httpURL, "ws://")
-	} else if strings.HasPrefix(httpURL, "wss://") {
-		httpURL = "https://" + strings.TrimPrefix(httpURL, "wss://")
-	}
-	// Strip /ws path suffix if present (bus WS endpoint vs REST endpoint)
-	httpURL = strings.TrimSuffix(httpURL, "/ws")
 
-	return &EventPublisher{
-		busURL:   httpURL,
-		busToken: busToken,
-		client:   &http.Client{Timeout: 5 * time.Second},
+	nc, err := natsbus.Connect(natsbus.Options{
+		URL:  natsURL,
+		Name: "inber-events",
+	})
+	if err != nil {
+		log.Printf("[events] failed to connect to NATS: %v", err)
+		return nil
 	}
+
+	return &EventPublisher{nc: nc}
 }
 
-// Publish sends an event to the bus on the "server" topic.
+// Publish sends an event to the bus on the "server" subject.
 func (ep *EventPublisher) Publish(event GatewayEvent) {
 	if ep == nil {
 		return
@@ -62,26 +54,9 @@ func (ep *EventPublisher) Publish(event GatewayEvent) {
 
 	event.Timestamp = time.Now()
 
-	payload, err := json.Marshal(event)
-	if err != nil {
-		log.Printf("[events] marshal error: %v", err)
-		return
-	}
-
-	body := map[string]interface{}{
-		"topic":   "server",
-		"payload": json.RawMessage(payload),
-		"source":  "server",
-	}
-	data, _ := json.Marshal(body)
-
-	url := fmt.Sprintf("%s/publish?token=%s", ep.busURL, ep.busToken)
-	resp, err := ep.client.Post(url, "application/json", bytes.NewReader(data))
-	if err != nil {
+	if err := ep.nc.Publish("server", event); err != nil {
 		log.Printf("[events] publish error: %v", err)
-		return
 	}
-	resp.Body.Close()
 }
 
 // SpawnStarted publishes a spawn start event.
@@ -110,8 +85,7 @@ func (ep *EventPublisher) SpawnCompleted(result SpawnResult) {
 	})
 }
 
-// PublishOutbound sends a spawn result to the bus "outbound" topic so the
-// dashboard displays it immediately (without waiting for the next user message).
+// PublishOutbound sends a spawn result to the bus "chat.outbound" subject.
 func (ep *EventPublisher) PublishOutbound(parentAgent string, result SpawnResult) {
 	if ep == nil {
 		return
@@ -125,19 +99,10 @@ func (ep *EventPublisher) PublishOutbound(parentAgent string, result SpawnResult
 		"orchestrator": "inber",
 		"timestamp":    time.Now().Format(time.RFC3339),
 	}
-	data, _ := json.Marshal(map[string]interface{}{
-		"topic":   "outbound",
-		"payload": payload,
-		"source":  "server",
-	})
 
-	url := fmt.Sprintf("%s/publish?token=%s", ep.busURL, ep.busToken)
-	resp, err := ep.client.Post(url, "application/json", bytes.NewReader(data))
-	if err != nil {
+	if err := ep.nc.Publish("chat.outbound", payload); err != nil {
 		log.Printf("[events] outbound publish error: %v", err)
-		return
 	}
-	resp.Body.Close()
 }
 
 // SessionActive publishes when a session starts running.
@@ -156,4 +121,11 @@ func (ep *EventPublisher) SessionIdle(sessionKey, agent string) {
 		SessionKey: sessionKey,
 		Agent:      agent,
 	})
+}
+
+// Close closes the NATS connection.
+func (ep *EventPublisher) Close() {
+	if ep != nil && ep.nc != nil {
+		ep.nc.Close()
+	}
 }
