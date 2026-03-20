@@ -104,13 +104,13 @@ func TestContextBudget_LongSession(t *testing.T) {
 func TestContextBudget_MinImportanceAlwaysZero(t *testing.T) {
 	cases := []struct {
 		name string
-		e    Engine
+		e    *Engine
 	}{
-		{"first turn", Engine{TurnCounter: 0}},
-		{"normal", Engine{TurnCounter: 3}},
-		{"error", Engine{TurnCounter: 5, consecutiveErrors: 2}},
-		{"stuck", Engine{TurnCounter: 10, consecutiveErrors: 5}},
-		{"long session", Engine{TurnCounter: 20}},
+		{"first turn", &Engine{TurnCounter: 0}},
+		{"normal", &Engine{TurnCounter: 3}},
+		{"error", &Engine{TurnCounter: 5, consecutiveErrors: 2}},
+		{"stuck", &Engine{TurnCounter: 10, consecutiveErrors: 5}},
+		{"long session", &Engine{TurnCounter: 20}},
 	}
 
 	for _, tc := range cases {
