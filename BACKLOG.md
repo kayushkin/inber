@@ -95,6 +95,10 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ## 🧹 Code Quality (Active)
 
+- [~] **Re-split memory/memory.go** — The 335-line memory.go file contains multiple distinct responsibilities: type definitions, database initialization, migrations, core store operations, and access utilities. Despite previous claims of splitting, the file remains large. Extract database initialization into `memory_init.go`, migrations into `memory_migrations.go`, core CRUD operations into `memory_crud.go`, and access utilities into `memory_access.go`. Keep only type definitions and package documentation in main `memory.go`. Better separation of concerns and easier maintenance.
+
+## 🧹 Code Quality (Active)
+
 - [x] **Extract session management from server/server.go** — Extracted ListSessions(), StopSession(), persistMessages(), and Inject() methods into `server/session_management.go`. Reduced server.go from 439 to 344 lines (22% reduction). Better separation of concerns between request orchestration and session lifecycle management. Removed unused encoding/json import.
 
 ---
