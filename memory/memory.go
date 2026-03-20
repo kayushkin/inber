@@ -1,38 +1,38 @@
-// Package memory provides persistent, searchable memory across sessions.
+// Package memory provides a thin wrapper around github.com/kayushkin/agent-store/memory.
+// This package re-exports types and interfaces from agent-store/memory while maintaining
+// the same API that inber expects.
 package memory
 
 import (
-	"database/sql"
-	"time"
+	asmemory "github.com/kayushkin/agent-store/memory"
 )
 
-// Memory represents a single persistent memory entry.
-type Memory struct {
-	ID           string    // unique identifier
-	Content      string    // the actual text
-	Summary      string    // compressed version (nullable, for future compaction)
-	OriginalID   string    // pointer to parent memory if compacted (nullable)
-	Tags         []string  // tags for categorization
-	Importance   float64   // 0-1, how important this memory is
-	AccessCount  int       // how many times it's been retrieved
-	LastAccessed time.Time // timestamp of last retrieval
-	CreatedAt    time.Time // when it was stored
-	Source       string    // "user", "agent", "reflection", "compaction", "system"
-	Embedding    []float64 // vector for semantic search
-	
-	// New fields for context unification
-	AlwaysLoad   bool       // if true, always include in context (e.g., identity)
-	ExpiresAt    *time.Time // optional expiration (for ephemeral content like recent files)
-	Tokens       int        // pre-computed token count for budget management
-	
-	// Reference fields for lazy loading
-	RefType      string     // "memory" (default), "file", "identity", "repo-map", "tools", "web"
-	RefTarget    string     // file path, URL, or empty for pure memories
-	IsLazy       bool       // if true, load content on-demand instead of from DB
-}
+// Re-export types from agent-store/memory
+type Memory = asmemory.Memory
+type MemoryStore = asmemory.MemoryStore
+type CompactionResult = asmemory.CompactionResult
+type BuildContextRequest = asmemory.BuildContextRequest
+type PrepareSessionConfig = asmemory.PrepareSessionConfig
+type Session = asmemory.Session
+type ToolMetadata = asmemory.ToolMetadata
+type RecentFile = asmemory.RecentFile
+type Embedder = asmemory.Embedder
+type Tagger = asmemory.Tagger
+type PatternTagger = asmemory.PatternTagger
 
-// Store handles persistent memory storage via SQLite.
-type Store struct {
-	db       *sql.DB
-	embedder *Embedder
-}
+// Re-export functions from agent-store/memory
+var NewStore = asmemory.NewStore
+var OpenOrCreate = asmemory.OpenOrCreate
+var NewSQLiteStore = asmemory.NewSQLiteStore
+var DefaultPrepareSessionConfig = asmemory.DefaultPrepareSessionConfig
+var FindRecentlyModified = asmemory.FindRecentlyModified
+var FormatRecentFiles = asmemory.FormatRecentFiles
+var NewEmbedder = asmemory.NewEmbedder
+var CosineSimilarity = asmemory.CosineSimilarity
+var NewPatternTagger = asmemory.NewPatternTagger
+var AutoTag = asmemory.AutoTag
+var EstimateTokens = asmemory.EstimateTokens
+var EstimateMessageOverhead = asmemory.EstimateMessageOverhead
+var EstimateToolSchemaTokens = asmemory.EstimateToolSchemaTokens
+var SessionsSchema = asmemory.SessionsSchema
+var DefaultMemoryPath = asmemory.DefaultMemoryPath
