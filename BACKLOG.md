@@ -95,7 +95,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 
 ## 🧹 Code Quality (Active)
 
-- [~] **Re-split memory/memory.go** — The 335-line memory.go file contains multiple distinct responsibilities: type definitions, database initialization, migrations, core store operations, and access utilities. Despite previous claims of splitting, the file remains large. Extract database initialization into `memory_init.go`, migrations into `memory_migrations.go`, core CRUD operations into `memory_crud.go`, and access utilities into `memory_access.go`. Keep only type definitions and package documentation in main `memory.go`. Better separation of concerns and easier maintenance.
+- [x] **Re-split memory/memory.go** — Extracted database initialization into `memory_init.go` (67 lines), migration logic into `memory_migrations.go` (52 lines), CRUD operations into `memory_crud.go` (181 lines), and access utilities into `memory_access.go` (16 lines). Reduced main memory.go from 335 to 37 lines (89% reduction). Better separation of concerns: package documentation and type definitions vs initialization vs migrations vs core operations vs access tracking. All tests passing.
 
 ## 🧹 Code Quality (Active)
 
