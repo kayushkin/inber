@@ -6,7 +6,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/bus"
+	"github.com/kayushkin/inber/logger"
 	modelstore "github.com/kayushkin/model-store"
 	sessionMod "github.com/kayushkin/inber/session"
 )
@@ -76,7 +76,9 @@ func New(cfg Config) (*Server, error) {
 	// Open shared model store.
 	ms, err := modelstore.Open("")
 	if err != nil {
-		log.Printf("[server] warning: model store unavailable: %v", err)
+		logger.WithComponent("server").Warn("model store unavailable", map[string]interface{}{
+			"error": err,
+		})
 	}
 
 	// Open server store.
@@ -92,9 +94,13 @@ func New(cfg Config) (*Server, error) {
 
 	// Mark any previously-running requests as interrupted.
 	if n, err := store.InterruptRunning(); err != nil {
-		log.Printf("[server] warning: failed to interrupt running requests: %v", err)
+		logger.WithComponent("server").Warn("failed to interrupt running requests", map[string]interface{}{
+			"error": err,
+		})
 	} else if n > 0 {
-		log.Printf("[server] marked %d interrupted requests from previous run", n)
+		logger.WithComponent("server").Info("marked interrupted requests from previous run", map[string]interface{}{
+			"count": n,
+		})
 	}
 
 	q := NewQueue(map[string]int{
@@ -110,10 +116,15 @@ func New(cfg Config) (*Server, error) {
 	forgePath := filepath.Join(home, ".config", "forge", "forge.db")
 	if _, err := os.Stat(forgePath); err == nil {
 		if f, err := forge.Open(forgePath); err != nil {
-			log.Printf("[server] warning: forge unavailable: %v", err)
+			logger.WithComponent("server").Warn("forge unavailable", map[string]interface{}{
+				"error": err,
+				"path":  forgePath,
+			})
 		} else {
 			forgeDB = f
-			log.Printf("[server] forge DB opened")
+			logger.WithComponent("server").Info("forge DB opened", map[string]interface{}{
+				"path": forgePath,
+			})
 		}
 	}
 
@@ -256,7 +267,9 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 		sess.mu.Unlock()
 
 		if isRunning {
-			log.Printf("[server] session %s busy, injecting message mid-turn", sessionKey)
+			logger.WithComponent("server").Debug("session busy, injecting message mid-turn", map[string]interface{}{
+				"session_key": sessionKey,
+			})
 			sess.inject(input)
 			return &RunResponse{
 				Text:       "[Message injected into running session — agent will see it during current work]",

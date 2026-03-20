@@ -3,13 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/engine"
+	"github.com/kayushkin/inber/logger"
 )
 
 // SessionStatus represents the current state of a session.
@@ -109,7 +109,10 @@ func (s *Session) turn(ctx context.Context, input string) (*agent.TurnResult, er
 	if len(s.pendingMessages) > 0 {
 		prefix := strings.Join(s.pendingMessages, "\n\n---\n\n")
 		input = prefix + "\n\n---\n\n" + input
-		log.Printf("[session] %s: delivering %d pending messages", s.Key, len(s.pendingMessages))
+		logger.WithComponent("session").Debug("delivering pending messages", map[string]interface{}{
+			"session_key": s.Key,
+			"count":       len(s.pendingMessages),
+		})
 		s.pendingMessages = nil
 	}
 	s.mu.Unlock()
@@ -145,7 +148,9 @@ func (s *Session) inject(message string) {
 		select {
 		case s.injections <- message:
 		default:
-			log.Printf("[session] injection buffer full for %s, dropping", s.Key)
+			logger.WithComponent("session").Warn("injection buffer full, dropping message", map[string]interface{}{
+				"session_key": s.Key,
+			})
 		}
 	}
 }

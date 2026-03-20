@@ -3,10 +3,10 @@ package server
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/kayushkin/forge"
+	"github.com/kayushkin/inber/logger"
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
@@ -83,12 +83,18 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 	if len(ac.Projects) > 0 && g.forgeDB != nil {
 		w, err := g.forgeDB.CreateWorkspace(req.Agent, ac.Projects)
 		if err != nil {
-			log.Printf("[server] workspace creation failed for %s: %v (using source repo)", req.Agent, err)
+			logger.WithComponent("spawn").Warn("workspace creation failed, using source repo", map[string]interface{}{
+				"agent": req.Agent,
+				"error": err,
+			})
 		} else {
 			ws = w
 			// Set agent's working directory to the primary repo worktree.
 			ac.Workspace = w.Repos[w.Primary]
-			log.Printf("[server] workspace %s created → %s", w.ID, w.BaseDir)
+			logger.WithComponent("spawn").Info("workspace created", map[string]interface{}{
+				"workspace_id": w.ID,
+				"base_dir":     w.BaseDir,
+			})
 			g.mu.Lock()
 			g.workspaces[w.ID] = w
 			g.mu.Unlock()
@@ -122,8 +128,12 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 	parent.Children = append(parent.Children, childKey)
 	parent.mu.Unlock()
 
-	log.Printf("[server] spawn %s → %s/%s: %s",
-		req.ParentKey, req.Agent, childKey, truncate(req.Task, 80))
+	logger.WithComponent("spawn").Info("creating sub-agent", map[string]interface{}{
+		"parent_key":  req.ParentKey,
+		"agent":       req.Agent,
+		"child_key":   childKey,
+		"task":        truncate(req.Task, 80),
+	})
 
 	// Apply timeout.
 	timeout := req.Timeout
@@ -207,15 +217,23 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 				commitMsg := fmt.Sprintf("%s: %s", req.Agent, truncate(req.Task, 100))
 				results, cerr := g.forgeDB.CommitAll(ws, commitMsg)
 				if cerr != nil {
-					log.Printf("[server] workspace commit error: %v", cerr)
+					logger.WithComponent("spawn").Error("workspace commit error", map[string]interface{}{
+						"error": cerr,
+					})
 				} else {
 					commits = make(map[string]string)
 					for repo, cr := range results {
 						if cr.Dirty && cr.Hash != "" {
 							commits[repo] = cr.Hash
-							log.Printf("[server] committed %s: %s", repo, cr.Hash)
+							logger.WithComponent("spawn").Debug("committed repository", map[string]interface{}{
+								"repo": repo,
+								"hash": cr.Hash,
+							})
 						} else if cr.Error != "" {
-							log.Printf("[server] commit failed for %s: %s", repo, cr.Error)
+							logger.WithComponent("spawn").Error("commit failed for repository", map[string]interface{}{
+								"repo":  repo,
+								"error": cr.Error,
+							})
 						}
 					}
 				}
@@ -246,7 +264,10 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 			return err
 		})
 		if err != nil {
-			log.Printf("[server] spawn %s failed: %v", childKey, err)
+			logger.WithComponent("spawn").Error("spawn failed", map[string]interface{}{
+				"child_key": childKey,
+				"error":     err,
+			})
 			if ws != nil {
 				g.forgeDB.Cleanup(ws)
 			}
@@ -280,7 +301,10 @@ func (g *Server) ForkAndSpawn(ctx context.Context, parentKey string, tasks []Spa
 
 		resp, err := g.Spawn(ctx, task)
 		if err != nil {
-			log.Printf("[server] fork-spawn failed for %s: %v", task.Agent, err)
+			logger.WithComponent("spawn").Error("fork-spawn failed", map[string]interface{}{
+				"agent": task.Agent,
+				"error": err,
+			})
 			continue
 		}
 		responses = append(responses, resp)

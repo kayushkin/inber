@@ -3,8 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
+
+	"github.com/kayushkin/inber/logger"
 )
 
 // Serve starts the HTTP API server. Blocks until ctx is cancelled.
@@ -32,8 +33,11 @@ func (g *Server) Serve(ctx context.Context) error {
 		server.Shutdown(context.Background())
 	}()
 
-	log.Printf("[server] API listening on %s", g.config.ListenAddr)
-	log.Printf("[server] %d agents configured, default=%s", len(g.config.Agents), g.config.DefaultAgent)
+	logger.WithComponent("api").Info("API server starting", map[string]interface{}{
+		"address":      g.config.ListenAddr,
+		"agent_count":  len(g.config.Agents),
+		"default_agent": g.config.DefaultAgent,
+	})
 
 	err := server.ListenAndServe()
 	if err == http.ErrServerClosed {

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/kayushkin/inber/agent/registry"
+	"github.com/kayushkin/inber/logger"
 	"github.com/kayushkin/inber/server"
 	"github.com/spf13/cobra"
 )
@@ -92,14 +92,18 @@ func runServe() error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigCh
-		log.Printf("[server] received %s, shutting down...", sig)
+		logger.WithComponent("server").Info("received shutdown signal", map[string]interface{}{
+			"signal": sig.String(),
+		})
 		cancel()
 	}()
 
 	// Start bus listener in background (subscribes to inbound, routes to agents).
 	go func() {
 		if err := g.ListenBus(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("[server] bus listener stopped: %v", err)
+			logger.WithComponent("server").Error("bus listener stopped", map[string]interface{}{
+				"error": err,
+			})
 		}
 	}()
 
@@ -147,7 +151,7 @@ func buildConfigFromRegistry() server.Config {
 	}
 
 	if len(agents) == 0 {
-		log.Printf("[server] no agents found in registry, using defaults")
+		logger.WithComponent("server").Warn("no agents found in registry, using defaults")
 		agents["default"] = server.AgentConfig{
 			Name:  "default",
 			Model: "claude-sonnet-4-5-20250929",
@@ -159,8 +163,11 @@ func buildConfigFromRegistry() server.Config {
 	for name := range agents {
 		agentNames = append(agentNames, name)
 	}
-	log.Printf("[server] loaded %d agents from registry: %s (default: %s)",
-		len(agents), strings.Join(agentNames, ", "), defaultAgent)
+	logger.WithComponent("server").Info("loaded agents from registry", map[string]interface{}{
+		"count":        len(agents),
+		"agents":       strings.Join(agentNames, ", "),
+		"default":      defaultAgent,
+	})
 
 	return server.Config{
 		Agents:       agents,
