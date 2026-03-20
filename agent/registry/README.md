@@ -171,7 +171,7 @@ go test ./agent/registry/ -v
 ## Roadmap
 
 - [x] Phase 1: Core registry and config loading
-- [ ] Phase 2: Tool scoping implementation
+- [x] Phase 2: Tool scoping implementation
 - [ ] Phase 3: Sub-agent spawning (`spawn_agent` tool)
 - [ ] Phase 4: Context inheritance
 - [ ] Phase 5: CLI integration

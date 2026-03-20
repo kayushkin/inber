@@ -137,6 +137,13 @@ func (a *Agent) AddTool(t Tool) {
 	a.tools = append(a.tools, t)
 }
 
+// GetTools returns a copy of the agent's tools slice.
+func (a *Agent) GetTools() []Tool {
+	tools := make([]Tool, len(a.tools))
+	copy(tools, a.tools)
+	return tools
+}
+
 // TurnResult is what comes back from a single Run call.
 type TurnResult struct {
 	Text         string // Final text response
