@@ -111,14 +111,7 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 			delta := chunk.Choices[0].Delta.Content
 			if delta != "" {
 				fullText += delta
-				g.bus.PublishOutbound(bus.OutboundMessage{
-					Text:     delta,
-					Agent:    agent,
-					Author:   agent,
-					Channel:  msg.Channel,
-					Stream:   "delta",
-					StreamID: streamID,
-				})
+				g.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", streamID, delta))
 			}
 		}
 	}
@@ -136,28 +129,17 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 		agent, truncate(fullText, 80), duration.Seconds(), usage.PromptTokens, usage.CompletionTokens)
 
 	// Publish final done message.
-	g.bus.PublishOutbound(bus.OutboundMessage{
-		Text:     fullText,
-		Agent:    agent,
-		Author:   agent,
-		Channel:  msg.Channel,
-		Stream:   "done",
-		StreamID: streamID,
-		Meta: &bus.OutboundMeta{
-			InputTokens:  usage.PromptTokens,
-			OutputTokens: usage.CompletionTokens,
-			DurationMs:   duration.Milliseconds(),
-		},
-	})
+	doneMsg := bus.NewOutboundFull(agent, msg.Channel, "done", streamID, fullText)
+	doneMsg.Meta = &bus.OutboundMeta{
+		InputTokens:  usage.PromptTokens,
+		OutputTokens: usage.CompletionTokens,
+		DurationMs:   duration.Milliseconds(),
+	}
+	g.bus.PublishOutbound(doneMsg)
 }
 
 func (g *Server) publishOpenClawError(msg bus.InboundMessage, errMsg string) {
-	g.bus.PublishOutbound(bus.OutboundMessage{
-		Text:    "⚠️ " + errMsg,
-		Agent:   msg.Agent,
-		Author:  msg.Agent,
-		Channel: msg.Channel,
-	})
+	g.bus.PublishOutbound(bus.NewOutboundFull(msg.Agent, msg.Channel, "done", "", "⚠️ "+errMsg))
 }
 
 // readOpenClawUsage reads session usage from OpenClaw's sessions.json.

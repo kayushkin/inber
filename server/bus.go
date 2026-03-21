@@ -71,14 +71,7 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 	streamID := fmt.Sprintf("s-%d", time.Now().UnixMilli())
 
 	// Publish status: orchestrator received the message
-	bm.server.bus.PublishOutbound(bus.OutboundMessage{
-		Text:     "received",
-		Agent:    agent,
-		Author:   agent,
-		Channel:  msg.Channel,
-		Stream:   "status",
-		StreamID: streamID,
-	})
+	bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "status", streamID, "received"))
 
 	req := RunRequest{
 		Agent:   agent,
@@ -93,52 +86,26 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 	onEvent := func(ev StreamEvent) {
 		switch ev.Kind {
 		case "delta":
-			bm.server.bus.PublishOutbound(bus.OutboundMessage{
-				Text:     ev.Text,
-				Agent:    agent,
-				Author:   agent,
-				Channel:  msg.Channel,
-				Stream:   "delta",
-				StreamID: streamID,
-			})
+			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", streamID, ev.Text))
 
 		case "thinking":
-			bm.server.bus.PublishOutbound(bus.OutboundMessage{
-				Text:     ev.Text,
-				Agent:    agent,
-				Author:   agent,
-				Channel:  msg.Channel,
-				Stream:   "thinking",
-				StreamID: streamID,
-			})
+			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "thinking", streamID, ev.Text))
 
 		case "tool_call":
-			bm.server.bus.PublishOutbound(bus.OutboundMessage{
-				Text:     ev.Text,
-				Agent:    agent,
-				Author:   agent,
-				Channel:  msg.Channel,
-				Stream:   "tool_call",
-				StreamID: streamID,
-				Tool:     ev.Tool,
-				Meta: &bus.OutboundMeta{
-					Tools: []bus.ToolEventMeta{{Tool: ev.Tool, Input: ev.Text}},
-				},
-			})
+			m := bus.NewOutboundFull(agent, msg.Channel, "tool_call", streamID, ev.Text)
+			m.Tool = ev.Tool
+			m.Meta = &bus.OutboundMeta{
+				Tools: []bus.ToolEventMeta{{Tool: ev.Tool, Input: ev.Text}},
+			}
+			bm.server.bus.PublishOutbound(m)
 
 		case "tool_result":
-			bm.server.bus.PublishOutbound(bus.OutboundMessage{
-				Text:     ev.Text,
-				Agent:    agent,
-				Author:   agent,
-				Channel:  msg.Channel,
-				Stream:   "tool_result",
-				StreamID: streamID,
-				Tool:     ev.Tool,
-				Meta: &bus.OutboundMeta{
-					Tools: []bus.ToolEventMeta{{Tool: ev.Tool, Output: ev.Text}},
-				},
-			})
+			m := bus.NewOutboundFull(agent, msg.Channel, "tool_result", streamID, ev.Text)
+			m.Tool = ev.Tool
+			m.Meta = &bus.OutboundMeta{
+				Tools: []bus.ToolEventMeta{{Tool: ev.Tool, Output: ev.Text}},
+			}
+			bm.server.bus.PublishOutbound(m)
 
 		case "done":
 			finalText = ev.Text
@@ -151,42 +118,24 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 	}
 
 	// Publish status: calling API
-	bm.server.bus.PublishOutbound(bus.OutboundMessage{
-		Agent:    agent,
-		Author:   agent,
-		Channel:  msg.Channel,
-		Stream:   "status",
-		StreamID: streamID,
-		Text:     "api_call",
-	})
+	bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "status", streamID, "api_call"))
 
 	err := bm.server.Stream(ctx, req, onEvent)
 	if err != nil {
 		log.Printf("[server] bus message error: %v", err)
 		// Publish error response.
-		bm.server.bus.PublishOutbound(bus.OutboundMessage{
-			Text:    fmt.Sprintf("error: %v", err),
-			Agent:   agent,
-			Author:  agent,
-			Channel: msg.Channel,
-		})
+		bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "done", streamID, fmt.Sprintf("error: %v", err)))
 		return
 	}
 
 	// Publish final "done" message.
-	bm.server.bus.PublishOutbound(bus.OutboundMessage{
-		Text:     finalText,
-		Agent:    agent,
-		Author:   agent,
-		Channel:  msg.Channel,
-		Stream:   "done",
-		StreamID: streamID,
-		Meta: &bus.OutboundMeta{
-			InputTokens:         finalTokens.Input,
-			OutputTokens:        finalTokens.Output,
-			CacheReadTokens:     finalTokens.CacheRead,
-			CacheCreationTokens: finalTokens.CacheWrite,
-			Cost:                finalTokens.Cost,
-		},
-	})
+	done := bus.NewOutboundFull(agent, msg.Channel, "done", streamID, finalText)
+	done.Meta = &bus.OutboundMeta{
+		InputTokens:         finalTokens.Input,
+		OutputTokens:        finalTokens.Output,
+		CacheReadTokens:     finalTokens.CacheRead,
+		CacheCreationTokens: finalTokens.CacheWrite,
+		Cost:                finalTokens.Cost,
+	}
+	bm.server.bus.PublishOutbound(done)
 }

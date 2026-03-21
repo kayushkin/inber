@@ -25,6 +25,25 @@ type OutboundMessage = messages.ChatOutbound
 type OutboundMeta = messages.OutboundMeta
 type ToolEventMeta = messages.ToolEventMeta
 
+// NewOutbound creates a ChatOutbound with required fields enforced.
+// See messages.NewChatOutbound for details.
+func NewOutbound(agent, channel, stream string) OutboundMessage {
+	m := messages.NewChatOutbound(agent, "inber", channel, stream)
+	m.Author = agent // inber convention: author = agent
+	return m
+}
+
+// NewOutboundFull creates a ChatOutbound with text and streamID pre-set.
+func NewOutboundFull(agent, channel, stream, streamID, text string) OutboundMessage {
+	m := NewOutbound(agent, channel, stream)
+	m.StreamID = streamID
+	m.Text = text
+	return m
+}
+
+// Intentionally is a sentinel for deliberately empty required fields.
+var Intentionally = messages.Intentionally
+
 // NewClient creates a bus client. Returns nil if natsURL is empty.
 func NewClient(natsURL, consumer string) *Client {
 	if natsURL == "" {

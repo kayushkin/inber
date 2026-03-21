@@ -111,20 +111,11 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 				onEvent = func(ev StreamEvent) {
 					switch ev.Kind {
 					case "delta":
-						g.bus.PublishOutbound(bus.OutboundMessage{
-							Text: ev.Text, Agent: parent.AgentName, Author: parent.AgentName,
-							Channel: "webchat", Stream: "delta", StreamID: streamID,
-						})
+						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "delta", streamID, ev.Text))
 					case "thinking":
-						g.bus.PublishOutbound(bus.OutboundMessage{
-							Text: ev.Text, Agent: parent.AgentName, Author: parent.AgentName,
-							Channel: "webchat", Stream: "thinking", StreamID: streamID,
-						})
+						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "thinking", streamID, ev.Text))
 					case "done":
-						g.bus.PublishOutbound(bus.OutboundMessage{
-							Text: ev.Text, Agent: parent.AgentName, Author: parent.AgentName,
-							Channel: "webchat", Stream: "done", StreamID: streamID,
-						})
+						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "done", streamID, ev.Text))
 					}
 				}
 			}

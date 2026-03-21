@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/kayushkin/inber/bus"
 	natsbus "github.com/kayushkin/bus"
 )
 
@@ -91,16 +92,8 @@ func (ep *EventPublisher) PublishOutbound(parentAgent string, result SpawnResult
 		return
 	}
 
-	payload := map[string]interface{}{
-		"text":         fmt.Sprintf("🔔 **Sub-agent %s completed** (%s)\n%s", result.Agent, result.Status, result.Summary),
-		"agent":        parentAgent,
-		"author":       parentAgent,
-		"channel":      "websocket",
-		"orchestrator": "inber",
-		"timestamp":    time.Now().Format(time.RFC3339),
-	}
-
-	if err := ep.nc.Publish("chat.outbound", payload); err != nil {
+	m := bus.NewOutboundFull(parentAgent, "websocket", "done", "", fmt.Sprintf("🔔 **Sub-agent %s completed** (%s)\n%s", result.Agent, result.Status, result.Summary))
+	if err := ep.nc.Publish("chat.outbound", m); err != nil {
 		log.Printf("[events] outbound publish error: %v", err)
 	}
 }
