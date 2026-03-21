@@ -154,3 +154,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Split conversation/manage_utils.go** — Extracted 341-line utility file into focused modules: `manage_tool_pruning.go` (161 lines: tool result/call pruning and summarization), `manage_auto_save.go` (95 lines: auto-save to memory functionality), and `manage_text_utils.go` (72 lines: text processing and content extraction utilities). Better separation of concerns between tool management, memory operations, and text processing. All builds and tests pass.
 
 - [x] **Split session/prompts.go** — Extracted token estimation into `prompts_tokens.go` (45 lines), file reading/listing into `prompts_read.go` (54 lines), and file writing into `prompts_write.go` (209 lines). Reduced main prompts.go from 334 to 25 lines (93% reduction). Better separation of concerns: token calculation vs file I/O vs core types. All builds and tests pass.
+
+## 🧹 Code Quality (Active)
+
+- [~] **Improve test coverage for engine package** — Current coverage: 10.7% (lowest in codebase). Add focused unit tests for core functions: NewEngine initialization phases, context budget management, display utilities, and build system components. Target: 50%+ coverage to make engine more maintainable and catch regressions during refactoring.
