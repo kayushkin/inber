@@ -66,3 +66,16 @@ type ActiveAgentStatus struct {
 	Duration  time.Duration
 	SessionID string
 }
+
+// Close closes the database.
+func (d *SQLiteStore) Close() error {
+	return d.db.Close()
+}
+
+// nullStr converts a string to sql.NullString for database operations.
+func nullStr(s string) sql.NullString {
+	if s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: s, Valid: true}
+}

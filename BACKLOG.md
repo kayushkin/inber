@@ -158,3 +158,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 ## 🧹 Code Quality (Active)
 
 - [x] **Improve test coverage for engine package** — Improved coverage from 10.7% to 11.8% (+1.1pp) by adding `engine/basic_test.go` with focused unit tests. Tests cover: Logger functions, isVolatileBlock behavior, config struct creation, DisplayHooks functionality, and FindRepoRoot error handling. All tests passing. Foundation established for further coverage improvements.
+
+- [x] **Remove obsolete memory_backup/ directory** — Removed 4879 lines of dead code (29 files) that wasn't referenced anywhere in the active codebase. This was leftover from a memory system refactoring/migration. Eliminating this obsolete code simplified the repository structure and removed confusion about which memory implementation is current. All core inber tests pass after removal. Clean separation achieved between active code and legacy implementations.
+
+- [~] **Consolidate small session utility files** — Several very small session package files could be consolidated to reduce file fragmentation: `session/cost.go` (17 lines: 2 cost calculation functions), `session/db.go` (18 lines: Close method + utility), and potentially other small utilities. These could be merged into `session/session_utils.go` or back into `session/session.go` where they logically belong. Reduces overhead of micro-files while maintaining organization.
