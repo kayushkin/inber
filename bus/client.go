@@ -43,9 +43,6 @@ func NewOutboundFull(agent, channel, stream, turnID, text string) OutboundMessag
 	return m
 }
 
-// Intentionally is a sentinel for deliberately empty required fields.
-var Intentionally = messages.Intentionally
-
 // NewClient creates a bus client. Returns nil if natsURL is empty.
 func NewClient(natsURL, consumer string) *Client {
 	if natsURL == "" {
