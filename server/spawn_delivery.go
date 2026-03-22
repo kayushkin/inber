@@ -108,14 +108,13 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 			var onEvent func(StreamEvent)
 			if g.bus != nil {
 				onEvent = func(ev StreamEvent) {
-					tid := fmt.Sprintf("%d", ev.Turn)
 					switch ev.Kind {
 					case "delta":
-						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "delta", tid, ev.Text))
+						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "delta", "", ev.Text))
 					case "thinking":
-						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "thinking", tid, ev.Text))
+						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "thinking", "", ev.Text))
 					case "done":
-						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "done", tid, ev.Text))
+						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "done", "", ""))
 					}
 				}
 			}

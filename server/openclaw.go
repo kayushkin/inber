@@ -82,9 +82,6 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	}
 
 	// Stream SSE response.
-	// OpenClaw SSE doesn't expose turn IDs — use timestamp as fallback.
-	// The openclaw-adapter (which tails JSONL) provides real turn IDs.
-	turnID := fmt.Sprintf("oc-%d", start.UnixMilli())
 	var fullText string
 	var usage openclawUsage
 
@@ -113,7 +110,7 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 			delta := chunk.Choices[0].Delta.Content
 			if delta != "" {
 				fullText += delta
-				g.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", turnID, delta))
+				g.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", "", delta))
 			}
 		}
 	}
@@ -130,18 +127,12 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	log.Printf("[openclaw] → %s: %s (%.1fs, %d in, %d out)",
 		agent, truncate(fullText, 80), duration.Seconds(), usage.PromptTokens, usage.CompletionTokens)
 
-	// Publish final done message.
-	doneMsg := bus.NewOutboundFull(agent, msg.Channel, "done", turnID, fullText)
-	doneMsg.Meta = &bus.OutboundMeta{
-		InputTokens:  usage.PromptTokens,
-		OutputTokens: usage.CompletionTokens,
-		DurationMs:   duration.Milliseconds(),
-	}
-	g.bus.PublishOutbound(doneMsg)
+	// Publish done signal — frontend fetches full message from logstack.
+	g.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "done", "", ""))
 }
 
 func (g *Server) publishOpenClawError(msg bus.InboundMessage, errMsg string) {
-	g.bus.PublishOutbound(bus.NewOutboundFull(msg.Agent, msg.Channel, "done", "", "⚠️ "+errMsg))
+	g.bus.PublishOutbound(bus.NewOutboundFull(msg.Agent, msg.Channel, "done", "", ""))
 }
 
 // readOpenClawUsage reads session usage from OpenClaw's sessions.json.

@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"log"
 
 	"github.com/kayushkin/inber/bus"
@@ -76,55 +75,26 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 		Author:  msg.Author,
 	}
 
-	var finalText string
-	var finalTokens TokenUsage
-	var finalTurnID string
-	var toolEvents []bus.ToolEventMeta
-
-	turnID := func(ev StreamEvent) string {
-		return fmt.Sprintf("%d", ev.Turn)
-	}
-
 	onEvent := func(ev StreamEvent) {
-		tid := turnID(ev)
-		finalTurnID = tid
-
 		switch ev.Kind {
 		case "delta":
-			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", tid, ev.Text))
+			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", "", ev.Text))
 
 		case "thinking":
-			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "thinking", tid, ev.Text))
+			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "thinking", "", ev.Text))
 
 		case "tool_call":
-			toolEvents = append(toolEvents, bus.ToolEventMeta{Tool: ev.Tool, Input: ev.Text})
-			m := bus.NewOutboundFull(agent, msg.Channel, "tool_call", tid, ev.Text)
+			m := bus.NewOutboundFull(agent, msg.Channel, "tool_call", "", ev.Text)
 			m.Tool = ev.Tool
-			m.Meta = &bus.OutboundMeta{
-				Tools: []bus.ToolEventMeta{{Tool: ev.Tool, Input: ev.Text}},
-			}
 			bm.server.bus.PublishOutbound(m)
 
 		case "tool_result":
-			if len(toolEvents) > 0 && toolEvents[len(toolEvents)-1].Tool == ev.Tool {
-				toolEvents[len(toolEvents)-1].Output = ev.Text
-			} else {
-				toolEvents = append(toolEvents, bus.ToolEventMeta{Tool: ev.Tool, Output: ev.Text})
-			}
-			m := bus.NewOutboundFull(agent, msg.Channel, "tool_result", tid, ev.Text)
+			m := bus.NewOutboundFull(agent, msg.Channel, "tool_result", "", ev.Text)
 			m.Tool = ev.Tool
-			m.Meta = &bus.OutboundMeta{
-				Tools: []bus.ToolEventMeta{{Tool: ev.Tool, Output: ev.Text}},
-			}
 			bm.server.bus.PublishOutbound(m)
 
 		case "done":
-			finalText = ev.Text
-			if data, ok := ev.Data.(map[string]any); ok {
-				if tokens, ok := data["tokens"].(TokenUsage); ok {
-					finalTokens = tokens
-				}
-			}
+			// done event handled after Stream() returns
 		}
 	}
 
@@ -134,21 +104,11 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 	err := bm.server.Stream(ctx, req, onEvent)
 	if err != nil {
 		log.Printf("[server] bus message error: %v", err)
-		// Publish error response.
-		bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "done", finalTurnID, fmt.Sprintf("error: %v", err)))
+		// Publish error done signal.
+		bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "done", "", ""))
 		return
 	}
 
-	// Publish final "done" message.
-	done := bus.NewOutboundFull(agent, msg.Channel, "done", finalTurnID, finalText)
-	done.Meta = &bus.OutboundMeta{
-		InputTokens:         finalTokens.Input,
-		OutputTokens:        finalTokens.Output,
-		CacheReadTokens:     finalTokens.CacheRead,
-		CacheCreationTokens: finalTokens.CacheWrite,
-		Cost:                finalTokens.Cost,
-		ToolCalls:           len(toolEvents),
-		Tools:               toolEvents,
-	}
-	bm.server.bus.PublishOutbound(done)
+	// Publish done signal — no payload, frontend fetches from logstack.
+	bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "done", "", ""))
 }
