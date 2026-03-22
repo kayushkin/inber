@@ -8,7 +8,7 @@ import (
 
 // LogUser logs a user message to the session.
 func (s *Session) LogUser(text string) {
-	turn := s.currentTurn()
+	turn := s.CurrentTurn()
 	s.write(Entry{
 		Timestamp: time.Now(),
 		Turn:      turn,
@@ -47,7 +47,7 @@ func (s *Session) LogAssistant(text string, inTokens, outTokens, toolCalls int) 
 func (s *Session) LogToolCall(toolID, name string, input json.RawMessage) {
 	s.write(Entry{
 		Timestamp: time.Now(),
-		Turn:      s.currentTurn(),
+		Turn:      s.CurrentTurn(),
 		Role:      "tool_call",
 		ToolID:    toolID,
 		ToolName:  name,
@@ -87,7 +87,7 @@ func (s *Session) LogToolResult(toolID, name, output string, isError bool) {
 
 	s.write(Entry{
 		Timestamp: time.Now(),
-		Turn:      s.currentTurn(),
+		Turn:      s.CurrentTurn(),
 		Role:      "tool_result",
 		ToolID:    toolID,
 		ToolName:  name,
@@ -100,7 +100,7 @@ func (s *Session) LogToolResult(toolID, name, output string, isError bool) {
 func (s *Session) LogThinking(text string) {
 	s.write(Entry{
 		Timestamp: time.Now(),
-		Turn:      s.currentTurn(),
+		Turn:      s.CurrentTurn(),
 		Role:      "thinking",
 		Content:   text,
 	})

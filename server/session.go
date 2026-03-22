@@ -76,18 +76,19 @@ func (s *Session) updateHooks() {
 		return
 	}
 	if onEvent != nil {
+		sess := s.Engine.Session // for turn number access
 		s.Engine.SetDisplayHooks(&engine.DisplayHooks{
 			OnThinking: func(text string) {
-				onEvent(StreamEvent{Kind: "thinking", Text: text})
+				onEvent(StreamEvent{Kind: "thinking", Text: text, Turn: sess.CurrentTurn()})
 			},
 			OnTextDelta: func(text string) {
-				onEvent(StreamEvent{Kind: "delta", Text: text})
+				onEvent(StreamEvent{Kind: "delta", Text: text, Turn: sess.CurrentTurn()})
 			},
 			OnToolCall: func(name, input string) {
-				onEvent(StreamEvent{Kind: "tool_call", Tool: name, Text: input})
+				onEvent(StreamEvent{Kind: "tool_call", Tool: name, Text: input, Turn: sess.CurrentTurn()})
 			},
 			OnToolResult: func(name, output string, isError bool) {
-				onEvent(StreamEvent{Kind: "tool_result", Tool: name, Text: output})
+				onEvent(StreamEvent{Kind: "tool_result", Tool: name, Text: output, Turn: sess.CurrentTurn()})
 			},
 		})
 	} else {

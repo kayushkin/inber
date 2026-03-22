@@ -82,7 +82,9 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	}
 
 	// Stream SSE response.
-	streamID := fmt.Sprintf("s-%d", start.UnixMilli())
+	// OpenClaw SSE doesn't expose turn IDs — use timestamp as fallback.
+	// The openclaw-adapter (which tails JSONL) provides real turn IDs.
+	turnID := fmt.Sprintf("oc-%d", start.UnixMilli())
 	var fullText string
 	var usage openclawUsage
 
@@ -111,7 +113,7 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 			delta := chunk.Choices[0].Delta.Content
 			if delta != "" {
 				fullText += delta
-				g.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", streamID, delta))
+				g.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", turnID, delta))
 			}
 		}
 	}
@@ -129,7 +131,7 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 		agent, truncate(fullText, 80), duration.Seconds(), usage.PromptTokens, usage.CompletionTokens)
 
 	// Publish final done message.
-	doneMsg := bus.NewOutboundFull(agent, msg.Channel, "done", streamID, fullText)
+	doneMsg := bus.NewOutboundFull(agent, msg.Channel, "done", turnID, fullText)
 	doneMsg.Meta = &bus.OutboundMeta{
 		InputTokens:  usage.PromptTokens,
 		OutputTokens: usage.CompletionTokens,

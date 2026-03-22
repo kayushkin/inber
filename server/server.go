@@ -221,6 +221,7 @@ type StreamEvent struct {
 	Kind string `json:"kind"` // "delta", "thinking", "tool_call", "tool_result", "done"
 	Text string `json:"text,omitempty"`
 	Tool string `json:"tool,omitempty"`
+	Turn int    `json:"turn,omitempty"` // API round-trip number from session
 	Data any    `json:"data,omitempty"`
 }
 

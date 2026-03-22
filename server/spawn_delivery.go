@@ -107,15 +107,15 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 			// Set up streaming to bus if available
 			var onEvent func(StreamEvent)
 			if g.bus != nil {
-				streamID := fmt.Sprintf("s-%d", time.Now().UnixMilli())
 				onEvent = func(ev StreamEvent) {
+					tid := fmt.Sprintf("%d", ev.Turn)
 					switch ev.Kind {
 					case "delta":
-						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "delta", streamID, ev.Text))
+						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "delta", tid, ev.Text))
 					case "thinking":
-						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "thinking", streamID, ev.Text))
+						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "thinking", tid, ev.Text))
 					case "done":
-						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "done", streamID, ev.Text))
+						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "done", tid, ev.Text))
 					}
 				}
 			}

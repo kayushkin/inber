@@ -198,8 +198,8 @@ func (s *Session) GetFullToolResult(toolID string) string {
 	return s.truncateRefs[toolID]
 }
 
-// currentTurn returns the current turn number (0 before first request).
-func (s *Session) currentTurn() int {
+// CurrentTurn returns the current turn number (0 before first request).
+func (s *Session) CurrentTurn() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.turn

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/kayushkin/inber/bus"
 )
@@ -67,11 +66,8 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 
 	log.Printf("[server] bus → %s: %s", agent, truncate(msg.Text, 80))
 
-	// Use streaming so we can publish deltas to bus in real-time.
-	streamID := fmt.Sprintf("s-%d", time.Now().UnixMilli())
-
-	// Publish status: orchestrator received the message
-	bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "status", streamID, "received"))
+	// Publish status: orchestrator received the message (no turn_id yet — turn starts on first API call)
+	bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "status", "", "received"))
 
 	req := RunRequest{
 		Agent:   agent,
@@ -82,17 +78,27 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 
 	var finalText string
 	var finalTokens TokenUsage
+	var finalTurnID string
+	var toolEvents []bus.ToolEventMeta
+
+	turnID := func(ev StreamEvent) string {
+		return fmt.Sprintf("%d", ev.Turn)
+	}
 
 	onEvent := func(ev StreamEvent) {
+		tid := turnID(ev)
+		finalTurnID = tid
+
 		switch ev.Kind {
 		case "delta":
-			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", streamID, ev.Text))
+			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", tid, ev.Text))
 
 		case "thinking":
-			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "thinking", streamID, ev.Text))
+			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "thinking", tid, ev.Text))
 
 		case "tool_call":
-			m := bus.NewOutboundFull(agent, msg.Channel, "tool_call", streamID, ev.Text)
+			toolEvents = append(toolEvents, bus.ToolEventMeta{Tool: ev.Tool, Input: ev.Text})
+			m := bus.NewOutboundFull(agent, msg.Channel, "tool_call", tid, ev.Text)
 			m.Tool = ev.Tool
 			m.Meta = &bus.OutboundMeta{
 				Tools: []bus.ToolEventMeta{{Tool: ev.Tool, Input: ev.Text}},
@@ -100,7 +106,12 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 			bm.server.bus.PublishOutbound(m)
 
 		case "tool_result":
-			m := bus.NewOutboundFull(agent, msg.Channel, "tool_result", streamID, ev.Text)
+			if len(toolEvents) > 0 && toolEvents[len(toolEvents)-1].Tool == ev.Tool {
+				toolEvents[len(toolEvents)-1].Output = ev.Text
+			} else {
+				toolEvents = append(toolEvents, bus.ToolEventMeta{Tool: ev.Tool, Output: ev.Text})
+			}
+			m := bus.NewOutboundFull(agent, msg.Channel, "tool_result", tid, ev.Text)
 			m.Tool = ev.Tool
 			m.Meta = &bus.OutboundMeta{
 				Tools: []bus.ToolEventMeta{{Tool: ev.Tool, Output: ev.Text}},
@@ -118,24 +129,26 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 	}
 
 	// Publish status: calling API
-	bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "status", streamID, "api_call"))
+	bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "status", "", "api_call"))
 
 	err := bm.server.Stream(ctx, req, onEvent)
 	if err != nil {
 		log.Printf("[server] bus message error: %v", err)
 		// Publish error response.
-		bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "done", streamID, fmt.Sprintf("error: %v", err)))
+		bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "done", finalTurnID, fmt.Sprintf("error: %v", err)))
 		return
 	}
 
 	// Publish final "done" message.
-	done := bus.NewOutboundFull(agent, msg.Channel, "done", streamID, finalText)
+	done := bus.NewOutboundFull(agent, msg.Channel, "done", finalTurnID, finalText)
 	done.Meta = &bus.OutboundMeta{
 		InputTokens:         finalTokens.Input,
 		OutputTokens:        finalTokens.Output,
 		CacheReadTokens:     finalTokens.CacheRead,
 		CacheCreationTokens: finalTokens.CacheWrite,
 		Cost:                finalTokens.Cost,
+		ToolCalls:           len(toolEvents),
+		Tools:               toolEvents,
 	}
 	bm.server.bus.PublishOutbound(done)
 }

@@ -33,10 +33,12 @@ func NewOutbound(agent, channel, stream string) OutboundMessage {
 	return m
 }
 
-// NewOutboundFull creates a ChatOutbound with text and streamID pre-set.
-func NewOutboundFull(agent, channel, stream, streamID, text string) OutboundMessage {
+// NewOutboundFull creates a ChatOutbound with text and turnID pre-set.
+// Also sets StreamID = turnID for backward compatibility with consumers that still read stream_id.
+func NewOutboundFull(agent, channel, stream, turnID, text string) OutboundMessage {
 	m := NewOutbound(agent, channel, stream)
-	m.StreamID = streamID
+	m.TurnID = turnID
+	m.StreamID = turnID // backward compat
 	m.Text = text
 	return m
 }

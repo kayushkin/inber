@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"log"
 
 	logstackclient "github.com/kayushkin/logstack/client"
@@ -70,6 +71,7 @@ func (e Entry) toLogstackEntry(agentName, sessionID string) logstackmodels.LogEn
 		Source:      "inber",
 		Agent:       agentName,
 		SessionID:   sessionID,
+		TurnID:      fmt.Sprintf("%d", e.Turn),
 		Model:       e.Model,
 		Level:       level,
 		Type:        entryType,
