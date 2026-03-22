@@ -3,7 +3,10 @@ package server
 import (
 	"context"
 	"log"
+	"strings"
+	"time"
 
+	"github.com/kayushkin/bus/messages"
 	"github.com/kayushkin/inber/bus"
 )
 
@@ -18,16 +21,12 @@ func NewBusManager(server *Server) *BusManager {
 }
 
 // ListenBus subscribes to the bus and processes inbound messages.
-// Each message is routed to the appropriate agent and processed via Run().
-// Responses are published back to bus "outbound" topic.
-// Blocks until ctx is cancelled.
 func (bm *BusManager) ListenBus(ctx context.Context) error {
 	if bm.server.bus == nil {
 		log.Printf("[server] bus not configured, skipping bus listener")
 		return nil
 	}
 
-	// Set up NATS request/reply handlers.
 	bm.server.setupAgentRunHandler()
 
 	inbound := bm.server.bus.Subscribe(ctx, []string{"chat.inbound"})
@@ -48,7 +47,6 @@ func (bm *BusManager) ListenBus(ctx context.Context) error {
 
 // handleBusMessage routes an inbound bus message to the correct agent.
 func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessage) {
-	// Proxy openclaw messages to OpenClaw API.
 	if msg.Orchestrator == "openclaw" {
 		bm.server.proxyToOpenClaw(ctx, msg)
 		return
@@ -63,10 +61,8 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 		return
 	}
 
+	sessionID := "main"
 	log.Printf("[server] bus → %s: %s", agent, truncate(msg.Text, 80))
-
-	// Publish status: orchestrator received the message (no turn_id yet — turn starts on first API call)
-	bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "status", "", "received"))
 
 	req := RunRequest{
 		Agent:   agent,
@@ -75,40 +71,49 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 		Author:  msg.Author,
 	}
 
+	var fullText strings.Builder
+
 	onEvent := func(ev StreamEvent) {
+		delta := messages.NewChatDelta(agent, "inber", sessionID, ev.Kind)
 		switch ev.Kind {
 		case "delta":
-			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", "", ev.Text))
-
+			delta.Type = "text"
+			delta.Text = ev.Text
+			fullText.WriteString(ev.Text)
 		case "thinking":
-			bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "thinking", "", ev.Text))
-
+			delta.Text = ev.Text
 		case "tool_call":
-			m := bus.NewOutboundFull(agent, msg.Channel, "tool_call", "", ev.Text)
-			m.Tool = ev.Tool
-			bm.server.bus.PublishOutbound(m)
-
+			delta.Type = "tool"
+			delta.Tool = ev.Tool
+			delta.ToolInput = ev.Text
 		case "tool_result":
-			m := bus.NewOutboundFull(agent, msg.Channel, "tool_result", "", ev.Text)
-			m.Tool = ev.Tool
-			bm.server.bus.PublishOutbound(m)
-
+			delta.Tool = ev.Tool
+			delta.ToolOutput = ev.Text
 		case "done":
-			// done event handled after Stream() returns
+			return // handled after Stream() returns
+		default:
+			return
 		}
+		bm.server.bus.PublishDelta(delta)
 	}
-
-	// Publish status: calling API
-	bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "status", "", "api_call"))
 
 	err := bm.server.Stream(ctx, req, onEvent)
 	if err != nil {
 		log.Printf("[server] bus message error: %v", err)
-		// Publish error done signal.
-		bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "done", "", ""))
-		return
 	}
 
-	// Publish done signal — no payload, frontend fetches from logstack.
-	bm.server.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "done", "", ""))
+	// Publish done on chat.stream
+	done := messages.NewDoneDelta(agent, "inber", sessionID, nil)
+	bm.server.bus.PublishDelta(done)
+
+	// Publish completed message on chat.outbound
+	if fullText.Len() > 0 {
+		bm.server.bus.PublishOutbound(messages.ChatOutbound{
+			Agent:        agent,
+			Orchestrator: "inber",
+			SessionID:    sessionID,
+			Text:         fullText.String(),
+			Timestamp:    time.Now(),
+		})
+	}
 }

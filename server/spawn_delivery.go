@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/kayushkin/inber/bus"
+	"github.com/kayushkin/bus/messages"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
 )
@@ -26,10 +26,8 @@ func (g *Server) deliverProgress(parentKey, childKey, agentName, message string)
 	parent.mu.Unlock()
 
 	if isRunning {
-		// Parent is mid-turn — inject directly.
 		parent.inject(message)
 	} else {
-		// Parent is idle — queue for next turn.
 		parent.queuePending(message)
 	}
 }
@@ -86,14 +84,12 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 	if isRunning {
 		parent.inject(msg)
 	} else {
-		// Parent finished its turn. Trigger a new turn to deliver the result
-		// so the agent can process it and respond to the user.
 		log.Printf("[server] delivering spawn result to idle parent %s", parentKey)
 
-		// Publish the result directly to the bus outbound topic
-		// so the dashboard shows it immediately.
+		// Publish completed spawn result to chat.outbound for dashboard
 		if g.events != nil {
-			g.events.PublishOutbound(parent.AgentName, result)
+			summary := fmt.Sprintf("🔔 **Sub-agent %s completed** (%s)\n%s", result.Agent, result.Status, result.Summary)
+			g.events.PublishOutbound(parent.AgentName, "main", summary)
 		}
 
 		// Trigger a turn on the parent session with the spawn result
@@ -104,18 +100,25 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 				return
 			}
 
-			// Set up streaming to bus if available
+			sessionID := "main"
+			var fullText strings.Builder
 			var onEvent func(StreamEvent)
 			if g.bus != nil {
 				onEvent = func(ev StreamEvent) {
+					delta := messages.NewChatDelta(parent.AgentName, "inber", sessionID, ev.Kind)
 					switch ev.Kind {
 					case "delta":
-						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "delta", "", ev.Text))
+						delta.Type = "text"
+						delta.Text = ev.Text
+						fullText.WriteString(ev.Text)
 					case "thinking":
-						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "thinking", "", ev.Text))
+						delta.Text = ev.Text
 					case "done":
-						g.bus.PublishOutbound(bus.NewOutboundFull(parent.AgentName, "webchat", "done", "", ""))
+						return
+					default:
+						return
 					}
+					g.bus.PublishDelta(delta)
 				}
 			}
 
@@ -129,22 +132,33 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 			if err != nil {
 				log.Printf("[server] failed to deliver spawn result to %s: %v", parentKey, err)
 			}
-			_ = ac // suppress unused
+
+			// Publish done + outbound
+			done := messages.NewDoneDelta(parent.AgentName, "inber", sessionID, nil)
+			g.bus.PublishDelta(done)
+			if fullText.Len() > 0 {
+				g.bus.PublishOutbound(messages.ChatOutbound{
+					Agent:        parent.AgentName,
+					Orchestrator: "inber",
+					SessionID:    sessionID,
+					Text:         fullText.String(),
+					Timestamp:    time.Now(),
+				})
+			}
+
+			_ = ac
 		}()
 	}
 }
 
 // saveSpawnToMemory persists a summary of the spawn's work into the agent's memory DB.
-// This gives the agent's main session access to the full context via memory_search.
 func (g *Server) saveSpawnToMemory(child *Session, agentName, task, status, summary string) {
 	if child.Engine == nil || child.Engine.MemStore == nil {
 		return
 	}
 
-	// Build a detailed memory entry from the spawn.
 	content := fmt.Sprintf("Spawn task: %s\nStatus: %s\n\n%s", task, status, summary)
 
-	// Extract key tool calls/decisions from the transcript for richer context.
 	if transcript := formatTranscriptHighlights(child.Engine.Messages); transcript != "" {
 		content += "\n\nKey actions:\n" + transcript
 	}
@@ -162,8 +176,7 @@ func (g *Server) saveSpawnToMemory(child *Session, agentName, task, status, summ
 	}
 }
 
-// updateMainSession injects a short context update into the agent's main session
-// so it knows what happened in the spawn without loading the full transcript.
+// updateMainSession injects a short context update into the agent's main session.
 func (g *Server) updateMainSession(agentName, task, status, summary string) {
 	mainKey := fmt.Sprintf("agent:%s:main", agentName)
 	val, ok := g.sessions.Load(mainKey)
@@ -172,7 +185,6 @@ func (g *Server) updateMainSession(agentName, task, status, summary string) {
 	}
 	main := val.(*Session)
 
-	// Keep it brief — full context is in memory_search.
 	summaryTrunc := summary
 	if len(summaryTrunc) > 500 {
 		summaryTrunc = summaryTrunc[:497] + "..."

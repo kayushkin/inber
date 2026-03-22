@@ -1,32 +1,16 @@
 package server
 
 import (
-	"fmt"
 	"log"
 	"time"
 
-	"github.com/kayushkin/inber/bus"
 	natsbus "github.com/kayushkin/bus"
+	"github.com/kayushkin/bus/messages"
 )
 
 // EventPublisher sends server events to the bus so dashboards can display them.
 type EventPublisher struct {
 	nc *natsbus.Client
-}
-
-// GatewayEvent is published to the bus for dashboard consumption.
-type GatewayEvent struct {
-	Kind       string      `json:"kind"`        // "spawn_started", "spawn_progress", "spawn_completed", "session_active", "session_idle"
-	SessionKey string      `json:"session_key"`
-	Agent      string      `json:"agent"`
-	ParentKey  string      `json:"parent_key,omitempty"`
-	Task       string      `json:"task,omitempty"`
-	Status     string      `json:"status,omitempty"`
-	Summary    string      `json:"summary,omitempty"`
-	Tokens     *TokenUsage `json:"tokens,omitempty"`
-	DurationMs int64       `json:"duration_ms,omitempty"`
-	Error      string      `json:"error,omitempty"`
-	Timestamp  time.Time   `json:"timestamp"`
 }
 
 // NewEventPublisher creates a publisher. Pass empty natsURL to disable.
@@ -47,73 +31,62 @@ func NewEventPublisher(natsURL, _ string) *EventPublisher {
 	return &EventPublisher{nc: nc}
 }
 
-// Publish sends an event to the bus on the "server" subject.
-func (ep *EventPublisher) Publish(event GatewayEvent) {
-	if ep == nil {
+// publishDelta sends a ChatDelta to chat.stream.
+func (ep *EventPublisher) publishDelta(delta messages.ChatDelta) {
+	if ep == nil || ep.nc == nil {
 		return
 	}
-
-	event.Timestamp = time.Now()
-
-	if err := ep.nc.Publish("server", event); err != nil {
+	if err := ep.nc.Publish("chat.stream", delta); err != nil {
 		log.Printf("[events] publish error: %v", err)
 	}
 }
 
-// SpawnStarted publishes a spawn start event.
+// SpawnStarted publishes a spawn_started event on chat.stream.
 func (ep *EventPublisher) SpawnStarted(sessionKey, agent, parentKey, task string) {
-	ep.Publish(GatewayEvent{
-		Kind:       "spawn_started",
-		SessionKey: sessionKey,
-		Agent:      agent,
-		ParentKey:  parentKey,
-		Task:       task,
-	})
+	delta := messages.NewChatDelta(agent, "inber", sessionKey, "spawn_started")
+	delta.Text = task
+	ep.publishDelta(delta)
 }
 
-// SpawnCompleted publishes a spawn completion event.
+// SpawnCompleted publishes a spawn_completed event on chat.stream.
 func (ep *EventPublisher) SpawnCompleted(result SpawnResult) {
-	ep.Publish(GatewayEvent{
-		Kind:       "spawn_completed",
-		SessionKey: result.ChildKey,
-		Agent:      result.Agent,
-		Task:       result.Task,
-		Status:     result.Status,
-		Summary:    truncate(result.Summary, 500),
-		Tokens:     &result.Tokens,
-		DurationMs: result.Duration.Milliseconds(),
-		Error:      result.Error,
-	})
-}
-
-// PublishOutbound sends a spawn result to the bus "chat.outbound" subject.
-func (ep *EventPublisher) PublishOutbound(parentAgent string, result SpawnResult) {
-	if ep == nil {
-		return
+	delta := messages.NewChatDelta(result.Agent, "inber", result.ChildKey, "spawn_completed")
+	delta.Text = truncate(result.Summary, 500)
+	if result.Duration > 0 {
+		delta.Stats = &messages.TurnStats{
+			DurationMs: int(result.Duration.Milliseconds()),
+		}
 	}
-
-	m := bus.NewOutboundFull(parentAgent, "websocket", "done", "", fmt.Sprintf("🔔 **Sub-agent %s completed** (%s)\n%s", result.Agent, result.Status, result.Summary))
-	if err := ep.nc.Publish("chat.outbound", m); err != nil {
-		log.Printf("[events] outbound publish error: %v", err)
-	}
+	ep.publishDelta(delta)
 }
 
 // SessionActive publishes when a session starts running.
 func (ep *EventPublisher) SessionActive(sessionKey, agent string) {
-	ep.Publish(GatewayEvent{
-		Kind:       "session_active",
-		SessionKey: sessionKey,
-		Agent:      agent,
-	})
+	delta := messages.NewChatDelta(agent, "inber", sessionKey, "session_active")
+	ep.publishDelta(delta)
 }
 
 // SessionIdle publishes when a session finishes.
 func (ep *EventPublisher) SessionIdle(sessionKey, agent string) {
-	ep.Publish(GatewayEvent{
-		Kind:       "session_idle",
-		SessionKey: sessionKey,
-		Agent:      agent,
-	})
+	delta := messages.NewChatDelta(agent, "inber", sessionKey, "session_idle")
+	ep.publishDelta(delta)
+}
+
+// PublishOutbound sends a completed message to chat.outbound via JetStream.
+func (ep *EventPublisher) PublishOutbound(agent, sessionID, text string) {
+	if ep == nil || ep.nc == nil {
+		return
+	}
+	msg := messages.ChatOutbound{
+		Agent:        agent,
+		Orchestrator: "inber",
+		SessionID:    sessionID,
+		Text:         text,
+		Timestamp:    time.Now(),
+	}
+	if err := ep.nc.JetPublish("chat.outbound", msg); err != nil {
+		log.Printf("[events] outbound publish error: %v", err)
+	}
 }
 
 // Close closes the NATS connection.

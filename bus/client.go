@@ -18,30 +18,8 @@ type Client struct {
 	nc *natsbus.Client
 }
 
-// Type aliases — keep existing names for backward compatibility within inber.
-type BusMessage = messages.BusEnvelope
+// Type aliases for convenience.
 type InboundMessage = messages.ChatInbound
-type OutboundMessage = messages.ChatOutbound
-type OutboundMeta = messages.OutboundMeta
-type ToolEventMeta = messages.ToolEventMeta
-
-// NewOutbound creates a ChatOutbound with required fields enforced.
-// See messages.NewChatOutbound for details.
-func NewOutbound(agent, channel, stream string) OutboundMessage {
-	m := messages.NewChatOutbound(agent, "inber", channel, stream)
-	m.Author = agent // inber convention: author = agent
-	return m
-}
-
-// NewOutboundFull creates a ChatOutbound with text and turnID pre-set.
-// Also sets StreamID = turnID for backward compatibility with consumers that still read stream_id.
-func NewOutboundFull(agent, channel, stream, turnID, text string) OutboundMessage {
-	m := NewOutbound(agent, channel, stream)
-	m.TurnID = turnID
-	m.StreamID = turnID // backward compat
-	m.Text = text
-	return m
-}
 
 // NewClient creates a bus client. Returns nil if natsURL is empty.
 func NewClient(natsURL, consumer string) *Client {
@@ -66,9 +44,7 @@ func NewClient(natsURL, consumer string) *Client {
 	return &Client{nc: nc}
 }
 
-// Subscribe connects to NATS and delivers inbound messages to the returned channel.
-// The topics parameter is kept for API compatibility but messages are received on "chat.inbound".
-// Blocks until ctx is cancelled.
+// Subscribe connects to NATS and delivers inbound messages on chat.inbound.
 func (c *Client) Subscribe(ctx context.Context, topics []string) <-chan InboundMessage {
 	ch := make(chan InboundMessage, 64)
 
@@ -84,7 +60,6 @@ func (c *Client) Subscribe(ctx context.Context, topics []string) <-chan InboundM
 
 			// Filter: only process messages for "inber" orchestrator.
 			if msg.Orchestrator != "" && msg.Orchestrator != "inber" {
-				log.Printf("[bus] skipping message for orchestrator %q", msg.Orchestrator)
 				return
 			}
 
@@ -105,7 +80,6 @@ func (c *Client) Subscribe(ctx context.Context, topics []string) <-chan InboundM
 		defer sub.Unsubscribe()
 
 		log.Printf("[bus] subscribed to chat.inbound")
-
 		<-ctx.Done()
 	}()
 
@@ -120,48 +94,24 @@ func (c *Client) Publish(topic string, payload any) error {
 	return c.nc.Publish(topic, payload)
 }
 
-// PublishOutbound publishes an agent response to the "chat.outbound" subject.
-func (c *Client) PublishOutbound(msg OutboundMessage) error {
+// PublishDelta publishes a streaming delta to chat.stream.
+func (c *Client) PublishDelta(delta messages.ChatDelta) error {
+	return c.Publish("chat.stream", delta)
+}
+
+// PublishOutbound publishes a completed response to chat.outbound (JetStream).
+func (c *Client) PublishOutbound(msg messages.ChatOutbound) error {
 	msg.Timestamp = time.Now()
 	if msg.Orchestrator == "" {
 		msg.Orchestrator = "inber"
 	}
-
-	agent := msg.Agent
-	if agent == "" {
-		agent = "unknown"
-	}
-
-	// Route to subject based on stream type, matching openclaw-adapter conventions.
-	switch msg.Stream {
-	case "delta", "thinking", "tool_call", "tool_result":
-		// Ephemeral streaming events → chat.stream.{agent}
-		return c.Publish("chat.stream."+agent, msg)
-	case "status":
-		return c.Publish("chat.status."+agent, msg)
-	case "done":
-		// Final completed message → JetStream chat.completed
-		// Also publish to webchat.completed if channel is webchat
-		if err := c.Publish("chat.completed", msg); err != nil {
-			return err
-		}
-		if msg.Channel == "webchat" {
-			return c.Publish("webchat.completed", msg)
-		}
+	if c == nil || c.nc == nil {
 		return nil
-	default:
-		// Fallback for other/unset stream types
-		return c.Publish("chat.completed", msg)
 	}
-}
-
-// PublishEvent publishes a system event to the "events" subject.
-func (c *Client) PublishEvent(event any) error {
-	return c.Publish("events", event)
+	return c.nc.JetPublish("chat.outbound", msg)
 }
 
 // Reply subscribes to a subject using request/reply pattern.
-// The handler receives raw bytes and returns a response to marshal back.
 func (c *Client) Reply(subject string, handler func(data []byte) (any, error)) error {
 	if c == nil {
 		return nil

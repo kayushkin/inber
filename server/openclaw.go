@@ -14,11 +14,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kayushkin/bus/messages"
 	"github.com/kayushkin/inber/bus"
 )
 
 // proxyToOpenClaw forwards a bus message to OpenClaw's chat completions API
-// and publishes the response back to bus outbound.
+// and publishes the response back via chat.stream / chat.outbound.
 func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	if g.config.OpenClawURL == "" {
 		log.Printf("[openclaw] no OpenClaw URL configured, dropping message for %s", msg.Agent)
@@ -29,13 +30,10 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	if agent == "" {
 		agent = "main"
 	}
+	sessionID := "main"
 
 	log.Printf("[openclaw] bus → %s: %s", agent, truncate(msg.Text, 80))
 
-	// Map agent name to openclaw agent ID (some differ).
-	openclawAgent := agent
-
-	// Build chat completions request.
 	content := msg.Text
 	if msg.Author != "" {
 		content = fmt.Sprintf("[%s] %s", msg.Author, msg.Text)
@@ -46,7 +44,7 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 		Messages: []openclawMessage{
 			{Role: "user", Content: content},
 		},
-		Stream: true,
+		Stream:        true,
 		StreamOptions: &openclawStreamOpts{IncludeUsage: true},
 	}
 	data, _ := json.Marshal(reqBody)
@@ -61,15 +59,14 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	if g.config.OpenClawToken != "" {
 		req.Header.Set("Authorization", "Bearer "+g.config.OpenClawToken)
 	}
-	req.Header.Set("x-openclaw-agent-id", openclawAgent)
-	req.Header.Set("x-openclaw-session-key", fmt.Sprintf("agent:%s:main", openclawAgent))
+	req.Header.Set("x-openclaw-agent-id", agent)
+	req.Header.Set("x-openclaw-session-key", fmt.Sprintf("agent:%s:main", agent))
 
 	client := &http.Client{Timeout: 5 * time.Minute}
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[openclaw] request failed: %v", err)
-		g.publishOpenClawError(msg, fmt.Sprintf("openclaw unavailable: %v", err))
 		return
 	}
 	defer resp.Body.Close()
@@ -77,12 +74,10 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		log.Printf("[openclaw] HTTP %d: %s", resp.StatusCode, string(body)[:200])
-		g.publishOpenClawError(msg, fmt.Sprintf("openclaw error: HTTP %d", resp.StatusCode))
 		return
 	}
 
-	// Stream SSE response.
-	var fullText string
+	var fullText strings.Builder
 	var usage openclawUsage
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -109,33 +104,50 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 		if len(chunk.Choices) > 0 {
 			delta := chunk.Choices[0].Delta.Content
 			if delta != "" {
-				fullText += delta
-				g.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "delta", "", delta))
+				fullText.WriteString(delta)
+				d := messages.NewChatDelta(agent, "openclaw", sessionID, "text")
+				d.Text = delta
+				g.bus.PublishDelta(d)
 			}
 		}
 	}
 
 	duration := time.Since(start)
 
-	// Read usage from sessions file if SSE didn't provide it.
 	if usage.PromptTokens == 0 && usage.CompletionTokens == 0 {
-		if u, ok := readOpenClawUsage(openclawAgent); ok {
+		if u, ok := readOpenClawUsage(agent); ok {
 			usage = u
 		}
 	}
 
 	log.Printf("[openclaw] → %s: %s (%.1fs, %d in, %d out)",
-		agent, truncate(fullText, 80), duration.Seconds(), usage.PromptTokens, usage.CompletionTokens)
+		agent, truncate(fullText.String(), 80), duration.Seconds(), usage.PromptTokens, usage.CompletionTokens)
 
-	// Publish done signal — frontend fetches full message from logstack.
-	g.bus.PublishOutbound(bus.NewOutboundFull(agent, msg.Channel, "done", "", ""))
+	// Publish done on chat.stream
+	done := messages.NewDoneDelta(agent, "openclaw", sessionID, &messages.TurnStats{
+		InputTokens:  usage.PromptTokens,
+		OutputTokens: usage.CompletionTokens,
+		DurationMs:   int(duration.Milliseconds()),
+	})
+	g.bus.PublishDelta(done)
+
+	// Publish completed message on chat.outbound
+	if fullText.Len() > 0 {
+		g.bus.PublishOutbound(messages.ChatOutbound{
+			Agent:        agent,
+			Orchestrator: "openclaw",
+			SessionID:    sessionID,
+			Text:         fullText.String(),
+			Stats: &messages.TurnStats{
+				InputTokens:  usage.PromptTokens,
+				OutputTokens: usage.CompletionTokens,
+				DurationMs:   int(duration.Milliseconds()),
+			},
+			Timestamp: time.Now(),
+		})
+	}
 }
 
-func (g *Server) publishOpenClawError(msg bus.InboundMessage, errMsg string) {
-	g.bus.PublishOutbound(bus.NewOutboundFull(msg.Agent, msg.Channel, "done", "", ""))
-}
-
-// readOpenClawUsage reads session usage from OpenClaw's sessions.json.
 func readOpenClawUsage(agent string) (openclawUsage, bool) {
 	home, _ := os.UserHomeDir()
 	path := filepath.Join(home, ".openclaw", "sessions.json")
@@ -161,12 +173,11 @@ func readOpenClawUsage(agent string) (openclawUsage, bool) {
 	}, true
 }
 
-// OpenClaw API types.
 type openclawRequest struct {
-	Model         string               `json:"model"`
-	Messages      []openclawMessage    `json:"messages"`
-	Stream        bool                 `json:"stream,omitempty"`
-	StreamOptions *openclawStreamOpts  `json:"stream_options,omitempty"`
+	Model         string              `json:"model"`
+	Messages      []openclawMessage   `json:"messages"`
+	Stream        bool                `json:"stream,omitempty"`
+	StreamOptions *openclawStreamOpts `json:"stream_options,omitempty"`
 }
 
 type openclawStreamOpts struct {
