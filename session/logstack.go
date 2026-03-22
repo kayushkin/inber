@@ -68,7 +68,7 @@ func (e Entry) toLogstackEntry(agentName, sessionID string) logstackmodels.LogEn
 
 	return logstackmodels.LogEntry{
 		Timestamp:   e.Timestamp,
-		Source:      "inber",
+		Orchestrator: "inber",
 		Agent:       agentName,
 		SessionID:   sessionID,
 		TurnID:      fmt.Sprintf("%d", e.Turn),
