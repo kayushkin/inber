@@ -47,9 +47,8 @@ func (bm *BusManager) ListenBus(ctx context.Context) error {
 
 // handleBusMessage routes an inbound bus message to the correct agent.
 func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessage) {
-	if msg.Orchestrator == "openclaw" {
-		bm.server.proxyToOpenClaw(ctx, msg)
-		return
+	if msg.Orchestrator != "" && msg.Orchestrator != "inber" {
+		return // not for us — other orchestrators have their own adapters
 	}
 
 	agent := msg.Agent
@@ -61,6 +60,7 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 		return
 	}
 
+	// Session ID for bus events — use "main" for now, spawns will get their own
 	sessionID := "main"
 	log.Printf("[server] bus → %s: %s", agent, truncate(msg.Text, 80))
 
@@ -102,12 +102,16 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 		log.Printf("[server] bus message error: %v", err)
 	}
 
-	// Publish done on chat.stream
+	// Publish done + completed on chat.stream (ordered with other deltas)
 	done := messages.NewDoneDelta(agent, "inber", sessionID, nil)
 	bm.server.bus.PublishDelta(done)
 
-	// Publish completed message on chat.outbound
 	if fullText.Len() > 0 {
+		completed := messages.NewChatDelta(agent, "inber", sessionID, "completed")
+		completed.Text = fullText.String()
+		bm.server.bus.PublishDelta(completed)
+
+		// Also publish to JetStream for persistence
 		bm.server.bus.PublishOutbound(messages.ChatOutbound{
 			Agent:        agent,
 			Orchestrator: "inber",
