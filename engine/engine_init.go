@@ -192,6 +192,24 @@ func setupSession(repoRoot, agentName, commandName string, newSession, detach bo
 		}
 	}
 
+	// Create a basic session for engine hooks - we'll do full initialization later
+	// For now, we just need a non-nil session that can handle CurrentTurn() calls
+	logsDir := filepath.Join(repoRoot, "logs")
+	if agentName != "" {
+		logsDir = filepath.Join(logsDir, agentName)
+	}
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		Log.Warn("failed to create logs directory: %v", err)
+	}
+	
+	// Create a minimal session that will work with the engine hooks
+	session, err = sessionMod.New(logsDir, "", agentName, "", nil)
+	if err != nil {
+		Log.Warn("failed to create session: %v", err)
+		// Create an even more minimal session to prevent nil pointer crashes
+		session = &sessionMod.Session{}
+	}
+
 	return session, sessionDB, workspace, messages, nil
 }
 
