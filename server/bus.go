@@ -2,23 +2,13 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/kayushkin/bus/messages"
 	"github.com/kayushkin/inber/bus"
 )
-
-func debugLog(msg string, args ...interface{}) {
-	f, _ := os.OpenFile("/tmp/inber-bus-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if f != nil {
-		fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05.000"), fmt.Sprintf(msg, args...))
-		f.Close()
-	}
-}
 
 // BusManager handles message bus integration for the server.
 type BusManager struct {
@@ -72,7 +62,6 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 
 	// Session ID for bus events — use "main" for now, spawns will get their own
 	sessionID := "main"
-	debugLog("handleBusMessage: agent=%s text=%s", agent, truncate(msg.Text, 80))
 	log.Printf("[server] bus → %s: %s", agent, truncate(msg.Text, 80))
 
 	req := RunRequest{
@@ -85,7 +74,6 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 	var fullText strings.Builder
 
 	onEvent := func(ev StreamEvent) {
-		debugLog("onEvent: kind=%s text=%s", ev.Kind, truncate(ev.Text, 60))
 		delta := messages.NewChatDelta(agent, "inber", sessionID, ev.Kind)
 		switch ev.Kind {
 		case "delta":
@@ -109,24 +97,19 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 		bm.server.bus.PublishDelta(delta)
 	}
 
-	debugLog("calling Stream() for %s", agent)
 	err := bm.server.Stream(ctx, req, onEvent)
-	debugLog("Stream() returned for %s, err=%v", agent, err)
 	if err != nil {
 		log.Printf("[server] bus message error: %v", err)
 	}
 
 	// Publish done on chat.stream
-	debugLog("publishing done delta for %s", agent)
 	done := messages.NewDoneDelta(agent, "inber", sessionID, nil)
 	bm.server.bus.PublishDelta(done)
 
-	debugLog("handleBusMessage done for %s, fullText=%d bytes", agent, fullText.Len())
 	if fullText.Len() > 0 {
 		// Publish to JetStream for persistence (chat.outbound is the authoritative
 		// completed-response channel; do NOT also publish a "completed" delta on
 		// chat.stream — that causes downstream consumers to deliver the response twice).
-		debugLog("publishing outbound for %s", agent)
 		bm.server.bus.PublishOutbound(messages.ChatOutbound{
 			Agent:        agent,
 			Orchestrator: "inber",

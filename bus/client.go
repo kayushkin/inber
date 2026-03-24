@@ -72,14 +72,14 @@ func (c *Client) Subscribe(ctx context.Context, topics []string) <-chan InboundM
 			}
 		}
 
-		sub, err := c.nc.Subscribe("chat.inbound", handler)
+		sub, err := c.nc.QueueSubscribe("chat.inbound", "inber-server", handler)
 		if err != nil {
 			log.Printf("[bus] subscribe chat.inbound error: %v", err)
 			return
 		}
 		defer sub.Unsubscribe()
 
-		log.Printf("[bus] subscribed to chat.inbound")
+		log.Printf("[bus] subscribed to chat.inbound (queue: inber-server)")
 		<-ctx.Done()
 	}()
 
@@ -96,7 +96,6 @@ func (c *Client) Publish(topic string, payload any) error {
 
 // PublishDelta publishes a streaming delta to chat.stream.
 func (c *Client) PublishDelta(delta messages.ChatDelta) error {
-	log.Printf("[bus] PublishDelta: agent=%s type=%s text=%s", delta.Agent, delta.Type, truncateBus(delta.Text, 40))
 	return c.Publish("chat.stream", delta)
 }
 
