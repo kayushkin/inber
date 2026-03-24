@@ -16,7 +16,77 @@ func (g *Server) contextInjectorsFor(sessionKey, agentName string) []engine.Cont
 		return nil // only orchestrator sees session status
 	}
 	return []engine.ContextInjector{
+		g.agentFleetInjector(),
 		g.sessionStatusInjector(sessionKey),
+	}
+}
+
+// agentFleetInjector returns an injector that provides the full agent fleet with statuses.
+// Injected into the system prompt so the orchestrator always knows its agents.
+func (g *Server) agentFleetInjector() engine.ContextInjector {
+	return func() []sessionMod.NamedBlock {
+		if g.agentStore == nil {
+			return nil
+		}
+
+		statuses, err := g.agentStore.ListStatuses()
+		if err != nil {
+			return nil
+		}
+
+		// Build a map of agent slug → status info
+		type statusInfo struct {
+			Status string
+			Task   string
+			Since  int64
+		}
+		statusMap := make(map[string]statusInfo)
+		for _, s := range statuses {
+			si := statusInfo{Status: s.Status}
+			if s.Task != nil {
+				si.Task = *s.Task
+			}
+			if s.StartedAt != nil {
+				si.Since = *s.StartedAt
+			}
+			statusMap[s.AgentSlug] = si
+		}
+
+		// Get all agent configs from server config
+		configs := g.config.Agents
+		if len(configs) == 0 {
+			return nil
+		}
+
+		var b strings.Builder
+		b.WriteString("# Agent Fleet\n\n")
+		b.WriteString("Available agents for spawn_agent:\n\n")
+
+		for slug, ac := range configs {
+			status := "idle"
+			var taskStr string
+			if si, ok := statusMap[slug]; ok && si.Status != "" {
+				status = si.Status
+				if si.Task != "" {
+					taskStr = fmt.Sprintf(": %q", truncate(si.Task, 80))
+				}
+				if si.Status == "working" && si.Since > 0 {
+					ago := time.Since(time.Unix(si.Since, 0))
+					taskStr += fmt.Sprintf(" (%s)", formatDuration(ago))
+				}
+			}
+			project := ac.Project
+			if project == "" && len(ac.Projects) > 0 {
+				project = strings.Join(ac.Projects, ", ")
+			}
+			b.WriteString(fmt.Sprintf("- **%s** (%s) — %s [%s%s]",
+				ac.Name, slug, project, status, taskStr))
+			b.WriteString("\n")
+		}
+
+		return []sessionMod.NamedBlock{
+			{ID: "agent-fleet", Text: b.String()},
+		}
 	}
 }
 

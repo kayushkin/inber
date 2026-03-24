@@ -66,6 +66,24 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 		return nil, fmt.Errorf("max children reached (%d)", g.config.MaxChildrenPerAgent)
 	}
 
+	// Check if agent is already busy (informational).
+	if g.agentStore != nil {
+		if statuses, err := g.agentStore.GetStatus(req.Agent); err == nil {
+			for _, s := range statuses {
+				if s.Status == "working" {
+					task := ""
+					if s.Task != nil {
+						task = *s.Task
+					}
+					logger.WithComponent("spawn").Info("spawning agent that is already working", map[string]interface{}{
+						"agent":        req.Agent,
+						"current_task": task,
+					})
+				}
+			}
+		}
+	}
+
 	// Resolve agent config.
 	ac, ok := g.GetAgentConfig(req.Agent)
 	if !ok {

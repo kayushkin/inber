@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	agentstore "github.com/kayushkin/agent-store"
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/bus"
 	"github.com/kayushkin/inber/logger"
@@ -29,8 +30,9 @@ type Server struct {
 	events     *EventPublisher   // bus event publisher (nil = disabled)
 	bus        *bus.Client       // bus subscription client (nil = API-only mode)
 	busManager *BusManager       // bus message handling
-	modelStore *modelstore.Store
-	forgeDB    WorkspaceManager             // workspace management
+	modelStore  *modelstore.Store
+	agentStore  *agentstore.Store
+	forgeDB     WorkspaceManager             // workspace management
 	workspaces map[string]*forge.Workspace // active workspaces by ID
 	mu         sync.RWMutex
 }
@@ -128,6 +130,16 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 
+	// Open agent-store for status queries.
+	var as *agentstore.Store
+	if a, err := agentstore.Open(""); err != nil {
+		logger.WithComponent("server").Warn("agent-store unavailable", map[string]interface{}{
+			"error": err,
+		})
+	} else {
+		as = a
+	}
+
 	// Create bus client for inbound subscription + outbound publishing.
 	busClient := bus.NewClient(cfg.NatsURL, "inber-server")
 
@@ -138,6 +150,7 @@ func New(cfg Config) (*Server, error) {
 		events:     events,
 		bus:        busClient,
 		modelStore: ms,
+		agentStore: as,
 		forgeDB:    forgeDB,
 		workspaces: make(map[string]*forge.Workspace),
 	}
@@ -160,6 +173,9 @@ func (g *Server) Close() error {
 	}
 	if g.modelStore != nil {
 		g.modelStore.Close()
+	}
+	if g.agentStore != nil {
+		g.agentStore.Close()
 	}
 	if g.forgeDB != nil {
 		g.forgeDB.Close()

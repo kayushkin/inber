@@ -9,6 +9,7 @@ func (g *Server) toolsForAgent(sessionKey, agentName string) []agent.Tool {
 		g.SpawnAgentTool(sessionKey),
 		g.SessionsListTool(sessionKey),
 		g.SteerAgentTool(),
+		g.AgentsStatusTool(),
 	}
 
 	// Orchestrator agents get workspace management tools.
