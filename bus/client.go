@@ -96,6 +96,7 @@ func (c *Client) Publish(topic string, payload any) error {
 
 // PublishDelta publishes a streaming delta to chat.stream.
 func (c *Client) PublishDelta(delta messages.ChatDelta) error {
+	log.Printf("[bus] PublishDelta: agent=%s type=%s text=%s", delta.Agent, delta.Type, truncateBus(delta.Text, 40))
 	return c.Publish("chat.stream", delta)
 }
 
