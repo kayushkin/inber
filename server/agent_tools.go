@@ -12,11 +12,10 @@ func (g *Server) toolsForAgent(sessionKey, agentName string) []agent.Tool {
 		g.SteerAgentTool(),
 	}
 
-	// Non-orchestrator agents get sessions_list and agents_status as tools.
-	// The orchestrator gets these injected into its prompt via ContextInjectors instead.
+	// Non-orchestrator agents get agents_status as a tool.
+	// The orchestrator gets this injected into its prompt via ContextInjectors instead.
 	if !isOrchestrator {
 		tools = append(tools,
-			g.SessionsListTool(sessionKey),
 			g.AgentsStatusTool(),
 		)
 	}

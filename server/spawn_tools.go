@@ -4,94 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 )
-
-// SessionsListTool creates a tool for checking sub-agent status.
-func (g *Server) SessionsListTool(parentSessionKey string) agent.Tool {
-	return agent.Tool{
-		Name:        "sessions_list",
-		Description: "List active sessions and their status, enriched with agent-store status. Shows all registered agents — those with sessions and those without.",
-		InputSchema: anthropic.ToolInputSchemaParam{
-			Properties: map[string]any{},
-		},
-		Run: func(ctx context.Context, raw string) (string, error) {
-			sessions := g.ListSessions()
-
-			// Build agent-store status map.
-			statusMap := map[string]string{}
-			if g.agentStore != nil {
-				if statuses, err := g.agentStore.ListStatuses(); err == nil {
-					for _, s := range statuses {
-						statusMap[s.AgentSlug] = s.Status
-						if s.Status == "working" && s.Task != nil {
-							statusMap[s.AgentSlug] = fmt.Sprintf("working: %q", *s.Task)
-						}
-					}
-				}
-			}
-
-			// Track which agents have sessions.
-			agentsWithSessions := map[string]bool{}
-
-			var sb strings.Builder
-			if len(sessions) > 0 {
-				sb.WriteString("## Active Sessions\n")
-				for _, s := range sessions {
-					agentsWithSessions[s.Agent] = true
-					marker := "  "
-					if s.Key == parentSessionKey {
-						marker = "→ "
-					}
-					sb.WriteString(fmt.Sprintf("%s%s (%s) [%s] %d msgs, active %s ago",
-						marker, s.Key, s.Agent, s.Status,
-						s.Messages, time.Since(s.LastActive).Round(time.Second)))
-					if as, ok := statusMap[s.Agent]; ok {
-						sb.WriteString(fmt.Sprintf(" agent-status=%s", as))
-					}
-					if s.ParentKey != "" {
-						sb.WriteString(fmt.Sprintf(" parent=%s", s.ParentKey))
-					}
-					if len(s.Children) > 0 {
-						sb.WriteString(fmt.Sprintf(" children=%v", s.Children))
-					}
-					sb.WriteString("\n")
-				}
-			}
-
-			// Show registered agents without active sessions.
-			var inactive []string
-			for slug := range g.config.Agents {
-				if !agentsWithSessions[slug] {
-					status := "idle"
-					if as, ok := statusMap[slug]; ok {
-						status = as
-					}
-					inactive = append(inactive, fmt.Sprintf("  %s — %s (no session)", slug, status))
-				}
-			}
-			if len(inactive) > 0 {
-				if len(sessions) > 0 {
-					sb.WriteString("\n")
-				}
-				sb.WriteString("## Other Registered Agents\n")
-				for _, line := range inactive {
-					sb.WriteString(line)
-					sb.WriteString("\n")
-				}
-			}
-
-			if sb.Len() == 0 {
-				return "No active sessions and no registered agents.", nil
-			}
-			return sb.String(), nil
-		},
-	}
-}
 
 // SteerAgentTool creates a tool for sending messages to running sub-agents.
 func (g *Server) SteerAgentTool() agent.Tool {
