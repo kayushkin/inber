@@ -107,11 +107,9 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 	bm.server.bus.PublishDelta(done)
 
 	if fullText.Len() > 0 {
-		completed := messages.NewChatDelta(agent, "inber", sessionID, "completed")
-		completed.Text = fullText.String()
-		bm.server.bus.PublishDelta(completed)
-
-		// Also publish to JetStream for persistence
+		// Publish to JetStream for persistence (chat.outbound is the authoritative
+		// completed-response channel; do NOT also publish a "completed" delta on
+		// chat.stream — that causes downstream consumers to deliver the response twice).
 		bm.server.bus.PublishOutbound(messages.ChatOutbound{
 			Agent:        agent,
 			Orchestrator: "inber",

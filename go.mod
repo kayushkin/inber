@@ -9,7 +9,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/kayushkin/agent-store v0.0.0-20260321193739-d3c08bd35df5
 	github.com/kayushkin/agentkit v0.0.0-20260314194625-53ebfd5a647f
-	github.com/kayushkin/bus v0.0.0-20260321234814-6d7d8f0ba371
+	github.com/kayushkin/bus v0.0.0-20260324013021-8010a5dab1d6
 	github.com/kayushkin/forge v0.0.0
 	github.com/kayushkin/logstack v0.0.0-20260322075744-a4ca356093f8
 	github.com/kayushkin/model-store v0.0.0-20260307230928-77f7530097d2

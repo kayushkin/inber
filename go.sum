@@ -19,8 +19,6 @@ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
-github.com/kayushkin/logstack v0.0.0-20260321234900-44300d0d8d9b h1:6BhqAZtBc6V5B4IlChfrrUKMyssY59s+kBwdf64WOfI=
-github.com/kayushkin/logstack v0.0.0-20260321234900-44300d0d8d9b/go.mod h1:2qKDp6wMhQtpOSjVINU/3wnBC9k7zFIrBI0fui7eDzg=
 github.com/kayushkin/logstack v0.0.0-20260322075744-a4ca356093f8 h1:m5soCzj2Adx//qsRKTMn2kzI02YXkRC/SdXgmoE/nUc=
 github.com/kayushkin/logstack v0.0.0-20260322075744-a4ca356093f8/go.mod h1:2qKDp6wMhQtpOSjVINU/3wnBC9k7zFIrBI0fui7eDzg=
 github.com/klauspost/compress v1.18.2 h1:iiPHWW0YrcFgpBYhsA6D1+fqHssJscY/Tm/y2Uqnapk=
