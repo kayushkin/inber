@@ -254,6 +254,9 @@ func (g *Server) Stream(ctx context.Context, req RunRequest, onEvent func(Stream
 }
 
 func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEvent)) (*RunResponse, error) {
+	logger.WithComponent("server").Info("run() called", map[string]interface{}{
+		"agent": req.Agent, "message": truncate(req.Message, 60), "session_key": req.SessionKey,
+	})
 	// Resolve agent.
 	agentName := req.Agent
 	if agentName == "" {

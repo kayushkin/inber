@@ -62,7 +62,7 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 
 	// Session ID for bus events — use "main" for now, spawns will get their own
 	sessionID := "main"
-	log.Printf("[server] bus → %s: %s", agent, truncate(msg.Text, 80))
+	log.Printf("[server] bus → %s: %s [DEBUG: entering handleBusMessage]", agent, truncate(msg.Text, 80))
 
 	req := RunRequest{
 		Agent:   agent,
@@ -97,12 +97,14 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 		bm.server.bus.PublishDelta(delta)
 	}
 
+	log.Printf("[server] bus → %s: calling Stream() [DEBUG]", agent)
 	err := bm.server.Stream(ctx, req, onEvent)
 	if err != nil {
 		log.Printf("[server] bus message error: %v", err)
 	}
+	log.Printf("[server] bus → %s: Stream() returned, publishing done [DEBUG]", agent)
 
-	// Publish done + completed on chat.stream (ordered with other deltas)
+	// Publish done on chat.stream
 	done := messages.NewDoneDelta(agent, "inber", sessionID, nil)
 	bm.server.bus.PublishDelta(done)
 
