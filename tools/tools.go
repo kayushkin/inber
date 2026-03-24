@@ -36,6 +36,7 @@ func init() {
 	DefaultRegistry.Register(NewAgentToolAdapter(Browser()))
 	DefaultRegistry.Register(NewAgentToolAdapter(WebSearch()))
 	DefaultRegistry.Register(NewAgentToolAdapter(WebFetch()))
+	DefaultRegistry.Register(NewAgentToolAdapter(Scheduler()))
 }
 
 // File system tools
@@ -82,6 +83,9 @@ func WebSearch() agent.Tool { return wrap(agentkittools.WebSearch()) }
 
 // WebFetch returns a tool that fetches a URL and extracts readable text.
 func WebFetch() agent.Tool { return wrap(agentkittools.WebFetch()) }
+
+// Scheduler returns a tool that interacts with the scheduler HTTP API.
+func Scheduler() agent.Tool { return wrap(agentkittools.Scheduler()) }
 
 // All returns standard file system tools.
 // Note: RepoMap and RecentFiles require configuration (rootDir, patterns) and must be added explicitly.

@@ -95,8 +95,20 @@ func (e *Engine) buildSpecialTool(toolName string) *agent.Tool {
 	return nil
 }
 
-// findStandardTool looks for a tool in the standard tools list.
+// findStandardTool looks for a tool in the default registry.
 func (e *Engine) findStandardTool(toolName string) *agent.Tool {
+	// First check the default registry for registered tools
+	if tool := tools.GetTool(toolName); tool != nil {
+		agentTool := tools.ToAgentTool(tool)
+		// Use workspace-scoped shell when repoRoot is set
+		if agentTool.Name == "shell" && e.repoRoot != "" {
+			tool := tools.ShellInDir(e.repoRoot)
+			return &tool
+		}
+		return &agentTool
+	}
+	
+	// Fallback to legacy All() for backward compatibility
 	for _, t := range tools.All() {
 		if t.Name == toolName {
 			// Use workspace-scoped shell when repoRoot is set
