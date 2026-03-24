@@ -2,13 +2,23 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/kayushkin/bus/messages"
 	"github.com/kayushkin/inber/bus"
 )
+
+func debugLog(msg string, args ...interface{}) {
+	f, _ := os.OpenFile("/tmp/inber-bus-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if f != nil {
+		fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05.000"), fmt.Sprintf(msg, args...))
+		f.Close()
+	}
+}
 
 // BusManager handles message bus integration for the server.
 type BusManager struct {
@@ -62,7 +72,8 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 
 	// Session ID for bus events — use "main" for now, spawns will get their own
 	sessionID := "main"
-	log.Printf("[server] bus → %s: %s [DEBUG: entering handleBusMessage]", agent, truncate(msg.Text, 80))
+	debugLog("handleBusMessage: agent=%s text=%s", agent, truncate(msg.Text, 80))
+	log.Printf("[server] bus → %s: %s", agent, truncate(msg.Text, 80))
 
 	req := RunRequest{
 		Agent:   agent,
@@ -97,12 +108,12 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 		bm.server.bus.PublishDelta(delta)
 	}
 
-	log.Printf("[server] bus → %s: calling Stream() [DEBUG]", agent)
+	debugLog("calling Stream() for %s", agent)
 	err := bm.server.Stream(ctx, req, onEvent)
+	debugLog("Stream() returned for %s, err=%v", agent, err)
 	if err != nil {
 		log.Printf("[server] bus message error: %v", err)
 	}
-	log.Printf("[server] bus → %s: Stream() returned, publishing done [DEBUG]", agent)
 
 	// Publish done on chat.stream
 	done := messages.NewDoneDelta(agent, "inber", sessionID, nil)
