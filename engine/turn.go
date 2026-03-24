@@ -13,6 +13,17 @@ import (
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
+// isThinkingSignatureError checks if an API error is due to invalid thinking signatures.
+// This happens when API credentials rotate mid-session.
+func isThinkingSignatureError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// The Anthropic API returns a generic "Error" message for thinking signature mismatches
+	return msg == "Error"
+}
+
 // RunTurn sends a user message, rebuilds the system prompt, runs the agent, and returns the result.
 func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	// Increment and log turn number
@@ -104,6 +115,14 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 		}
 		e.buildAgent(systemBlocks)
 		result, err = e.Agent.Run(context.Background(), e.Model, &e.Messages)
+		
+		// If we hit a thinking signature error, strip thinking blocks and retry once
+		if err != nil && isThinkingSignatureError(err) {
+			Log.Warn("API returned generic 'Error', likely stale thinking signatures — stripping and retrying")
+			e.Messages = conversation.RepairThinkingSignatures(e.Messages)
+			e.buildAgent(systemBlocks) // Rebuild agent with repaired messages
+			result, err = e.Agent.Run(context.Background(), e.Model, &e.Messages)
+		}
 	}
 
 	// Record health regardless of success/failure

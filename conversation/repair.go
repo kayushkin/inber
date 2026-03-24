@@ -203,3 +203,39 @@ func RepairMissingToolResults(messages []anthropic.MessageParam) ([]anthropic.Me
 	}
 	return messages, repairs
 }
+
+// RepairThinkingSignatures strips thinking and redacted_thinking blocks from
+// assistant messages. This is needed when API credentials change mid-session,
+// as thinking signatures are tied to the credential that generated them.
+func RepairThinkingSignatures(messages []anthropic.MessageParam) []anthropic.MessageParam {
+	var repaired []anthropic.MessageParam
+	
+	for _, msg := range messages {
+		if msg.Role != anthropic.MessageParamRoleAssistant {
+			repaired = append(repaired, msg)
+			continue
+		}
+		
+		// Filter out thinking and redacted_thinking blocks
+		var filteredContent []anthropic.ContentBlockParamUnion
+		for _, block := range msg.Content {
+			// Check if this is a thinking or redacted_thinking block
+			if block.OfThinking != nil || block.OfRedactedThinking != nil {
+				continue // Skip thinking blocks
+			}
+			filteredContent = append(filteredContent, block)
+		}
+		
+		// If no content blocks remain after filtering, replace with placeholder
+		if len(filteredContent) == 0 {
+			filteredContent = []anthropic.ContentBlockParamUnion{
+				anthropic.NewTextBlock("[thinking redacted]"),
+			}
+		}
+		
+		msg.Content = filteredContent
+		repaired = append(repaired, msg)
+	}
+	
+	return repaired
+}

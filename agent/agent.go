@@ -22,6 +22,17 @@ func isContextLengthError(err error) bool {
 		strings.Contains(msg, "too many tokens")
 }
 
+// isThinkingSignatureError checks if an API error is due to invalid thinking signatures.
+// This happens when API credentials rotate mid-session.
+func isThinkingSignatureError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// The Anthropic API returns a generic "Error" message for thinking signature mismatches
+	return msg == "Error"
+}
+
 // Tool defines a tool the agent can use.
 type Tool struct {
 	Name        string

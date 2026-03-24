@@ -69,6 +69,7 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, onEvent fu
 		msgs = conversation.RepairEmptyContent(msgs)
 		msgs, _ = conversation.RepairDanglingToolUse(msgs)
 		msgs = conversation.RepairAlternation(msgs)
+		msgs = conversation.RepairThinkingSignatures(msgs)
 		msgs = agent.SanitizeMessageToolIDs(msgs)
 		log.Printf("[server] resumed session %s (%d messages)", key, len(msgs))
 	}
