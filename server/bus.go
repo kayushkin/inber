@@ -85,6 +85,7 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 	var fullText strings.Builder
 
 	onEvent := func(ev StreamEvent) {
+		debugLog("onEvent: kind=%s text=%s", ev.Kind, truncate(ev.Text, 60))
 		delta := messages.NewChatDelta(agent, "inber", sessionID, ev.Kind)
 		switch ev.Kind {
 		case "delta":
