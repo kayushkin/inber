@@ -91,11 +91,15 @@ func newAnthropicClientFromCreds(creds *modelstore.Credentials) (*anthropic.Clie
 	}
 
 	if strings.HasPrefix(key, "sk-ant-oat01-") {
-		// OAuth tokens: send as x-api-key (same as OpenClaw).
-		// Bearer auth + oauth beta header returns 400 "Error" for Claude 4 models.
+		// OAuth tokens from Claude Max: use Bearer auth with Claude Code identity headers.
+		// This is how OpenClaw/pi-ai sends them — pretends to be Claude CLI so the Max
+		// subscription grants access to Claude 4 models.
 		c := anthropic.NewClient(
-			option.WithAPIKey(key),
-			option.WithHeader("anthropic-beta", "prompt-caching-2024-07-31"),
+			option.WithAPIKey(""),
+			option.WithAuthToken(key),
+			option.WithHeader("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-2024-07-31"),
+			option.WithHeader("user-agent", "claude-cli/2.1.44 (external, cli)"),
+			option.WithHeader("x-app", "cli"),
 		)
 		return &c, nil
 	}
