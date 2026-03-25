@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -92,6 +93,8 @@ func newAnthropicClientFromCreds(creds *modelstore.Credentials) (*anthropic.Clie
 		return nil, fmt.Errorf("no active key in credential %s", creds.ID)
 	}
 
+	log.Printf("[auth] creating Anthropic client: cred=%s auth_type=%s key_prefix=%s", creds.ID, creds.AuthType, key[:min(20, len(key))])
+
 	if strings.HasPrefix(key, "sk-ant-oat01-") {
 		// OAuth tokens from Claude Max: use Bearer auth with Claude Code identity headers.
 		// This is how OpenClaw/pi-ai sends them — pretends to be Claude CLI so the Max
@@ -138,6 +141,8 @@ func newAnthropicFallbackClient(modelID string) (*ModelClient, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("no Anthropic credentials found (tried model-store, env)")
 	}
+
+	log.Printf("[auth] FALLBACK: using ANTHROPIC_API_KEY env var for %s (key_prefix=%s)", modelID, apiKey[:min(20, len(apiKey))])
 
 	c := anthropic.NewClient(
 		option.WithAPIKey(apiKey),
