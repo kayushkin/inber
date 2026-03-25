@@ -206,7 +206,7 @@ func (e *Engine) Close() {
 	if e.SessionDB != nil {
 		e.SessionDB.Close()
 	}
-	if e.modelStore != nil {
+	if e.modelStore != nil && e.ownsModelStore {
 		e.modelStore.Close()
 	}
 

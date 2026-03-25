@@ -88,7 +88,8 @@ type Engine struct {
 	workflowHooks   *WorkflowHooks                // auto-commit, auto-format, build/test
 	forgeHook       *forge.Hook                   // workspace/preview automation
 	forgeDB         *forge.Forge                  // forge database handle
-	modelStore      *modelstore.Store             // model usage tracking (opened once, closed in Close())
+	modelStore      *modelstore.Store             // model usage tracking
+	ownsModelStore  bool                          // true if we opened it (false if shared from server)
 	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
 	agentRegistry   *registry.Registry            // agent registry for spawn tools
 	modelExplicitlySet bool                       // true if --model flag was used
@@ -189,6 +190,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		return nil, fmt.Errorf("failed to setup model store: %w", err)
 	}
 	e.modelStore = modelStore
+	e.ownsModelStore = (cfg.ModelStore == nil) // only close if we opened it ourselves
 
 	// Create model client
 	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore)
