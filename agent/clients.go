@@ -16,6 +16,7 @@ type ModelClient struct {
 	Model           *modelstore.Model
 	AnthropicClient *anthropic.Client
 	OpenAIClient    *OpenAIClient
+	IsOAuth         bool // true when using Claude Max OAuth token (needs Claude Code system prompt)
 }
 
 // NewModelClient creates a client for any provider using model-store.
@@ -52,6 +53,7 @@ func newClientFromCredentials(creds *modelstore.Credentials, model *modelstore.M
 			return nil, fmt.Errorf("failed to create Anthropic client: %w", err)
 		}
 		mc.AnthropicClient = client
+		mc.IsOAuth = strings.HasPrefix(modelstore.ActiveKey(creds), "sk-ant-oat01-")
 		return mc, nil
 
 	case "openai", "google", "openrouter", "ollama":

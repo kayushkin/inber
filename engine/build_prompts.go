@@ -123,9 +123,18 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 
 // buildSystemBlocks converts named blocks to anthropic system blocks with cache control.
 func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.TextBlockParam {
-	systemBlocks := make([]anthropic.TextBlockParam, len(blocks))
-	for i, b := range blocks {
-		systemBlocks[i] = anthropic.TextBlockParam{Text: b.Text}
+	systemBlocks := make([]anthropic.TextBlockParam, 0, len(blocks)+1)
+
+	// Claude Max OAuth tokens require Claude Code identity in the system prompt.
+	// Without this, the API returns 400 "Error" for Claude 4 models.
+	if e.modelClient != nil && e.modelClient.IsOAuth {
+		systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
+			Text: "You are Claude Code, Anthropic's official CLI for Claude.",
+		})
+	}
+
+	for _, b := range blocks {
+		systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: b.Text})
 	}
 	
 	// Enable prompt caching: place cache_control at the stable/volatile boundary.
