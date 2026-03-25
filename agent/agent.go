@@ -70,6 +70,7 @@ type Agent struct {
 	sessionID      string
 	thinkingBudget int64 // 0 = disabled, >0 = budget tokens for extended thinking
 	contextWindow  int   // max context tokens for the model (0 = no guard)
+	isOAuth        bool  // true = Claude Max OAuth token; requires Claude Code identity in system prompt
 
 	// BeforeRequest is called before each API call with a mutable reference to
 	// the messages slice. Use it to prune/compact if the conversation is too large.
@@ -128,6 +129,13 @@ func (a *Agent) SetThinking(budgetTokens int64) {
 // SetContextWindow sets the model's context window size for overflow protection.
 func (a *Agent) SetContextWindow(tokens int) {
 	a.contextWindow = tokens
+}
+
+// SetOAuth marks this agent as using a Claude Max OAuth token.
+// When set, the system prompt will be prefixed with Claude Code identity
+// (required for Claude 4 model access via Max subscription).
+func (a *Agent) SetOAuth(isOAuth bool) {
+	a.isOAuth = isOAuth
 }
 
 // SetBeforeRequest sets a callback invoked before each API call to allow

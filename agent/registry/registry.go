@@ -206,6 +206,11 @@ func (r *Registry) createAgent(cfg *AgentConfig) (*agent.Agent, error) {
 	provider := agent.NewAnthropicProvider(r.client)
 	a := agent.New(provider, cfg.System)
 
+	// Propagate OAuth flag so the agent adds Claude Code identity to system prompt
+	if r.modelClient != nil && r.modelClient.IsOAuth {
+		a.SetOAuth(true)
+	}
+
 	// Set thinking budget if specified
 	if cfg.Thinking > 0 {
 		a.SetThinking(cfg.Thinking)

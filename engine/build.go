@@ -25,6 +25,11 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	}
 	
 	a := agent.NewWithSystemBlocks(provider, systemBlocks)
+
+	// Propagate OAuth flag so buildRequest adds Claude Code identity
+	if e.modelClient != nil && e.modelClient.IsOAuth {
+		a.SetOAuth(true)
+	}
 	
 	e.configureAgent(a)
 	e.configureContextPruning(a)
