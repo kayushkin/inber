@@ -237,9 +237,16 @@ func setupModelStore(providedStore *modelstore.Store) (*modelstore.Store, error)
 			Log.Warn("failed to seed model-store: %v", err)
 		}
 	}
-	// Initial sync to ensure OpenClaw has latest credentials
+	// Bidirectional sync: pick up any tokens OpenClaw refreshed while we were down,
+	// then push our state back. Order matters — From first so we get fresh tokens,
+	// then To so OpenClaw has the latest from model-store.
+	if n, syncErr := store.SyncFromAuthProfiles(""); syncErr != nil {
+		Log.Warn("sync from auth-profiles: %v", syncErr)
+	} else if n > 0 {
+		Log.Info("synced %d credentials from auth-profiles.json", n)
+	}
 	if syncErr := store.SyncToAuthProfiles(""); syncErr != nil {
-		Log.Warn("initial auth-profiles sync: %v", syncErr)
+		Log.Warn("sync to auth-profiles: %v", syncErr)
 	}
 
 	return store, nil
