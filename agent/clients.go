@@ -91,13 +91,11 @@ func newAnthropicClientFromCreds(creds *modelstore.Credentials) (*anthropic.Clie
 	}
 
 	if strings.HasPrefix(key, "sk-ant-oat01-") {
-		// OAuth tokens require Bearer auth + beta headers.
-		// Explicitly clear apiKey to prevent SDK's DefaultClientOptions from
-		// also sending x-api-key (which the server would treat as a no-credits API key).
+		// OAuth tokens: send as x-api-key (same as OpenClaw).
+		// Bearer auth + oauth beta header returns 400 "Error" for Claude 4 models.
 		c := anthropic.NewClient(
-			option.WithAPIKey(""),
-			option.WithAuthToken(key),
-			option.WithHeader("anthropic-beta", "oauth-2025-04-20,prompt-caching-2024-07-31"),
+			option.WithAPIKey(key),
+			option.WithHeader("anthropic-beta", "prompt-caching-2024-07-31"),
 		)
 		return &c, nil
 	}
