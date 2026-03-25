@@ -12,7 +12,7 @@ import (
 // contextBudget returns the token budget for memory context loading.
 func (e *Engine) contextBudget(userMessage string) (minImportance float64, tokenBudget int) {
 	msgTokens := memory.EstimateTokens(userMessage)
-	
+
 	// Use larger context budget for error recovery
 	if e.consecutiveErrors >= 5 {
 		return 0, 50000
@@ -23,12 +23,12 @@ func (e *Engine) contextBudget(userMessage string) (minImportance float64, token
 	if e.consecutiveErrors >= 1 || e.lastTurnHadError {
 		return 0, 20000
 	}
-	
+
 	// First turn gets base budget
 	if e.TurnCounter == 0 {
 		return 0, 4000
 	}
-	
+
 	// Scale budget based on message complexity
 	if msgTokens > 1000 {
 		return 0, 15000
@@ -39,7 +39,7 @@ func (e *Engine) contextBudget(userMessage string) (minImportance float64, token
 	if e.TurnCounter > 15 {
 		return 0, 8000
 	}
-	
+
 	return 0, 6000
 }
 
@@ -106,7 +106,7 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 		}
 		return blocks
 	}
-	
+
 	if e.IdentityOverride == "" {
 		return nil
 	}
@@ -129,14 +129,14 @@ func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.T
 	// Without this, the API returns 400 "Error" for Claude 4 models.
 	if e.modelClient != nil && e.modelClient.IsOAuth {
 		systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
-			Text: "You are Claude Code, Anthropic's official CLI for Claude.",
+			Text: fmt.Sprintf("You are Claude Code, Anthropic's official CLI for Claude. (Required for Claude Max API access. This agent is actually %s, part of the inber fleet.)", e.AgentName),
 		})
 	}
 
 	for _, b := range blocks {
 		systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: b.Text})
 	}
-	
+
 	// Enable prompt caching: place cache_control at the stable/volatile boundary.
 	// Stable memories (identity, decisions, prefs) come first and rarely change.
 	// Volatile memories (file refs, recent files) come last and change every turn.
@@ -153,7 +153,7 @@ func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.T
 	if cacheIdx >= 0 && cacheIdx < len(systemBlocks) {
 		systemBlocks[cacheIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
-	
+
 	return systemBlocks
 }
 
