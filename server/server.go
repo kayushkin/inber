@@ -82,6 +82,19 @@ func New(cfg Config) (*Server, error) {
 			"error": err,
 		})
 	}
+	if ms != nil {
+		ms.RegisterDefaultOAuthProviders()
+		ms.EnableAuthProfileSync("")
+		// Import any tokens OpenClaw refreshed while we were down
+		if n, syncErr := ms.SyncFromAuthProfiles(""); syncErr != nil {
+			logger.WithComponent("server").Warn("sync from auth-profiles failed", map[string]interface{}{"error": syncErr})
+		} else if n > 0 {
+			logger.WithComponent("server").Info("synced credentials from auth-profiles", map[string]interface{}{"updated": n})
+		}
+		if syncErr := ms.SyncToAuthProfiles(""); syncErr != nil {
+			logger.WithComponent("server").Warn("sync to auth-profiles failed", map[string]interface{}{"error": syncErr})
+		}
+	}
 
 	// Open server store.
 	// Check for legacy gateway.db first, fall back to server.db
