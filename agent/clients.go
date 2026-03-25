@@ -96,9 +96,14 @@ func newAnthropicClientFromCreds(creds *modelstore.Credentials) (*anthropic.Clie
 		// OAuth tokens from Claude Max: use Bearer auth with Claude Code identity headers.
 		// This is how OpenClaw/pi-ai sends them — pretends to be Claude CLI so the Max
 		// subscription grants access to Claude 4 models.
+		//
+		// IMPORTANT: We must clear X-Api-Key header because the Anthropic SDK
+		// auto-loads ANTHROPIC_API_KEY from env in DefaultClientOptions(), which
+		// runs before our opts. If both headers are sent, the API uses the API key
+		// (which may have zero balance) instead of the OAuth Bearer token.
 		c := anthropic.NewClient(
-			option.WithAPIKey(""),
 			option.WithAuthToken(key),
+			option.WithHeaderDel("X-Api-Key"),
 			option.WithHeader("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-2024-07-31"),
 			option.WithHeader("user-agent", "claude-cli/2.1.44 (external, cli)"),
 			option.WithHeader("x-app", "cli"),
