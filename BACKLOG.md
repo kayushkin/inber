@@ -17,6 +17,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Goose** (github.com/block/goose) — Rust agent. Study their extension/plugin system and how tools are modular
 - [x] **Aider** (github.com/paul-gauthier/aider) — Python coding agent. Study their repo-map approach, git integration, and how they keep context lean
 - [x] **Hermes Agent** (from skill-recommendations.md) — Study orchestration patterns
+- [ ] **ATLAS** (github.com/itigges22/ATLAS) — Analyze architecture, patterns, and ideas worth adopting
 
 ## 🔧 Simplification
 
