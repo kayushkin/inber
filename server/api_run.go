@@ -35,6 +35,8 @@ func (g *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := g.Run(r.Context(), req)
 	if err != nil {
+		// Log structured error for HTTP path  
+		g.logError(req.Agent, "http", req.Message, err)
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -61,6 +63,8 @@ func (g *Server) handleRunStream(w http.ResponseWriter, r *http.Request, req Run
 		flusher.Flush()
 	})
 	if err != nil {
+		// Log structured error for HTTP streaming path
+		g.logError(req.Agent, "http-stream", req.Message, err)
 		data, _ := json.Marshal(StreamEvent{Kind: "error", Text: err.Error()})
 		fmt.Fprintf(w, "event: error\ndata: %s\n\n", data)
 		flusher.Flush()

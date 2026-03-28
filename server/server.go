@@ -5,7 +5,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -380,6 +382,71 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 
 // ---------------------------------------------------------------------------
 // Config loading moved to config.go
+
+// ---------------------------------------------------------------------------
+// Error logging
+// ---------------------------------------------------------------------------
+
+// logError writes structured error logs to logs/server-errors.jsonl
+func (g *Server) logError(agent, session, input string, err error) {
+	logEntry := map[string]interface{}{
+		"ts":      time.Now().Format("2006-01-02T15:04:05-07:00"),
+		"level":   "error", 
+		"agent":   agent,
+		"session": session,
+		"input":   truncateInput(input, 200),
+		"error":   err.Error(),
+	}
+
+	g.writeErrorLog(logEntry)
+}
+
+// logWarning writes structured warning logs to logs/server-errors.jsonl  
+func (g *Server) logWarning(agent, session, input, message string) {
+	logEntry := map[string]interface{}{
+		"ts":      time.Now().Format("2006-01-02T15:04:05-07:00"),
+		"level":   "warning",
+		"agent":   agent, 
+		"session": session,
+		"input":   truncateInput(input, 200),
+		"error":   message,
+	}
+
+	g.writeErrorLog(logEntry)
+}
+
+// writeErrorLog writes a log entry to logs/server-errors.jsonl
+func (g *Server) writeErrorLog(logEntry map[string]interface{}) {
+	// Create logs directory if it doesn't exist
+	logsDir := "logs"
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		log.Printf("[server] failed to create logs directory: %v", err)
+		return
+	}
+
+	// Open/create the error log file  
+	logFile := filepath.Join(logsDir, "server-errors.jsonl")
+	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("[server] failed to open error log file: %v", err)
+		return
+	}
+	defer file.Close()
+
+	// Write JSON line
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(logEntry); err != nil {
+		log.Printf("[server] failed to write error log: %v", err)
+	}
+}
+
+// truncateInput truncates input text to the specified length
+func truncateInput(input string, maxLen int) string {
+	if len(input) <= maxLen {
+		return input
+	}
+	return input[:maxLen] + "..."
+}
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)

@@ -47,6 +47,10 @@ func (bm *BusManager) ListenBus(ctx context.Context) error {
 
 // handleBusMessage routes an inbound bus message to the correct agent.
 func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessage) {
+	// Task 4: Add entrance logging BEFORE orchestrator filter
+	log.Printf("[bus] received: orchestrator=%s agent=%s channel=%s text=%s", 
+		msg.Orchestrator, msg.Agent, msg.Channel, truncate(msg.Text, 50))
+
 	if msg.Orchestrator != "" && msg.Orchestrator != "inber" {
 		return // not for us — other orchestrators have their own adapters
 	}
@@ -63,6 +67,13 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 	// Session ID for bus events — use "main" for now, spawns will get their own
 	sessionID := "main"
 	log.Printf("[server] bus → %s: %s", agent, truncate(msg.Text, 80))
+	
+	// Task 1: Publish "received" acknowledgment event 
+	ack := messages.NewChatDelta(agent, "inber", sessionID, "status")
+	ack.Text = "processing"
+	if err := bm.server.bus.PublishDelta(ack); err != nil {
+		bm.server.logWarning(agent, sessionID, msg.Text, "failed to publish processing ack: "+err.Error())
+	}
 
 	req := RunRequest{
 		Agent:   agent,
@@ -94,17 +105,34 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 		default:
 			return
 		}
-		bm.server.bus.PublishDelta(delta)
+		if err := bm.server.bus.PublishDelta(delta); err != nil {
+			bm.server.logWarning(agent, sessionID, msg.Text, "failed to publish delta: "+err.Error())
+		}
 	}
+
+	// Task 3: Add request timeout
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
 
 	err := bm.server.Stream(ctx, req, onEvent)
 	if err != nil {
+		// Task 1: Publish error to chat.stream
+		errDelta := messages.NewChatDelta(agent, "inber", sessionID, "error")
+		errDelta.Text = err.Error()
+		if pubErr := bm.server.bus.PublishDelta(errDelta); pubErr != nil {
+			bm.server.logWarning(agent, sessionID, msg.Text, "failed to publish error delta: "+pubErr.Error())
+		}
+		
+		// Task 2: Log structured error
+		bm.server.logError(agent, sessionID, msg.Text, err)
 		log.Printf("[server] bus message error: %v", err)
 	}
 
-	// Publish done on chat.stream
+	// Task 1: Always publish done
 	done := messages.NewDoneDelta(agent, "inber", sessionID, nil)
-	bm.server.bus.PublishDelta(done)
+	if err := bm.server.bus.PublishDelta(done); err != nil {
+		bm.server.logWarning(agent, sessionID, msg.Text, "failed to publish done delta: "+err.Error())
+	}
 
 	if fullText.Len() > 0 {
 		// Publish to JetStream for persistence (chat.outbound is the authoritative
