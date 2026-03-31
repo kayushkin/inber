@@ -17,7 +17,7 @@ Study these projects for architectural ideas. For each, write a brief comparison
 - [x] **Goose** (github.com/block/goose) — Rust agent. Study their extension/plugin system and how tools are modular
 - [x] **Aider** (github.com/paul-gauthier/aider) — Python coding agent. Study their repo-map approach, git integration, and how they keep context lean
 - [x] **Hermes Agent** (from skill-recommendations.md) — Study orchestration patterns
-- [ ] **ATLAS** (github.com/itigges22/ATLAS) — Analyze architecture, patterns, and ideas worth adopting
+- [ ] **NanoClaw** (github.com/qwibitai/nanoclaw) — Lightweight OpenClaw alternative. Built on Anthropic's Agent SDK / Claude Code. Agents run in Linux containers (Docker or Apple Container) for OS-level isolation. Small codebase, "fork and customize" model. Skills-based extension via Claude Code commands. Study their container isolation approach vs inber's workspace confinement, and the tradeoff of tiny-codebase-you-modify vs framework-with-config.
 
 ## 🔧 Simplification
 
