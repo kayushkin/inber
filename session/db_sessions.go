@@ -39,9 +39,9 @@ func (d *SQLiteStore) SetTask(sessionID, task string) error {
 func (d *SQLiteStore) ListActiveStatus() ([]ActiveAgentStatus, error) {
 	rows, err := d.db.Query(`
 		SELECT s.id, s.agent, s.model, COALESCE(s.task,''), s.pid,
-			strftime('%s', s.started_at),
+			COALESCE(strftime('%s', s.started_at), 0),
 			COUNT(t.turn),
-			strftime('%s', COALESCE(MAX(t.started_at), s.started_at))
+			COALESCE(strftime('%s', COALESCE(MAX(t.started_at), s.started_at)), 0)
 		FROM sessions s
 		LEFT JOIN turns t ON s.id = t.session_id
 		WHERE s.status = 'running'
