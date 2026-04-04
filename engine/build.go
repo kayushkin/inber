@@ -30,6 +30,18 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	
 	e.configureAgent(a)
 	e.configureContextPruning(a)
+
+	// Generate prompt blueprint for cache analysis
+	if e.blueprintEnabled {
+		bp := BuildBlueprint(e.TurnCounter, e.agentTools, systemBlocks, blocks, e.Messages)
+		if e.lastBlueprint != nil {
+			diff := DiffBlueprints(e.lastBlueprint, bp)
+			Log.Info("prompt blueprint:\n%s", FormatDiff(diff))
+		} else {
+			Log.Info("prompt blueprint:\n%s", FormatBlueprint(bp))
+		}
+		e.lastBlueprint = bp
+	}
 	
 	e.Agent = a
 	return a

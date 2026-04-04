@@ -82,6 +82,7 @@ func runChat(cmd *cobra.Command, args []string) {
 		CommandName:        "chat",
 		NewSession:         chatNew,
 		MemoryProfiling:    chatMemoryProfile,
+		Blueprint:          os.Getenv("INBER_BLUEPRINT") == "1",
 		MemoryLogPath:      chatMemoryLogPath,
 		Display: &engine.DisplayHooks{
 			OnThinking: func(text string) {

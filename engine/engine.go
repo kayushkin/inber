@@ -5,6 +5,7 @@ package engine
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -52,6 +53,7 @@ type EngineConfig struct {
 	ContextInjectors []ContextInjector // extra system prompt sections injected by server
 	MemoryProfiling  bool           // enable memory usage profiling
 	MemoryLogPath    string         // path to memory profile log file (optional)
+	Blueprint        bool           // emit prompt blueprint diffs per turn for cache analysis
 }
 
 // ContextInjector provides additional system prompt blocks at turn time.
@@ -83,7 +85,9 @@ type Engine struct {
 	extractCfg      conversation.ExtractionConfig
 	consecutiveErrors  int  // track consecutive tool errors for context escalation
 	lastTurnHadError   bool
-	lastStablePrefix   *cachedPrefix // hash + blocks of last stable system prefix (for cache determinism)
+	lastStablePrefix   *cachedPrefix   // hash + blocks of last stable system prefix (for cache determinism)
+	lastBlueprint      *PromptBlueprint // previous turn's blueprint for diff comparison
+	blueprintEnabled   bool             // emit blueprint logs (set via --blueprint or env)
 	toolInputsCache   map[string]string             // toolID -> input JSON for workflow hooks
 	contextInjectors  []ContextInjector              // extra system prompt sections from server
 	workflowHooks   *WorkflowHooks                // auto-commit, auto-format, build/test
@@ -285,6 +289,14 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		return nil, err
 	}
 	e.memoryProfiler = memoryProfiler
+
+	// Blueprint: enable via config or INBER_BLUEPRINT env var
+	e.blueprintEnabled = cfg.Blueprint
+	if !e.blueprintEnabled {
+		if v := os.Getenv("INBER_BLUEPRINT"); v == "1" || v == "true" {
+			e.blueprintEnabled = true
+		}
+	}
 
 	return e, nil
 }

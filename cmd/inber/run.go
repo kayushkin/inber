@@ -37,6 +37,9 @@ var (
 	// Memory profiling
 	runMemoryProfile bool
 	runMemoryLogPath string
+
+	// Prompt blueprint
+	runBlueprint bool
 )
 
 var runCmd = &cobra.Command{
@@ -79,6 +82,9 @@ func init() {
 	// Memory profiling
 	runCmd.Flags().BoolVar(&runMemoryProfile, "memory-profile", false, "Enable memory usage profiling during session")
 	runCmd.Flags().StringVar(&runMemoryLogPath, "memory-log", "", "Path to memory profile log file (optional)")
+
+	// Prompt blueprint
+	runCmd.Flags().BoolVar(&runBlueprint, "blueprint", false, "Emit prompt blueprint diffs per turn (cache analysis)")
 }
 
 // stdinMessage is the JSON line format for bus-agent → inber communication.
@@ -160,6 +166,7 @@ func runRun(cmd *cobra.Command, args []string) {
 		NewSession:         runNew,
 		Detach:             runDetach,
 		MemoryProfiling:    runMemoryProfile,
+		Blueprint:          runBlueprint,
 		MemoryLogPath:      runMemoryLogPath,
 		Display: &engine.DisplayHooks{
 			OnThinking: func(text string) {
