@@ -83,6 +83,7 @@ type Engine struct {
 	extractCfg      conversation.ExtractionConfig
 	consecutiveErrors  int  // track consecutive tool errors for context escalation
 	lastTurnHadError   bool
+	lastStablePrefix   *cachedPrefix // hash + blocks of last stable system prefix (for cache determinism)
 	toolInputsCache   map[string]string             // toolID -> input JSON for workflow hooks
 	contextInjectors  []ContextInjector              // extra system prompt sections from server
 	workflowHooks   *WorkflowHooks                // auto-commit, auto-format, build/test
