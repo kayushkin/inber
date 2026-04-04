@@ -29,6 +29,9 @@ type ManagementConfig struct {
 	TokenBudget             int       // Target token budget for managed conversation
 	MinimumImportance       float64   // Minimum importance score for auto-saving memories
 	
+	// Batched management — only prune/dedup every N turns for cache stability
+	ManageInterval          int       // Only manage every N turns (0 = every turn, default 5)
+
 	// Stashing configuration
 	Stash                   StashConfig // Configuration for stashing large content
 }
@@ -50,6 +53,7 @@ func OrchestratorManagementConfig() ManagementConfig {
 		AggressiveTruncation:   true,
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
+		ManageInterval:         3,
 		MinimumImportance:      0.3,
 		Stash: StashConfig{
 			Enabled:               true,
@@ -75,6 +79,7 @@ func CoderManagementConfig() ManagementConfig {
 		AggressiveTruncation:   true,
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
+		ManageInterval:         5,
 		MinimumImportance:      0.3,
 		Stash: StashConfig{
 			Enabled:               true,
@@ -100,6 +105,7 @@ func TesterManagementConfig() ManagementConfig {
 		AggressiveTruncation:   true,
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
+		ManageInterval:         5,
 		MinimumImportance:      0.3,
 		Stash: StashConfig{
 			Enabled:               true,
@@ -125,6 +131,7 @@ func DefaultManagementConfig() ManagementConfig {
 		AggressiveTruncation:   true,
 		MemorySaveThreshold:    10,
 		TokenBudget:            50000,
+		ManageInterval:         5,
 		MinimumImportance:      0.3,
 		Stash: StashConfig{
 			Enabled:               true,

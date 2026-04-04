@@ -71,3 +71,12 @@ func estimateMessageTokens(msg anthropic.MessageParam) int {
 	content := extractTextContent(msg.Content)
 	return memory.EstimateTokens(content)
 }
+
+// EstimateTokens returns a rough token count for all messages in a conversation.
+func EstimateTokens(messages []anthropic.MessageParam) int {
+	total := 0
+	for _, msg := range messages {
+		total += estimateMessageTokens(msg)
+	}
+	return total
+}

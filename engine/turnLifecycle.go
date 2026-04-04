@@ -72,12 +72,36 @@ func (e *Engine) pruneConfig() conversation.PruneConfig {
 }
 
 // pruneIfNeeded checks if conversation should be pruned and does so if necessary.
+// To preserve cache stability, management (pruning + dedup) is batched every
+// ManageInterval turns. Between batches, the conversation grows freely and BP3
+// extends incrementally with cache hits.
+//
+// Exception: if token budget is exceeded (emergency), prune immediately.
 func (e *Engine) pruneIfNeeded() {
 	cfg := e.pruneConfig()
 
 	if !conversation.ShouldPrune(e.Messages, cfg) {
 		return
 	}
+
+	// Batched management: only run every N turns for cache stability.
+	// Emergency override: always prune if we're over 2x the token budget.
+	interval := cfg.ManageInterval
+	if interval <= 0 {
+		interval = 5 // default
+	}
+	turnsSinceManage := e.TurnCounter - e.lastManageTurn
+	emergency := conversation.EstimateTokens(e.Messages) > cfg.TokenBudget*2
+	if turnsSinceManage < interval && !emergency {
+		Log.Info("skipping management (turn %d, last manage at turn %d, interval %d)",
+			e.TurnCounter, e.lastManageTurn, interval)
+		return
+	}
+	if emergency {
+		Log.Warn("emergency management: token estimate %d > 2x budget %d",
+			conversation.EstimateTokens(e.Messages), cfg.TokenBudget)
+	}
+	e.lastManageTurn = e.TurnCounter
 
 	sessionID := ""
 	if e.Session != nil {
