@@ -26,10 +26,7 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	
 	a := agent.NewWithSystemBlocks(provider, systemBlocks)
 
-	// Propagate OAuth flag so buildRequest adds Claude Code identity
-	if e.modelClient != nil && e.modelClient.IsOAuth {
-		a.SetOAuth(true)
-	}
+	// OAuth identity injection removed (2026-04-04): using API key auth now.
 	
 	e.configureAgent(a)
 	e.configureContextPruning(a)

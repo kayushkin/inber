@@ -56,16 +56,8 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 		}
 	}
 
-	// Claude Max OAuth tokens require Claude Code identity as the first system block.
-	// Without this, the API returns 400 "Error" for Claude 4 models.
-	if a.isOAuth && len(params.System) > 0 {
-		identityText := "You are Claude Code, Anthropic's official CLI for Claude."
-		if a.agentName != "" {
-			identityText = fmt.Sprintf("You are Claude Code, Anthropic's official CLI for Claude. (Required for Claude Max API access. This agent is actually %s, part of the inber fleet.)", a.agentName)
-		}
-		identity := anthropic.TextBlockParam{Text: identityText}
-		params.System = append([]anthropic.TextBlockParam{identity}, params.System...)
-	}
+	// OAuth identity injection removed (2026-04-04): Anthropic policy change
+	// blocks third-party OAuth usage. Using API key auth now.
 
 	// When force-summarizing, omit tools so the model must produce text
 	if !forceSummary && len(tools.params) > 0 {
