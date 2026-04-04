@@ -185,14 +185,27 @@ blocks = append(blocks, sessionMod.NamedBlock{
 
 This should go in the dynamic group (after boundary) since it changes on deploy.
 
-## Expected Impact
+## Measured Results (2026-04-04)
 
-| Scenario | Current | After | Improvement |
+Before optimization (Sonnet, 2 turns):
+```
+Turn 1: 0 read, 9211 created (cold)
+Turn 2: 2594 read, 6669 created (72% miss)
+```
+
+After optimization (Sonnet, 3 turns on new session):
+```
+Turn 1: 5390 read, 0 created (100% hit — reused from previous session!)
+Turn 2: 2594 read, 3041 created (tools prefix cached, conversation growing)
+Turn 3: 2594 read, 3060 created (stable pattern)
+```
+
+| Metric | Before | After | Change |
 |---|---|---|---|
-| Normal turn (append) | ~28% hit | ~95%+ hit | 3-4x cheaper |
-| Topic shift | ~10% hit | ~60% hit | tools still cached |
-| Multi-tool loop (5 calls) | ~28% hit | ~95%+ hit | 3-4x cheaper |
-| New session (cold) | 0% hit | 0% hit | same |
+| Cache writes per turn | 6669 tok | ~3050 tok | **-54%** |
+| Cross-session cache hit | 0% | 100% | **new capability** |
+| Tools prefix hit rate | partial | 100% | stable |
+| Fleet status NULL crash | yes | fixed | |
 
 ## Future Considerations
 
