@@ -21,6 +21,7 @@ type ManagementResult struct {
 	TruncatedAssistant int
 	DroppedToolResults int
 	StashedBlocks      int
+	DeduplicatedFiles  int
 }
 
 // PruneResult is an alias for backward compatibility
@@ -45,6 +46,11 @@ func ManageConversation(
 	if len(messages) <= cfg.KeepRecentTurns {
 		return messages, result, nil
 	}
+
+	// Step 0: Deduplicate file references — replace older read/write/edit results
+	// for the same file path with a compact stub. Only the latest is kept full.
+	deduped := DeduplicateFileRefs(messages)
+	result.DeduplicatedFiles = deduped
 
 	// Step 1: Apply stashing first (move large content blocks to memory)
 	managedMessages, totalStashed, err := ApplyStashing(messages, sessionID, memStore, cfg.Stash)

@@ -99,8 +99,8 @@ func (e *Engine) pruneIfNeeded() {
 
 	if result.PrunedMessages > 0 {
 		e.Messages = pruned
-		Log.Info("pruned %d messages (%d tokens freed, %d memories saved)",
-			result.PrunedMessages, result.TokensFreed, result.MemoriesSaved)
+		Log.Info("pruned %d messages (%d tokens freed, %d memories saved, %d files deduped)",
+			result.PrunedMessages, result.TokensFreed, result.MemoriesSaved, result.DeduplicatedFiles)
 		if e.Session != nil {
 			e.Session.LogPrune(result.PrunedMessages, result.TokensFreed, result.Strategy)
 		}
