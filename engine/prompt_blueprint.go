@@ -4,12 +4,39 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 	sessionMod "github.com/kayushkin/inber/session"
 )
+
+// SaveBlueprintToWorkspace persists the blueprint as JSON for cross-invocation diffs.
+func SaveBlueprintToWorkspace(ws *sessionMod.Workspace, bp *PromptBlueprint) {
+	path := filepath.Join(ws.Dir, "last_blueprint.json")
+	data, err := json.Marshal(bp)
+	if err != nil {
+		return
+	}
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, data, 0o644)
+}
+
+// LoadBlueprintFromWorkspace loads the previous blueprint for diffing.
+func LoadBlueprintFromWorkspace(ws *sessionMod.Workspace) (*PromptBlueprint, error) {
+	path := filepath.Join(ws.Dir, "last_blueprint.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var bp PromptBlueprint
+	if err := json.Unmarshal(data, &bp); err != nil {
+		return nil, err
+	}
+	return &bp, nil
+}
 
 // PromptBlueprint is a structural manifest of a prompt request, showing each
 // block's hash, size, cache control state, and predicted cache behavior.

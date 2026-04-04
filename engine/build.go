@@ -34,6 +34,14 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	// Generate prompt blueprint for cache analysis
 	if e.blueprintEnabled {
 		bp := BuildBlueprint(e.TurnCounter, e.agentTools, systemBlocks, blocks, e.Messages)
+
+		// Try loading previous blueprint from workspace for cross-invocation diffs
+		if e.lastBlueprint == nil && e.workspace != nil {
+			if prev, err := LoadBlueprintFromWorkspace(e.workspace); err == nil {
+				e.lastBlueprint = prev
+			}
+		}
+
 		if e.lastBlueprint != nil {
 			diff := DiffBlueprints(e.lastBlueprint, bp)
 			Log.Info("prompt blueprint:\n%s", FormatDiff(diff))
@@ -41,6 +49,11 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 			Log.Info("prompt blueprint:\n%s", FormatBlueprint(bp))
 		}
 		e.lastBlueprint = bp
+
+		// Persist to workspace for next invocation
+		if e.workspace != nil {
+			SaveBlueprintToWorkspace(e.workspace, bp)
+		}
 	}
 	
 	e.Agent = a
