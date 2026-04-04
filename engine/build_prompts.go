@@ -158,30 +158,36 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 			}
 		}
 
-		// Assemble: stable → boundary → volatile + injectors
+		// Assemble system blocks: ONLY stable content (cached via BP2).
+		// Volatile content goes into e.volatileContext for injection into the
+		// user's message (after BP3), preventing cache busting.
 		var blocks []sessionMod.NamedBlock
 		blocks = append(blocks, stableBlocks...)
 
-		// Explicit cache boundary — buildSystemBlocks places BP2 before this
-		blocks = append(blocks, sessionMod.NamedBlock{ID: cacheBoundaryID})
-
-		// Dynamic/volatile content (after boundary, never cached)
+		// Build volatile context string for user message injection
+		var volParts []string
 		if status := e.buildFleetStatus(); status != "" {
-			blocks = append(blocks, sessionMod.NamedBlock{ID: "fleet-status", Text: status})
+			volParts = append(volParts, status)
 		}
-		blocks = append(blocks, volatileBlocks...)
-
-		// Server-provided context (live session status, workspace info, etc.)
+		for _, vb := range volatileBlocks {
+			volParts = append(volParts, vb.Text)
+		}
 		for _, injector := range e.contextInjectors {
 			if extra := injector(); len(extra) > 0 {
-				blocks = append(blocks, extra...)
+				for _, eb := range extra {
+					if eb.Text != "" {
+						volParts = append(volParts, eb.Text)
+					}
+				}
 			}
 		}
-
-		// Source reference — tracks which build generated this prompt.
-		// In dynamic group so it doesn't bust cache on redeploy.
 		if ref := sourceRef(); ref != "" {
-			blocks = append(blocks, sessionMod.NamedBlock{ID: "source-ref", Text: "[source: " + ref + "]"})
+			volParts = append(volParts, "[source: "+ref+"]")
+		}
+		if len(volParts) > 0 {
+			e.volatileContext = "[Context]\n" + strings.Join(volParts, "\n")
+		} else {
+			e.volatileContext = ""
 		}
 
 		if e.workspace != nil {
@@ -206,35 +212,25 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 
 // buildSystemBlocks converts named blocks to anthropic system blocks with cache control.
 //
-// Cache breakpoint placement (BP2) uses the explicit __CACHE_BOUNDARY__ marker:
-// everything before it is stable and cached; everything after is volatile and uncached.
-// If no boundary marker is found, falls back to caching the last block.
+// All system blocks are now stable (volatile content moved to user message injection).
+// BP2 is placed on the last system block. The entire system section is cached.
 func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.TextBlockParam {
 	var stableTexts []string
 	var systemBlocks []anthropic.TextBlockParam
-	cacheIdx := -1
 
 	for _, b := range blocks {
 		if b.ID == cacheBoundaryID {
-			// Mark the last emitted block as the cache boundary
-			cacheIdx = len(systemBlocks) - 1
-			continue
+			continue // legacy marker, skip
 		}
 		if b.Text == "" {
 			continue
 		}
 		systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: b.Text})
-
-		// Track stable block texts (before boundary) for hash comparison
-		if cacheIdx < 0 {
-			stableTexts = append(stableTexts, b.Text)
-		}
+		stableTexts = append(stableTexts, b.Text)
 	}
 
-	// Fallback: if no boundary marker, cache last block
-	if cacheIdx < 0 {
-		cacheIdx = len(systemBlocks) - 1
-	}
+	// BP2 on last system block (all are stable now)
+	cacheIdx := len(systemBlocks) - 1
 
 	// Deterministic prefix check: if stable blocks haven't changed since last turn,
 	// reuse the exact same TextBlockParam slice to guarantee byte-identical prefix.

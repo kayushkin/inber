@@ -72,6 +72,28 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 		}
 	}
 
+	// Inject volatile context (fleet status, recent files) into the last user message.
+	// This keeps it AFTER BP3, preventing cache busting on the conversation prefix.
+	// Only injected on the first API call of each turn (when VolatileContext is set).
+	if a.VolatileContext != "" && len(*messages) > 0 {
+		lastIdx := len(*messages) - 1
+		if (*messages)[lastIdx].Role == anthropic.MessageParamRoleUser {
+			// Prepend volatile context to the last user message
+			volatileBlock := anthropic.ContentBlockParamUnion{
+				OfText: &anthropic.TextBlockParam{
+					Text: a.VolatileContext,
+				},
+			}
+			(*messages)[lastIdx].Content = append(
+				[]anthropic.ContentBlockParamUnion{volatileBlock},
+				(*messages)[lastIdx].Content...,
+			)
+			params.Messages = *messages
+			// Clear so it's not re-injected on subsequent tool loop calls
+			a.VolatileContext = ""
+		}
+	}
+
 	// Guard against context overflow: let caller prune if needed
 	if a.BeforeRequest != nil && a.contextWindow > 0 {
 		pruned := a.BeforeRequest(*messages, a.contextWindow)

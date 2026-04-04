@@ -28,6 +28,9 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 
 	// OAuth identity injection removed (2026-04-04): using API key auth now.
 	
+	// Pass volatile context for injection into last user message
+	a.VolatileContext = e.volatileContext
+
 	e.configureAgent(a)
 	e.configureContextPruning(a)
 

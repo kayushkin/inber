@@ -86,6 +86,7 @@ type Engine struct {
 	consecutiveErrors  int  // track consecutive tool errors for context escalation
 	lastTurnHadError   bool
 	lastStablePrefix   *cachedPrefix   // hash + blocks of last stable system prefix (for cache determinism)
+	volatileContext    string          // per-turn volatile content (fleet status, recent files) injected into last user message
 	lastBlueprint      *PromptBlueprint // previous turn's blueprint for diff comparison
 	blueprintEnabled   bool             // emit blueprint logs (set via --blueprint or env)
 	toolInputsCache   map[string]string             // toolID -> input JSON for workflow hooks

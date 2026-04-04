@@ -87,6 +87,11 @@ type Agent struct {
 	// for mid-run messages from the user. Returns any pending messages to inject
 	// into the conversation before the next API call.
 	InjectCheck func() []string
+
+	// VolatileContext is per-turn context (fleet status, recent files) that
+	// gets prepended to the last user message instead of being in system blocks.
+	// This prevents cache busting: system blocks stay stable → BP2 always hits.
+	VolatileContext string
 }
 
 // New creates an agent with the given system prompt.
