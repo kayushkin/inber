@@ -56,6 +56,7 @@ type Agent struct {
 	tools          []Tool
 	hooks              *Hooks
 	sidebandCallbacks  *SidebandCallbacks
+	readCache          *ReadCache
 	agentName          string
 	sessionID      string
 	thinkingBudget int64 // 0 = disabled, >0 = budget tokens for extended thinking
@@ -93,8 +94,9 @@ type Agent struct {
 // New creates an agent with the given system prompt.
 func New(provider Provider, system string) *Agent {
 	return &Agent{
-		provider: provider,
-		system:   system,
+		provider:  provider,
+		system:    system,
+		readCache: NewReadCache(),
 	}
 }
 
@@ -103,6 +105,7 @@ func NewWithSystemBlocks(provider Provider, blocks []anthropic.TextBlockParam) *
 	return &Agent{
 		provider:     provider,
 		systemBlocks: blocks,
+		readCache:    NewReadCache(),
 	}
 }
 

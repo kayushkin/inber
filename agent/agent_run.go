@@ -224,6 +224,37 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 			a.hooks.OnToolCall(block.ID, block.Name, []byte(block.Input))
 		}
 
+		// Check read cache — block redundant reads of files already in context.
+		if a.readCache != nil {
+			rawInput := string(block.Input)
+			// Full re-read of a cached file? Return stub.
+			if path, isFull := isFullRead(block.Name, rawInput); isFull {
+				if stub, cached := a.readCache.Check(path); cached {
+					if a.hooks != nil && a.hooks.OnToolResult != nil {
+						a.hooks.OnToolResult(block.ID, block.Name, stub, false)
+					}
+					toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, stub, false))
+					continue
+				}
+			}
+			// Partial re-read of a cached file? Also return stub.
+			if path, partial := isPartialRead(block.Name, rawInput); partial {
+				if stub, cached := a.readCache.Check(path); cached {
+					if a.hooks != nil && a.hooks.OnToolResult != nil {
+						a.hooks.OnToolResult(block.ID, block.Name, stub, false)
+					}
+					toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, stub, false))
+					continue
+				}
+			}
+			// Write/edit invalidates the cache for that file.
+			if paths := isFileWrite(block.Name, rawInput); len(paths) > 0 {
+				for _, p := range paths {
+					a.readCache.Invalidate(p)
+				}
+			}
+		}
+
 		// Execute tool with optional chain ("then" field).
 		output, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks)
 		if isError {
@@ -235,6 +266,15 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 			}
 			toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, finalOutput, true))
 			continue
+		}
+
+		// Record full reads in the cache.
+		if a.readCache != nil {
+			if path, isFull := isFullRead(block.Name, string(block.Input)); isFull {
+				if lines := extractCompleteFileLines(output); lines > 0 {
+					a.readCache.RecordFullRead(path, result.ToolCalls, lines)
+				}
+			}
 		}
 
 		// Apply truncation/modification before adding to conversation
