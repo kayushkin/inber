@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	agentkittools "github.com/kayushkin/agentkit/tools"
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
@@ -289,6 +290,21 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			}
 		}
 		
+		// If agent has task_plan tool, inject .task.md as always-visible context
+		for _, t := range e.agentTools {
+			if t.Name == "task_plan" {
+				repoRoot := e.repoRoot
+				e.contextInjectors = append(e.contextInjectors, func() []sessionMod.NamedBlock {
+					content := agentkittools.LoadPlanContext(repoRoot)
+					if content == "" {
+						return nil
+					}
+					return []sessionMod.NamedBlock{{ID: "task-plan", Text: content}}
+				})
+				break
+			}
+		}
+
 		// Load tool registry into memory
 		if err := loadToolsIntoMemory(e.MemStore, e.agentTools); err != nil {
 			Log.Warn("failed to load tool registry: %v", err)

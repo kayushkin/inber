@@ -91,6 +91,11 @@ func (e *Engine) buildSpecialTool(toolName string) *agent.Tool {
 			tool := e.agentRegistry.SpawnAgentTool()
 			return &tool
 		}
+	case "task_plan":
+		if e.repoRoot != "" {
+			tool := tools.TaskPlan(e.repoRoot)
+			return &tool
+		}
 	}
 	return nil
 }
