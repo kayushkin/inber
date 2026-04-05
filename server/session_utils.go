@@ -1,25 +1,15 @@
 package server
 
 import (
-	"fmt"
 	"strings"
 	"time"
+
+	"github.com/kayushkin/inber/internal/timeutil"
 )
 
-// formatDuration formats a duration for display.
+// formatDuration is a convenience wrapper around timeutil.FormatDuration.
 func formatDuration(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	}
-	h := int(d.Hours())
-	m := int(d.Minutes()) % 60
-	if m == 0 {
-		return fmt.Sprintf("%dh", h)
-	}
-	return fmt.Sprintf("%dh%dm", h, m)
+	return timeutil.FormatDuration(d)
 }
 
 // truncate truncates a string for display.

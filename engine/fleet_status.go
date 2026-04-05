@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kayushkin/inber/internal/timeutil"
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
@@ -40,8 +41,8 @@ func (e *Engine) buildFleetStatus() string {
 	var b strings.Builder
 	b.WriteString("## Active Agents\n")
 	for _, a := range others {
-		elapsed := formatDuration(a.Duration)
-		lastAgo := formatDuration(time.Since(a.LastTurn))
+		elapsed := timeutil.FormatDuration(a.Duration)
+		lastAgo := timeutil.FormatDuration(time.Since(a.LastTurn))
 
 		b.WriteString(fmt.Sprintf("- **%s** (%s) — %d turns, running %s, last turn %s ago",
 			a.Agent, shortModel(a.Model), a.Turns, elapsed, lastAgo))
@@ -61,18 +62,4 @@ func shortModel(model string) string {
 	return model
 }
 
-// formatDuration formats a duration as a human-readable string.
-func formatDuration(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	}
-	hours := int(d.Hours())
-	mins := int(d.Minutes()) % 60
-	if mins == 0 {
-		return fmt.Sprintf("%dh", hours)
-	}
-	return fmt.Sprintf("%dh%dm", hours, mins)
-}
+
