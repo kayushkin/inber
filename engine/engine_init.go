@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/kayushkin/bus"
+
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
@@ -91,34 +91,10 @@ func loadAgentConfig(agentName string, commandName string, modelExplicitlySet bo
 // setupMemoryStore initializes the memory store and prepares the session.
 func setupMemoryStore(repoRoot, identityText, agentName string) (memory.MemoryStore, error) {
 	Log.Infof("loading context (repoRoot=%s)...", repoRoot)
-	
-	// Check if NATS URL is provided for network-based memory
-	natsURL := os.Getenv("NATS_URL")
-	
-	var ms memory.MemoryStore
-	var err error
-	
-	if natsURL != "" {
-		// Use NATS-based memory store
-		busClient, err := bus.Connect(bus.Options{
-			URL:  natsURL,
-			Name: "inber-memory-client",
-		})
-		if err != nil {
-			Log.Warn("NATS connection failed, falling back to SQLite: %v", err)
-		} else {
-			ms = memory.NewNATSStore(busClient, 10*time.Second)
-			Log.Info("using NATS memory store (url: %s)", natsURL)
-		}
-	}
-	
-	if ms == nil {
-		// Fallback to SQLite-based memory store
-		ms, err = memory.OpenOrCreate(repoRoot)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open memory store: %w", err)
-		}
-		Log.Info("using SQLite memory store")
+
+	ms, err := memory.OpenOrCreate(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open memory store: %w", err)
 	}
 
 	// Prepare session: load identity + recent files into memory

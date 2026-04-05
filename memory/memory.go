@@ -24,7 +24,7 @@ type PatternTagger = asmemory.PatternTagger
 var NewStore = asmemory.NewStore
 var OpenOrCreate = asmemory.OpenOrCreate
 var NewSQLiteStore = asmemory.NewSQLiteStore
-var NewNATSStore = asmemory.NewNATSStore
+
 var DefaultPrepareSessionConfig = asmemory.DefaultPrepareSessionConfig
 var FindRecentlyModified = asmemory.FindRecentlyModified
 var FormatRecentFiles = asmemory.FormatRecentFiles
