@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	natsbus "github.com/kayushkin/bus"
 	"github.com/kayushkin/bus/messages"
 )
@@ -72,14 +73,24 @@ func (c *Client) Subscribe(ctx context.Context, topics []string) <-chan InboundM
 			}
 		}
 
-		sub, err := c.nc.QueueSubscribe("chat.inbound", "inber-server", handler)
-		if err != nil {
-			log.Printf("[bus] subscribe chat.inbound error: %v", err)
-			return
+		// Subscribe to all requested topics (e.g. "chat.inbound.inber").
+		// Also subscribe to base "chat.inbound" for backward compat.
+		allTopics := append([]string{"chat.inbound"}, topics...)
+		var subs []*nats.Subscription
+		for _, topic := range allTopics {
+			s, err := c.nc.QueueSubscribe(topic, "inber-server", handler)
+			if err != nil {
+				log.Printf("[bus] subscribe %s error: %v", topic, err)
+				continue
+			}
+			subs = append(subs, s)
+			log.Printf("[bus] subscribed to %s (queue: inber-server)", topic)
 		}
-		defer sub.Unsubscribe()
-
-		log.Printf("[bus] subscribed to chat.inbound (queue: inber-server)")
+		defer func() {
+			for _, s := range subs {
+				s.Unsubscribe()
+			}
+		}()
 		<-ctx.Done()
 	}()
 
