@@ -465,3 +465,8 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
+
+// DataDir returns the resolved data directory path.
+func (g *Server) DataDir() string {
+	return g.config.DataDir
+}
