@@ -43,4 +43,4 @@ func GetModelInfo(modelID string, store *modelstore.Store) ModelInfo {
 }
 
 // DefaultModel is the model used when none is specified.
-const DefaultModel = "glm-5"
+const DefaultModel = "claude-sonnet-4-20250514"
