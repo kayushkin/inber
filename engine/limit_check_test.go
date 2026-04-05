@@ -186,7 +186,7 @@ func TestAgentConfigLimits(t *testing.T) {
 
 func TestCLIOverridesAgentConfig(t *testing.T) {
 	// CLI flags should take precedence over agent config
-	e := &Engine{maxTurns: 50, maxInputTokens: 1000000} // CLI set these
+	e := &Engine{Limits: LimitConfig{MaxTurns: 50, MaxInputTokens: 1000000}} // CLI set these
 
 	// Agent config specifies lower limits
 	agentLimits := struct {
@@ -197,27 +197,27 @@ func TestCLIOverridesAgentConfig(t *testing.T) {
 		MaxInputTokens: 300000,
 	}
 
-	// Apply agent config limits only if CLI didn't set them (maxTurns != 0 means CLI set it)
-	if e.maxTurns == 0 {
-		e.maxTurns = agentLimits.MaxTurns
+	// Apply agent config limits only if CLI didn't set them (MaxTurns != 0 means CLI set it)
+	if e.Limits.MaxTurns == 0 {
+		e.Limits.MaxTurns = agentLimits.MaxTurns
 	}
-	if e.maxInputTokens == 0 {
-		e.maxInputTokens = agentLimits.MaxInputTokens
+	if e.Limits.MaxInputTokens == 0 {
+		e.Limits.MaxInputTokens = agentLimits.MaxInputTokens
 	}
 
 	// CLI values should persist
-	if e.maxTurns != 50 {
-		t.Errorf("CLI maxTurns = %d, want 50", e.maxTurns)
+	if e.Limits.MaxTurns != 50 {
+		t.Errorf("CLI maxTurns = %d, want 50", e.Limits.MaxTurns)
 	}
-	if e.maxInputTokens != 1000000 {
-		t.Errorf("CLI maxInputTokens = %d, want 1000000", e.maxInputTokens)
+	if e.Limits.MaxInputTokens != 1000000 {
+		t.Errorf("CLI maxInputTokens = %d, want 1000000", e.Limits.MaxInputTokens)
 	}
 }
 
 func TestBuildLimitCheck_ResponseTimeUnderLimit(t *testing.T) {
 	e := &Engine{
-		maxResponseTime: 20,
-		turnStartTime:   time.Now(), // just started
+		Limits: LimitConfig{MaxResponseTime: 20},
+		Turn:   TurnState{StartTime: time.Now()}, // just started
 	}
 	check := e.buildLimitCheck()
 	result := &agent.TurnResult{InputTokens: 1000, ToolCalls: 1}
@@ -229,8 +229,8 @@ func TestBuildLimitCheck_ResponseTimeUnderLimit(t *testing.T) {
 
 func TestBuildLimitCheck_ResponseTimeExceeded(t *testing.T) {
 	e := &Engine{
-		maxResponseTime: 20,
-		turnStartTime:   time.Now().Add(-25 * time.Second), // 25s ago
+		Limits: LimitConfig{MaxResponseTime: 20},
+		Turn:   TurnState{StartTime: time.Now().Add(-25 * time.Second)}, // 25s ago
 	}
 	check := e.buildLimitCheck()
 	result := &agent.TurnResult{InputTokens: 1000, ToolCalls: 1}
@@ -245,8 +245,8 @@ func TestBuildLimitCheck_ResponseTimeExceeded(t *testing.T) {
 
 func TestBuildLimitCheck_ResponseTimeZeroMeansUnlimited(t *testing.T) {
 	e := &Engine{
-		maxResponseTime: 0,
-		turnStartTime:   time.Now().Add(-300 * time.Second), // 5 minutes ago
+		Limits: LimitConfig{MaxResponseTime: 0},
+		Turn:   TurnState{StartTime: time.Now().Add(-300 * time.Second)}, // 5 minutes ago
 	}
 	check := e.buildLimitCheck()
 	result := &agent.TurnResult{InputTokens: 1000, ToolCalls: 1}
@@ -258,7 +258,7 @@ func TestBuildLimitCheck_ResponseTimeZeroMeansUnlimited(t *testing.T) {
 
 func TestBuildLimitCheck_ResponseTimeNotSetMeansUnlimited(t *testing.T) {
 	e := &Engine{
-		turnStartTime: time.Now().Add(-300 * time.Second),
+		Turn: TurnState{StartTime: time.Now().Add(-300 * time.Second)},
 	}
 	check := e.buildLimitCheck()
 	result := &agent.TurnResult{InputTokens: 1000, ToolCalls: 1}
