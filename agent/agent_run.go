@@ -92,16 +92,28 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 	if a.VolatileContext != "" && len(*messages) > 0 {
 		lastIdx := len(*messages) - 1
 		if (*messages)[lastIdx].Role == anthropic.MessageParamRoleUser {
-			// Prepend volatile context to the last user message
+			// Insert volatile context into the last user message, AFTER any tool_result blocks.
+			// Anthropic requires tool_result blocks to appear before text in a user message
+			// that follows an assistant message with tool_use.
 			volatileBlock := anthropic.ContentBlockParamUnion{
 				OfText: &anthropic.TextBlockParam{
 					Text: a.VolatileContext,
 				},
 			}
-			(*messages)[lastIdx].Content = append(
-				[]anthropic.ContentBlockParamUnion{volatileBlock},
-				(*messages)[lastIdx].Content...,
-			)
+			content := (*messages)[lastIdx].Content
+			// Find the insertion point: after the last tool_result block
+			insertAt := 0
+			for i, block := range content {
+				if block.OfToolResult != nil {
+					insertAt = i + 1
+				}
+			}
+			// Insert at the right position
+			newContent := make([]anthropic.ContentBlockParamUnion, 0, len(content)+1)
+			newContent = append(newContent, content[:insertAt]...)
+			newContent = append(newContent, volatileBlock)
+			newContent = append(newContent, content[insertAt:]...)
+			(*messages)[lastIdx].Content = newContent
 			params.Messages = *messages
 			// Clear so it's not re-injected on subsequent tool loop calls
 			a.VolatileContext = ""
