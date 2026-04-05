@@ -13,6 +13,7 @@ import (
 // executeAgent runs the agent with the built system prompt and conversation messages.
 // Handles model selection, client setup, OpenAI vs Anthropic routing, and thinking signature errors.
 func (e *Engine) executeAgent(ctx context.Context, systemBlocks []sessionMod.NamedBlock) (*agent.TurnResult, error) {
+	e.emitStatus("Selecting model...")
 	// Select model based on health data (failover if primary is down)
 	modelUsed, _ := e.selectModel()
 
@@ -40,6 +41,7 @@ func (e *Engine) executeAgent(ctx context.Context, systemBlocks []sessionMod.Nam
 			Log.Info("filtered %d tool_use, %d tool_result blocks from OpenAI provider (%d→%d messages)",
 				stats.ToolUseFiltered, stats.ToolResultFiltered, originalLen, len(e.Messages))
 		}
+		e.emitStatus("Running agent...")
 		e.buildAgent(systemBlocks)
 		result, err = e.Agent.Run(ctx, e.Model, &e.Messages)
 

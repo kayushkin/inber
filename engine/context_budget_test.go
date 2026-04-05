@@ -84,7 +84,7 @@ func TestContextBudget_ThreeErrors(t *testing.T) {
 }
 
 func TestContextBudget_FiveErrors(t *testing.T) {
-	e := &Engine{TurnCounter: 10, consecutiveErrors: 5}
+	e := &Engine{Turn: TurnState{Counter: 10, ConsecutiveErrors: 5}}
 	_, budget := e.contextBudget("completely stuck")
 
 	if budget != 50000 {
@@ -93,7 +93,7 @@ func TestContextBudget_FiveErrors(t *testing.T) {
 }
 
 func TestContextBudget_LongSession(t *testing.T) {
-	e := &Engine{TurnCounter: 20}
+	e := &Engine{Turn: TurnState{Counter: 20}}
 	_, budget := e.contextBudget("short msg")
 
 	if budget != 8000 {
@@ -106,11 +106,11 @@ func TestContextBudget_MinImportanceAlwaysZero(t *testing.T) {
 		name string
 		e    *Engine
 	}{
-		{"first turn", &Engine{TurnCounter: 0}},
-		{"normal", &Engine{TurnCounter: 3}},
-		{"error", &Engine{TurnCounter: 5, consecutiveErrors: 2}},
-		{"stuck", &Engine{TurnCounter: 10, consecutiveErrors: 5}},
-		{"long session", &Engine{TurnCounter: 20}},
+		{"first turn", &Engine{Turn: TurnState{Counter: 0}}},
+		{"normal", &Engine{Turn: TurnState{Counter: 3}}},
+		{"error", &Engine{Turn: TurnState{Counter: 5, ConsecutiveErrors: 2}}},
+		{"stuck", &Engine{Turn: TurnState{Counter: 10, ConsecutiveErrors: 5}}},
+		{"long session", &Engine{Turn: TurnState{Counter: 20}}},
 	}
 
 	for _, tc := range cases {
@@ -127,7 +127,7 @@ func TestContextBudget_Escalation(t *testing.T) {
 	// Budget should strictly increase as errors increase
 	budgets := make([]int, 6)
 	for errors := 0; errors < 6; errors++ {
-		e := &Engine{TurnCounter: 5, consecutiveErrors: errors}
+		e := &Engine{Turn: TurnState{Counter: 5, ConsecutiveErrors: errors}}
 		_, budgets[errors] = e.contextBudget("test")
 	}
 

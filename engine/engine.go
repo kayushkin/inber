@@ -57,6 +57,7 @@ type DisplayHooks struct {
 	OnTextDelta  func(text string) // streaming text chunks from API
 	OnToolCall   func(name string, input string)
 	OnToolResult func(name string, output string, isError bool)
+	OnStatus     func(text string) // progress/status updates during turn execution
 }
 
 // EngineConfig configures the Engine.
@@ -149,6 +150,14 @@ func (e *Engine) GetDisplayHooks() *DisplayHooks {
 	e.displayMu.Lock()
 	defer e.displayMu.Unlock()
 	return e.display
+}
+
+// emitStatus emits a status update if the OnStatus hook is configured.
+func (e *Engine) emitStatus(text string) {
+	d := e.GetDisplayHooks()
+	if d != nil && d.OnStatus != nil {
+		d.OnStatus(text)
+	}
 }
 
 func NewEngine(cfg EngineConfig) (*Engine, error) {

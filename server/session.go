@@ -90,6 +90,9 @@ func (s *Session) updateHooks() {
 			OnToolResult: func(name, output string, isError bool) {
 				onEvent(StreamEvent{Kind: "tool_result", Tool: name, Text: output, Turn: sess.CurrentTurn()})
 			},
+			OnStatus: func(text string) {
+				onEvent(StreamEvent{Kind: "status", Text: text, Turn: sess.CurrentTurn()})
+			},
 		})
 	} else {
 		s.Engine.SetDisplayHooks(nil)

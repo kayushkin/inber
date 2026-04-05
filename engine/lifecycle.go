@@ -28,6 +28,8 @@ func (e *Engine) summarizeIfNeeded() {
 		return
 	}
 
+	e.emitStatus("Summarizing context...")
+
 	sessionID := ""
 	if e.Session != nil {
 		sessionID = e.Session.SessionID()

@@ -10,6 +10,7 @@ import (
 // prepareInput handles user message stashing, alternation repair, and context management.
 // Returns the processed input (post-stash).
 func (e *Engine) prepareInput(input, sessionID string) string {
+	e.emitStatus("Preparing conversation...")
 	processedInput := input
 
 	// 1. STASH LARGE USER MESSAGES (before sending to LLM)
@@ -49,6 +50,7 @@ func (e *Engine) prepareInput(input, sessionID string) string {
 	// 1a. Summarize if conversation is very long (compress old turns into summary)
 	e.summarizeIfNeeded()
 	// 1b. Prune remaining conversation (truncate tool results, old messages)
+	e.emitStatus("Pruning context...")
 	e.pruneIfNeeded()
 
 	return processedInput
@@ -56,6 +58,7 @@ func (e *Engine) prepareInput(input, sessionID string) string {
 
 // buildTurnContext assembles system prompt blocks for the turn.
 func (e *Engine) buildTurnContext(processedInput string) []sessionMod.NamedBlock {
+	e.emitStatus("Building system prompt...")
 	systemBlocks := e.BuildSystemPrompt(processedInput)
 	e.Cache.LastNamedBlocks = systemBlocks
 	return systemBlocks

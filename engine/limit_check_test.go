@@ -84,7 +84,7 @@ func TestBuildLimitCheck_SessionTokensAccumulate(t *testing.T) {
 }
 
 func TestBuildLimitCheck_BothLimits(t *testing.T) {
-	e := &Engine{maxTurns: 10, maxInputTokens: 100000}
+	e := &Engine{Limits: LimitConfig{MaxTurns: 10, MaxInputTokens: 100000}}
 	check := e.buildLimitCheck()
 
 	// Token limit hit first
@@ -271,9 +271,8 @@ func TestBuildLimitCheck_ResponseTimeNotSetMeansUnlimited(t *testing.T) {
 func TestBuildLimitCheck_ResponseTimeWithTurnLimit(t *testing.T) {
 	// Time exceeded but turns not — time should trigger first
 	e := &Engine{
-		maxTurns:        10,
-		maxResponseTime: 20,
-		turnStartTime:   time.Now().Add(-30 * time.Second),
+		Limits: LimitConfig{MaxTurns: 10, MaxResponseTime: 20},
+		Turn:   TurnState{StartTime: time.Now().Add(-30 * time.Second)},
 	}
 	check := e.buildLimitCheck()
 	result := &agent.TurnResult{InputTokens: 1000, ToolCalls: 2}
@@ -302,28 +301,28 @@ func TestOrchestratorLimitsFromConfig(t *testing.T) {
 		MaxResponseTime: 20,
 	}
 
-	if e.maxTurns == 0 {
-		e.maxTurns = limits.MaxTurns
+	if e.Limits.MaxTurns == 0 {
+		e.Limits.MaxTurns = limits.MaxTurns
 	}
-	if e.maxInputTokens == 0 {
-		e.maxInputTokens = limits.MaxInputTokens
+	if e.Limits.MaxInputTokens == 0 {
+		e.Limits.MaxInputTokens = limits.MaxInputTokens
 	}
-	if e.maxResponseTime == 0 {
-		e.maxResponseTime = limits.MaxResponseTime
+	if e.Limits.MaxResponseTime == 0 {
+		e.Limits.MaxResponseTime = limits.MaxResponseTime
 	}
 
-	if e.maxTurns != 5 {
-		t.Errorf("maxTurns = %d, want 5", e.maxTurns)
+	if e.Limits.MaxTurns != 5 {
+		t.Errorf("maxTurns = %d, want 5", e.Limits.MaxTurns)
 	}
-	if e.maxInputTokens != 200000 {
-		t.Errorf("maxInputTokens = %d, want 200000", e.maxInputTokens)
+	if e.Limits.MaxInputTokens != 200000 {
+		t.Errorf("maxInputTokens = %d, want 200000", e.Limits.MaxInputTokens)
 	}
-	if e.maxResponseTime != 20 {
-		t.Errorf("maxResponseTime = %d, want 20", e.maxResponseTime)
+	if e.Limits.MaxResponseTime != 20 {
+		t.Errorf("maxResponseTime = %d, want 20", e.Limits.MaxResponseTime)
 	}
 
 	// Verify limits work together
-	e.turnStartTime = time.Now().Add(-25 * time.Second)
+	e.Turn.StartTime = time.Now().Add(-25 * time.Second)
 	check := e.buildLimitCheck()
 
 	// Under turn/token limits but over time

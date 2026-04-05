@@ -35,6 +35,7 @@ func (e *Engine) postProcessResult(result *agent.TurnResult, input, sessionID st
 	e.stashAssistantResponse(sessionID, result)
 
 	// Save messages snapshot for session resume
+	e.emitStatus("Saving session...")
 	e.saveMessages()
 
 	// Checkpoint if needed (every 20 turns)
