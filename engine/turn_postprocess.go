@@ -1,0 +1,61 @@
+package engine
+
+import (
+	"context"
+
+	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/conversation"
+	sessionMod "github.com/kayushkin/inber/session"
+)
+
+// postProcessResult handles background memory extraction, response stashing, session save,
+// checkpointing, and usage tracking after a successful turn.
+func (e *Engine) postProcessResult(result *agent.TurnResult, input, sessionID string) error {
+	// Log assistant response to session
+	if e.Session != nil {
+		e.Session.LogAssistant(result.Text, result.InputTokens, result.OutputTokens, result.ToolCalls)
+	}
+
+	// 2. BACKGROUND MEMORY EXTRACTION (after turn completes, async)
+	if e.extractCfg.Enabled && e.MemStore != nil {
+		var toolCalls []conversation.ToolCallSummary
+		go conversation.BackgroundExtractMemories(
+			context.Background(),
+			e.Client,
+			input,
+			result.Text,
+			toolCalls,
+			sessionID,
+			e.MemStore,
+			e.extractCfg,
+		)
+	}
+
+	// 3. STASH LARGE ASSISTANT RESPONSES (for next turn)
+	e.stashAssistantResponse(sessionID, result)
+
+	// Save messages snapshot for session resume
+	e.saveMessages()
+
+	// Checkpoint if needed (every 20 turns)
+	e.checkpointIfNeeded()
+
+	// Track cumulative session tokens
+	e.SessionInputTokens += result.InputTokens
+	e.SessionOutputTokens += result.OutputTokens
+	e.SessionCost += sessionMod.CalcCostWithCache(e.Model, result.InputTokens, result.OutputTokens,
+		result.CacheReadTokens, result.CacheCreationTokens)
+
+	// Track usage in model-store
+	if e.modelStore != nil {
+		agentName := e.AgentName
+		if agentName == "" {
+			agentName = "inber"
+		}
+		if err := e.modelStore.TrackUsage(agentName, e.Model, int64(result.InputTokens), int64(result.OutputTokens)); err != nil {
+			Log.Warn("failed to track usage in model-store: %v", err)
+		}
+	}
+
+	return nil
+}
