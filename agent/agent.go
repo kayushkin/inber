@@ -54,8 +54,9 @@ type Agent struct {
 	system         string
 	systemBlocks   []anthropic.TextBlockParam
 	tools          []Tool
-	hooks          *Hooks
-	agentName      string
+	hooks              *Hooks
+	sidebandCallbacks  *SidebandCallbacks
+	agentName          string
 	sessionID      string
 	thinkingBudget int64 // 0 = disabled, >0 = budget tokens for extended thinking
 	contextWindow  int   // max context tokens for the model (0 = no guard)
@@ -118,6 +119,11 @@ func NewWithClientAndSystemBlocks(client *anthropic.Client, blocks []anthropic.T
 // SetHooks attaches observation hooks for tool calls/results.
 func (a *Agent) SetHooks(h *Hooks) {
 	a.hooks = h
+}
+
+// SetSidebandCallbacks sets the callbacks for sideband fields (done, note, split).
+func (a *Agent) SetSidebandCallbacks(cb *SidebandCallbacks) {
+	a.sidebandCallbacks = cb
 }
 
 // SetThinking enables extended thinking with the given token budget.

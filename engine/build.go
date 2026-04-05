@@ -79,6 +79,11 @@ func (e *Engine) configureAgent(a *agent.Agent) {
 	}
 	
 	a.SetHooks(e.buildHooks())
+	
+	// Wire up sideband callbacks (task completion, notes, task splitting)
+	if e.repoRoot != "" {
+		a.SetSidebandCallbacks(e.buildSidebandCallbacks())
+	}
 
 	// Wire up mid-run message injection
 	if e.injections != nil {

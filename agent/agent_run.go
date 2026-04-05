@@ -24,10 +24,12 @@ func (a *Agent) prepareTools() *toolInfo {
 		toolNames = append(toolNames, t.Name)
 	}
 	thenSchema := buildThenSchema(toolNames)
+	sbSchema := sidebandSchema()
 
 	for i, t := range a.tools {
-		// Inject "then" chain field into every tool's schema (except end_turn).
+		// Inject sideband fields (done, note, split) and "then" chain into every tool's schema.
 		schema := t.InputSchema
+		schema = injectFields(schema, sbSchema)
 		if t.Name != "end_turn" {
 			schema = injectChainField(schema, thenSchema)
 		}
@@ -223,7 +225,7 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 		}
 
 		// Execute tool with optional chain ("then" field).
-		output, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID)
+		output, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks)
 		if isError {
 			finalOutput := output
 			if a.hooks != nil && a.hooks.ModifyToolResult != nil {

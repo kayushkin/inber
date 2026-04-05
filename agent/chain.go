@@ -33,6 +33,25 @@ func buildThenSchema(toolNames []string) map[string]any {
 	}
 }
 
+// injectFields adds multiple properties to a tool's InputSchema.
+func injectFields(schema anthropic.ToolInputSchemaParam, fields map[string]any) anthropic.ToolInputSchemaParam {
+	props, ok := schema.Properties.(map[string]any)
+	if !ok {
+		return schema
+	}
+	newProps := make(map[string]any, len(props)+len(fields))
+	for k, v := range props {
+		newProps[k] = v
+	}
+	for k, v := range fields {
+		newProps[k] = v
+	}
+	return anthropic.ToolInputSchemaParam{
+		Properties: newProps,
+		Required:   schema.Required,
+	}
+}
+
 // injectChainField adds the "then" property to a tool's InputSchema.
 // Returns a new schema with the field added (does not mutate original).
 func injectChainField(schema anthropic.ToolInputSchemaParam, thenSchema map[string]any) anthropic.ToolInputSchemaParam {
@@ -94,8 +113,12 @@ func extractChain(rawInput string) (cleanInput string, chain *chainedTool) {
 }
 
 // executeWithChain runs a tool and any chained follow-up, combining results.
-func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string, rawInput string, hooks *Hooks, blockID string) (output string, isError bool) {
-	cleanInput, chain := extractChain(rawInput)
+// Also processes sideband fields (done, note, split) if callbacks are set.
+func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string, rawInput string, hooks *Hooks, blockID string, sbCallbacks *SidebandCallbacks) (output string, isError bool) {
+	// Extract sideband fields first, then chain.
+	cleanInput, sb := extractSideband(rawInput)
+	sbSummary := processSideband(sb, sbCallbacks)
+	cleanInput, chain := extractChain(cleanInput)
 
 	// Run primary tool
 	tool, ok := toolMap[name]
@@ -109,6 +132,11 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 
 	if hooks != nil && hooks.OnToolResult != nil {
 		hooks.OnToolResult(blockID, name, primaryOutput, false)
+	}
+
+	// Prepend sideband summary if any
+	if sbSummary != "" {
+		primaryOutput = sbSummary + "\n" + primaryOutput
 	}
 
 	// No chain — return primary result
