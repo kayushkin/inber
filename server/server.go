@@ -37,6 +37,11 @@ type Server struct {
 	forgeDB     WorkspaceManager             // workspace management
 	workspaces map[string]*forge.Workspace // active workspaces by ID
 	mu         sync.RWMutex
+
+	// Health tracking
+	startedAt   time.Time
+	lastError   string
+	lastErrorAt time.Time
 }
 
 // New creates a server.
@@ -168,6 +173,7 @@ func New(cfg Config) (*Server, error) {
 		agentStore: as,
 		forgeDB:    forgeDB,
 		workspaces: make(map[string]*forge.Workspace),
+		startedAt:  time.Now(),
 	}
 
 	// Create bus manager for handling bus messages.
@@ -389,9 +395,16 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 
 // logError writes structured error logs to logs/server-errors.jsonl
 func (g *Server) logError(agent, session, input string, err error) {
+	now := time.Now()
+
+	g.mu.Lock()
+	g.lastError = err.Error()
+	g.lastErrorAt = now
+	g.mu.Unlock()
+
 	logEntry := map[string]interface{}{
-		"ts":      time.Now().Format("2006-01-02T15:04:05-07:00"),
-		"level":   "error", 
+		"ts":      now.Format("2006-01-02T15:04:05-07:00"),
+		"level":   "error",
 		"agent":   agent,
 		"session": session,
 		"input":   truncateInput(input, 200),

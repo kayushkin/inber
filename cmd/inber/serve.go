@@ -84,6 +84,10 @@ func runServe() error {
 	}
 	defer g.Close()
 
+	if err := g.SelfTest(); err != nil {
+		return fmt.Errorf("selftest: %w", err)
+	}
+
 	// Handle shutdown signals.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

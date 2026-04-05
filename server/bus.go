@@ -102,7 +102,41 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 
 	var fullText strings.Builder
 
+	// publishStatus sends a status delta to signal progress to the UI.
+	publishStatus := func(text string) {
+		s := messages.NewChatDelta(agent, "inber", sessionID, "status")
+		s.Text = text
+		bm.server.bus.PublishDelta(s)
+	}
+
+	// Track which status phases we've already emitted to avoid duplicates.
+	seenThinking := false
+	seenDelta := false
+
 	onEvent := func(ev StreamEvent) {
+		// Emit granular status deltas at key phase transitions.
+		switch ev.Kind {
+		case "thinking":
+			if !seenThinking {
+				seenThinking = true
+				publishStatus("thinking")
+			}
+		case "delta":
+			if !seenDelta {
+				seenDelta = true
+				publishStatus("responding")
+			}
+		case "tool_call":
+			toolName := ev.Tool
+			if toolName == "" {
+				toolName = "tool"
+			}
+			publishStatus("tool:" + toolName)
+		case "tool_result":
+			publishStatus("responding")
+		}
+
+		// Original delta publishing.
 		delta := messages.NewChatDelta(agent, "inber", sessionID, ev.Kind)
 		switch ev.Kind {
 		case "delta":
@@ -128,25 +162,29 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 		}
 	}
 
+	// Publish loading status before calling Stream.
+	publishStatus("loading_agent")
+
 	// Task 3: Add request timeout
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	err := bm.server.Stream(ctx, req, onEvent)
 	if err != nil {
-		// Task 1: Publish error to chat.stream
+		// Publish error status + error delta.
+		publishStatus("error")
 		errDelta := messages.NewChatDelta(agent, "inber", sessionID, "error")
 		errDelta.Text = err.Error()
 		if pubErr := bm.server.bus.PublishDelta(errDelta); pubErr != nil {
 			bm.server.logWarning(agent, sessionID, msg.Text, "failed to publish error delta: "+pubErr.Error())
 		}
-		
-		// Task 2: Log structured error
+
 		bm.server.logError(agent, sessionID, msg.Text, err)
 		log.Printf("[server] bus message error: %v", err)
 	}
 
-	// Task 1: Always publish done
+	// Publish done status + done delta.
+	publishStatus("done")
 	done := messages.NewDoneDelta(agent, "inber", sessionID, nil)
 	if err := bm.server.bus.PublishDelta(done); err != nil {
 		bm.server.logWarning(agent, sessionID, msg.Text, "failed to publish done delta: "+err.Error())

@@ -27,6 +27,7 @@ func (g *Server) Serve(ctx context.Context) error {
 	// mux.HandleFunc("/api/models/test", g.handleModelTest) // removed: stub
 	mux.HandleFunc("/api/agents", g.handleAgents)
 	mux.HandleFunc("/api/agents/config", g.handleAgentConfig)
+	mux.HandleFunc("/api/health", g.handleHealth)
 
 	server := &http.Server{
 		Addr:    g.config.ListenAddr,
