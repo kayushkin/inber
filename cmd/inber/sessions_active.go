@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/kayushkin/inber/internal/fsutil"
 	"fmt"
 	"os"
 	"time"
@@ -17,7 +18,7 @@ var sessionsActiveCmd = &cobra.Command{
 }
 
 func runSessionsActive(cmd *cobra.Command, args []string) {
-	repoRoot, _ := engine.FindRepoRoot()
+	repoRoot, _ := fsutil.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}

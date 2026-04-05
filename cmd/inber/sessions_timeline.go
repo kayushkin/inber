@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/kayushkin/inber/internal/fsutil"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,7 +21,7 @@ var sessionsTimelineCmd = &cobra.Command{
 func runSessionsTimeline(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 
-	repoRoot, _ := engine.FindRepoRoot()
+	repoRoot, _ := fsutil.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kayushkin/inber/engine"
+	"github.com/kayushkin/inber/internal/fsutil"
 )
 
 func TestFindRepoRoot(t *testing.T) {
@@ -21,7 +21,7 @@ func TestFindRepoRoot(t *testing.T) {
 	defer os.Chdir(orig)
 
 	os.Chdir(subdir)
-	root, err := engine.FindRepoRoot()
+	root, err := fsutil.FindRepoRoot()
 	if err != nil {
 		t.Fatalf("FindRepoRoot failed: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestFindRepoRoot_NotInRepo(t *testing.T) {
 	defer os.Chdir(orig)
 
 	os.Chdir(dir)
-	_, err := engine.FindRepoRoot()
+	_, err := fsutil.FindRepoRoot()
 	if err == nil {
 		t.Error("expected error when not in a git repository")
 	}

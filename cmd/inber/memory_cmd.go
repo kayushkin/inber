@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/kayushkin/inber/internal/fsutil"
 	"os"
 
 	"github.com/kayushkin/inber/memory"
@@ -49,7 +50,7 @@ func init() {
 
 // getMemoryStore opens a memory store for the current repository
 func getMemoryStore() memory.MemoryStore {
-	repoRoot, _ := engine.FindRepoRoot()
+	repoRoot, _ := fsutil.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}

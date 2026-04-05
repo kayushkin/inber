@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/kayushkin/inber/internal/fsutil"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -27,7 +28,7 @@ var sessionsShowCmd = &cobra.Command{
 }
 
 func runSessionsList(cmd *cobra.Command, args []string) {
-	repoRoot, _ := engine.FindRepoRoot()
+	repoRoot, _ := fsutil.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -133,7 +134,7 @@ func findSessionFile(logsDir, sessionID string) string {
 func runSessionsShow(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 	
-	repoRoot, _ := engine.FindRepoRoot()
+	repoRoot, _ := fsutil.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}

@@ -2,6 +2,8 @@ package engine
 
 import (
 	"testing"
+
+	"github.com/kayushkin/inber/internal/fsutil"
 )
 
 func TestLogger_Functions(t *testing.T) {
@@ -134,7 +136,7 @@ func TestDisplayHooks_Basic(t *testing.T) {
 
 func TestFindRepoRoot_ErrorHandling(t *testing.T) {
 	// Test that FindRepoRoot doesn't panic when called in non-git directory
-	_, err := FindRepoRoot()
+	_, err := fsutil.FindRepoRoot()
 	// We don't assert success/failure since it depends on the test environment,
 	// just that it doesn't panic
 	_ = err

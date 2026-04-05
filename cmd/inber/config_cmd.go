@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/kayushkin/inber/internal/fsutil"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -87,7 +88,7 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 		}
 	}
 	
-	repoRoot, err := engine.FindRepoRoot()
+	repoRoot, err := fsutil.FindRepoRoot()
 	if err != nil {
 		fmt.Printf("\nRepo root: %s(not in a git repository)%s\n", engine.Dim, engine.Reset)
 	} else {
@@ -108,7 +109,7 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 }
 
 func runConfigInit(cmd *cobra.Command, args []string) {
-	repoRoot, err := engine.FindRepoRoot()
+	repoRoot, err := fsutil.FindRepoRoot()
 	if err != nil {
 		engine.Log.Error("not in a git repository")
 		os.Exit(1)

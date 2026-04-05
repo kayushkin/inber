@@ -14,6 +14,7 @@ import (
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 	"github.com/kayushkin/inber/conversation"
+	"github.com/kayushkin/inber/internal/fsutil"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
 	modelstore "github.com/kayushkin/model-store"
@@ -24,7 +25,7 @@ func setupRepoRoot(configRepoRoot string) (string, error) {
 	repoRoot := configRepoRoot
 	if repoRoot == "" {
 		var err error
-		repoRoot, err = FindRepoRoot()
+		repoRoot, err = fsutil.FindRepoRoot()
 		if err != nil {
 			repoRoot, _ = os.Getwd()
 		}

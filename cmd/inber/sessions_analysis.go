@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/kayushkin/inber/internal/fsutil"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -36,7 +37,7 @@ var sessionsPromptCmd = &cobra.Command{
 func runSessionsContext(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 	
-	repoRoot, _ := engine.FindRepoRoot()
+	repoRoot, _ := fsutil.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -85,7 +86,7 @@ func runSessionsContext(cmd *cobra.Command, args []string) {
 func runSessionsPrompts(cmd *cobra.Command, args []string) {
 	sessionID := args[0]
 
-	repoRoot, _ := engine.FindRepoRoot()
+	repoRoot, _ := fsutil.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
@@ -113,7 +114,7 @@ func runSessionsPrompt(cmd *cobra.Command, args []string) {
 	turn := 0
 	fmt.Sscanf(args[1], "%d", &turn)
 
-	repoRoot, _ := engine.FindRepoRoot()
+	repoRoot, _ := fsutil.FindRepoRoot()
 	if repoRoot == "" {
 		repoRoot, _ = os.Getwd()
 	}
