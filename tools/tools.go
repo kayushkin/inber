@@ -33,6 +33,7 @@ func init() {
 	DefaultRegistry.Register(NewAgentToolAdapter(WriteFile()))
 	DefaultRegistry.Register(NewAgentToolAdapter(EditFile()))
 	DefaultRegistry.Register(NewAgentToolAdapter(ListFiles()))
+	DefaultRegistry.Register(NewAgentToolAdapter(Grep()))
 	DefaultRegistry.Register(NewAgentToolAdapter(Browser()))
 	DefaultRegistry.Register(NewAgentToolAdapter(WebSearch()))
 	DefaultRegistry.Register(NewAgentToolAdapter(WebFetch()))
@@ -65,6 +66,7 @@ func ReadFile() agent.Tool  { return wrap(agentkittools.ReadFile()) }
 func WriteFile() agent.Tool { return wrap(agentkittools.WriteFile()) }
 func EditFile() agent.Tool  { return wrap(agentkittools.EditFile()) }
 func ListFiles() agent.Tool { return wrap(agentkittools.ListFiles()) }
+func Grep() agent.Tool      { return wrap(agentkittools.Grep()) }
 
 // Code introspection tools (require configuration)
 func RepoMap(rootDir string, ignorePatterns []string) agent.Tool {
