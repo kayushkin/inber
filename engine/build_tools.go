@@ -96,6 +96,11 @@ func (e *Engine) buildSpecialTool(toolName string) *agent.Tool {
 			tool := tools.TaskPlan(e.repoRoot)
 			return &tool
 		}
+	case "scratchpad":
+		if e.repoRoot != "" {
+			tool := tools.Scratchpad(e.repoRoot, e.AgentName)
+			return &tool
+		}
 	}
 	return nil
 }

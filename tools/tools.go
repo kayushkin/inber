@@ -68,7 +68,8 @@ func EditFiles() agent.Tool  { return wrap(agentkittools.EditFile()) }
 func ListFiles() agent.Tool  { return wrap(agentkittools.ListFiles()) }
 func Ripgrep() agent.Tool          { return wrap(agentkittools.Grep()) }
 func EndTurn() agent.Tool          { return wrap(agentkittools.EndTurn()) }
-func TaskPlan(repoRoot string) agent.Tool { return wrap(agentkittools.TaskPlanTool(repoRoot)) }
+func TaskPlan(repoRoot string) agent.Tool                    { return wrap(agentkittools.TaskPlanTool(repoRoot)) }
+func Scratchpad(repoRoot, agentName string) agent.Tool { return wrap(agentkittools.ScratchpadTool(repoRoot, agentName)) }
 
 // Code introspection tools (require configuration)
 func RepoMap(rootDir string, ignorePatterns []string) agent.Tool {

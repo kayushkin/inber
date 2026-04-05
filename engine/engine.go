@@ -290,9 +290,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			}
 		}
 		
-		// If agent has task_plan tool, inject .task.md as always-visible context
+		// Inject task plan and scratchpad as always-visible context
 		for _, t := range e.agentTools {
-			if t.Name == "task_plan" {
+			switch t.Name {
+			case "task_plan":
 				repoRoot := e.repoRoot
 				e.contextInjectors = append(e.contextInjectors, func() []sessionMod.NamedBlock {
 					content := agentkittools.LoadPlanContext(repoRoot)
@@ -301,7 +302,15 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 					}
 					return []sessionMod.NamedBlock{{ID: "task-plan", Text: content}}
 				})
-				break
+			case "scratchpad":
+				repoRoot, agentName := e.repoRoot, e.AgentName
+				e.contextInjectors = append(e.contextInjectors, func() []sessionMod.NamedBlock {
+					content := agentkittools.LoadScratchpadContext(repoRoot, agentName)
+					if content == "" {
+						return nil
+					}
+					return []sessionMod.NamedBlock{{ID: "scratchpad", Text: content}}
+				})
 			}
 		}
 
