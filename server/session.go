@@ -68,6 +68,13 @@ func (s *Session) setOnEvent(onEvent func(StreamEvent)) {
 	s.mu.Unlock()
 }
 
+// getOnEvent returns the current event callback (may be nil).
+func (s *Session) getOnEvent() func(StreamEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.onEvent
+}
+
 // updateHooks updates the engine's display hooks to use the current onEvent.
 // Must be called with s.mu held.
 func (s *Session) updateHooks() {

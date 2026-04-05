@@ -168,6 +168,28 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 		parentReqID = &pr.ID
 	}
 
+	// Snapshot parent's onEvent so we can bubble subagent events to the parent's stream.
+	parentOnEvent := parent.getOnEvent()
+
+	// Wire child hooks to forward status updates as agent_update events to parent stream.
+	if parentOnEvent != nil {
+		child.setOnEvent(func(ev StreamEvent) {
+			if ev.Kind == "status" || ev.Kind == "thinking" {
+				parentOnEvent(StreamEvent{
+					Kind: "agent_update",
+					Text: ev.Text,
+					Turn: ev.Turn,
+					Data: map[string]any{
+						"agent":       req.Agent,
+						"session_key": childKey,
+						"parent_key":  req.ParentKey,
+						"depth":       child.SpawnDepth,
+					},
+				})
+			}
+		})
+	}
+
 	// Enqueue the work asynchronously.
 	go func() {
 		start := time.Now()
@@ -175,9 +197,23 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 		// Track request in DB.
 		reqID, _ := g.store.CreateRequest(childKey, truncate(req.Task, 500), parentReqID)
 
-		// Notify parent that child has started.
+		// Notify parent that child has started — both via injection and live stream.
 		g.deliverProgress(req.ParentKey, childKey, req.Agent,
 			fmt.Sprintf("⏳ Sub-agent %s started working on: %s", req.Agent, truncate(req.Task, 100)))
+
+		// Fire agent_spawned on the parent's live stream.
+		if parentOnEvent != nil {
+			parentOnEvent(StreamEvent{
+				Kind: "agent_spawned",
+				Text: truncate(req.Task, 200),
+				Data: map[string]any{
+					"agent":       req.Agent,
+					"session_key": childKey,
+					"parent_key":  req.ParentKey,
+					"depth":       child.SpawnDepth,
+				},
+			})
+		}
 
 		// Publish to bus for dashboard.
 		g.events.SpawnStarted(childKey, req.Agent, req.ParentKey, truncate(req.Task, 200))
@@ -274,6 +310,23 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 				Commits:     commits,
 			}
 			g.events.SpawnCompleted(spawnResult)
+
+			// Fire agent_done on the parent's live stream.
+			if parentOnEvent != nil {
+				parentOnEvent(StreamEvent{
+					Kind: "agent_done",
+					Text: truncate(summary, 300),
+					Data: map[string]any{
+						"agent":       req.Agent,
+						"session_key": childKey,
+						"parent_key":  req.ParentKey,
+						"depth":       child.SpawnDepth,
+						"status":      status,
+						"duration":    time.Since(start).String(),
+					},
+				})
+			}
+
 			g.deliverResult(req.ParentKey, spawnResult)
 
 			// Persist child's messages.
