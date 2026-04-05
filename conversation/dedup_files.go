@@ -50,6 +50,43 @@ func toolUseFilePath(block anthropic.ContentBlockParamUnion) (string, bool) {
 	return "", false
 }
 
+// toolUseIsPartial checks if a read_files tool call used offset/limit (partial read).
+func toolUseIsPartial(block anthropic.ContentBlockParamUnion) bool {
+	if block.OfToolUse == nil {
+		return false
+	}
+	name := block.OfToolUse.Name
+	if name != "read_file" && name != "read_files" {
+		return false
+	}
+	input := block.OfToolUse.Input
+	if input == nil {
+		return false
+	}
+	var m map[string]interface{}
+	switch v := input.(type) {
+	case map[string]interface{}:
+		m = v
+	case json.RawMessage:
+		if json.Unmarshal(v, &m) != nil {
+			return false
+		}
+	default:
+		return false
+	}
+	if offset, ok := m["offset"]; ok {
+		if f, ok := offset.(float64); ok && f > 0 {
+			return true
+		}
+	}
+	if limit, ok := m["limit"]; ok {
+		if f, ok := limit.(float64); ok && f > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // fileRef tracks where a file was last referenced in the conversation.
 type fileRef struct {
 	msgIdx   int    // message index containing the tool_use
@@ -58,6 +95,7 @@ type fileRef struct {
 	resultBlockIdx int   // block index of the result
 	toolName string // read_file, write_file, edit_file
 	toolID   string // tool_use ID for matching with tool_result
+	isPartial bool  // true if offset/limit were used (partial read)
 }
 
 // DeduplicateFileRefs scans the conversation and replaces older tool results
@@ -70,11 +108,12 @@ type fileRef struct {
 func DeduplicateFileRefs(messages []anthropic.MessageParam) int {
 	// Pass 1: collect all file tool_use blocks with their paths
 	type toolRef struct {
-		path     string
-		toolName string
-		toolID   string
-		msgIdx   int
-		blockIdx int
+		path      string
+		toolName  string
+		toolID    string
+		msgIdx    int
+		blockIdx  int
+		isPartial bool
 	}
 
 	var refs []toolRef
@@ -88,11 +127,12 @@ func DeduplicateFileRefs(messages []anthropic.MessageParam) int {
 				continue
 			}
 			refs = append(refs, toolRef{
-				path:     path,
-				toolName: block.OfToolUse.Name,
-				toolID:   block.OfToolUse.ID,
-				msgIdx:   i,
-				blockIdx: j,
+				path:      path,
+				toolName:  block.OfToolUse.Name,
+				toolID:    block.OfToolUse.ID,
+				msgIdx:    i,
+				blockIdx:  j,
+				isPartial: toolUseIsPartial(block),
 			})
 		}
 	}
@@ -101,21 +141,33 @@ func DeduplicateFileRefs(messages []anthropic.MessageParam) int {
 		return 0
 	}
 
-	// Pass 2: find which paths have duplicates — mark all but the latest for stubbing
-	// Map: path → index of latest ref in refs slice
-	latest := make(map[string]int)
+	// Pass 2: find which paths have duplicates — mark older refs for stubbing.
+	// Rules:
+	//   - A full read supersedes any earlier read (full or partial) of the same path.
+	//   - A partial read ONLY supersedes an earlier full read (not other partials).
+	//   - Partial reads never supersede each other (they cover different ranges).
+	//   - Write/edit supersedes earlier reads of the same path.
+	// Map: path → index of latest FULL ref in refs slice
+	latestFull := make(map[string]int)
 	for i, r := range refs {
-		latest[r.path] = i
+		if !r.isPartial || r.toolName != "read_files" && r.toolName != "read_file" {
+			latestFull[r.path] = i
+		}
 	}
 
-	// Collect tool IDs to stub (older refs for same path)
+	// Collect tool IDs to stub (older refs superseded by a later FULL read or write)
 	stubIDs := make(map[string]string) // tool_use ID → stub message
 	for i, r := range refs {
-		if latest[r.path] != i {
-			// This is an older reference — mark its tool_result for stubbing
-			stub := fmt.Sprintf("[%s superseded — see later %s]", r.path, refs[latest[r.path]].toolName)
-			stubIDs[r.toolID] = stub
+		latestIdx, hasLatestFull := latestFull[r.path]
+		if !hasLatestFull {
+			continue // only partial reads exist — don't supersede any
 		}
+		if i >= latestIdx {
+			continue // this IS the latest full ref (or after it)
+		}
+		// This ref is older than a later full read/write — supersede it
+		stub := fmt.Sprintf("[%s superseded — see later %s]", r.path, refs[latestIdx].toolName)
+		stubIDs[r.toolID] = stub
 	}
 
 	if len(stubIDs) == 0 {
