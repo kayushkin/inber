@@ -265,7 +265,7 @@ func runRun(cmd *cobra.Command, args []string) {
 		"cost":                  cost,
 		"duration_ms":           durationMs,
 		"model":                 eng.Model,
-		"turn":                  eng.TurnCounter,
+		"turn":                  eng.Turn.Counter,
 	}
 	if metaJSON, err := json.Marshal(meta); err == nil {
 		fmt.Fprintf(os.Stderr, "INBER_META:%s\n", metaJSON)

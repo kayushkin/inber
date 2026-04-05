@@ -141,8 +141,8 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 					if e.Session != nil {
 						e.Session.LogToolResult(block.ID, block.Name, errMsg, true)
 					}
-					e.consecutiveErrors++
-					e.lastTurnHadError = true
+					e.Turn.ConsecutiveErrors++
+					e.Turn.LastHadError = true
 					toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, errMsg, true))
 					continue
 				}

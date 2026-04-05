@@ -17,13 +17,13 @@ import (
 // 4. Post-process (memory extraction, stashing, save, checkpoint, tracking)
 func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	// Increment and log turn number
-	e.TurnCounter++
-	e.turnStartTime = time.Now()
-	fmt.Fprintf(os.Stderr, "\n%s━━━ Turn %d ━━━%s\n", cyan+bold, e.TurnCounter, reset)
+	e.Turn.Counter++
+	e.Turn.StartTime = time.Now()
+	fmt.Fprintf(os.Stderr, "\n%s━━━ Turn %d ━━━%s\n", cyan+bold, e.Turn.Counter, reset)
 
 	// Take memory snapshot at start of turn
 	if e.memoryProfiler != nil {
-		e.memoryProfiler.TakeSnapshot(e.TurnCounter)
+		e.memoryProfiler.TakeSnapshot(e.Turn.Counter)
 	}
 
 	// Get session ID for tagging
@@ -52,7 +52,7 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 	// Take memory snapshot at end of turn
 	if e.memoryProfiler != nil {
-		e.memoryProfiler.TakeSnapshot(e.TurnCounter)
+		e.memoryProfiler.TakeSnapshot(e.Turn.Counter)
 	}
 
 	return result, nil

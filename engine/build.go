@@ -29,7 +29,7 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	// OAuth identity injection removed (2026-04-04): using API key auth now.
 	
 	// Pass volatile context for injection into last user message
-	a.VolatileContext = e.volatileContext
+	a.VolatileContext = e.Turn.VolatileContext
 
 	// Pass frozen/staging boundary for BP3 placement
 	if e.staged != nil {
@@ -40,23 +40,23 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	e.configureContextPruning(a)
 
 	// Generate prompt blueprint for cache analysis
-	if e.blueprintEnabled {
-		bp := BuildBlueprint(e.TurnCounter, e.agentTools, systemBlocks, blocks, e.Messages)
+	if e.Cache.BlueprintEnabled {
+		bp := BuildBlueprint(e.Turn.Counter, e.agentTools, systemBlocks, blocks, e.Messages)
 
 		// Try loading previous blueprint from workspace for cross-invocation diffs
-		if e.lastBlueprint == nil && e.workspace != nil {
+		if e.Cache.LastBlueprint == nil && e.workspace != nil {
 			if prev, err := LoadBlueprintFromWorkspace(e.workspace); err == nil {
-				e.lastBlueprint = prev
+				e.Cache.LastBlueprint = prev
 			}
 		}
 
-		if e.lastBlueprint != nil {
-			diff := DiffBlueprints(e.lastBlueprint, bp)
+		if e.Cache.LastBlueprint != nil {
+			diff := DiffBlueprints(e.Cache.LastBlueprint, bp)
 			Log.Info("prompt blueprint:\n%s", FormatDiff(diff))
 		} else {
 			Log.Info("prompt blueprint:\n%s", FormatBlueprint(bp))
 		}
-		e.lastBlueprint = bp
+		e.Cache.LastBlueprint = bp
 
 		// Persist to workspace for next invocation
 		if e.workspace != nil {
@@ -86,7 +86,7 @@ func (e *Engine) configureAgent(a *agent.Agent) {
 	}
 
 	// Wire up turn/token/time limit checks
-	if e.maxTurns > 0 || e.maxInputTokens > 0 || e.maxResponseTime > 0 {
+	if e.Limits.MaxTurns > 0 || e.Limits.MaxInputTokens > 0 || e.Limits.MaxResponseTime > 0 {
 		a.SetLimitCheck(e.buildLimitCheck())
 	}
 

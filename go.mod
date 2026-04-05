@@ -8,7 +8,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
 	github.com/kayushkin/agent-store v0.0.0-20260405014345-d199a8b99810
-	github.com/kayushkin/agentkit v0.0.0-20260405034537-484f5e31ff1d
+	github.com/kayushkin/agentkit v0.0.0-20260405024728-d098bb69144e
 	github.com/kayushkin/bus v0.0.0-20260324013021-8010a5dab1d6
 	github.com/kayushkin/forge v0.0.0
 	github.com/kayushkin/logstack v0.0.0-20260322075744-a4ca356093f8

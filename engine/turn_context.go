@@ -9,18 +9,18 @@ func (e *Engine) contextBudget(userMessage string) (minImportance float64, token
 	msgTokens := memory.EstimateTokens(userMessage)
 
 	// Use larger context budget for error recovery
-	if e.consecutiveErrors >= 5 {
+	if e.Turn.ConsecutiveErrors >= 5 {
 		return 0, 50000
 	}
-	if e.consecutiveErrors >= 3 {
+	if e.Turn.ConsecutiveErrors >= 3 {
 		return 0, 35000
 	}
-	if e.consecutiveErrors >= 1 || e.lastTurnHadError {
+	if e.Turn.ConsecutiveErrors >= 1 || e.Turn.LastHadError {
 		return 0, 20000
 	}
 
 	// First turn gets base budget
-	if e.TurnCounter == 0 {
+	if e.Turn.Counter == 0 {
 		return 0, 4000
 	}
 
@@ -31,7 +31,7 @@ func (e *Engine) contextBudget(userMessage string) (minImportance float64, token
 	if msgTokens > 300 {
 		return 0, 10000
 	}
-	if e.TurnCounter > 15 {
+	if e.Turn.Counter > 15 {
 		return 0, 8000
 	}
 

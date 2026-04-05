@@ -41,9 +41,9 @@ func (e *Engine) postProcessResult(result *agent.TurnResult, input, sessionID st
 	e.checkpointIfNeeded()
 
 	// Track cumulative session tokens
-	e.SessionInputTokens += result.InputTokens
-	e.SessionOutputTokens += result.OutputTokens
-	e.SessionCost += sessionMod.CalcCostWithCache(e.Model, result.InputTokens, result.OutputTokens,
+	e.Tokens.Input += result.InputTokens
+	e.Tokens.Output += result.OutputTokens
+	e.Tokens.Cost += sessionMod.CalcCostWithCache(e.Model, result.InputTokens, result.OutputTokens,
 		result.CacheReadTokens, result.CacheCreationTokens)
 
 	// Track usage in model-store

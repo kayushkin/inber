@@ -106,7 +106,7 @@ func (e *Engine) pruneIfNeeded() {
 				note += p
 			}
 			note += "]"
-			e.volatileContext += "\n" + note
+			e.Turn.VolatileContext += "\n" + note
 		}
 	}
 
@@ -161,7 +161,7 @@ func (e *Engine) checkpointIfNeeded() {
 	}
 
 	cfg := sessionMod.DefaultCheckpointConfig()
-	if !sessionMod.ShouldCheckpoint(e.TurnCounter, cfg) {
+	if !sessionMod.ShouldCheckpoint(e.Turn.Counter, cfg) {
 		return
 	}
 
@@ -172,7 +172,7 @@ func (e *Engine) checkpointIfNeeded() {
 	if err != nil {
 		Log.Warn("checkpoint failed: %v", err)
 	} else {
-		Log.Info("checkpoint saved (turn %d)", e.TurnCounter)
+		Log.Info("checkpoint saved (turn %d)", e.Turn.Counter)
 	}
 }
 

@@ -19,6 +19,38 @@ import (
 	modelstore "github.com/kayushkin/model-store"
 )
 
+// TurnState holds ephemeral state that changes each turn.
+type TurnState struct {
+	Counter           int
+	StartTime         time.Time
+	ConsecutiveErrors int
+	LastHadError      bool
+	VolatileContext   string
+	LastManageTurn    int
+}
+
+// CacheState holds prompt caching state across turns.
+type CacheState struct {
+	LastStablePrefix *cachedPrefix
+	LastBlueprint    *PromptBlueprint
+	BlueprintEnabled bool
+	LastNamedBlocks  []sessionMod.NamedBlock
+}
+
+// LimitConfig holds runtime limits for turn execution.
+type LimitConfig struct {
+	MaxTurns        int
+	MaxInputTokens  int
+	MaxResponseTime int
+}
+
+// TokenTotals holds session-level token usage.
+type TokenTotals struct {
+	Input  int
+	Output int
+	Cost   float64
+}
+
 // DisplayHooks configures how engine events are shown to the user.
 type DisplayHooks struct {
 	OnThinking   func(text string)
@@ -72,7 +104,10 @@ type Engine struct {
 	AgentName    string
 	AgentConfig  *registry.AgentConfig
 	Messages     []anthropic.MessageParam
-	TurnCounter  int
+	Turn    TurnState
+	Cache   CacheState
+	Limits  LimitConfig
+	Tokens  TokenTotals
 
 	repoRoot        string
 	agentTools      []agent.Tool
@@ -80,17 +115,9 @@ type Engine struct {
 	displayMu       sync.Mutex
 	workspace       *sessionMod.Workspace
 	thinkingBud     int64
-	lastNamedBlocks []sessionMod.NamedBlock
 	stashCfg        conversation.StashConfig
 	extractCfg      conversation.ExtractionConfig
-	consecutiveErrors  int  // track consecutive tool errors for context escalation
-	lastTurnHadError   bool
-	lastStablePrefix   *cachedPrefix   // hash + blocks of last stable system prefix (for cache determinism)
-	volatileContext    string          // per-turn volatile content (fleet status, recent files) injected into last user message
-	lastManageTurn     int             // turn counter at last management pass (for batched pruning)
 	staged             *conversation.StagedConversation // frozen/staging zone manager
-	lastBlueprint      *PromptBlueprint // previous turn's blueprint for diff comparison
-	blueprintEnabled   bool             // emit blueprint logs (set via --blueprint or env)
 	toolInputsCache   map[string]string             // toolID -> input JSON for workflow hooks
 	contextInjectors  []ContextInjector              // extra system prompt sections from server
 	workflowHooks   *WorkflowHooks                // auto-commit, auto-format, build/test
@@ -102,17 +129,8 @@ type Engine struct {
 	agentRegistry   *registry.Registry            // agent registry for spawn tools
 	modelExplicitlySet bool                       // true if --model flag was used
 	noHooks         bool                          // skip post-request verification
-	maxTurns        int                           // max API round-trips per RunTurn (0 = unlimited)
-	maxInputTokens  int                           // max cumulative input tokens per RunTurn (0 = unlimited)
-	maxResponseTime int                           // max seconds for orchestrator to respond (0 = unlimited)
-	turnStartTime   time.Time                     // when the current turn started (for time limit enforcement)
 	injections      <-chan string                  // mid-run message injection channel (nil = disabled)
 
-	// Session-level token tracking (exported for display)
-	SessionInputTokens  int
-	SessionOutputTokens int
-	SessionCost         float64
-	
 	// Memory profiling
 	memoryProfiler      *MemoryProfiler
 }
@@ -285,7 +303,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	}
 
 	// Setup limits and profiling
-	e.maxTurns, e.maxInputTokens, e.maxResponseTime = setupLimits(cfg, e.AgentConfig)
+	e.Limits.MaxTurns, e.Limits.MaxInputTokens, e.Limits.MaxResponseTime = setupLimits(cfg, e.AgentConfig)
 
 	// Setup memory profiling
 	memoryProfiler, err := setupMemoryProfiling(cfg.MemoryProfiling, cfg.MemoryLogPath)
@@ -295,10 +313,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	e.memoryProfiler = memoryProfiler
 
 	// Blueprint: enable via config or INBER_BLUEPRINT env var
-	e.blueprintEnabled = cfg.Blueprint
-	if !e.blueprintEnabled {
+	e.Cache.BlueprintEnabled = cfg.Blueprint
+	if !e.Cache.BlueprintEnabled {
 		if v := os.Getenv("INBER_BLUEPRINT"); v == "1" || v == "true" {
-			e.blueprintEnabled = true
+			e.Cache.BlueprintEnabled = true
 		}
 	}
 

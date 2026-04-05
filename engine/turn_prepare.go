@@ -57,6 +57,6 @@ func (e *Engine) prepareInput(input, sessionID string) string {
 // buildTurnContext assembles system prompt blocks for the turn.
 func (e *Engine) buildTurnContext(processedInput string) []sessionMod.NamedBlock {
 	systemBlocks := e.BuildSystemPrompt(processedInput)
-	e.lastNamedBlocks = systemBlocks
+	e.Cache.LastNamedBlocks = systemBlocks
 	return systemBlocks
 }

@@ -125,7 +125,7 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 		}
 
 		// Assemble system blocks: ONLY stable content (cached via BP2).
-		// Volatile content goes into e.volatileContext for injection into the
+		// Volatile content goes into e.Turn.VolatileContext for injection into the
 		// user's message (after BP3), preventing cache busting.
 		var blocks []sessionMod.NamedBlock
 		blocks = append(blocks, stableBlocks...)
@@ -151,9 +151,9 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 			volParts = append(volParts, "[source: "+ref+"]")
 		}
 		if len(volParts) > 0 {
-			e.volatileContext = "[Context]\n" + strings.Join(volParts, "\n")
+			e.Turn.VolatileContext = "[Context]\n" + strings.Join(volParts, "\n")
 		} else {
-			e.volatileContext = ""
+			e.Turn.VolatileContext = ""
 		}
 
 		if e.workspace != nil {
@@ -202,10 +202,10 @@ func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.T
 	// reuse the exact same TextBlockParam slice to guarantee byte-identical prefix.
 	if cacheIdx >= 0 && len(stableTexts) > 0 {
 		hash := hashStrings(stableTexts)
-		if e.lastStablePrefix != nil && e.lastStablePrefix.hash == hash {
+		if e.Cache.LastStablePrefix != nil && e.Cache.LastStablePrefix.hash == hash {
 			// Stable prefix unchanged — reuse cached blocks for byte-identical prefix
 			reused := make([]anthropic.TextBlockParam, 0, len(systemBlocks))
-			reused = append(reused, e.lastStablePrefix.blocks...)
+			reused = append(reused, e.Cache.LastStablePrefix.blocks...)
 			if cacheIdx+1 < len(systemBlocks) {
 				reused = append(reused, systemBlocks[cacheIdx+1:]...)
 			}
@@ -217,7 +217,7 @@ func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.T
 		if cacheIdx < len(stableBlocks) {
 			stableBlocks[cacheIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
 		}
-		e.lastStablePrefix = &cachedPrefix{hash: hash, blocks: stableBlocks}
+		e.Cache.LastStablePrefix = &cachedPrefix{hash: hash, blocks: stableBlocks}
 	}
 
 	if cacheIdx >= 0 && cacheIdx < len(systemBlocks) {

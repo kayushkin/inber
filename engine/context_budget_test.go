@@ -5,7 +5,7 @@ import (
 )
 
 func TestContextBudget_FirstTurn(t *testing.T) {
-	e := &Engine{TurnCounter: 0}
+	e := &Engine{Turn: TurnState{Counter: 0}}
 	minImp, budget := e.contextBudget("hello")
 
 	if minImp != 0 {
@@ -17,7 +17,7 @@ func TestContextBudget_FirstTurn(t *testing.T) {
 }
 
 func TestContextBudget_NormalTurn(t *testing.T) {
-	e := &Engine{TurnCounter: 3}
+	e := &Engine{Turn: TurnState{Counter: 3}}
 	minImp, budget := e.contextBudget("fix the build error")
 
 	if minImp != 0 {
@@ -29,7 +29,7 @@ func TestContextBudget_NormalTurn(t *testing.T) {
 }
 
 func TestContextBudget_LongMessage(t *testing.T) {
-	e := &Engine{TurnCounter: 2}
+	e := &Engine{Turn: TurnState{Counter: 2}}
 	// >300 tokens (~1200 chars)
 	longMsg := ""
 	for i := 0; i < 400; i++ {
@@ -43,7 +43,7 @@ func TestContextBudget_LongMessage(t *testing.T) {
 }
 
 func TestContextBudget_VeryLongMessage(t *testing.T) {
-	e := &Engine{TurnCounter: 2}
+	e := &Engine{Turn: TurnState{Counter: 2}}
 	// >1000 tokens (~4000 chars)
 	veryLong := ""
 	for i := 0; i < 1200; i++ {
@@ -57,7 +57,7 @@ func TestContextBudget_VeryLongMessage(t *testing.T) {
 }
 
 func TestContextBudget_SingleError(t *testing.T) {
-	e := &Engine{TurnCounter: 5, consecutiveErrors: 1}
+	e := &Engine{Turn: TurnState{Counter: 5, ConsecutiveErrors: 1}}
 	_, budget := e.contextBudget("fix it")
 
 	if budget != 20000 {
@@ -66,7 +66,7 @@ func TestContextBudget_SingleError(t *testing.T) {
 }
 
 func TestContextBudget_LastTurnError(t *testing.T) {
-	e := &Engine{TurnCounter: 5, lastTurnHadError: true}
+	e := &Engine{Turn: TurnState{Counter: 5, LastHadError: true}}
 	_, budget := e.contextBudget("try again")
 
 	if budget != 20000 {
@@ -75,7 +75,7 @@ func TestContextBudget_LastTurnError(t *testing.T) {
 }
 
 func TestContextBudget_ThreeErrors(t *testing.T) {
-	e := &Engine{TurnCounter: 8, consecutiveErrors: 3}
+	e := &Engine{Turn: TurnState{Counter: 8, ConsecutiveErrors: 3}}
 	_, budget := e.contextBudget("still broken")
 
 	if budget != 35000 {

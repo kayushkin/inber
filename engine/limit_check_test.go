@@ -18,7 +18,7 @@ func TestBuildLimitCheck_NoLimits(t *testing.T) {
 }
 
 func TestBuildLimitCheck_TurnLimit(t *testing.T) {
-	e := &Engine{maxTurns: 10}
+	e := &Engine{Limits: LimitConfig{MaxTurns: 10}}
 	check := e.buildLimitCheck()
 
 	// Under limit
@@ -47,7 +47,7 @@ func TestBuildLimitCheck_TurnLimit(t *testing.T) {
 }
 
 func TestBuildLimitCheck_TokenLimit(t *testing.T) {
-	e := &Engine{maxInputTokens: 100000}
+	e := &Engine{Limits: LimitConfig{MaxInputTokens: 100000}}
 	check := e.buildLimitCheck()
 
 	// Under limit
@@ -70,8 +70,8 @@ func TestBuildLimitCheck_TokenLimit(t *testing.T) {
 
 func TestBuildLimitCheck_SessionTokensAccumulate(t *testing.T) {
 	e := &Engine{
-		maxInputTokens:     100000,
-		SessionInputTokens: 80000, // previous turns used 80k
+		Limits: LimitConfig{MaxInputTokens: 100000},
+		Tokens: TokenTotals{Input: 80000}, // previous turns used 80k
 	}
 	check := e.buildLimitCheck()
 
@@ -127,14 +127,14 @@ func TestDetachDefaults(t *testing.T) {
 		}
 	}
 
-	e.maxTurns = maxTurns
-	e.maxInputTokens = maxInputTokens
+	e.Limits.MaxTurns = maxTurns
+	e.Limits.MaxInputTokens = maxInputTokens
 
-	if e.maxTurns != 25 {
-		t.Errorf("detach default maxTurns = %d, want 25", e.maxTurns)
+	if e.Limits.MaxTurns != 25 {
+		t.Errorf("detach default maxTurns = %d, want 25", e.Limits.MaxTurns)
 	}
-	if e.maxInputTokens != 500000 {
-		t.Errorf("detach default maxInputTokens = %d, want 500000", e.maxInputTokens)
+	if e.Limits.MaxInputTokens != 500000 {
+		t.Errorf("detach default maxInputTokens = %d, want 500000", e.Limits.MaxInputTokens)
 	}
 
 	// Verify limits actually work with detach defaults
@@ -157,7 +157,7 @@ func TestDetachDefaults(t *testing.T) {
 
 func TestAgentConfigLimits(t *testing.T) {
 	// Simulate loading limits from agent config
-	e := &Engine{maxTurns: 0, maxInputTokens: 0}
+	e := &Engine{Limits: LimitConfig{MaxTurns: 0, MaxInputTokens: 0}}
 
 	// Agent config specifies limits
 	agentLimits := struct {
@@ -169,18 +169,18 @@ func TestAgentConfigLimits(t *testing.T) {
 	}
 
 	// Apply agent config limits (as NewEngine does)
-	if e.maxTurns == 0 {
-		e.maxTurns = agentLimits.MaxTurns
+	if e.Limits.MaxTurns == 0 {
+		e.Limits.MaxTurns = agentLimits.MaxTurns
 	}
-	if e.maxInputTokens == 0 {
-		e.maxInputTokens = agentLimits.MaxInputTokens
+	if e.Limits.MaxInputTokens == 0 {
+		e.Limits.MaxInputTokens = agentLimits.MaxInputTokens
 	}
 
-	if e.maxTurns != 15 {
-		t.Errorf("agent config maxTurns = %d, want 15", e.maxTurns)
+	if e.Limits.MaxTurns != 15 {
+		t.Errorf("agent config maxTurns = %d, want 15", e.Limits.MaxTurns)
 	}
-	if e.maxInputTokens != 300000 {
-		t.Errorf("agent config maxInputTokens = %d, want 300000", e.maxInputTokens)
+	if e.Limits.MaxInputTokens != 300000 {
+		t.Errorf("agent config maxInputTokens = %d, want 300000", e.Limits.MaxInputTokens)
 	}
 }
 

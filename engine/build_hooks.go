@@ -38,33 +38,33 @@ func truncateLog(s string, n int) string {
 func (e *Engine) buildLimitCheck() func(result *agent.TurnResult) (bool, string) {
 	return func(result *agent.TurnResult) (bool, string) {
 		// Check cumulative input tokens (session-level + current turn)
-		totalInput := e.SessionInputTokens + result.InputTokens
-		if e.maxInputTokens > 0 && totalInput > e.maxInputTokens {
+		totalInput := e.Tokens.Input + result.InputTokens
+		if e.Limits.MaxInputTokens > 0 && totalInput > e.Limits.MaxInputTokens {
 			return true, fmt.Sprintf(
 				"Input token budget exceeded: %dk / %dk used (%d tool calls so far).",
-				totalInput/1000, e.maxInputTokens/1000, result.ToolCalls,
+				totalInput/1000, e.Limits.MaxInputTokens/1000, result.ToolCalls,
 			)
 		}
 
 		// Check API round-trips within this turn
-		if e.maxTurns > 0 && result.ToolCalls >= e.maxTurns {
+		if e.Limits.MaxTurns > 0 && result.ToolCalls >= e.Limits.MaxTurns {
 			return true, fmt.Sprintf(
 				"Turn limit exceeded: %d tool calls made (limit: %d). Used %dk input tokens.",
-				result.ToolCalls, e.maxTurns, totalInput/1000,
+				result.ToolCalls, e.Limits.MaxTurns, totalInput/1000,
 			)
 		}
 
 		// Check response time limit (orchestrator speed enforcement)
-		if e.maxResponseTime > 0 && !e.turnStartTime.IsZero() {
-			elapsed := time.Since(e.turnStartTime)
-			limit := time.Duration(e.maxResponseTime) * time.Second
+		if e.Limits.MaxResponseTime > 0 && !e.Turn.StartTime.IsZero() {
+			elapsed := time.Since(e.Turn.StartTime)
+			limit := time.Duration(e.Limits.MaxResponseTime) * time.Second
 			if elapsed > limit {
 				return true, fmt.Sprintf(
 					"Response time exceeded: %.0fs elapsed (limit: %ds). "+
 						"You are an orchestrator — respond or spawn immediately. "+
 						"Do NOT continue reading files or running commands. "+
 						"Either give your answer now or spawn_agent for the work.",
-					elapsed.Seconds(), e.maxResponseTime,
+					elapsed.Seconds(), e.Limits.MaxResponseTime,
 				)
 			}
 		}
@@ -87,7 +87,7 @@ func (e *Engine) buildHooks() *agent.Hooks {
 			if logHooks.OnRequest != nil {
 				logHooks.OnRequest(params)
 			}
-			e.Session.WritePromptBreakdown(e.TurnCounter, params, e.lastNamedBlocks)
+			e.Session.WritePromptBreakdown(e.Turn.Counter, params, e.Cache.LastNamedBlocks)
 		}
 		hooks.OnThinking = func(text string) {
 			if logHooks.OnThinking != nil {
@@ -121,8 +121,8 @@ func (e *Engine) buildHooks() *agent.Hooks {
 				d.OnToolResult(name, output, isError)
 			}
 			if isError {
-				e.consecutiveErrors++
-				e.lastTurnHadError = true
+				e.Turn.ConsecutiveErrors++
+				e.Turn.LastHadError = true
 			}
 		}
 		hooks.ModifyToolResult = func(toolID, name, output string, isError bool) string {
@@ -171,10 +171,10 @@ func (e *Engine) buildHooks() *agent.Hooks {
 				stopReason,
 				"",
 			)
-			if !e.lastTurnHadError {
-				e.consecutiveErrors = 0
+			if !e.Turn.LastHadError {
+				e.Turn.ConsecutiveErrors = 0
 			}
-			e.lastTurnHadError = false
+			e.Turn.LastHadError = false
 			if logHooks.OnResponse != nil {
 				logHooks.OnResponse(resp)
 			}
