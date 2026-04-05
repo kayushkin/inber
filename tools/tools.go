@@ -33,7 +33,9 @@ func init() {
 	DefaultRegistry.Register(NewAgentToolAdapter(WriteFiles()))
 	DefaultRegistry.Register(NewAgentToolAdapter(EditFiles()))
 	DefaultRegistry.Register(NewAgentToolAdapter(ListFiles()))
-	DefaultRegistry.Register(NewAgentToolAdapter(Ripgrep()))
+	// ripgrep removed as dedicated tool — encourages grep-then-read two-turn
+	// pattern when reading the file directly is one turn. Still available via
+	// shell_commands ("rg ...") when truly needed for large-scale searches.
 	DefaultRegistry.Register(NewAgentToolAdapter(Browser()))
 	DefaultRegistry.Register(NewAgentToolAdapter(WebSearch()))
 	DefaultRegistry.Register(NewAgentToolAdapter(WebFetch()))
