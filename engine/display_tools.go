@@ -51,7 +51,7 @@ func formatToolPayload(name, rawInput string) string {
 
 	// Tool-specific formatting
 	switch name {
-	case "shell", "bash":
+	case "shell", "shell_commands", "bash":
 		if cmd, ok := input["command"].(string); ok {
 			if len(cmd) > 100 {
 				return fmt.Sprintf("$ %s…", cmd[:100])
@@ -59,7 +59,7 @@ func formatToolPayload(name, rawInput string) string {
 			return fmt.Sprintf("$ %s", cmd)
 		}
 
-	case "read_file":
+	case "read_file", "read_files":
 		if path, ok := input["path"].(string); ok {
 			return path
 		}
@@ -67,27 +67,27 @@ func formatToolPayload(name, rawInput string) string {
 			return path
 		}
 
-	case "write_file":
+	case "write_file", "write_files":
 		var path string
 		if p, ok := input["path"].(string); ok {
 			path = p
 		} else if p, ok := input["file_path"].(string); ok {
 			path = p
 		}
-		
+
 		var size string
 		if content, ok := input["content"].(string); ok {
 			lines := strings.Count(content, "\n") + 1
 			size = fmt.Sprintf("%d lines", lines)
 		}
-		
+
 		if path != "" && size != "" {
 			return fmt.Sprintf("%s (%s)", path, size)
 		} else if path != "" {
 			return path
 		}
 
-	case "edit_file":
+	case "edit_file", "edit_files":
 		if path, ok := input["path"].(string); ok {
 			return path
 		}
@@ -151,7 +151,7 @@ func formatToolResult(name, output string) string {
 
 	// Tool-specific formatting
 	switch name {
-	case "shell", "bash":
+	case "shell", "shell_commands", "bash":
 		// Show first line if it's short, otherwise just "OK" or line count
 		if bytes == 0 {
 			return "OK (no output)"
@@ -165,19 +165,19 @@ func formatToolResult(name, output string) string {
 		}
 		return fmt.Sprintf("%d lines", lines)
 
-	case "read_file":
+	case "read_file", "read_files":
 		if lines > 1 {
 			return fmt.Sprintf("%d lines", lines)
 		}
 		return fmt.Sprintf("%d bytes", bytes)
 
-	case "write_file":
+	case "write_file", "write_files":
 		if lines > 1 {
 			return fmt.Sprintf("wrote %d lines", lines)
 		}
 		return fmt.Sprintf("wrote %d bytes", bytes)
 
-	case "edit_file":
+	case "edit_file", "edit_files":
 		// Try to extract edit summary from output
 		if strings.Contains(output, "replaced") || strings.Contains(output, "edited") {
 			firstLine := strings.Split(output, "\n")[0]

@@ -65,7 +65,7 @@ func (h *WorkflowHooks) OnToolResult(toolName, toolInput, output string, isError
 	}
 
 	// Only process file write tools
-	if toolName != "write_file" && toolName != "edit_file" {
+	if toolName != "write_file" && toolName != "edit_file" && toolName != "write_files" && toolName != "edit_files" {
 		return ""
 	}
 

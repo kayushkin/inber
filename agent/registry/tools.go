@@ -22,10 +22,10 @@ func NewToolRegistry() *ToolRegistry {
 	}
 
 	// Register all built-in file and shell tools
-	r.Register("shell", tools.Shell())
-	r.Register("read_file", tools.ReadFile())
-	r.Register("write_file", tools.WriteFile())
-	r.Register("edit_file", tools.EditFile())
+	r.Register("shell_commands", tools.ShellCommands())
+	r.Register("read_files", tools.ReadFiles())
+	r.Register("write_files", tools.WriteFiles())
+	r.Register("edit_files", tools.EditFiles())
 	r.Register("list_files", tools.ListFiles())
 	r.Register("browser", tools.Browser())
 	r.Register("web_search", tools.WebSearch())

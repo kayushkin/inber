@@ -28,12 +28,12 @@ var DefaultRegistry = NewRegistry()
 // init populates the default registry with built-in tools
 func init() {
 	// Register all built-in tools in the default registry
-	DefaultRegistry.Register(NewAgentToolAdapter(Shell()))
-	DefaultRegistry.Register(NewAgentToolAdapter(ReadFile()))
-	DefaultRegistry.Register(NewAgentToolAdapter(WriteFile()))
-	DefaultRegistry.Register(NewAgentToolAdapter(EditFile()))
+	DefaultRegistry.Register(NewAgentToolAdapter(ShellCommands()))
+	DefaultRegistry.Register(NewAgentToolAdapter(ReadFiles()))
+	DefaultRegistry.Register(NewAgentToolAdapter(WriteFiles()))
+	DefaultRegistry.Register(NewAgentToolAdapter(EditFiles()))
 	DefaultRegistry.Register(NewAgentToolAdapter(ListFiles()))
-	DefaultRegistry.Register(NewAgentToolAdapter(Grep()))
+	DefaultRegistry.Register(NewAgentToolAdapter(Ripgrep()))
 	DefaultRegistry.Register(NewAgentToolAdapter(Browser()))
 	DefaultRegistry.Register(NewAgentToolAdapter(WebSearch()))
 	DefaultRegistry.Register(NewAgentToolAdapter(WebFetch()))
@@ -41,7 +41,7 @@ func init() {
 }
 
 // File system tools
-func Shell() agent.Tool     { return wrap(agentkittools.Shell()) }
+func ShellCommands() agent.Tool { return wrap(agentkittools.Shell()) }
 
 // ShellInDir returns a shell tool that defaults to the given directory.
 func ShellInDir(dir string) agent.Tool {
@@ -62,11 +62,11 @@ func ShellInDir(dir string) agent.Tool {
 	}
 	return wrap(t)
 }
-func ReadFile() agent.Tool  { return wrap(agentkittools.ReadFile()) }
-func WriteFile() agent.Tool { return wrap(agentkittools.WriteFile()) }
-func EditFile() agent.Tool  { return wrap(agentkittools.EditFile()) }
-func ListFiles() agent.Tool { return wrap(agentkittools.ListFiles()) }
-func Grep() agent.Tool      { return wrap(agentkittools.Grep()) }
+func ReadFiles() agent.Tool  { return wrap(agentkittools.ReadFile()) }
+func WriteFiles() agent.Tool { return wrap(agentkittools.WriteFile()) }
+func EditFiles() agent.Tool  { return wrap(agentkittools.EditFile()) }
+func ListFiles() agent.Tool  { return wrap(agentkittools.ListFiles()) }
+func Ripgrep() agent.Tool    { return wrap(agentkittools.Grep()) }
 
 // Code introspection tools (require configuration)
 func RepoMap(rootDir string, ignorePatterns []string) agent.Tool {
@@ -93,10 +93,10 @@ func Scheduler() agent.Tool { return wrap(agentkittools.Scheduler()) }
 // Note: RepoMap and RecentFiles require configuration (rootDir, patterns) and must be added explicitly.
 func All() []agent.Tool {
 	return []agent.Tool{
-		Shell(),
-		ReadFile(),
-		WriteFile(),
-		EditFile(),
+		ShellCommands(),
+		ReadFiles(),
+		WriteFiles(),
+		EditFiles(),
 		ListFiles(),
 	}
 }

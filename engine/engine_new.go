@@ -325,7 +325,7 @@ func loadToolsIntoMemory(memStore memory.MemoryStore, tools []agent.Tool) error 
 			category = "code-introspection"
 		} else if strings.HasPrefix(t.Name, "memory_") {
 			category = "memory"
-		} else if t.Name == "shell" {
+		} else if t.Name == "shell" || t.Name == "shell_commands" {
 			category = "execution"
 		}
 		

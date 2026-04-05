@@ -19,7 +19,7 @@ func summarizeToolInput(name, raw string) string {
 	raw = strings.TrimSpace(raw)
 	
 	// For shell/exec, try to extract the command
-	if name == "shell" || name == "bash" {
+	if name == "shell" || name == "shell_commands" || name == "bash" {
 		var input struct {
 			Command string `json:"command"`
 		}

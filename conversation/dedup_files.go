@@ -13,6 +13,9 @@ var fileOps = map[string]bool{
 	"read_file":  true,
 	"write_file": true,
 	"edit_file":  true,
+	"read_files":  true,
+	"write_files": true,
+	"edit_files":  true,
 }
 
 // toolUseFilePath extracts the file path from a tool_use block if it's a file operation.

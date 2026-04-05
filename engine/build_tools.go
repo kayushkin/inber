@@ -47,7 +47,7 @@ func (e *Engine) buildDefaultTools() []agent.Tool {
 	// Replace shell with workspace-scoped version
 	if e.repoRoot != "" {
 		for i, t := range result {
-			if t.Name == "shell" {
+			if t.Name == "shell" || t.Name == "shell_commands" {
 				result[i] = tools.ShellInDir(e.repoRoot)
 				break
 			}
@@ -101,7 +101,7 @@ func (e *Engine) findStandardTool(toolName string) *agent.Tool {
 	if tool := tools.GetTool(toolName); tool != nil {
 		agentTool := tools.ToAgentTool(tool)
 		// Use workspace-scoped shell when repoRoot is set
-		if agentTool.Name == "shell" && e.repoRoot != "" {
+		if (agentTool.Name == "shell" || agentTool.Name == "shell_commands") && e.repoRoot != "" {
 			tool := tools.ShellInDir(e.repoRoot)
 			return &tool
 		}
@@ -112,7 +112,7 @@ func (e *Engine) findStandardTool(toolName string) *agent.Tool {
 	for _, t := range tools.All() {
 		if t.Name == toolName {
 			// Use workspace-scoped shell when repoRoot is set
-			if t.Name == "shell" && e.repoRoot != "" {
+			if (t.Name == "shell" || t.Name == "shell_commands") && e.repoRoot != "" {
 				tool := tools.ShellInDir(e.repoRoot)
 				return &tool
 			}

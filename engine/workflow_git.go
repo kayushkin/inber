@@ -17,7 +17,7 @@ func (h *WorkflowHooks) git(args ...string) (string, error) {
 // commitFile handles auto-commit for a changed file.
 func (h *WorkflowHooks) commitFile(toolName, filePath string) string {
 	var msg string
-	if toolName == "write_file" {
+	if toolName == "write_file" || toolName == "write_files" {
 		msg = fmt.Sprintf("Create %s", filepath.Base(filePath))
 	} else {
 		msg = fmt.Sprintf("Update %s", filepath.Base(filePath))
