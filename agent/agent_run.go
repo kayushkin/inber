@@ -19,10 +19,15 @@ func (a *Agent) prepareTools() *toolInfo {
 	toolMap := make(map[string]Tool)
 	
 	for i, t := range a.tools {
+		// Inject "then" chain field into every tool's schema (except end_turn).
+		schema := t.InputSchema
+		if t.Name != "end_turn" {
+			schema = injectChainField(schema)
+		}
 		tool := &anthropic.ToolParam{
 			Name:        t.Name,
 			Description: anthropic.String(t.Description),
-			InputSchema: t.InputSchema,
+			InputSchema: schema,
 		}
 		// Add cache control to the last tool definition
 		if i == len(a.tools)-1 {
@@ -210,44 +215,17 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 			a.hooks.OnToolCall(block.ID, block.Name, []byte(block.Input))
 		}
 
-		tool, ok := tools.toolMap[block.Name]
-		if !ok {
-			errMsg := fmt.Sprintf("error: unknown tool %q", block.Name)
-			if a.hooks != nil && a.hooks.OnToolResult != nil {
-				a.hooks.OnToolResult(block.ID, block.Name, errMsg, true)
-			}
-			finalErrMsg := errMsg
+		// Execute tool with optional chain ("then" field).
+		output, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID)
+		if isError {
+			finalOutput := output
 			if a.hooks != nil && a.hooks.ModifyToolResult != nil {
-				if modified := a.hooks.ModifyToolResult(block.ID, block.Name, errMsg, true); modified != "" {
-					finalErrMsg = modified
+				if modified := a.hooks.ModifyToolResult(block.ID, block.Name, output, true); modified != "" {
+					finalOutput = modified
 				}
 			}
-			toolResults = append(toolResults, anthropic.NewToolResultBlock(
-				block.ID, finalErrMsg, true,
-			))
+			toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, finalOutput, true))
 			continue
-		}
-
-		output, err := tool.Run(ctx, string(block.Input))
-		if err != nil {
-			errMsg := fmt.Sprintf("error: %s", err)
-			if a.hooks != nil && a.hooks.OnToolResult != nil {
-				a.hooks.OnToolResult(block.ID, block.Name, errMsg, true)
-			}
-			finalErrMsg := errMsg
-			if a.hooks != nil && a.hooks.ModifyToolResult != nil {
-				if modified := a.hooks.ModifyToolResult(block.ID, block.Name, errMsg, true); modified != "" {
-					finalErrMsg = modified
-				}
-			}
-			toolResults = append(toolResults, anthropic.NewToolResultBlock(
-				block.ID, finalErrMsg, true,
-			))
-			continue
-		}
-
-		if a.hooks != nil && a.hooks.OnToolResult != nil {
-			a.hooks.OnToolResult(block.ID, block.Name, output, false)
 		}
 
 		// Apply truncation/modification before adding to conversation

@@ -1,0 +1,142 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/anthropics/anthropic-sdk-go"
+)
+
+// chainField is the JSON field name used for tool chaining.
+const chainField = "then"
+
+// thenSchema is the schema for the "then" field injected into every tool.
+// It lets the model chain another tool call within the same tool_use block.
+var thenSchema = map[string]any{
+	"type": "object",
+	"description": "Chain another tool to run after this one. Avoids wasting an API turn. Use for: verify after write (edit + build), read related files, or any follow-up you already know you need.",
+	"properties": map[string]any{
+		"tool": map[string]any{
+			"type":        "string",
+			"description": "Name of the tool to chain",
+		},
+		"input": map[string]any{
+			"type":        "object",
+			"description": "Input for the chained tool",
+		},
+	},
+	"required": []string{"tool", "input"},
+}
+
+// injectChainField adds the "then" property to a tool's InputSchema.
+// Returns a new schema with the field added (does not mutate original).
+func injectChainField(schema anthropic.ToolInputSchemaParam) anthropic.ToolInputSchemaParam {
+	// Clone properties map
+	props, ok := schema.Properties.(map[string]any)
+	if !ok {
+		return schema
+	}
+	newProps := make(map[string]any, len(props)+1)
+	for k, v := range props {
+		newProps[k] = v
+	}
+	newProps[chainField] = thenSchema
+
+	return anthropic.ToolInputSchemaParam{
+		Properties: newProps,
+		Required:   schema.Required,
+		// Type is auto-set to "object" by the SDK
+	}
+}
+
+// chainedTool represents a parsed "then" field from tool input.
+type chainedTool struct {
+	Tool  string          `json:"tool"`
+	Input json.RawMessage `json:"input"`
+}
+
+// extractChain parses and removes the "then" field from raw tool input JSON.
+// Returns the cleaned input (without "then") and the chained tool if present.
+func extractChain(rawInput string) (cleanInput string, chain *chainedTool) {
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(rawInput), &parsed); err != nil {
+		return rawInput, nil
+	}
+
+	thenRaw, hasThen := parsed[chainField]
+	if !hasThen {
+		return rawInput, nil
+	}
+	delete(parsed, chainField)
+
+	// Re-marshal clean input
+	cleanBytes, err := json.Marshal(parsed)
+	if err != nil {
+		return rawInput, nil
+	}
+
+	// Parse the chain
+	thenBytes, err := json.Marshal(thenRaw)
+	if err != nil {
+		return string(cleanBytes), nil
+	}
+	var ct chainedTool
+	if err := json.Unmarshal(thenBytes, &ct); err != nil || ct.Tool == "" {
+		return string(cleanBytes), nil
+	}
+
+	return string(cleanBytes), &ct
+}
+
+// executeWithChain runs a tool and any chained follow-up, combining results.
+func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string, rawInput string, hooks *Hooks, blockID string) (output string, isError bool) {
+	cleanInput, chain := extractChain(rawInput)
+
+	// Run primary tool
+	tool, ok := toolMap[name]
+	if !ok {
+		return fmt.Sprintf("error: unknown tool %q", name), true
+	}
+	primaryOutput, err := tool.Run(ctx, cleanInput)
+	if err != nil {
+		return fmt.Sprintf("error: %s", err), true
+	}
+
+	if hooks != nil && hooks.OnToolResult != nil {
+		hooks.OnToolResult(blockID, name, primaryOutput, false)
+	}
+
+	// No chain — return primary result
+	if chain == nil {
+		return primaryOutput, false
+	}
+
+	// Execute chained tool
+	chainTool, ok := toolMap[chain.Tool]
+	if !ok {
+		return primaryOutput + fmt.Sprintf("\n\n--- then(%s) error: unknown tool ---", chain.Tool), false
+	}
+
+	if hooks != nil && hooks.OnToolCall != nil {
+		hooks.OnToolCall(blockID+"-chain", chain.Tool, chain.Input)
+	}
+
+	chainOutput, chainErr := chainTool.Run(ctx, string(chain.Input))
+	if chainErr != nil {
+		chainOutput = fmt.Sprintf("error: %s", chainErr)
+	}
+
+	if hooks != nil && hooks.OnToolResult != nil {
+		hooks.OnToolResult(blockID+"-chain", chain.Tool, chainOutput, chainErr != nil)
+	}
+
+	// Combine results
+	var combined strings.Builder
+	combined.WriteString(primaryOutput)
+	combined.WriteString(fmt.Sprintf("\n\n--- then(%s) ---\n", chain.Tool))
+	combined.WriteString(chainOutput)
+
+	return combined.String(), false
+}
