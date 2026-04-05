@@ -12,27 +12,30 @@ import (
 // chainField is the JSON field name used for tool chaining.
 const chainField = "then"
 
-// thenSchema is the schema for the "then" field injected into every tool.
-// It lets the model chain another tool call within the same tool_use block.
-var thenSchema = map[string]any{
-	"type": "object",
-	"description": "Chain another tool to run after this one. Avoids wasting an API turn. Use for: verify after write (edit + build), read related files, or any follow-up you already know you need.",
-	"properties": map[string]any{
-		"tool": map[string]any{
-			"type":        "string",
-			"description": "Name of the tool to chain",
+// buildThenSchema creates the schema for the "then" field with tool names as enum.
+// Must be called with the actual tool names available to the agent.
+func buildThenSchema(toolNames []string) map[string]any {
+	return map[string]any{
+		"type": "object",
+		"description": "Chain another tool to run after this one. Avoids wasting an API turn. Use for: verify after write (edit + build), read related files, or any follow-up you already know you need. Use end_turn when no follow-up is needed.",
+		"properties": map[string]any{
+			"tool": map[string]any{
+				"type":        "string",
+				"enum":        toolNames,
+				"description": "Tool to chain next. Use end_turn if no follow-up needed.",
+			},
+			"input": map[string]any{
+				"type":        "object",
+				"description": "Input for the chained tool",
+			},
 		},
-		"input": map[string]any{
-			"type":        "object",
-			"description": "Input for the chained tool",
-		},
-	},
-	"required": []string{"tool", "input"},
+		"required": []string{"tool", "input"},
+	}
 }
 
 // injectChainField adds the "then" property to a tool's InputSchema.
 // Returns a new schema with the field added (does not mutate original).
-func injectChainField(schema anthropic.ToolInputSchemaParam) anthropic.ToolInputSchemaParam {
+func injectChainField(schema anthropic.ToolInputSchemaParam, thenSchema map[string]any) anthropic.ToolInputSchemaParam {
 	// Clone properties map
 	props, ok := schema.Properties.(map[string]any)
 	if !ok {

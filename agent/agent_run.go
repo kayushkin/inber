@@ -18,11 +18,18 @@ func (a *Agent) prepareTools() *toolInfo {
 	var toolParams []anthropic.ToolUnionParam
 	toolMap := make(map[string]Tool)
 	
+	// Build tool name enum for the "then" chain field.
+	toolNames := make([]string, 0, len(a.tools))
+	for _, t := range a.tools {
+		toolNames = append(toolNames, t.Name)
+	}
+	thenSchema := buildThenSchema(toolNames)
+
 	for i, t := range a.tools {
 		// Inject "then" chain field into every tool's schema (except end_turn).
 		schema := t.InputSchema
 		if t.Name != "end_turn" {
-			schema = injectChainField(schema)
+			schema = injectChainField(schema, thenSchema)
 		}
 		tool := &anthropic.ToolParam{
 			Name:        t.Name,
