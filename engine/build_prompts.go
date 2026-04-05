@@ -117,8 +117,8 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 			IncludeAlwaysLoad: true,
 			ExcludeTags:       []string{"session-summary", "repo-map", "code-introspection"},
 			MaxChunkSize:      5000,
-			TruncateThreshold: 500,
-			TruncatePreview:   300,
+			TruncateThreshold: 1000, // only truncate if memory >1000 tokens AND preview is <50% of content
+			TruncatePreview:   800,  // ~270 token preview — enough to understand what the memory is about
 		}
 
 		memories, tokensUsed, err := e.MemStore.BuildContext(req)
