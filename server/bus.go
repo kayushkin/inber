@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -47,6 +48,23 @@ func (bm *BusManager) ListenBus(ctx context.Context) error {
 
 // handleBusMessage routes an inbound bus message to the correct agent.
 func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessage) {
+	// Recover from panics so a single bad message doesn't crash the server.
+	defer func() {
+		if r := recover(); r != nil {
+			agent := msg.Agent
+			if agent == "" {
+				agent = bm.server.config.DefaultAgent
+			}
+			sessionID := "main"
+			log.Printf("[bus] PANIC handling message from %s: %v", msg.Author, r)
+			errDelta := messages.NewChatDelta(agent, "inber", sessionID, "error")
+			errDelta.Text = fmt.Sprintf("internal error: %v", r)
+			bm.server.bus.PublishDelta(errDelta)
+			done := messages.NewDoneDelta(agent, "inber", sessionID, nil)
+			bm.server.bus.PublishDelta(done)
+		}
+	}()
+
 	// Task 4: Add entrance logging BEFORE orchestrator filter
 	log.Printf("[bus] received: orchestrator=%s agent=%s channel=%s text=%s", 
 		msg.Orchestrator, msg.Agent, msg.Channel, truncate(msg.Text, 50))
