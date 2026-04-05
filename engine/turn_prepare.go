@@ -47,9 +47,16 @@ func (e *Engine) prepareInput(input, sessionID string) string {
 		e.Messages = append(e.Messages, anthropic.NewUserMessage(anthropic.NewTextBlock(processedInput)))
 	}
 
-	// 1a. Summarize if conversation is very long (compress old turns into summary)
+	// 1a. Repair dangling tool_use blocks (from interrupted turns, injections, or dedup)
+	repaired, repairCount := conversation.RepairDanglingToolUse(e.Messages)
+	if repairCount > 0 {
+		Log.Warn("repaired %d dangling tool_use blocks before API call", repairCount)
+		e.Messages = repaired
+	}
+
+	// 1b. Summarize if conversation is very long (compress old turns into summary)
 	e.summarizeIfNeeded()
-	// 1b. Prune remaining conversation (truncate tool results, old messages)
+	// 1c. Prune remaining conversation (truncate tool results, old messages)
 	e.emitStatus("Pruning context...")
 	e.pruneIfNeeded()
 
