@@ -74,8 +74,8 @@ func (c *Client) Subscribe(ctx context.Context, topics []string) <-chan InboundM
 		}
 
 		// Subscribe to all requested topics (e.g. "chat.inbound.inber").
-		// Also subscribe to base "chat.inbound" for backward compat.
-		allTopics := append([]string{"chat.inbound"}, topics...)
+		// Do NOT also subscribe to base "chat.inbound" — causes duplicate delivery.
+		allTopics := topics
 		var subs []*nats.Subscription
 		for _, topic := range allTopics {
 			s, err := c.nc.QueueSubscribe(topic, "inber-server", handler)
