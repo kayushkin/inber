@@ -84,6 +84,13 @@ func runServe() error {
 	}
 	defer g.Close()
 
+	// Ensure single instance — kill stale processes.
+	pidFile := server.NewPIDFile(cfg.DataDir)
+	if err := pidFile.Acquire(); err != nil {
+		return fmt.Errorf("pid file: %w", err)
+	}
+	defer pidFile.Release()
+
 	if err := g.SelfTest(); err != nil {
 		return fmt.Errorf("selftest: %w", err)
 	}
