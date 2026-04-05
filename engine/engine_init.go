@@ -90,7 +90,7 @@ func loadAgentConfig(agentName string, commandName string, modelExplicitlySet bo
 
 // setupMemoryStore initializes the memory store and prepares the session.
 func setupMemoryStore(repoRoot, identityText, agentName string) (memory.MemoryStore, error) {
-	Log.Infof("loading context...")
+	Log.Infof("loading context (repoRoot=%s)...", repoRoot)
 	
 	// Check if NATS URL is provided for network-based memory
 	natsURL := os.Getenv("NATS_URL")

@@ -135,6 +135,7 @@ func (e *Engine) GetDisplayHooks() *DisplayHooks {
 
 func NewEngine(cfg EngineConfig) (*Engine, error) {
 	// Setup repository root and validation
+	Log.Info("engine config: RepoRoot=%q AgentName=%q", cfg.RepoRoot, cfg.AgentName)
 	repoRoot, err := setupRepoRoot(cfg.RepoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup repo root: %w", err)
