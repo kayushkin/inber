@@ -31,6 +31,11 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	// Pass volatile context for injection into last user message
 	a.VolatileContext = e.volatileContext
 
+	// Pass frozen/staging boundary for BP3 placement
+	if e.staged != nil {
+		a.FrozenIdx = e.staged.FrozenIdx
+	}
+
 	e.configureAgent(a)
 	e.configureContextPruning(a)
 

@@ -103,8 +103,8 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 		}
 	}
 
-	// Add cache breakpoint on conversation history
-	addHistoryCacheBreakpoint(params.Messages)
+	// Add cache breakpoint at frozen/staging boundary
+	addHistoryCacheBreakpoint(params.Messages, a.FrozenIdx)
 
 	if a.hooks != nil && a.hooks.OnRequest != nil {
 		a.hooks.OnRequest(&params)

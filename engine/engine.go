@@ -88,6 +88,7 @@ type Engine struct {
 	lastStablePrefix   *cachedPrefix   // hash + blocks of last stable system prefix (for cache determinism)
 	volatileContext    string          // per-turn volatile content (fleet status, recent files) injected into last user message
 	lastManageTurn     int             // turn counter at last management pass (for batched pruning)
+	staged             *conversation.StagedConversation // frozen/staging zone manager
 	lastBlueprint      *PromptBlueprint // previous turn's blueprint for diff comparison
 	blueprintEnabled   bool             // emit blueprint logs (set via --blueprint or env)
 	toolInputsCache   map[string]string             // toolID -> input JSON for workflow hooks
@@ -299,6 +300,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 			e.blueprintEnabled = true
 		}
 	}
+
+	// Initialize staged conversation manager
+	pruneCfg := e.pruneConfig()
+	e.staged = conversation.NewStagedConversation(pruneCfg.ManageInterval)
 
 	return e, nil
 }

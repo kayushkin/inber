@@ -71,60 +71,83 @@ func (e *Engine) pruneConfig() conversation.PruneConfig {
 	return conversation.DefaultPruneConfig()
 }
 
-// pruneIfNeeded checks if conversation should be pruned and does so if necessary.
-// To preserve cache stability, management (pruning + dedup) is batched every
-// ManageInterval turns. Between batches, the conversation grows freely and BP3
-// extends incrementally with cache hits.
+// pruneIfNeeded uses staged conversation management:
+//   - Between flushes: only dedup/prune the STAGING zone (uncached, free to mutate)
+//   - On flush: freeze staging into cached prefix, advance FrozenIdx
+//   - Emergency: full management if tokens > 2x budget
 //
-// Exception: if token budget is exceeded (emergency), prune immediately.
+// Layout: [tools BP1] [system BP2] [frozen msgs BP3] [staging - uncached] [new input]
 func (e *Engine) pruneIfNeeded() {
 	cfg := e.pruneConfig()
 
-	if !conversation.ShouldPrune(e.Messages, cfg) {
-		return
+	if e.staged == nil {
+		e.staged = conversation.NewStagedConversation(cfg.ManageInterval)
+	}
+	e.staged.Tick()
+
+	// Always dedup/prune the staging zone (it's uncached — zero cache cost)
+	deduped := conversation.ManageStaging(e.Messages, e.staged.FrozenIdx, cfg)
+	if deduped > 0 {
+		Log.Info("staging dedup: %d file refs deduplicated", deduped)
 	}
 
-	// Batched management: only run every N turns for cache stability.
-	// Emergency override: always prune if we're over 2x the token budget.
-	interval := cfg.ManageInterval
-	if interval <= 0 {
-		interval = 5 // default
+	// Check for cross-zone superseded files (frozen has old read, staging has newer)
+	if e.staged.FrozenIdx > 0 && e.staged.FrozenIdx < len(e.Messages) {
+		frozen := e.Messages[:e.staged.FrozenIdx]
+		staging := e.Messages[e.staged.FrozenIdx:]
+		superseded := conversation.CrossZoneDedup(frozen, staging)
+		if len(superseded) > 0 {
+			// Add note to volatile context so model knows frozen reads are stale
+			note := "[Note: these files were re-read since last context snapshot — ignore earlier versions: "
+			for i, p := range superseded {
+				if i > 0 {
+					note += ", "
+				}
+				note += p
+			}
+			note += "]"
+			e.volatileContext += "\n" + note
+		}
 	}
-	turnsSinceManage := e.TurnCounter - e.lastManageTurn
+
+	// Check if it's time for a full flush (freeze staging)
 	emergency := conversation.EstimateTokens(e.Messages) > cfg.TokenBudget*2
-	if turnsSinceManage < interval && !emergency {
-		Log.Info("skipping management (turn %d, last manage at turn %d, interval %d)",
-			e.TurnCounter, e.lastManageTurn, interval)
-		return
-	}
-	if emergency {
-		Log.Warn("emergency management: token estimate %d > 2x budget %d",
-			conversation.EstimateTokens(e.Messages), cfg.TokenBudget)
-	}
-	e.lastManageTurn = e.TurnCounter
+	if e.staged.ShouldFlush() || emergency {
+		if emergency {
+			Log.Warn("emergency flush: token estimate %d > 2x budget %d",
+				conversation.EstimateTokens(e.Messages), cfg.TokenBudget)
+		}
 
-	sessionID := ""
-	if e.Session != nil {
-		sessionID = e.Session.SessionID()
-	}
+		// Full management on the entire conversation (happens rarely)
+		sessionID := ""
+		if e.Session != nil {
+			sessionID = e.Session.SessionID()
+		}
 
-	pruned, result, err := conversation.PruneConversation(
-		context.Background(),
-		e.Messages,
-		e.MemStore,
-		sessionID,
-		cfg,
-	)
+		pruned, result, err := conversation.PruneConversation(
+			context.Background(),
+			e.Messages,
+			e.MemStore,
+			sessionID,
+			cfg,
+		)
 
-	if err != nil {
-		Log.Warn("pruning failed: %v", err)
-		return
-	}
+		if err != nil {
+			Log.Warn("flush/prune failed: %v", err)
+			return
+		}
 
-	if result.PrunedMessages > 0 {
 		e.Messages = pruned
-		Log.Info("pruned %d messages (%d tokens freed, %d memories saved, %d files deduped)",
-			result.PrunedMessages, result.TokensFreed, result.MemoriesSaved, result.DeduplicatedFiles)
+		// Freeze everything: advance FrozenIdx to cover all current messages
+		// (minus the last one which is the new user input, still staging)
+		freezePoint := len(e.Messages)
+		if freezePoint > 1 {
+			freezePoint = freezePoint - 1 // keep latest user message in staging
+		}
+		e.staged.Flush(freezePoint)
+
+		Log.Info("flush: froze %d messages (pruned %d, %d tokens freed, %d memories saved, %d files deduped)",
+			freezePoint, result.PrunedMessages, result.TokensFreed, result.MemoriesSaved, result.DeduplicatedFiles)
 		if e.Session != nil {
 			e.Session.LogPrune(result.PrunedMessages, result.TokensFreed, result.Strategy)
 		}

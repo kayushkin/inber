@@ -92,6 +92,12 @@ type Agent struct {
 	// gets prepended to the last user message instead of being in system blocks.
 	// This prevents cache busting: system blocks stay stable → BP2 always hits.
 	VolatileContext string
+
+	// FrozenIdx is the message index where the frozen/staging boundary is.
+	// BP3 is placed here instead of second-to-last message.
+	// Messages before FrozenIdx are frozen (cached), after are staging (uncached).
+	// 0 means no frozen zone → fall back to default BP3 placement.
+	FrozenIdx int
 }
 
 // New creates an agent with the given system prompt.
@@ -300,11 +306,14 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 	}
 }
 
-// addHistoryCacheBreakpoint places a cache_control breakpoint on the last content
-// block of the second-to-last message. This caches the entire conversation history
-// prefix so only the new user message is uncached input.
+// addHistoryCacheBreakpoint places a cache_control breakpoint at the frozen/staging
+// boundary. Messages before the boundary are frozen (cached), after are staging (uncached).
+//
+// If frozenIdx > 0: BP3 goes on the last content block of message[frozenIdx-1].
+// If frozenIdx == 0: falls back to second-to-last message (legacy behavior).
+//
 // First clears any existing history breakpoints to avoid exceeding the 4-block limit.
-func addHistoryCacheBreakpoint(messages []anthropic.MessageParam) {
+func addHistoryCacheBreakpoint(messages []anthropic.MessageParam, frozenIdx int) {
 	if len(messages) < 2 {
 		return
 	}
@@ -323,8 +332,17 @@ func addHistoryCacheBreakpoint(messages []anthropic.MessageParam) {
 			}
 		}
 	}
-	// Target the second-to-last message's last content block.
-	msg := &messages[len(messages)-2]
+
+	// Determine BP3 target index
+	targetIdx := len(messages) - 2 // default: second-to-last
+	if frozenIdx > 0 && frozenIdx <= len(messages) {
+		targetIdx = frozenIdx - 1 // last frozen message
+	}
+	if targetIdx < 0 || targetIdx >= len(messages) {
+		return
+	}
+
+	msg := &messages[targetIdx]
 	if len(msg.Content) == 0 {
 		return
 	}
