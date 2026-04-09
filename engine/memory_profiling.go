@@ -264,3 +264,16 @@ func averageGCCPUFraction(snapshots []MemorySnapshot) float64 {
 	}
 	return sum / float64(len(snapshots))
 }
+
+// GetMemoryReport returns the current memory profiling report.
+func (e *Engine) GetMemoryReport() MemoryReport {
+	if e.memoryProfiler == nil {
+		return MemoryReport{Enabled: false}
+	}
+	return e.memoryProfiler.GenerateReport()
+}
+
+// IsMemoryProfilingEnabled returns whether memory profiling is active.
+func (e *Engine) IsMemoryProfilingEnabled() bool {
+	return e.memoryProfiler != nil
+}

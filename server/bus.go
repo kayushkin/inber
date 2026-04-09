@@ -28,8 +28,6 @@ func (bm *BusManager) ListenBus(ctx context.Context) error {
 		return nil
 	}
 
-	bm.server.setupAgentRunHandler()
-
 	inbound := bm.server.bus.Subscribe(ctx, []string{"chat.inbound.inber"})
 	log.Printf("[server] listening for bus inbound messages")
 

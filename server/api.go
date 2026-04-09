@@ -21,12 +21,20 @@ func (g *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/spawn", g.handleSpawn)
 	mux.HandleFunc("/api/fork-spawn", g.handleForkSpawn)
 	mux.HandleFunc("/api/sessions", g.handleSessions)
+	mux.HandleFunc("/api/sessions/history", g.handleSessionHistory)
 	mux.HandleFunc("/api/sessions/", g.handleSessionDetail)
 	mux.HandleFunc("/api/requests/", g.handleRequests)
 	mux.HandleFunc("/api/models", g.handleModels)
 	// mux.HandleFunc("/api/models/test", g.handleModelTest) // removed: stub
 	mux.HandleFunc("/api/agents", g.handleAgents)
 	mux.HandleFunc("/api/agents/config", g.handleAgentConfig)
+	mux.HandleFunc("/api/memory", g.handleMemoryList)
+	mux.HandleFunc("/api/memory/search", g.handleMemorySearch)
+	mux.HandleFunc("/api/memory/stats", g.handleMemoryStats)
+	mux.HandleFunc("/api/memory/compact", g.handleMemoryCompact)
+	mux.HandleFunc("/api/memory/prune", g.handleMemoryPrune)
+	mux.HandleFunc("/api/memory/decay", g.handleMemoryDecay)
+	mux.HandleFunc("/api/memory/", g.handleMemoryDetail)
 	mux.HandleFunc("/api/health", g.handleHealth)
 
 	server := &http.Server{

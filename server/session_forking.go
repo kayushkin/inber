@@ -23,7 +23,7 @@ func (g *Server) forkSession(parent *Session, childKey, agentName string, ac Age
 		return nil, fmt.Errorf("unmarshal messages: %w", err)
 	}
 
-	child, err := g.createSession(childKey, agentName, ac, onEvent)
+	child, err := g.createSession(childKey, agentName, ac, RunRequest{}, onEvent)
 	if err != nil {
 		return nil, err
 	}

@@ -234,6 +234,20 @@ type RunRequest struct {
 	SessionKey string `json:"session_key"`
 	Channel    string `json:"channel"`
 	Author     string `json:"author"`
+
+	// Per-request overrides (thin CLI passes these through from flags).
+	Model          string `json:"model,omitempty"`           // override agent's default model
+	Thinking       int64  `json:"thinking,omitempty"`        // extended thinking token budget
+	Raw            bool   `json:"raw,omitempty"`             // skip context/memory loading
+	NoTools        bool   `json:"no_tools,omitempty"`        // disable all tools
+	NoHooks        bool   `json:"no_hooks,omitempty"`        // skip post-request hooks
+	System         string `json:"system,omitempty"`          // override system prompt
+	NewSession     bool   `json:"new_session,omitempty"`     // start fresh session
+	Detach         bool   `json:"detach,omitempty"`          // one-off session, don't persist
+	MaxTurns       int     `json:"max_turns,omitempty"`        // safety limit: max API round-trips
+	MaxInputTokens int     `json:"max_input_tokens,omitempty"` // safety limit: max cumulative input tokens
+	MaxCost        float64 `json:"max_cost,omitempty"`         // safety limit: max dollar cost
+	Mode           string  `json:"mode,omitempty"`             // execution mode: observe, assist, autonomous
 }
 
 // RunResponse is the result of a turn.
@@ -287,7 +301,14 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 
 	// Resolve session key.
 	sessionKey := req.SessionKey
-	if sessionKey == "" {
+	if req.Detach {
+		// One-off session: unique key, won't affect main session.
+		sessionKey = fmt.Sprintf("agent:%s:detach-%d", agentName, time.Now().UnixMilli())
+	} else if req.NewSession {
+		// Fresh session: clear existing and use main key.
+		sessionKey = fmt.Sprintf("agent:%s:main", agentName)
+		g.sessions.Delete(sessionKey)
+	} else if sessionKey == "" {
 		sessionKey = fmt.Sprintf("agent:%s:main", agentName)
 	}
 
@@ -323,7 +344,7 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 
 	// Enqueue the work (serialized by session, capped by lane).
 	err := g.queue.Enqueue(ctx, "main", sessionKey, func(ctx context.Context) error {
-		sess, err := g.getOrCreateSession(sessionKey, agentName, ac, onEvent)
+		sess, err := g.getOrCreateSession(sessionKey, agentName, ac, req, onEvent)
 		if err != nil {
 			return fmt.Errorf("session %s: %w", sessionKey, err)
 		}

@@ -1,27 +1,27 @@
 # Inber Architecture
 
-Multi-agent orchestrator for LLM-powered coding agents. Supports CLI interactive chat,
-headless runs, and a server mode with bus-based message routing.
+Multi-agent orchestrator for LLM-powered coding agents. Runs as an always-on server
+with bus-based message routing. The CLI lives in a separate repo ([inber-cli](../inber-cli)).
 
 ## Package Map
 
 ```
-cmd/inber/       CLI entry point (cobra commands: chat, run, server, etc.)
-engine/          Core turn loop — builds prompts, calls LLM, executes tools
+cmd/inber-server/  Server entry point (flag-based, starts HTTP server + bus listener)
+engine/            Core turn loop — builds prompts, calls LLM, executes tools
   engine.go      Engine struct, NewEngine (init: agent config, memory, tools, session)
   turn.go        RunTurn (the main loop), runOpenAITurn (OpenAI-compat path)
+  turn_prompt.go BuildSystemPrompt — token-budgeted context assembly
+  turn_context.go contextBudget — scales context by turn state and message complexity
 server/          Multi-session server with bus integration
   server.go      Server struct, Run/Stream, session management, queue
   bus.go         BusClient — WebSocket subscribe + HTTP publish to message bus
 agent/           LLM client abstraction, tool definitions, message conversion
   registry/      Agent config store (agent-store), spawn management
-context/         Token-budgeted context assembly
-  builder.go     Builder — tag-based chunk selection within token budget
-  store.go       In-memory chunk store
+tools/           Built-in tool implementations (shell, files, deploy, MCP adapter)
 conversation/    Message repair, stashing, extraction, summarization
-memory/          SQLite-backed semantic memory (references, auto-indexing)
+memory/          Thin wrapper re-exporting agent-store/memory (SQLite-backed)
 session/         Session logging, workspace persistence, cost tracking
-deploy/          Deployment hooks
+deploy/          Agent seed data (agents-seed.db)
 ```
 
 ## Key Types
@@ -30,8 +30,7 @@ deploy/          Deployment hooks
 Central runtime. Holds:
 - `modelClient` — unified Anthropic/OpenAI client
 - `Agent` — tool-equipped LLM agent
-- `MemStore` — semantic memory (SQLite)
-- `ContextStore` — token-budgeted context chunks
+- `MemStore` — semantic memory (via agent-store SQLite)
 - `Session` — turn logger + cost tracker
 - `Messages` — conversation history (`[]anthropic.MessageParam`)
 - `agentTools` — registered tools (shell, file ops, memory, spawn, etc.)
@@ -54,31 +53,12 @@ Multi-agent session manager:
 WebSocket subscriber + HTTP publisher. Connects to a message bus for real-time
 chat routing between adapters (Discord, Telegram, etc.) and agent sessions.
 
-### `context.Builder`
-Token-budget-aware context assembler:
-1. Always-include chunks (identity, always tags)
-2. Tag-matched chunks (scored by match count, size-aware)
-3. Recent conversation chunks
-Deduplicates by ID and content similarity.
-
-### `context.Chunk`
-```go
-type Chunk struct {
-    ID        string
-    Text      string
-    Tags      []string
-    Source    string
-    Tokens    int
-    CreatedAt time.Time
-}
-```
-
 ### `agent.Tool`
 ```go
 type Tool struct {
     Name        string
     Description string
-    InputSchema json.RawMessage
+    InputSchema anthropic.ToolInputSchemaParam
     Run         func(ctx context.Context, input string) (string, error)
 }
 ```
@@ -87,17 +67,18 @@ type Tool struct {
 ```go
 type TurnResult struct {
     Text                string
+    Thinking            string // extended thinking output
+    ToolCalls           int
     InputTokens         int
     OutputTokens        int
-    CacheReadTokens     int
     CacheCreationTokens int
-    ToolCalls           int
+    CacheReadTokens     int
 }
 ```
 
 ## Data Flow
 
-### CLI Mode (`inber chat` / `inber run`)
+### Turn Execution (Engine.RunTurn)
 
 ```
 User Input
@@ -123,7 +104,7 @@ Engine.RunTurn(input)
     └─ 10. Track tokens/cost in model-store
 ```
 
-### Server Mode (`inber server`)
+### Server Request Flow
 
 ```
 Bus (WebSocket)                    HTTP API
@@ -176,17 +157,19 @@ handleBusMessage()                     │
 
 ## Context Budget System
 
-The `context.Builder` assembles the system prompt within a token budget:
+Context assembly is handled by the engine (`turn_prompt.go` / `turn_context.go`), not a separate package.
+`BuildSystemPrompt()` assembles the system prompt within a token budget that scales by turn state:
 
-1. **Always-include**: chunks tagged `identity` or `always` (agent personality, core rules)
-2. **Tag-matched**: chunks whose tags overlap with the user message's tags, scored by match count. Size thresholds: <500 tokens = 1 tag match, 500-5000 = 2+, >5000 = 3+
-3. **Conversation**: recent user/assistant messages by recency
-
-Deduplication by ID and content similarity prevents bloat.
+1. **Always-include**: identity and core rules from memory
+2. **Tag-matched**: memory entries scored by relevance to the user message
+3. **Budget scaling**: first turn gets a small budget (4K tokens), error recovery gets up to 50K,
+   complex messages scale proportionally via `contextBudget()`
 
 ## Memory System
 
-SQLite-backed (`memory.Store`):
+Thin wrapper around `agent-store/memory` (SQLite-backed). Inber's `memory/` package re-exports types
+and constructors; the implementation lives in the external `agent-store` library.
+
 - **References**: auto-created after tool calls (file reads, shell output)
 - **PrepareSession**: loads identity + recent files into memory at startup
 - **Auto-extraction**: background goroutine extracts memories from completed turns

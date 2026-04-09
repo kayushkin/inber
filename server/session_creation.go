@@ -15,14 +15,14 @@ import (
 )
 
 // getOrCreateSession retrieves an existing session or creates a new one.
-func (g *Server) getOrCreateSession(key, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
+func (g *Server) getOrCreateSession(key, agentName string, ac AgentConfig, req RunRequest, onEvent func(StreamEvent)) (*Session, error) {
 	if val, ok := g.sessions.Load(key); ok {
 		sess := val.(*Session)
 		sess.setOnEvent(onEvent)
 		return sess, nil
 	}
 
-	sess, err := g.createSession(key, agentName, ac, onEvent)
+	sess, err := g.createSession(key, agentName, ac, req, onEvent)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func (g *Server) getOrCreateSession(key, agentName string, ac AgentConfig, onEve
 }
 
 // createSession creates a new session with a fresh engine.
-func (g *Server) createSession(key, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
+func (g *Server) createSession(key, agentName string, ac AgentConfig, req RunRequest, onEvent func(StreamEvent)) (*Session, error) {
 	injections := make(chan string, 10)
 
 	cfg := engine.EngineConfig{
@@ -51,6 +51,36 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, onEvent fu
 		Injections:       injections,
 		ExtraTools:       g.toolsForAgent(key, agentName),
 		ContextInjectors: g.contextInjectorsFor(key, agentName),
+	}
+
+	// Apply per-request overrides from RunRequest.
+	if req.Model != "" {
+		cfg.Model = req.Model
+		cfg.ModelExplicitlySet = true
+	}
+	if req.Thinking != 0 {
+		cfg.Thinking = req.Thinking
+	}
+	if req.Raw {
+		cfg.Raw = true
+	}
+	if req.NoTools {
+		cfg.NoTools = true
+	}
+	if req.NoHooks {
+		cfg.NoHooks = true
+	}
+	if req.System != "" {
+		cfg.SystemOverride = req.System
+	}
+	if req.Detach {
+		cfg.Detach = true
+	}
+	if req.MaxTurns != 0 {
+		cfg.MaxTurns = req.MaxTurns
+	}
+	if req.MaxInputTokens != 0 {
+		cfg.MaxInputTokens = req.MaxInputTokens
 	}
 
 	// Pass shared model store.

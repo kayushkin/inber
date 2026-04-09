@@ -10,6 +10,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	agentkittools "github.com/kayushkin/agentkit/tools"
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
@@ -387,4 +388,193 @@ func setupMemoryProfiling(enabled bool, logPath string) (*MemoryProfiler, error)
 	memoryProfiler.Start()
 	Log.Info("memory profiling enabled")
 	return memoryProfiler, nil
+}
+
+// ---------------------------------------------------------------------------
+// init* methods — called by NewEngine in engine.go
+// ---------------------------------------------------------------------------
+
+// initAgent loads agent identity from registry and resolves the model.
+func (e *Engine) initAgent(cfg EngineConfig) error {
+	agentName, identityText, agentConfig, err := loadAgentConfig(cfg.AgentName, cfg.CommandName, cfg.ModelExplicitlySet)
+	if err != nil {
+		return err
+	}
+	e.AgentName = agentName
+	e.AgentConfig = agentConfig
+
+	if agentConfig != nil && agentConfig.Model != "" && !cfg.ModelExplicitlySet {
+		e.Model = agentConfig.Model
+	}
+
+	// Stash identity text for initMemory (via closure-free field)
+	e.IdentityOverride = identityText
+	return nil
+}
+
+// initMemory opens the semantic memory store and prepares the session context.
+func (e *Engine) initMemory(cfg EngineConfig) error {
+	identityText := e.IdentityOverride
+
+	if cfg.SystemOverride != "" {
+		e.IdentityOverride = cfg.SystemOverride
+		return nil
+	}
+	if cfg.Raw {
+		if identityText == "" {
+			identityText = "You are a helpful assistant."
+		}
+		e.IdentityOverride = identityText
+		return nil
+	}
+
+	// Normal mode: open memory store, clear identity override (memory provides it)
+	memStore, err := setupMemoryStore(e.repoRoot, identityText, e.AgentName)
+	if err != nil {
+		return err
+	}
+	e.MemStore = memStore
+	e.IdentityOverride = "" // memory store provides identity
+	return nil
+}
+
+// initSession sets up JSONL logging, workspace, and message persistence.
+func (e *Engine) initSession(cfg EngineConfig) error {
+	session, sessionDB, workspace, messages, err := setupSession(e.repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach)
+	if err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	e.Session = session
+	e.SessionDB = sessionDB
+	e.workspace = workspace
+	e.Messages = messages
+	return nil
+}
+
+// initModelClient creates the unified Anthropic/OpenAI client with auth.
+func (e *Engine) initModelClient(cfg EngineConfig) error {
+	modelStore, err := setupModelStore(cfg.ModelStore)
+	if err != nil {
+		return fmt.Errorf("model store: %w", err)
+	}
+	e.modelStore = modelStore
+	e.ownsModelStore = (cfg.ModelStore == nil)
+
+	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore)
+	if err != nil {
+		return err
+	}
+	e.Model = resolvedModel
+	e.modelClient = modelClient
+	e.Client = anthropicClient
+	return nil
+}
+
+// initWorkflow sets up session logging, workflow automation, and forge integration.
+func (e *Engine) initWorkflow(cfg EngineConfig) {
+	if e.Session != nil {
+		Log.Info("logging to %s", e.Session.FilePath())
+		if e.SessionDB != nil {
+			e.Session.AttachDB(e.SessionDB, cfg.CommandName)
+		}
+		truncCfg := sessionMod.TruncateConfigForRole(e.AgentName)
+		e.Session.SetTruncateConfig(truncCfg)
+
+		workflowCfg := cfg.AutoWorkflow
+		if workflowCfg == (AutoWorkflowConfig{}) {
+			workflowCfg = DefaultAutoWorkflowConfig()
+		}
+		e.workflowHooks = NewWorkflowHooks(e.repoRoot, e.Session.SessionID(), e.AgentName, workflowCfg)
+	}
+
+	forgeDB, forgeHook, err := setupForgeHook(e.repoRoot, "", e.AgentName, AutoWorkflowConfig{})
+	if err == nil {
+		e.forgeDB = forgeDB
+		e.forgeHook = forgeHook
+	}
+
+	agentRegistry, err := setupAgentRegistry(e.AgentConfig, e.Client, e.repoRoot, e.modelClient, e.modelStore, e.MemStore)
+	if err == nil {
+		e.agentRegistry = agentRegistry
+	}
+}
+
+// initTools builds and configures the tool set.
+func (e *Engine) initTools(cfg EngineConfig) {
+	e.agentTools = e.buildTools()
+
+	// Merge server-injected tools (replace same-named)
+	for _, extra := range cfg.ExtraTools {
+		replaced := false
+		for i, t := range e.agentTools {
+			if t.Name == extra.Name {
+				e.agentTools[i] = extra
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			e.agentTools = append(e.agentTools, extra)
+		}
+	}
+
+	// Register context injectors for tools that provide always-visible context
+	e.registerToolContextInjectors()
+
+	if err := loadToolsIntoMemory(e.MemStore, e.agentTools); err != nil {
+		Log.Warn("failed to load tool registry: %v", err)
+	}
+
+	if e.workspace != nil && len(e.agentTools) > 0 {
+		toolInfos := make([]sessionMod.ToolInfo, len(e.agentTools))
+		for i, t := range e.agentTools {
+			toolInfos[i] = sessionMod.ToolInfo{Name: t.Name, Description: t.Description}
+		}
+		e.workspace.WriteToolsList(toolInfos)
+	}
+}
+
+// registerToolContextInjectors adds context injectors for tools like task_plan and scratchpad.
+func (e *Engine) registerToolContextInjectors() {
+	for _, t := range e.agentTools {
+		switch t.Name {
+		case "task_plan":
+			repoRoot := e.repoRoot
+			e.contextInjectors = append(e.contextInjectors, func() []sessionMod.NamedBlock {
+				content := agentkittools.LoadPlanContext(repoRoot)
+				if content == "" {
+					return nil
+				}
+				return []sessionMod.NamedBlock{{ID: "task-plan", Text: content}}
+			})
+		case "scratchpad":
+			repoRoot, agentName := e.repoRoot, e.AgentName
+			e.contextInjectors = append(e.contextInjectors, func() []sessionMod.NamedBlock {
+				content := agentkittools.LoadScratchpadContext(repoRoot, agentName)
+				if content == "" {
+					return nil
+				}
+				return []sessionMod.NamedBlock{{ID: "scratchpad", Text: content}}
+			})
+		}
+	}
+}
+
+// initLimitsAndProfiling sets up safety limits, memory profiling, cache config, and staged conversation.
+func (e *Engine) initLimitsAndProfiling(cfg EngineConfig) {
+	e.Limits.MaxTurns, e.Limits.MaxInputTokens, e.Limits.MaxResponseTime = setupLimits(cfg, e.AgentConfig)
+
+	if mp, err := setupMemoryProfiling(cfg.MemoryProfiling, cfg.MemoryLogPath); err == nil {
+		e.memoryProfiler = mp
+	}
+
+	e.Cache.BlueprintEnabled = cfg.Blueprint
+	if !e.Cache.BlueprintEnabled {
+		if v := os.Getenv("INBER_BLUEPRINT"); v == "1" || v == "true" {
+			e.Cache.BlueprintEnabled = true
+		}
+	}
+
+	pruneCfg := e.pruneConfig()
+	e.staged = conversation.NewStagedConversation(pruneCfg.ManageInterval)
 }

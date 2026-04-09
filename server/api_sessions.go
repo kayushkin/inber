@@ -84,6 +84,35 @@ func (g *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle context.
+	if strings.HasSuffix(key, "/context") {
+		key = strings.TrimSuffix(key, "/context")
+		g.handleSessionContext(w, r, key)
+		return
+	}
+
+	// Handle timeline.
+	if strings.HasSuffix(key, "/timeline") {
+		key = strings.TrimSuffix(key, "/timeline")
+		g.handleSessionTimeline(w, r, key)
+		return
+	}
+
+	// Handle prompts — /prompts or /prompts/<turn>.
+	if strings.Contains(key, "/prompts") {
+		parts := strings.SplitN(key, "/prompts", 2)
+		sessionKey := parts[0]
+		rest := strings.TrimPrefix(parts[1], "/")
+		if rest == "" {
+			g.handleSessionPrompts(w, r, sessionKey)
+		} else {
+			turn := 0
+			fmt.Sscanf(rest, "%d", &turn)
+			g.handleSessionPromptDetail(w, r, sessionKey, turn)
+		}
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		val, ok := g.sessions.Load(key)

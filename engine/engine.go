@@ -1,178 +1,123 @@
-// Package engine provides the core inber engine that orchestrates
-// agent conversations: building system prompts, managing context budgets,
-// running conversation turns, and coordinating memory and tool integration.
+// Package engine orchestrates agent conversations: it builds system prompts,
+// manages context budgets, runs conversation turns, and coordinates memory,
+// tools, and workflow automation.
+//
+// Start here to understand the main path:
+//
+//	NewEngine   → initializes all subsystems (see engine_new.go for helpers)
+//	RunTurn     → the 4-phase turn pipeline
+//	Close       → cleanup and session summary
+//
+// Supporting files (this package):
+//
+//	turn_prepare.go      Phase 1: stash large messages, repair alternation, summarize/prune
+//	turn_prompt.go       Phase 2: build system prompt with memory context and cache control
+//	turn_execute.go      Phase 3: select model, call API (Anthropic or OpenAI path)
+//	turn_postprocess.go  Phase 4: extract memories, stash responses, track tokens
+//	build.go             Agent construction: system blocks, tools, hooks, limits
+//	build_tools.go       Tool resolution from agent config or defaults
+//	build_hooks.go       Injection, limit checks, display callbacks
+//	lifecycle.go         Summarization, pruning, checkpointing, session save
+//	failover.go          Model health tracking and failover selection
+//	workflow_hooks.go    Auto-commit, auto-format, build/test after tool calls
+//
+// Companion packages:
+//
+//	guard/       Safety controls: execution modes, cost/token limits, repetition detection
+//	trace/       Structured execution logging for analysis and optimization
+//	codeindex/   AST-based codebase analysis for intelligent context building
+//	checkpoint/  Workspace state snapshots with diff and restore
 package engine
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	agentkittools "github.com/kayushkin/agentkit/tools"
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
+	"github.com/kayushkin/inber/checkpoint"
+	"github.com/kayushkin/inber/codeindex"
 	"github.com/kayushkin/inber/conversation"
+	"github.com/kayushkin/inber/guard"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
+	"github.com/kayushkin/inber/trace"
 	modelstore "github.com/kayushkin/model-store"
 )
 
-// TurnState holds ephemeral state that changes each turn.
-type TurnState struct {
-	Counter           int
-	StartTime         time.Time
-	ConsecutiveErrors int
-	LastHadError      bool
-	VolatileContext   string
-	LastManageTurn    int
-}
+// ---------------------------------------------------------------------------
+// Engine — the central runtime
+// ---------------------------------------------------------------------------
 
-// CacheState holds prompt caching state across turns.
-type CacheState struct {
-	LastStablePrefix *cachedPrefix
-	LastBlueprint    *PromptBlueprint
-	BlueprintEnabled bool
-	LastNamedBlocks  []sessionMod.NamedBlock
-}
-
-// LimitConfig holds runtime limits for turn execution.
-type LimitConfig struct {
-	MaxTurns        int
-	MaxInputTokens  int
-	MaxResponseTime int
-}
-
-// TokenTotals holds session-level token usage.
-type TokenTotals struct {
-	Input  int
-	Output int
-	Cost   float64
-}
-
-// DisplayHooks configures how engine events are shown to the user.
-type DisplayHooks struct {
-	OnThinking   func(text string)
-	OnTextDelta  func(text string) // streaming text chunks from API
-	OnToolCall   func(name string, input string)
-	OnToolResult func(name string, output string, isError bool)
-	OnStatus     func(text string) // progress/status updates during turn execution
-}
-
-// EngineConfig configures the Engine.
-type EngineConfig struct {
-	Model              string
-	ModelExplicitlySet bool // true if Model came from --model CLI flag (takes precedence over agent config)
-	Thinking           int64
-	AgentName      string // load from registry
-	Raw            bool   // skip context/memory
-	NoTools        bool
-	ExtraTools     []agent.Tool // additional tools injected by gateway (spawn_agent, sessions_list, etc.)
-	NoHooks        bool   // skip post-request verification (git/deploy checks)
-	SystemOverride string
-	RepoRoot       string
-	ModelStore     *modelstore.Store // shared model store (optional - engine opens its own if nil)
-	CommandName    string // "chat" or "run" for session registration
-	NewSession     bool   // start fresh instead of continuing default session
-	Detach         bool   // one-off session, don't save to workspace
-	Display        *DisplayHooks
-	StashConfig    *conversation.StashConfig      // Large message stashing config (nil = use defaults)
-	ExtractConfig  *conversation.ExtractionConfig // Background extraction config (nil = use defaults)
-	AutoWorkflow   AutoWorkflowConfig // Auto-branch, auto-commit, auto-format (Phase 1)
-	MaxTurns         int            // max API round-trips per RunTurn (0 = unlimited)
-	MaxInputTokens   int            // max cumulative input tokens per RunTurn (0 = unlimited)
-	Injections       <-chan string  // channel for mid-run message injection (optional, from stdin)
-	ContextInjectors []ContextInjector // extra system prompt sections injected by server
-	MemoryProfiling  bool           // enable memory usage profiling
-	MemoryLogPath    string         // path to memory profile log file (optional)
-	Blueprint        bool           // emit prompt blueprint diffs per turn for cache analysis
-}
-
-// ContextInjector provides additional system prompt blocks at turn time.
-// Used by the server to inject live session status, workspace info, etc.
-type ContextInjector func() []sessionMod.NamedBlock
-
-// Engine encapsulates the shared setup and execution logic for chat and run.
+// Engine holds all state for a single agent session. Created by NewEngine,
+// driven by RunTurn, cleaned up by Close.
 type Engine struct {
-	Client       *anthropic.Client
-	Agent        *agent.Agent
-	MemStore          memory.MemoryStore
-	IdentityOverride  string // for raw/override modes (no SQLite memory)
-	Session      *sessionMod.Session
-	SessionDB    *sessionMod.DB
-	Model        string
-	AgentName    string
-	AgentConfig  *registry.AgentConfig
-	Messages     []anthropic.MessageParam
-	Turn    TurnState
-	Cache   CacheState
-	Limits  LimitConfig
-	Tokens  TokenTotals
+	// --- Public state (read by server, session management) ---
+	Client      *anthropic.Client
+	Agent       *agent.Agent
+	Model       string
+	AgentName   string
+	AgentConfig *registry.AgentConfig
+	Messages    []anthropic.MessageParam
+	Turn        TurnState
+	Cache       CacheState
+	Limits      LimitConfig
+	Tokens      TokenTotals
 
-	repoRoot        string
-	agentTools      []agent.Tool
-	display         *DisplayHooks
-	displayMu       sync.Mutex
-	workspace       *sessionMod.Workspace
-	thinkingBud     int64
-	stashCfg        conversation.StashConfig
-	extractCfg      conversation.ExtractionConfig
-	staged             *conversation.StagedConversation // frozen/staging zone manager
-	toolInputsCache   map[string]string             // toolID -> input JSON for workflow hooks
-	contextInjectors  []ContextInjector              // extra system prompt sections from server
-	workflowHooks   *WorkflowHooks                // auto-commit, auto-format, build/test
-	forgeHook       *forge.Hook                   // workspace/preview automation
-	forgeDB         *forge.Forge                  // forge database handle
-	modelStore      *modelstore.Store             // model usage tracking
-	ownsModelStore  bool                          // true if we opened it (false if shared from server)
-	modelClient     *agent.ModelClient            // unified client (Anthropic or OpenAI)
-	agentRegistry   *registry.Registry            // agent registry for spawn tools
-	modelExplicitlySet bool                       // true if --model flag was used
-	noHooks         bool                          // skip post-request verification
-	injections      <-chan string                  // mid-run message injection channel (nil = disabled)
+	// --- Subsystems ---
+	MemStore         memory.MemoryStore      // semantic memory (agent-store SQLite)
+	Session          *sessionMod.Session     // JSONL turn logger
+	SessionDB        *sessionMod.DB          // session metadata DB
+	Guard            *guard.Guard            // execution modes, limits, repetition detection
+	Trace            *trace.Recorder         // structured execution logging
+	CodeIndex        *codeindex.Index        // AST-based codebase symbol index
+	Checkpoint       *checkpoint.Manager     // workspace state snapshots
+	IdentityOverride string                  // system prompt for raw/override modes
 
-	// Memory profiling
-	memoryProfiler      *MemoryProfiler
+	// --- Internal state ---
+	repoRoot           string
+	agentTools         []agent.Tool
+	display            *DisplayHooks
+	displayMu          sync.Mutex
+	workspace          *sessionMod.Workspace
+	thinkingBud        int64
+	stashCfg           conversation.StashConfig
+	extractCfg         conversation.ExtractionConfig
+	staged             *conversation.StagedConversation
+	toolInputsCache    map[string]string
+	contextInjectors   []ContextInjector
+	workflowHooks      *WorkflowHooks
+	forgeHook          *forge.Hook
+	forgeDB            *forge.Forge
+	modelStore         *modelstore.Store
+	ownsModelStore     bool
+	modelClient        *agent.ModelClient
+	agentRegistry      *registry.Registry
+	modelExplicitlySet bool
+	noHooks            bool
+	injections         <-chan string
+	memoryProfiler     *MemoryProfiler
 }
 
-// NewEngine creates and fully initializes an Engine: context, memory, tools, session, hooks.
-// SetDisplayHooks updates the display hooks (thread-safe).
-// Used by the gateway to point hooks at the current HTTP request's writer.
-func (e *Engine) SetDisplayHooks(hooks *DisplayHooks) {
-	e.displayMu.Lock()
-	e.display = hooks
-	e.displayMu.Unlock()
-}
+// ---------------------------------------------------------------------------
+// NewEngine — initialize all subsystems
+// ---------------------------------------------------------------------------
 
-// GetDisplayHooks returns the current display hooks (thread-safe).
-func (e *Engine) GetDisplayHooks() *DisplayHooks {
-	e.displayMu.Lock()
-	defer e.displayMu.Unlock()
-	return e.display
-}
-
-// emitStatus emits a status update if the OnStatus hook is configured.
-func (e *Engine) emitStatus(text string) {
-	d := e.GetDisplayHooks()
-	if d != nil && d.OnStatus != nil {
-		d.OnStatus(text)
-	}
-}
-
+// NewEngine creates a fully initialized Engine. Each step delegates to a
+// helper in engine_new.go — look there for implementation details.
 func NewEngine(cfg EngineConfig) (*Engine, error) {
-	// Setup repository root and validation
-	Log.Info("engine config: RepoRoot=%q AgentName=%q", cfg.RepoRoot, cfg.AgentName)
 	repoRoot, err := setupRepoRoot(cfg.RepoRoot)
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup repo root: %w", err)
+		return nil, fmt.Errorf("repo root: %w", err)
 	}
 
-	// Initialize default configurations
 	stashCfg, extractCfg := initializeConfigs(cfg)
 
-	// Create engine instance with basic configuration
 	e := &Engine{
 		Model:              cfg.Model,
 		repoRoot:           repoRoot,
@@ -187,190 +132,163 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		injections:         cfg.Injections,
 	}
 
-	// Load agent configuration from registry
-	agentName, identityText, agentConfig, err := loadAgentConfig(cfg.AgentName, cfg.CommandName, cfg.ModelExplicitlySet)
-	if err != nil {
+	// 1. Agent identity — load from registry, resolve model
+	if err := e.initAgent(cfg); err != nil {
 		return nil, err
 	}
-	e.AgentName = agentName
-	e.AgentConfig = agentConfig
 
-	// Update model from agent config if not explicitly set
-	if agentConfig != nil && agentConfig.Model != "" && !cfg.ModelExplicitlySet {
-		e.Model = agentConfig.Model
-	}
-
-	// Setup memory store and context (only if not in raw mode)
-	if cfg.SystemOverride == "" && !cfg.Raw {
-		memStore, err := setupMemoryStore(repoRoot, identityText, e.AgentName)
-		if err != nil {
-			return nil, err
-		}
-		e.MemStore = memStore
-	} else if cfg.Raw && identityText == "" {
-		identityText = "You are a helpful assistant."
-	}
-
-	// Setup session management and workspace
-	session, sessionDB, workspace, messages, err := setupSession(repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach)
-	if err != nil {
-		return nil, fmt.Errorf("failed to setup session: %w", err)
-	}
-	e.Session = session
-	e.SessionDB = sessionDB
-	e.workspace = workspace
-	e.Messages = messages
-
-	// Setup model store and client
-	modelStore, err := setupModelStore(cfg.ModelStore)
-	if err != nil {
-		return nil, fmt.Errorf("failed to setup model store: %w", err)
-	}
-	e.modelStore = modelStore
-	e.ownsModelStore = (cfg.ModelStore == nil) // only close if we opened it ourselves
-
-	// Create model client
-	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore)
-	if err != nil {
+	// 2. Memory — SQLite-backed semantic store (skipped in raw mode)
+	if err := e.initMemory(cfg); err != nil {
 		return nil, err
 	}
-	e.Model = resolvedModel
-	e.modelClient = modelClient
-	e.Client = anthropicClient
 
-	// Setup session logging and workflow hooks
-	if e.Session != nil {
-		Log.Info("logging to %s", e.Session.FilePath())
-		if e.SessionDB != nil {
-			e.Session.AttachDB(e.SessionDB, cfg.CommandName)
-		}
-		
-		// Configure automatic truncation of large tool results
-		truncCfg := sessionMod.TruncateConfigForRole(e.AgentName)
-		e.Session.SetTruncateConfig(truncCfg)
-		
-		// Initialize workflow automation (auto-commit, auto-format)
-		workflowCfg := cfg.AutoWorkflow
-		if workflowCfg == (AutoWorkflowConfig{}) {
-			workflowCfg = DefaultAutoWorkflowConfig()
-		}
-		e.workflowHooks = NewWorkflowHooks(repoRoot, e.Session.SessionID(), e.AgentName, workflowCfg)
-	}
-
-	// Setup forge hook for project detection
-	forgeDB, forgeHook, err := setupForgeHook(repoRoot, "", e.AgentName, AutoWorkflowConfig{})
-	if err == nil {
-		e.forgeDB = forgeDB
-		e.forgeHook = forgeHook
-	}
-
-	// Setup agent registry for spawn tools
-	agentRegistry, err := setupAgentRegistry(e.AgentConfig, e.Client, repoRoot, modelClient, e.modelStore, e.MemStore)
-	if err != nil {
+	// 3. Session — JSONL logging, workspace, message persistence
+	if err := e.initSession(cfg); err != nil {
 		return nil, err
 	}
-	e.agentRegistry = agentRegistry
 
-	// Build and configure tools
+	// 4. Model client — Anthropic/OpenAI, auth, failover
+	if err := e.initModelClient(cfg); err != nil {
+		return nil, err
+	}
+
+	// 5. Workflow — auto-commit, auto-format, forge integration
+	e.initWorkflow(cfg)
+
+	// 6. Tools — shell, files, memory, spawn, server-injected extras
 	if !cfg.NoTools {
-		e.agentTools = e.buildTools()
-
-		// Append gateway-injected tools (replace same-named tools)
-		for _, extra := range cfg.ExtraTools {
-			replaced := false
-			for i, t := range e.agentTools {
-				if t.Name == extra.Name {
-					e.agentTools[i] = extra
-					replaced = true
-					break
-				}
-			}
-			if !replaced {
-				e.agentTools = append(e.agentTools, extra)
-			}
-		}
-		
-		// Inject task plan and scratchpad as always-visible context
-		for _, t := range e.agentTools {
-			switch t.Name {
-			case "task_plan":
-				repoRoot := e.repoRoot
-				e.contextInjectors = append(e.contextInjectors, func() []sessionMod.NamedBlock {
-					content := agentkittools.LoadPlanContext(repoRoot)
-					if content == "" {
-						return nil
-					}
-					return []sessionMod.NamedBlock{{ID: "task-plan", Text: content}}
-				})
-			case "scratchpad":
-				repoRoot, agentName := e.repoRoot, e.AgentName
-				e.contextInjectors = append(e.contextInjectors, func() []sessionMod.NamedBlock {
-					content := agentkittools.LoadScratchpadContext(repoRoot, agentName)
-					if content == "" {
-						return nil
-					}
-					return []sessionMod.NamedBlock{{ID: "scratchpad", Text: content}}
-				})
-			}
-		}
-
-		// Load tool registry into memory
-		if err := loadToolsIntoMemory(e.MemStore, e.agentTools); err != nil {
-			Log.Warn("failed to load tool registry: %v", err)
-		}
-
-		// Write tools list to workspace for reference
-		if e.workspace != nil && len(e.agentTools) > 0 {
-			toolInfos := make([]sessionMod.ToolInfo, len(e.agentTools))
-			for i, t := range e.agentTools {
-				toolInfos[i] = sessionMod.ToolInfo{Name: t.Name, Description: t.Description}
-			}
-			e.workspace.WriteToolsList(toolInfos)
-		}
+		e.initTools(cfg)
 	}
 
-	// Store system override for raw/override modes
-	if cfg.SystemOverride != "" {
-		e.IdentityOverride = cfg.SystemOverride
-	} else if cfg.Raw {
-		e.IdentityOverride = identityText
+	// 7. Limits, profiling, cache config
+	e.initLimitsAndProfiling(cfg)
+
+	// 8. Guard — execution modes, cost limits, repetition detection
+	e.Guard = guard.New(guard.Config{
+		Mode:           guard.Autonomous, // TODO: configurable via EngineConfig
+		MaxTurns:       e.Limits.MaxTurns,
+		MaxInputTokens: e.Limits.MaxInputTokens,
+	})
+
+	// 9. Trace — structured execution logging (nil = disabled)
+	e.Trace = trace.NewRecorder("", "", e.AgentName) // TODO: enable via config
+
+	// 10. Code index — AST-based codebase analysis (nil-safe, no-op if empty)
+	e.CodeIndex, _ = codeindex.Open(e.repoRoot)
+
+	// 11. Checkpoint — workspace state snapshots (nil-safe)
+	if e.Session != nil {
+		e.Checkpoint, _ = checkpoint.New(e.repoRoot, e.Session.SessionID())
 	}
-
-	// Setup limits and profiling
-	e.Limits.MaxTurns, e.Limits.MaxInputTokens, e.Limits.MaxResponseTime = setupLimits(cfg, e.AgentConfig)
-
-	// Setup memory profiling
-	memoryProfiler, err := setupMemoryProfiling(cfg.MemoryProfiling, cfg.MemoryLogPath)
-	if err != nil {
-		return nil, err
-	}
-	e.memoryProfiler = memoryProfiler
-
-	// Blueprint: enable via config or INBER_BLUEPRINT env var
-	e.Cache.BlueprintEnabled = cfg.Blueprint
-	if !e.Cache.BlueprintEnabled {
-		if v := os.Getenv("INBER_BLUEPRINT"); v == "1" || v == "true" {
-			e.Cache.BlueprintEnabled = true
-		}
-	}
-
-	// Initialize staged conversation manager
-	pruneCfg := e.pruneConfig()
-	e.staged = conversation.NewStagedConversation(pruneCfg.ManageInterval)
 
 	return e, nil
 }
 
-// GetMemoryReport returns the current memory profiling report.
-func (e *Engine) GetMemoryReport() MemoryReport {
-	if e.memoryProfiler == nil {
-		return MemoryReport{Enabled: false}
+// ---------------------------------------------------------------------------
+// RunTurn — the main execution pipeline
+// ---------------------------------------------------------------------------
+
+// RunTurn sends a user message through the turn pipeline:
+//
+//  1. Guard    — check limits, verify mode allows this turn
+//  2. Prepare  — stash large messages, repair alternation, summarize/prune
+//  3. Context  — build system prompt with memory, code index, cache control
+//  4. Execute  — select model, call API, loop on tool calls
+//  5. Process  — extract memories, stash response, track tokens/cost
+//  6. Record   — update guard counters, write trace, take checkpoint
+func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
+	e.Turn.Counter++
+	e.Turn.StartTime = time.Now()
+	fmt.Fprintf(os.Stderr, "\n%s━━━ Turn %d ━━━%s\n", cyan+bold, e.Turn.Counter, reset)
+
+	if e.memoryProfiler != nil {
+		e.memoryProfiler.TakeSnapshot(e.Turn.Counter)
 	}
-	return e.memoryProfiler.GenerateReport()
+
+	// 1. Guard — check if we've exceeded limits before doing work
+	if e.Guard != nil {
+		if exceeded, reason := e.Guard.CheckLimits(); exceeded {
+			return nil, fmt.Errorf("guard: %s", reason)
+		}
+	}
+
+	sessionID := ""
+	if e.Session != nil {
+		sessionID = e.Session.SessionID()
+		e.Session.LogUser(input)
+	}
+
+	// 2-3. Prepare input and build context
+	processedInput := e.prepareInput(input, sessionID)                   // turn_prepare.go
+	systemBlocks := e.buildTurnContext(processedInput)                    // turn_prompt.go
+
+	// 4. Execute agent
+	result, err := e.executeAgent(context.Background(), systemBlocks)    // turn_execute.go
+	if err != nil {
+		return nil, err
+	}
+
+	// 5. Post-process
+	if err := e.postProcessResult(result, input, sessionID); err != nil { // turn_postprocess.go
+		Log.Warn("post-processing failed: %v", err)
+	}
+
+	// 6. Record — update guard, trace, checkpoint
+	if e.Guard != nil {
+		e.Guard.RecordTurn(result.InputTokens)
+	}
+	e.Trace.RecordTurn(trace.Turn{
+		Number:       e.Turn.Counter,
+		Input:        input,
+		Output:       result.Text,
+		InputTokens:  result.InputTokens,
+		OutputTokens: result.OutputTokens,
+	})
+	if e.Checkpoint != nil {
+		e.Checkpoint.Take(fmt.Sprintf("turn %d", e.Turn.Counter), e.Turn.Counter)
+	}
+
+	if e.memoryProfiler != nil {
+		e.memoryProfiler.TakeSnapshot(e.Turn.Counter)
+	}
+
+	return result, nil
 }
 
-// IsMemoryProfilingEnabled returns whether memory profiling is active.
-func (e *Engine) IsMemoryProfilingEnabled() bool {
-	return e.memoryProfiler != nil
-}
+// ---------------------------------------------------------------------------
+// Close — cleanup
+// ---------------------------------------------------------------------------
 
+// Close finalizes the session: writes trace summary, saves memory, closes all stores.
+func (e *Engine) Close() {
+	if e.workflowHooks != nil {
+		if summary := e.workflowHooks.FinishSession(); summary != "" {
+			fmt.Fprintln(os.Stderr, "\n"+summary)
+		}
+	}
+	e.Trace.WriteSummary()
+	if e.CodeIndex != nil {
+		e.CodeIndex.Close()
+	}
+	if e.MemStore != nil && len(e.Messages) > 0 {
+		SaveSessionSummary(e.MemStore, e.Messages, e.AgentName)
+	}
+	if e.MemStore != nil {
+		e.MemStore.Close()
+	}
+	if e.Session != nil {
+		e.Session.Close()
+	}
+	if e.SessionDB != nil {
+		e.SessionDB.Close()
+	}
+	if e.modelStore != nil && e.ownsModelStore {
+		e.modelStore.Close()
+	}
+	if e.forgeDB != nil {
+		e.forgeDB.Close()
+	}
+	if e.memoryProfiler != nil {
+		e.memoryProfiler.Close()
+	}
+}

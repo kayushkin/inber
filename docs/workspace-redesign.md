@@ -226,11 +226,11 @@ Projects registered in forge:
 ```json
 {
   "kayushkin": {
-    "repo": "~/life/repos/kayushkin.com",
+    "repo": "~/repos/kayushkin.com",
     "max_concurrent": 3
   },
   "si": {
-    "repo": "~/life/repos/si",
+    "repo": "~/repos/si",
     "max_concurrent": 2
   }
 }
@@ -256,11 +256,11 @@ Projects registered in forge:
 
 ### Filesystem
 - `~/forge/slots/` directory (persistent worktrees)
-- `~/life/repos/.pools/` directory (agent-bench worktrees)
+- `~/repos/.pools/` directory (agent-bench worktrees)
 - Associated branches: `forge/slot-*`, `pool/*`
 
 ### Keep
-- `~/life/repos/.envs/env-{0,1,2}/` — staging Docker Compose envs (separate concern)
+- `~/repos/.envs/env-{0,1,2}/` — staging Docker Compose envs (separate concern)
 - `forge-env restart` system (unchanged)
 - `forge deploy prod` system (unchanged, called post-merge)
 - Forge v3 staging slot system (OpenSlot/ForceCloseSlot — for Docker envs)

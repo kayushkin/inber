@@ -1,125 +1,78 @@
 # Inber Project Context
 
-**Project:** inber — Go-based agent orchestration framework  
+**Project:** inber — Go-based agent orchestration server  
 **Repo:** github.com/kayushkin/inber  
-**Language:** Go 1.21+
+**Language:** Go 1.24+
 
 ## Architecture
 
-- **agent/** — Core agent loop, tool execution, hooks
-- **context/** — Tag-based context system, auto-loading
-- **memory/** — SQLite-backed persistent memory
-- **tools/** — Built-in tools (shell, files, etc)
-- **session/** — JSONL logging, session tracking
-- **cmd/inber/** — CLI REPL and commands
-- **agents/** — Agent definitions (markdown + JSON config)
+- **cmd/inber-server/** — Server entry point
+- **server/** — HTTP API, bus integration, session management
+- **engine/** — Core turn loop, context building, tool execution
+- **agent/** — LLM client abstraction, tool definitions
+- **agent/registry/** — Agent config loading from agent-store
+- **tools/** — Built-in tools (shell, files, deploy, MCP)
+- **memory/** — Thin wrapper around agent-store/memory (SQLite-backed)
+- **session/** — JSONL logging, session tracking, cost tracking
+- **conversation/** — Message repair, stashing, extraction
+
+The CLI is a separate thin HTTP client: [inber-cli](../inber-cli).
 
 ## Build & Test Commands
 
 ```bash
 # Build
-go build -o inber ./cmd/inber/
-
-# Test (unit tests, no API needed)
-go test ./context/ -v
-go test ./memory/ -v
-
-# Test with API key (agent integration tests)
-export $(cat .env | xargs)
-go test ./agent/ -v -timeout=120s
+go build -o inber-server ./cmd/inber-server/
 
 # Test everything
-export $(cat .env | xargs)
-go test ./... -v
+go test ./...
 
 # Run
-./inber                    # default agent
-./inber -a fionn "task"    # specific agent
+./inber-server                    # default port :8200
+./inber-server --addr :9000       # custom port
+./inber-server --config gw.json   # custom config
 ```
 
 ## Pre-Push Checklist
 
 **Every commit MUST:**
-1. Build cleanly: `go build ./cmd/inber/`
+1. Build cleanly: `go build ./cmd/inber-server/`
 2. Pass all tests: `go test ./...`
 3. Only then: `git push`
 
-No exceptions. Broken builds = broken trust.
-
 ## Deployment
 
-This is a CLI tool, not a service. "Deployment" means:
-1. Build binary: `go build -o inber ./cmd/inber/`
-2. Move to PATH: `mv inber ~/bin/` or `/usr/local/bin/`
-3. Verify: `inber --version` (when implemented)
-
-For releases:
-```bash
-# Tag release
-git tag v0.1.0
-git push origin v0.1.0
-
-# Build for multiple platforms
-GOOS=linux GOARCH=amd64 go build -o inber-linux-amd64 ./cmd/inber/
-GOOS=darwin GOARCH=amd64 go build -o inber-darwin-amd64 ./cmd/inber/
-GOOS=darwin GOARCH=arm64 go build -o inber-darwin-arm64 ./cmd/inber/
-```
+This is a systemd service. "Deployment" means:
+1. Build binary: `go build -o inber-server ./cmd/inber-server/`
+2. Move to PATH: `mv inber-server ~/bin/`
+3. Restart service: `systemctl --user restart inber`
 
 ## Dependencies
 
 - `github.com/anthropics/anthropic-sdk-go` — Claude API
-- `github.com/kayushkin/aiauth` — Auth management (OAuth + API keys)
-- `github.com/mattn/go-sqlite3` — Memory storage (CGO dependency)
-- `github.com/google/uuid` — UUID generation
-- `github.com/joho/godotenv` — .env loading
-- `github.com/spf13/cobra` — CLI framework
+- `github.com/kayushkin/agent-store` — Agent identity and config (SQLite)
+- `github.com/kayushkin/model-store` — Model registry, auth, usage tracking
+- `github.com/kayushkin/bus` — NATS message bus client
+- `github.com/kayushkin/forge` — Workspace management
+- `modernc.org/sqlite` — Pure Go SQLite (no CGO)
 
 ## Environment Setup
 
-Required in `.env` (gitignored):
+Required env vars (or in `.env`):
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...
+NATS_URL=nats://localhost:4222   # bus connection
 ```
 
 Optional:
 ```bash
-OPENAI_API_KEY=sk-...  # for avatar generation
+OPENCLAW_URL=http://localhost:18789
+OPENCLAW_TOKEN=...
+BUS_TOKEN=...
 ```
-
-## Git Workflow
-
-- **main** branch is always buildable
-- Feature branches for new work
-- Squash commits before merging
-- Clear commit messages: `feat: add X`, `fix: Y`, `refactor: Z`
-
-## Code Style
-
-- `gofmt` formatted (enforced)
-- Clear variable names, no abbreviations unless obvious
-- Comments explain "why", not "what"
-- Error handling: always check errors, return early
-- Tests: table-driven tests preferred
-
-## Common Issues
-
-**CGO errors with sqlite3:**
-- Ensure GCC installed: `sudo apt-get install build-essential`
-- Or use pure-Go sqlite: `modernc.org/sqlite` (future)
-
-**API rate limits:**
-- Claude API: tier-based limits
-- Use smaller models for testing (sonnet vs opus)
-
-**Memory corruption:**
-- Memory DB at `.inber/memory.db`
-- Safe to delete and rebuild if corrupted
-- Backed up in git? No—add to .gitignore
 
 ## Project-Specific Conventions
 
-- Agent identities are markdown in `agents/` and `agents/templates/`
-- Agent configs are JSON in `agents.json`
-- Context chunks use tags, not relevance scores
-- All file paths relative to repo root
+- Agent definitions are in agent-store (`~/.config/agent-store/agents.db`), not in this repo
+- Context building is in engine/turn_prompt.go and turn_context.go
 - Session logs in `logs/` (gitignored)
+- Server data in `~/.inber/server/`

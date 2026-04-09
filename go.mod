@@ -6,30 +6,26 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.27.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/joho/godotenv v1.5.1
 	github.com/kayushkin/agent-store v0.0.0-20260405014345-d199a8b99810
 	github.com/kayushkin/agentkit v0.0.0-20260405052600-a2f937bf60ee
-	github.com/kayushkin/bus v0.0.0-20260324013021-8010a5dab1d6
+	github.com/kayushkin/bus v0.0.0-20260402051322-d9429109f21a
 	github.com/kayushkin/forge v0.0.0
 	github.com/kayushkin/logstack v0.0.0-20260322075744-a4ca356093f8
 	github.com/kayushkin/model-store v0.0.0-20260307230928-77f7530097d2
-	github.com/spf13/cobra v1.10.2
+	github.com/nats-io/nats.go v1.49.0
 	modernc.org/sqlite v1.46.1
 )
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/kayushkin/aiauth v0.0.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sqlite3 v1.14.37 // indirect
-	github.com/nats-io/nats.go v1.49.0 // indirect
 	github.com/nats-io/nkeys v0.4.12 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

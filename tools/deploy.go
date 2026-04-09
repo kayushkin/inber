@@ -36,7 +36,7 @@ func runDeploy(ctx context.Context) (string, error) {
 	}
 
 	// Detect project and slot from cwd path
-	// Expected: ~/life/repos/.pools/<project>/slot-<N>
+	// Expected: ~/repos/.pools/<project>/slot-<N>
 	project, slot, err := detectSlot(cwd)
 	if err != nil {
 		return "", fmt.Errorf("not in a forge slot: %w", err)

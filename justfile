@@ -1,8 +1,8 @@
 # Inber build commands
 
-# Build inber binary
+# Build inber-server binary
 build:
-  go build -o ~/bin/inber ./cmd/inber
+  go build -o ~/bin/inber-server ./cmd/inber-server
 
 # Run tests
 test:
@@ -13,4 +13,4 @@ install: build
 
 # Clean
 clean:
-  rm -f ~/bin/inber
+  rm -f ~/bin/inber-server

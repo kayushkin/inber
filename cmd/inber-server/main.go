@@ -1,7 +1,15 @@
+// Command inber-server starts the inber agent server daemon.
+//
+// Usage:
+//
+//	inber-server                  # default port :8200
+//	inber-server --addr :9000     # custom port
+//	inber-server --config gw.json # custom config file
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,53 +20,33 @@ import (
 	"github.com/kayushkin/inber/agent/registry"
 	"github.com/kayushkin/inber/logger"
 	"github.com/kayushkin/inber/server"
-	"github.com/spf13/cobra"
 )
 
-var (
-	serveAddr string
-	serveConfig string
-)
+func main() {
+	addr := flag.String("addr", ":8200", "API listen address")
+	configFile := flag.String("config", "", "Config file (JSON)")
+	flag.Parse()
 
-var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Start the inber server",
-	Long: `Start the inber server daemon. Keeps agent sessions alive,
-manages sub-agent spawning, and exposes an HTTP API.
-
-The server loads agent configs from agent-store
-and creates engines on demand.
-
-Example:
-  inber serve                    # default port :8200
-  inber serve --addr :9000       # custom port
-  inber serve --config gw.json   # custom config file`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runServe()
-	},
+	if err := run(*addr, *configFile); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
-func init() {
-	serveCmd.Flags().StringVar(&serveAddr, "addr", ":8200", "API listen address")
-	serveCmd.Flags().StringVar(&serveConfig, "config", "", "Config file (JSON)")
-}
-
-func runServe() error {
+func run(addr, configFile string) error {
 	var cfg server.Config
 
-	// Try loading from config file.
-	if serveConfig != "" {
-		loaded, err := server.LoadConfig(serveConfig)
+	if configFile != "" {
+		loaded, err := server.LoadConfig(configFile)
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
 		cfg = loaded
 	} else {
-		// Build config from existing agent registry.
 		cfg = buildConfigFromRegistry()
 	}
 
-	cfg.ListenAddr = serveAddr
+	cfg.ListenAddr = addr
 
 	// Wire bus integration from env vars.
 	if natsURL := os.Getenv("NATS_URL"); natsURL != "" {
@@ -84,7 +72,7 @@ func runServe() error {
 	}
 	defer g.Close()
 
-	// Ensure single instance — kill stale processes.
+	// Ensure single instance.
 	pidFile := server.NewPIDFile(g.DataDir())
 	if err := pidFile.Acquire(); err != nil {
 		return fmt.Errorf("pid file: %w", err)
@@ -95,7 +83,6 @@ func runServe() error {
 		return fmt.Errorf("selftest: %w", err)
 	}
 
-	// Handle shutdown signals.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -109,7 +96,6 @@ func runServe() error {
 		cancel()
 	}()
 
-	// Start bus listener in background (subscribes to inbound, routes to agents).
 	go func() {
 		if err := g.ListenBus(ctx); err != nil && ctx.Err() == nil {
 			logger.WithComponent("server").Error("bus listener stopped", map[string]interface{}{
@@ -121,7 +107,7 @@ func runServe() error {
 	return g.Serve(ctx)
 }
 
-// buildConfigFromRegistry builds gateway config from agent-store.
+// buildConfigFromRegistry builds server config from agent-store.
 func buildConfigFromRegistry() server.Config {
 	regCfg, err := registry.LoadConfig()
 
@@ -131,7 +117,6 @@ func buildConfigFromRegistry() server.Config {
 		for name, ac := range regCfg.Agents {
 			workspace := ac.Workspace
 			if workspace == "" {
-				// Try to resolve workspace from project name
 				home, _ := os.UserHomeDir()
 				lookupName := name
 				if ac.Project != "" {
@@ -143,7 +128,7 @@ func buildConfigFromRegistry() server.Config {
 				}
 			}
 
-			gac := server.AgentConfig{
+			agents[name] = server.AgentConfig{
 				Name:      name,
 				Project:   ac.Project,
 				Projects:  ac.Projects,
@@ -152,7 +137,6 @@ func buildConfigFromRegistry() server.Config {
 				Thinking:  ac.Thinking,
 				Tools:     ac.Tools,
 			}
-			agents[name] = gac
 		}
 	}
 
@@ -175,9 +159,9 @@ func buildConfigFromRegistry() server.Config {
 		agentNames = append(agentNames, name)
 	}
 	logger.WithComponent("server").Info("loaded agents from registry", map[string]interface{}{
-		"count":        len(agents),
-		"agents":       strings.Join(agentNames, ", "),
-		"default":      defaultAgent,
+		"count":   len(agents),
+		"agents":  strings.Join(agentNames, ", "),
+		"default": defaultAgent,
 	})
 
 	return server.Config{
@@ -185,5 +169,3 @@ func buildConfigFromRegistry() server.Config {
 		DefaultAgent: defaultAgent,
 	}
 }
-
-// removed: loadAgentsJSONProjects — agent-store is the source of truth
