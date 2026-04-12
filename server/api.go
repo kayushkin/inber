@@ -37,6 +37,12 @@ func (g *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/memory/", g.handleMemoryDetail)
 	mux.HandleFunc("/api/health", g.handleHealth)
 
+	// llm-bridge compatible endpoints (root-level, no /api prefix).
+	mux.HandleFunc("/health", g.handleBridgeHealth)
+	mux.HandleFunc("/harnesses", g.handleBridgeHarnesses)
+	mux.HandleFunc("/sessions", g.handleBridgeSessions)
+	mux.HandleFunc("/sessions/", g.handleBridgeSessionRouter)
+
 	server := &http.Server{
 		Addr:    g.config.ListenAddr,
 		Handler: mux,
