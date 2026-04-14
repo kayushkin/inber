@@ -70,14 +70,14 @@ type Engine struct {
 	Tokens      TokenTotals
 
 	// --- Subsystems ---
-	MemStore         memory.MemoryStore      // semantic memory (agent-store SQLite)
-	Session          *sessionMod.Session     // JSONL turn logger
-	SessionDB        *sessionMod.DB          // session metadata DB
-	Guard            *guard.Guard            // execution modes, limits, repetition detection
-	Trace            *trace.Recorder         // structured execution logging
-	CodeIndex        *codeindex.Index        // AST-based codebase symbol index
-	Checkpoint       *checkpoint.Manager     // workspace state snapshots
-	IdentityOverride string                  // system prompt for raw/override modes
+	MemStore         memory.MemoryStore  // semantic memory (agent-store SQLite)
+	Session          *sessionMod.Session // JSONL turn logger
+	SessionDB        *sessionMod.DB      // session metadata DB
+	Guard            *guard.Guard        // execution modes, limits, repetition detection
+	Trace            *trace.Recorder     // structured execution logging
+	CodeIndex        *codeindex.Index    // AST-based codebase symbol index
+	Checkpoint       *checkpoint.Manager // workspace state snapshots
+	IdentityOverride string              // system prompt for raw/override modes
 
 	// --- Internal state ---
 	repoRoot           string
@@ -219,11 +219,11 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	}
 
 	// 2-3. Prepare input and build context
-	processedInput := e.prepareInput(input, sessionID)                   // turn_prepare.go
-	systemBlocks := e.buildTurnContext(processedInput)                    // turn_prompt.go
+	processedInput := e.prepareInput(input, sessionID) // turn_prepare.go
+	systemBlocks := e.buildTurnContext(processedInput) // turn_prompt.go
 
 	// 4. Execute agent
-	result, err := e.executeAgent(context.Background(), systemBlocks)    // turn_execute.go
+	result, err := e.executeAgent(context.Background(), systemBlocks) // turn_execute.go
 	if err != nil {
 		return nil, err
 	}
@@ -257,6 +257,61 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 
 // ---------------------------------------------------------------------------
 // Close — cleanup
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Mid-session configuration updates
+// ---------------------------------------------------------------------------
+
+// SetModel overrides the model for subsequent turns.
+func (e *Engine) SetModel(model string) {
+	e.Model = model
+	e.modelExplicitlySet = true
+}
+
+// SetThinkingBudget updates the extended thinking token budget for subsequent turns.
+func (e *Engine) SetThinkingBudget(budget int64) {
+	e.thinkingBud = budget
+}
+
+// ThinkingBudget returns the current thinking budget.
+func (e *Engine) ThinkingBudget() int64 {
+	return e.thinkingBud
+}
+
+// SetDisabledTools updates the set of tools that should be excluded from subsequent turns.
+func (e *Engine) SetDisabledTools(names []string) {
+	disabled := make(map[string]bool, len(names))
+	for _, n := range names {
+		disabled[n] = true
+	}
+	var filtered []agent.Tool
+	// Re-filter from the full tool set.
+	for _, t := range e.agentTools {
+		if !disabled[t.Name()] {
+			filtered = append(filtered, t)
+		}
+	}
+	e.agentTools = filtered
+}
+
+// CompactContext triggers conversation summarization/pruning, optionally
+// incorporating a user-provided summary. Returns the number of messages removed.
+func (e *Engine) CompactContext(summary string) (int, error) {
+	before := len(e.Messages)
+
+	// Run summarization first.
+	e.summarizeIfNeeded()
+
+	// Then run prune.
+	e.pruneIfNeeded()
+
+	removed := before - len(e.Messages)
+	return removed, nil
+}
+
+// ---------------------------------------------------------------------------
+// Close
 // ---------------------------------------------------------------------------
 
 // Close finalizes the session: writes trace summary, saves memory, closes all stores.

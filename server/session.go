@@ -56,7 +56,7 @@ type Session struct {
 	mu              sync.Mutex
 	cancel          context.CancelFunc
 	injections      chan string
-	pendingMessages []string // results queued while session was idle
+	pendingMessages []string          // results queued while session was idle
 	onEvent         func(StreamEvent) // current request's event callback (updated per-turn)
 }
 
@@ -166,7 +166,19 @@ func (s *Session) inject(message string) {
 	}
 }
 
-// stop cancels the current run.
+// interrupt cancels the current turn but keeps the session alive for future turns.
+func (s *Session) interrupt() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	s.Status = Idle
+	s.LastActive = time.Now()
+}
+
+// stop cancels the current run and marks the session as completed (terminal).
 func (s *Session) stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

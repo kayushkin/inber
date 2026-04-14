@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/llm-bridge/msg"
 )
 
@@ -21,9 +22,9 @@ import (
 // ---------------------------------------------------------------------------
 
 type bridgeHealthResponse struct {
-	Status    string              `json:"status"`
+	Status    string                `json:"status"`
 	Harnesses []bridgeHarnessStatus `json:"harnesses"`
-	Sessions  bridgeSessionCounts `json:"sessions"`
+	Sessions  bridgeSessionCounts   `json:"sessions"`
 }
 
 type bridgeHarnessStatus struct {
@@ -194,6 +195,18 @@ func (g *Server) handleBridgeSessionRouter(w http.ResponseWriter, r *http.Reques
 		g.handleBridgeStop(w, r, id)
 	case "interrupt":
 		g.handleBridgeInterrupt(w, r, id)
+	case "resume":
+		g.handleBridgeResume(w, r, id)
+	case "fork":
+		g.handleBridgeFork(w, r, id)
+	case "config":
+		g.handleBridgeConfig(w, r, id)
+	case "compact":
+		g.handleBridgeCompact(w, r, id)
+	case "discover":
+		g.handleBridgeDiscover(w, r, id)
+	case "messages":
+		g.handleBridgeMessages(w, r, id)
 	default:
 		jsonError(w, "unknown action", http.StatusNotFound)
 	}
@@ -462,7 +475,7 @@ func (g *Server) handleBridgeInterrupt(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
-	if err := g.StopSession(id); err != nil {
+	if err := g.InterruptSession(id); err != nil {
 		jsonError(w, err.Error(), http.StatusNotFound)
 		return
 	}
@@ -475,8 +488,328 @@ func (g *Server) handleBridgeInterrupt(w http.ResponseWriter, r *http.Request, i
 }
 
 // ---------------------------------------------------------------------------
+// POST /sessions/{id}/resume — reconnect to an idle session
+// ---------------------------------------------------------------------------
+
+func (g *Server) handleBridgeResume(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// If the session is already loaded, just return it.
+	if val, ok := g.sessions.Load(id); ok {
+		s := val.(*Session)
+		s.mu.Lock()
+		info := sessionInfoToBridge(&SessionInfo{
+			Key:        s.Key,
+			Agent:      s.AgentName,
+			Status:     s.Status,
+			SpawnDepth: s.SpawnDepth,
+			ParentKey:  s.ParentKey,
+			Children:   s.Children,
+			CreatedAt:  s.CreatedAt,
+			LastActive: s.LastActive,
+			Messages:   len(s.Engine.Messages),
+		})
+		s.mu.Unlock()
+		jsonResponse(w, info)
+		return
+	}
+
+	// Not loaded — try to recreate from persisted messages.
+	agentName := agentFromSessionKey(id)
+	if agentName == "" {
+		jsonError(w, "cannot determine agent from session key", http.StatusBadRequest)
+		return
+	}
+	ac, ok := g.GetAgentConfig(agentName)
+	if !ok {
+		jsonError(w, fmt.Sprintf("unknown agent: %s", agentName), http.StatusBadRequest)
+		return
+	}
+
+	sess, err := g.createSession(id, agentName, ac, RunRequest{}, nil)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("resume failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	actual, loaded := g.sessions.LoadOrStore(id, sess)
+	if loaded {
+		sess.close()
+		sess = actual.(*Session)
+	}
+
+	jsonResponse(w, sessionInfoToBridge(&SessionInfo{
+		Key:        sess.Key,
+		Agent:      sess.AgentName,
+		Status:     sess.Status,
+		CreatedAt:  sess.CreatedAt,
+		LastActive: sess.LastActive,
+		Messages:   len(sess.Engine.Messages),
+	}))
+}
+
+// ---------------------------------------------------------------------------
+// POST /sessions/{id}/fork — branch a conversation
+// ---------------------------------------------------------------------------
+
+func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	val, ok := g.sessions.Load(id)
+	if !ok {
+		jsonError(w, "session not found", http.StatusNotFound)
+		return
+	}
+	parent := val.(*Session)
+
+	var req struct {
+		DisplayName string `json:"display_name,omitempty"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	childKey := sessionKeyForChild(id)
+	agentName := parent.AgentName
+	ac, _ := g.GetAgentConfig(agentName)
+
+	child, err := g.forkSession(parent, childKey, agentName, ac, nil)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("fork failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	g.sessions.Store(childKey, child)
+	g.store.UpsertSession(childKey, agentName, "fork")
+
+	// Track as child of parent.
+	parent.mu.Lock()
+	parent.Children = append(parent.Children, childKey)
+	parent.mu.Unlock()
+
+	displayName := req.DisplayName
+	if displayName == "" {
+		displayName = agentName + " (fork)"
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	jsonResponse(w, bridgeSession{
+		ID:          childKey,
+		DisplayName: displayName,
+		Harness:     "inber",
+		State:       string(msg.SessionIdle),
+		AgentID:     agentName,
+		ParentID:    id,
+		CreatedAt:   child.CreatedAt,
+		UpdatedAt:   child.LastActive,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// POST /sessions/{id}/config — update model, effort, tools, budget
+// ---------------------------------------------------------------------------
+
+func (g *Server) handleBridgeConfig(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	val, ok := g.sessions.Load(id)
+	if !ok {
+		jsonError(w, "session not found", http.StatusNotFound)
+		return
+	}
+	s := val.(*Session)
+
+	var req struct {
+		Model         string   `json:"model,omitempty"`
+		Effort        string   `json:"effort,omitempty"` // "high", "medium", "low" or raw token count
+		DisabledTools []string `json:"disabled_tools,omitempty"`
+		MaxBudget     int      `json:"max_budget,omitempty"` // max input tokens
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if req.Model != "" {
+		s.Engine.SetModel(req.Model)
+	}
+
+	if req.Effort != "" {
+		var budget int64
+		switch req.Effort {
+		case "high":
+			budget = 32000
+		case "medium":
+			budget = 10000
+		case "low":
+			budget = 0
+		default:
+			// Try parsing as raw token count.
+			if n, err := parseIntFromString(req.Effort); err == nil {
+				budget = int64(n)
+			}
+		}
+		s.Engine.SetThinkingBudget(budget)
+	}
+
+	if len(req.DisabledTools) > 0 {
+		s.Engine.SetDisabledTools(req.DisabledTools)
+	}
+
+	if req.MaxBudget > 0 && s.Engine.Guard != nil {
+		s.Engine.Guard.SetMaxInputTokens(req.MaxBudget)
+	}
+
+	jsonResponse(w, map[string]string{
+		"status": "updated",
+		"model":  s.Engine.Model,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// POST /sessions/{id}/compact — compress conversation context
+// ---------------------------------------------------------------------------
+
+func (g *Server) handleBridgeCompact(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	val, ok := g.sessions.Load(id)
+	if !ok {
+		jsonError(w, "session not found", http.StatusNotFound)
+		return
+	}
+	s := val.(*Session)
+
+	var req struct {
+		Summary string `json:"summary,omitempty"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	before := len(s.Engine.Messages)
+	removed, err := s.Engine.CompactContext(req.Summary)
+	after := len(s.Engine.Messages)
+	s.mu.Unlock()
+
+	if err != nil {
+		jsonError(w, fmt.Sprintf("compact failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	g.persistMessages(s)
+
+	jsonResponse(w, map[string]any{
+		"status":           "compacted",
+		"messages_before":  before,
+		"messages_after":   after,
+		"messages_removed": removed,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// GET /sessions/{id}/discover — find stored sessions for this agent
+// ---------------------------------------------------------------------------
+
+func (g *Server) handleBridgeDiscover(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	agentName := agentFromSessionKey(id)
+
+	// List all stored sessions and filter by agent.
+	rows, err := g.store.ListSessions("")
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var filtered []any
+	for _, row := range rows {
+		if agentName == "" || row.Agent == agentName {
+			filtered = append(filtered, row)
+		}
+	}
+	if filtered == nil {
+		filtered = []any{}
+	}
+
+	jsonResponse(w, filtered)
+}
+
+// ---------------------------------------------------------------------------
+// GET /sessions/{id}/messages — materialized message list
+// ---------------------------------------------------------------------------
+
+func (g *Server) handleBridgeMessages(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	val, ok := g.sessions.Load(id)
+	if !ok {
+		jsonError(w, "session not found", http.StatusNotFound)
+		return
+	}
+	s := val.(*Session)
+
+	s.mu.Lock()
+	msgs := s.Engine.Messages
+	s.mu.Unlock()
+
+	// Return a lightweight materialized view.
+	type materializedMsg struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	var result []materializedMsg
+	for _, m := range msgs {
+		text := extractMessageText(m)
+		result = append(result, materializedMsg{
+			Role:    string(m.Role),
+			Content: text,
+		})
+	}
+
+	jsonResponse(w, result)
+}
+
+// ---------------------------------------------------------------------------
 // Type conversion helpers
 // ---------------------------------------------------------------------------
+
+// extractMessageText extracts the text content from an anthropic MessageParam.
+func extractMessageText(m anthropic.MessageParam) string {
+	var parts []string
+	for _, block := range m.Content {
+		if block.OfText != nil {
+			parts = append(parts, block.OfText.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// parseIntFromString tries to parse a string as an integer.
+func parseIntFromString(s string) (int, error) {
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
+}
 
 // streamEventToBridge converts inber's StreamEvent to llm-bridge's msg.Event.
 func streamEventToBridge(e StreamEvent, sessionID string) msg.Event {

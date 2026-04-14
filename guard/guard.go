@@ -85,14 +85,14 @@ type Guard struct {
 	cfg Config
 
 	// Tracking
-	turns      int
-	inputToks  int
-	cost       float64
-	startTime  int64 // unix seconds
+	turns     int
+	inputToks int
+	cost      float64
+	startTime int64 // unix seconds
 
 	// Repetition detection
-	lastTool   string
-	lastInput  string
+	lastTool    string
+	lastInput   string
 	repeatCount int
 }
 
@@ -164,6 +164,11 @@ func (g *Guard) CheckLimits() (exceeded bool, reason string) {
 	}
 	// TODO: check MaxDuration against startTime
 	return false, ""
+}
+
+// SetMaxInputTokens updates the input token limit.
+func (g *Guard) SetMaxInputTokens(max int) {
+	g.cfg.MaxInputTokens = max
 }
 
 // IsRepeating returns true if the agent is stuck calling the same tool.

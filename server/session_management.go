@@ -52,6 +52,29 @@ func (g *Server) ListSessions() []*SessionInfo {
 	return result
 }
 
+// InterruptSession pauses a running session's current turn but keeps
+// the session alive for future messages. Cascades to children.
+func (g *Server) InterruptSession(key string) error {
+	val, ok := g.sessions.Load(key)
+	if !ok {
+		return fmt.Errorf("session not found: %s", key)
+	}
+	s := val.(*Session)
+
+	// Cascade to children first.
+	s.mu.Lock()
+	children := append([]string{}, s.Children...)
+	s.mu.Unlock()
+
+	for _, childKey := range children {
+		g.InterruptSession(childKey)
+	}
+
+	s.interrupt()
+	g.persistMessages(s)
+	return nil
+}
+
 // StopSession aborts a running session and cascades to children.
 func (g *Server) StopSession(key string) error {
 	val, ok := g.sessions.Load(key)
