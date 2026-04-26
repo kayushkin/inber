@@ -7,7 +7,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/kayushkin/agent-store v0.0.0-20260405014345-d199a8b99810
-	github.com/kayushkin/agentkit v0.0.0-20260405052600-a2f937bf60ee
 	github.com/kayushkin/aiauth v0.0.0-20260316222336-6d4241da6194
 	github.com/kayushkin/bus v0.0.0-20260402051322-d9429109f21a
 	github.com/kayushkin/forge v0.0.0
@@ -15,6 +14,7 @@ require (
 	github.com/kayushkin/logstack v0.0.0-20260322075744-a4ca356093f8
 	github.com/kayushkin/memory-store v0.0.0
 	github.com/kayushkin/model-store v0.0.0-20260307230928-77f7530097d2
+	github.com/kayushkin/tool-store v0.0.0
 	github.com/nats-io/nats.go v1.49.0
 	modernc.org/sqlite v1.48.2
 )
@@ -48,7 +48,7 @@ replace github.com/kayushkin/agent-store => ../agent-store
 
 replace github.com/kayushkin/forge => ../forge
 
-replace github.com/kayushkin/agentkit => ../agentkit
+replace github.com/kayushkin/tool-store => ../tool-store
 
 replace github.com/kayushkin/bus => ../bus
 

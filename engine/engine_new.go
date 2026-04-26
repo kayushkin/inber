@@ -10,7 +10,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
-	agentkittools "github.com/kayushkin/agentkit/tools"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 	"github.com/kayushkin/aiauth"
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
@@ -533,7 +533,7 @@ func (e *Engine) registerToolContextInjectors() {
 		case "task_plan":
 			repoRoot := e.repoRoot
 			e.contextInjectors = append(e.contextInjectors, func() []sessionMod.NamedBlock {
-				content := agentkittools.LoadPlanContext(repoRoot)
+				content := toolstoretools.LoadPlanContext(repoRoot)
 				if content == "" {
 					return nil
 				}
@@ -542,7 +542,7 @@ func (e *Engine) registerToolContextInjectors() {
 		case "scratchpad":
 			repoRoot, agentName := e.repoRoot, e.AgentName
 			e.contextInjectors = append(e.contextInjectors, func() []sessionMod.NamedBlock {
-				content := agentkittools.LoadScratchpadContext(repoRoot, agentName)
+				content := toolstoretools.LoadScratchpadContext(repoRoot, agentName)
 				if content == "" {
 					return nil
 				}

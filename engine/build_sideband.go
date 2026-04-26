@@ -3,7 +3,7 @@ package engine
 import (
 	"fmt"
 
-	agentkittools "github.com/kayushkin/agentkit/tools"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 	"github.com/kayushkin/inber/agent"
 )
 
@@ -23,14 +23,14 @@ func (e *Engine) buildSidebandCallbacks() *agent.SidebandCallbacks {
 			for i := len(indices) - 1; i >= 0; i-- {
 				idx := indices[i]
 				if idx >= 0 && idx < len(plan.Tasks) {
-					plan.Tasks[idx].Status = agentkittools.TaskDone
+					plan.Tasks[idx].Status = toolstoretools.TaskDone
 				}
 			}
 
 			// Remove done tasks.
 			filtered := plan.Tasks[:0]
 			for _, t := range plan.Tasks {
-				if t.Status != agentkittools.TaskDone {
+				if t.Status != toolstoretools.TaskDone {
 					filtered = append(filtered, t)
 				}
 			}
@@ -42,21 +42,21 @@ func (e *Engine) buildSidebandCallbacks() *agent.SidebandCallbacks {
 
 			// If all tasks done, auto-build.
 			if len(plan.Tasks) == 0 {
-				result := agentkittools.RunBuildCheck(repoRoot)
+				result := toolstoretools.RunBuildCheck(repoRoot)
 				if !result.Success {
-					_ = agentkittools.AddBuildErrorTask(repoRoot, result.Output)
+					_ = toolstoretools.AddBuildErrorTask(repoRoot, result.Output)
 				}
 			}
 			return nil
 		},
 
 		SaveNote: func(key, value string) error {
-			notes := agentkittools.LoadScratchpadNotes(repoRoot, agentName)
+			notes := toolstoretools.LoadScratchpadNotes(repoRoot, agentName)
 			if notes == nil {
 				notes = make(map[string]string)
 			}
 			notes[key] = value
-			return agentkittools.SaveScratchpadNotes(repoRoot, agentName, notes)
+			return toolstoretools.SaveScratchpadNotes(repoRoot, agentName, notes)
 		},
 
 		SplitTask: func(index int, subtasks []string) error {
@@ -69,13 +69,13 @@ func (e *Engine) buildSidebandCallbacks() *agent.SidebandCallbacks {
 			}
 
 			// Replace the task at index with subtasks.
-			var newTasks []agentkittools.TaskItem
+			var newTasks []toolstoretools.TaskItem
 			for i, t := range plan.Tasks {
 				if i == index {
 					for _, st := range subtasks {
-						newTasks = append(newTasks, agentkittools.TaskItem{
+						newTasks = append(newTasks, toolstoretools.TaskItem{
 							Task:   st,
-							Status: agentkittools.TaskPending,
+							Status: toolstoretools.TaskPending,
 						})
 					}
 				} else {
@@ -89,15 +89,15 @@ func (e *Engine) buildSidebandCallbacks() *agent.SidebandCallbacks {
 }
 
 // loadTaskPlan reads the task plan from disk.
-func loadTaskPlan(repoRoot string) *agentkittools.TaskPlan {
-	content := agentkittools.LoadPlanContext(repoRoot)
+func loadTaskPlan(repoRoot string) *toolstoretools.TaskPlan {
+	content := toolstoretools.LoadPlanContext(repoRoot)
 	if content == "" {
 		return nil
 	}
-	return agentkittools.ParsePlanMD(content)
+	return toolstoretools.ParsePlanMD(content)
 }
 
 // saveTaskPlan writes the task plan to disk.
-func saveTaskPlan(repoRoot string, plan *agentkittools.TaskPlan) error {
-	return agentkittools.SavePlanMD(repoRoot, plan)
+func saveTaskPlan(repoRoot string, plan *toolstoretools.TaskPlan) error {
+	return toolstoretools.SavePlanMD(repoRoot, plan)
 }

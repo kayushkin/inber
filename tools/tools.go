@@ -7,18 +7,24 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/kayushkin/agentkit"
-	agentkittools "github.com/kayushkin/agentkit/tools"
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
-// wrap converts an agentkit.Tool to an agent.Tool
-func wrap(t agentkit.Tool) agent.Tool {
+// wrap converts a tool-store Impl to an inber agent.Tool. The only structural
+// difference is the schema type — tool-store uses plain JSON Schema, inber's
+// agent.Tool uses the Anthropic SDK's ToolInputSchemaParam. Properties and
+// Required pass through unchanged.
+func wrap(t toolstoretools.Impl) agent.Tool {
 	return agent.Tool{
 		Name:        t.Name,
 		Description: t.Description,
-		InputSchema: t.InputSchema,
-		Run:         t.Run,
+		InputSchema: anthropic.ToolInputSchemaParam{
+			Properties: t.InputSchema.Properties,
+			Required:   t.InputSchema.Required,
+		},
+		Run: t.Run,
 	}
 }
 
@@ -43,11 +49,11 @@ func init() {
 }
 
 // File system tools
-func ShellCommands() agent.Tool { return wrap(agentkittools.Shell()) }
+func ShellCommands() agent.Tool { return wrap(toolstoretools.Shell()) }
 
 // ShellInDir returns a shell tool that defaults to the given directory.
 func ShellInDir(dir string) agent.Tool {
-	t := agentkittools.Shell()
+	t := toolstoretools.Shell()
 	origRun := t.Run
 	t.Run = func(ctx context.Context, raw string) (string, error) {
 		// Inject default workdir if not specified.
@@ -64,35 +70,35 @@ func ShellInDir(dir string) agent.Tool {
 	}
 	return wrap(t)
 }
-func ReadFiles() agent.Tool  { return wrap(agentkittools.ReadFile()) }
-func WriteFiles() agent.Tool { return wrap(agentkittools.WriteFile()) }
-func EditFiles() agent.Tool  { return wrap(agentkittools.EditFile()) }
-func ListFiles() agent.Tool  { return wrap(agentkittools.ListFiles()) }
-func Ripgrep() agent.Tool          { return wrap(agentkittools.Grep()) }
-func EndTurn() agent.Tool          { return wrap(agentkittools.EndTurn()) }
-func TaskPlan(repoRoot string) agent.Tool                    { return wrap(agentkittools.TaskPlanTool(repoRoot)) }
-func Scratchpad(repoRoot, agentName string) agent.Tool { return wrap(agentkittools.ScratchpadTool(repoRoot, agentName)) }
+func ReadFiles() agent.Tool  { return wrap(toolstoretools.ReadFile()) }
+func WriteFiles() agent.Tool { return wrap(toolstoretools.WriteFile()) }
+func EditFiles() agent.Tool  { return wrap(toolstoretools.EditFile()) }
+func ListFiles() agent.Tool  { return wrap(toolstoretools.ListFiles()) }
+func Ripgrep() agent.Tool          { return wrap(toolstoretools.Grep()) }
+func EndTurn() agent.Tool          { return wrap(toolstoretools.EndTurn()) }
+func TaskPlan(repoRoot string) agent.Tool                    { return wrap(toolstoretools.TaskPlanTool(repoRoot)) }
+func Scratchpad(repoRoot, agentName string) agent.Tool { return wrap(toolstoretools.ScratchpadTool(repoRoot, agentName)) }
 
 // Code introspection tools (require configuration)
 func RepoMap(rootDir string, ignorePatterns []string) agent.Tool {
-	return wrap(agentkittools.RepoMap(rootDir, ignorePatterns))
+	return wrap(toolstoretools.RepoMap(rootDir, ignorePatterns))
 }
 
 func RecentFiles(rootDir string) agent.Tool {
-	return wrap(agentkittools.RecentFiles(rootDir))
+	return wrap(toolstoretools.RecentFiles(rootDir))
 }
 
 // Browser returns a tool that controls a browser via PinchTab.
-func Browser() agent.Tool { return wrap(agentkittools.Browser()) }
+func Browser() agent.Tool { return wrap(toolstoretools.Browser()) }
 
 // WebSearch returns a tool that searches the web via Brave Search API.
-func WebSearch() agent.Tool { return wrap(agentkittools.WebSearch()) }
+func WebSearch() agent.Tool { return wrap(toolstoretools.WebSearch()) }
 
 // WebFetch returns a tool that fetches a URL and extracts readable text.
-func WebFetch() agent.Tool { return wrap(agentkittools.WebFetch()) }
+func WebFetch() agent.Tool { return wrap(toolstoretools.WebFetch()) }
 
 // Scheduler returns a tool that interacts with the scheduler HTTP API.
-func Scheduler() agent.Tool { return wrap(agentkittools.Scheduler()) }
+func Scheduler() agent.Tool { return wrap(toolstoretools.Scheduler()) }
 
 // All returns standard file system tools.
 // Note: RepoMap and RecentFiles require configuration (rootDir, patterns) and must be added explicitly.
