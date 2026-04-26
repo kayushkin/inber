@@ -4,7 +4,7 @@
 package memory
 
 import (
-	asmemory "github.com/kayushkin/agent-store/memory"
+	asmemory "github.com/kayushkin/memory-store"
 )
 
 // Re-export types from agent-store/memory

@@ -87,9 +87,11 @@ func (g *Server) handleBridgeHarnesses(w http.ResponseWriter, r *http.Request) {
 // POST /sessions — create
 // ---------------------------------------------------------------------------
 
-// bridgeSession mirrors llm-bridge's store.Session JSON shape.
+// bridgeSession mirrors llm-bridge's ManagedSession JSON shape (3-ID model).
 type bridgeSession struct {
-	ID          string    `json:"id"`
+	BridgeID    string    `json:"bridge_id"`
+	HarnessID   string    `json:"harness_id,omitempty"`
+	ClientID    string    `json:"client_id,omitempty"`
 	DisplayName string    `json:"display_name"`
 	Harness     string    `json:"harness"`
 	State       string    `json:"state"`
@@ -102,7 +104,8 @@ type bridgeSession struct {
 
 func sessionInfoToBridge(s *SessionInfo) bridgeSession {
 	return bridgeSession{
-		ID:          s.Key,
+		BridgeID:    s.Key,
+		HarnessID:   s.Key,
 		DisplayName: s.Agent,
 		Harness:     "inber",
 		State:       s.Status.String(),
@@ -128,6 +131,7 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 			DisplayName string `json:"display_name,omitempty"`
 			AgentID     string `json:"agent_id,omitempty"`
 			AutoStart   bool   `json:"auto_start,omitempty"`
+			ClientID    string `json:"client_id,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -146,14 +150,16 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 		sessionKey := fmt.Sprintf("agent:%s:bridge-%d", agentName, time.Now().UnixNano())
 		g.store.UpsertSession(sessionKey, agentName, "main")
 
+		now := time.Now()
 		sess := bridgeSession{
-			ID:          sessionKey,
+			BridgeID:    sessionKey,
+			ClientID:    req.ClientID,
 			DisplayName: req.DisplayName,
 			Harness:     "inber",
 			State:       string(msg.SessionIdle),
 			AgentID:     agentName,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}
 		if sess.DisplayName == "" {
 			sess.DisplayName = agentName
@@ -462,9 +468,9 @@ func (g *Server) handleBridgeStop(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	jsonResponse(w, bridgeSession{
-		ID:      id,
-		Harness: "inber",
-		State:   string(msg.SessionAborted),
+		BridgeID: id,
+		Harness:  "inber",
+		State:    string(msg.SessionAborted),
 	})
 }
 
@@ -481,9 +487,9 @@ func (g *Server) handleBridgeInterrupt(w http.ResponseWriter, r *http.Request, i
 	}
 
 	jsonResponse(w, bridgeSession{
-		ID:      id,
-		Harness: "inber",
-		State:   string(msg.SessionIdle),
+		BridgeID: id,
+		Harness:  "inber",
+		State:    string(msg.SessionIdle),
 	})
 }
 
@@ -570,6 +576,7 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 
 	var req struct {
 		DisplayName string `json:"display_name,omitempty"`
+		ClientID    string `json:"client_id,omitempty"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
@@ -598,7 +605,8 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 
 	w.WriteHeader(http.StatusCreated)
 	jsonResponse(w, bridgeSession{
-		ID:          childKey,
+		BridgeID:    childKey,
+		ClientID:    req.ClientID,
 		DisplayName: displayName,
 		Harness:     "inber",
 		State:       string(msg.SessionIdle),

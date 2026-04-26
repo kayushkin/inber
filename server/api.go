@@ -10,11 +10,6 @@ import (
 
 // Serve starts the HTTP API server. Blocks until ctx is cancelled.
 func (g *Server) Serve(ctx context.Context) error {
-	// Background auth sync: pick up OpenClaw's refreshed OAuth tokens every 30 min.
-	if g.modelStore != nil {
-		go g.authSyncLoop(ctx)
-	}
-
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/run", g.handleRun)

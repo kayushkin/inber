@@ -19,7 +19,7 @@ func (e *Engine) executeAgent(ctx context.Context, systemBlocks []sessionMod.Nam
 
 	// Ensure we have the right client for the selected model
 	if e.modelClient == nil || (e.modelClient.Model != nil && e.modelClient.Model.ID != modelUsed) {
-		mc, mcErr := agent.NewModelClient(modelUsed, e.modelStore)
+		mc, mcErr := agent.NewModelClient(modelUsed, e.modelStore, e.authStore)
 		if mcErr == nil {
 			e.modelClient = mc
 		}

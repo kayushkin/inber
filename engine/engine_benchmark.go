@@ -102,11 +102,12 @@ func NewEngineBenchmark(cfg EngineConfig) (*Engine, BenchmarkTiming, error) {
 		return nil, timing, fmt.Errorf("failed to setup model store: %w", err)
 	}
 	e.modelStore = modelStore
+	e.authStore = setupAuthStore()
 	timing.ModelStoreTime = time.Since(phaseStart)
 
 	// Phase 6: Create model client
 	phaseStart = time.Now()
-	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore)
+	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore, e.authStore)
 	if err != nil {
 		return nil, timing, err
 	}

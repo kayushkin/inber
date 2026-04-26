@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/aiauth"
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
@@ -96,6 +97,7 @@ type Engine struct {
 	forgeDB            *forge.Forge
 	modelStore         *modelstore.Store
 	ownsModelStore     bool
+	authStore          *aiauth.Store
 	modelClient        *agent.ModelClient
 	agentRegistry      *registry.Registry
 	modelExplicitlySet bool
@@ -288,7 +290,7 @@ func (e *Engine) SetDisabledTools(names []string) {
 	var filtered []agent.Tool
 	// Re-filter from the full tool set.
 	for _, t := range e.agentTools {
-		if !disabled[t.Name()] {
+		if !disabled[t.Name] {
 			filtered = append(filtered, t)
 		}
 	}

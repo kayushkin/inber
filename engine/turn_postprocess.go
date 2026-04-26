@@ -47,16 +47,5 @@ func (e *Engine) postProcessResult(result *agent.TurnResult, input, sessionID st
 	e.Tokens.Cost += sessionMod.CalcCostWithCache(e.Model, result.InputTokens, result.OutputTokens,
 		result.CacheReadTokens, result.CacheCreationTokens)
 
-	// Track usage in model-store
-	if e.modelStore != nil {
-		agentName := e.AgentName
-		if agentName == "" {
-			agentName = "inber"
-		}
-		if err := e.modelStore.TrackUsage(agentName, e.Model, int64(result.InputTokens), int64(result.OutputTokens)); err != nil {
-			Log.Warn("failed to track usage in model-store: %v", err)
-		}
-	}
-
 	return nil
 }

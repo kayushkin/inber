@@ -8,6 +8,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/kayushkin/aiauth"
 	modelstore "github.com/kayushkin/model-store"
 )
 
@@ -20,90 +21,82 @@ type ModelClient struct {
 	IsOAuth         bool // true when using Claude Max OAuth token (needs Claude Code system prompt)
 }
 
-// NewModelClient creates a client for any provider using model-store.
-// Falls back to direct Anthropic client if model-store is not available.
-// store parameter can be nil, in which case it falls back to direct auth.
-func NewModelClient(modelIDOrAlias string, store *modelstore.Store) (*ModelClient, error) {
-	// Try model-store first (if provided)
-	if store != nil {
-		// Use ResolveForModel which handles model-specific credentials and falls back to provider-level
-		creds, model, err := store.ResolveForModel(modelIDOrAlias)
+// NewModelClient creates a client for any provider using model-store for metadata
+// and aiauth for credentials. Either store can be nil for fallback behavior.
+func NewModelClient(modelIDOrAlias string, ms *modelstore.Store, auth *aiauth.Store) (*ModelClient, error) {
+	// Resolve model metadata
+	var model *modelstore.Model
+	if ms != nil {
+		m, err := ms.ResolveModel(modelIDOrAlias)
 		if err == nil {
-			// Have both model and credentials from store
-			return newClientFromCredentials(creds, model)
+			model = m
 		}
-		// Model not found in store, fall through to fallback
-		// (This is expected for direct model IDs that aren't in the catalog)
 	}
 
-	// Fallback: assume Anthropic and use env var
-	return newAnthropicFallbackClient(modelIDOrAlias)
+	// Build minimal model info if not found in store
+	if model == nil {
+		model = &modelstore.Model{
+			ID:       modelIDOrAlias,
+			Provider: guessProvider(modelIDOrAlias),
+			Name:     modelIDOrAlias,
+		}
+	}
+
+	// Resolve credentials via aiauth
+	var apiKey string
+	if auth != nil {
+		key, err := auth.ResolveKey(model.Provider)
+		if err == nil {
+			apiKey = key
+		}
+	}
+
+	// Fallback to env var if aiauth didn't resolve
+	if apiKey == "" {
+		apiKey = envKeyForProvider(model.Provider)
+	}
+
+	if apiKey == "" {
+		return nil, fmt.Errorf("no credentials found for provider %q (model %s)", model.Provider, model.ID)
+	}
+
+	return newClientFromKey(apiKey, model)
 }
 
-// newClientFromCredentials creates a client based on credential type and provider.
-func newClientFromCredentials(creds *modelstore.Credentials, model *modelstore.Model) (*ModelClient, error) {
+// newClientFromKey creates a client for the given provider using an API key/token.
+func newClientFromKey(apiKey string, model *modelstore.Model) (*ModelClient, error) {
 	mc := &ModelClient{
-		Provider: creds.Provider,
+		Provider: model.Provider,
 		Model:    model,
 	}
 
-	switch creds.Provider {
+	switch model.Provider {
 	case "anthropic":
-		client, err := newAnthropicClientFromCreds(creds)
+		client, err := newAnthropicClient(apiKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Anthropic client: %w", err)
 		}
 		mc.AnthropicClient = client
-		mc.IsOAuth = strings.HasPrefix(modelstore.ActiveKey(creds), "sk-ant-oat01-")
+		mc.IsOAuth = strings.HasPrefix(apiKey, "sk-ant-oat01-")
 		return mc, nil
 
 	case "openai", "google", "openrouter", "ollama":
-		// OpenAI-compatible providers
-		baseURL := creds.BaseURL
-		if baseURL == "" {
-			// Default base URLs for known providers
-			switch creds.Provider {
-			case "openai":
-				baseURL = "https://api.openai.com/v1"
-			case "google":
-				baseURL = "https://generativelanguage.googleapis.com/v1beta"
-			case "openrouter":
-				baseURL = "https://openrouter.ai/api/v1"
-			}
-		}
-		apiKey := modelstore.ActiveKey(creds)
-		client := NewOpenAIClient(baseURL, apiKey, model.ID)
-		mc.OpenAIClient = client
+		baseURL := defaultBaseURL(model.Provider)
+		mc.OpenAIClient = NewOpenAIClient(baseURL, apiKey, model.ID)
 		return mc, nil
 
 	default:
-		// Catch-all: assume OpenAI-compatible for unknown providers
-		apiKey := modelstore.ActiveKey(creds)
-		client := NewOpenAIClient(creds.BaseURL, apiKey, model.ID)
-		mc.OpenAIClient = client
+		// Catch-all: assume OpenAI-compatible
+		mc.OpenAIClient = NewOpenAIClient("", apiKey, model.ID)
 		return mc, nil
 	}
 }
 
-// newAnthropicClientFromCreds creates an Anthropic client from model-store credentials.
-// Handles both OAuth tokens (sk-ant-oat01-*) and API keys (sk-ant-api03-*).
-func newAnthropicClientFromCreds(creds *modelstore.Credentials) (*anthropic.Client, error) {
-	key := modelstore.ActiveKey(creds)
-	if key == "" {
-		return nil, fmt.Errorf("no active key in credential %s", creds.ID)
-	}
-
-	log.Printf("[auth] creating Anthropic client: cred=%s auth_type=%s key_prefix=%s", creds.ID, creds.AuthType, key[:min(20, len(key))])
+// newAnthropicClient creates an Anthropic client from an API key or OAuth token.
+func newAnthropicClient(key string) (*anthropic.Client, error) {
+	log.Printf("[auth] creating Anthropic client: key_prefix=%s", key[:min(20, len(key))])
 
 	if strings.HasPrefix(key, "sk-ant-oat01-") {
-		// OAuth tokens from Claude Max: use Bearer auth with Claude Code identity headers.
-		// This is how OpenClaw/pi-ai sends them — pretends to be Claude CLI so the Max
-		// subscription grants access to Claude 4 models.
-		//
-		// IMPORTANT: We must clear X-Api-Key header because the Anthropic SDK
-		// auto-loads ANTHROPIC_API_KEY from env in DefaultClientOptions(), which
-		// runs before our opts. If both headers are sent, the API uses the API key
-		// (which may have zero balance) instead of the OAuth Bearer token.
 		c := anthropic.NewClient(
 			option.WithAuthToken(key),
 			option.WithHeaderDel("X-Api-Key"),
@@ -114,7 +107,6 @@ func newAnthropicClientFromCreds(creds *modelstore.Credentials) (*anthropic.Clie
 		return &c, nil
 	}
 
-	// API keys use x-api-key header
 	c := anthropic.NewClient(
 		option.WithAPIKey(key),
 		option.WithHeader("anthropic-beta", "prompt-caching-2024-07-31"),
@@ -122,45 +114,48 @@ func newAnthropicClientFromCreds(creds *modelstore.Credentials) (*anthropic.Clie
 	return &c, nil
 }
 
-// newAnthropicFallbackClient creates an Anthropic client using environment variable.
-// Returns error if modelID appears to be for a different provider (e.g., glm-*).
-func newAnthropicFallbackClient(modelID string) (*ModelClient, error) {
-	// Detect non-Anthropic models and return clear error
-	if strings.HasPrefix(modelID, "glm-") || strings.HasPrefix(modelID, "zai/") {
-		return nil, fmt.Errorf("model %s requires zhipu/zai provider (not configured)", modelID)
+// guessProvider infers provider from model ID prefix when model-store is unavailable.
+func guessProvider(modelID string) string {
+	switch {
+	case strings.HasPrefix(modelID, "claude-"):
+		return "anthropic"
+	case strings.HasPrefix(modelID, "gpt-") || strings.HasPrefix(modelID, "o1-") || strings.HasPrefix(modelID, "o3-"):
+		return "openai"
+	case strings.HasPrefix(modelID, "gemini-"):
+		return "google"
+	case strings.HasPrefix(modelID, "glm-") || strings.HasPrefix(modelID, "zai/"):
+		return "zhipu"
+	default:
+		return "anthropic"
 	}
-	if strings.HasPrefix(modelID, "gpt-") || strings.HasPrefix(modelID, "o1-") || strings.HasPrefix(modelID, "o3-") {
-		return nil, fmt.Errorf("model %s requires openai provider (not configured)", modelID)
+}
+
+// envKeyForProvider returns the API key from the canonical env var for a provider.
+func envKeyForProvider(provider string) string {
+	envVars := map[string]string{
+		"anthropic":  "ANTHROPIC_API_KEY",
+		"openai":     "OPENAI_API_KEY",
+		"google":     "GOOGLE_API_KEY",
+		"openrouter": "OPENROUTER_API_KEY",
 	}
-	if strings.HasPrefix(modelID, "gemini-") {
-		return nil, fmt.Errorf("model %s requires google provider (not configured)", modelID)
+	if name, ok := envVars[provider]; ok {
+		return os.Getenv(name)
 	}
+	return ""
+}
 
-	// Final fallback: environment variable
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("no Anthropic credentials found (tried model-store, env)")
+// defaultBaseURL returns the default API base URL for known providers.
+func defaultBaseURL(provider string) string {
+	switch provider {
+	case "openai":
+		return "https://api.openai.com/v1"
+	case "google":
+		return "https://generativelanguage.googleapis.com/v1beta"
+	case "openrouter":
+		return "https://openrouter.ai/api/v1"
+	default:
+		return ""
 	}
-
-	log.Printf("[auth] FALLBACK: using ANTHROPIC_API_KEY env var for %s (key_prefix=%s)", modelID, apiKey[:min(20, len(apiKey))])
-
-	c := anthropic.NewClient(
-		option.WithAPIKey(apiKey),
-		option.WithHeader("anthropic-beta", "prompt-caching-2024-07-31"),
-	)
-
-	// Build minimal model info
-	model := &modelstore.Model{
-		ID:       modelID,
-		Provider: "anthropic",
-		Name:     modelID,
-	}
-
-	return &ModelClient{
-		Provider:        "anthropic",
-		Model:           model,
-		AnthropicClient: &c,
-	}, nil
 }
 
 // GetAnthropicClient returns the Anthropic client or error if not Anthropic provider.

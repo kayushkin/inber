@@ -11,6 +11,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 
 	agentkittools "github.com/kayushkin/agentkit/tools"
+	"github.com/kayushkin/aiauth"
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
@@ -204,10 +205,6 @@ func setupModelStore(providedStore *modelstore.Store) (*modelstore.Store, error)
 		return nil, err
 	}
 
-	// Register OAuth providers for token refresh
-	store.RegisterDefaultOAuthProviders()
-	// Enable auto-sync to OpenClaw's auth-profiles.json
-	store.EnableAuthProfileSync("")
 	// Seed if empty (one-time init)
 	providers, _ := store.Providers()
 	if len(providers) == 0 {
@@ -215,24 +212,18 @@ func setupModelStore(providedStore *modelstore.Store) (*modelstore.Store, error)
 			Log.Warn("failed to seed model-store: %v", err)
 		}
 	}
-	// Bidirectional sync: pick up any tokens OpenClaw refreshed while we were down,
-	// then push our state back. Order matters — From first so we get fresh tokens,
-	// then To so OpenClaw has the latest from model-store.
-	if n, syncErr := store.SyncFromAuthProfiles(""); syncErr != nil {
-		Log.Warn("sync from auth-profiles: %v", syncErr)
-	} else if n > 0 {
-		Log.Info("synced %d credentials from auth-profiles.json", n)
-	}
-	if syncErr := store.SyncToAuthProfiles(""); syncErr != nil {
-		Log.Warn("sync to auth-profiles: %v", syncErr)
-	}
 
 	return store, nil
 }
 
+// setupAuthStore initializes the aiauth credential store.
+func setupAuthStore() *aiauth.Store {
+	return aiauth.DefaultStore()
+}
+
 // createModelClient creates the appropriate model client for the given model.
-func createModelClient(model string, store *modelstore.Store) (*agent.ModelClient, string, *anthropic.Client, error) {
-	modelClient, err := agent.NewModelClient(model, store)
+func createModelClient(model string, store *modelstore.Store, auth *aiauth.Store) (*agent.ModelClient, string, *anthropic.Client, error) {
+	modelClient, err := agent.NewModelClient(model, store, auth)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("failed to create model client: %w", err)
 	}
@@ -459,8 +450,9 @@ func (e *Engine) initModelClient(cfg EngineConfig) error {
 	}
 	e.modelStore = modelStore
 	e.ownsModelStore = (cfg.ModelStore == nil)
+	e.authStore = setupAuthStore()
 
-	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore)
+	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore, e.authStore)
 	if err != nil {
 		return err
 	}
