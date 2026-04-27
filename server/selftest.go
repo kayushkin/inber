@@ -12,13 +12,15 @@ func (g *Server) SelfTest() error {
 	log := logger.WithComponent("selftest")
 	failed := 0
 
-	// 1. NATS connectivity
+	// 1. NATS connectivity — informational only. NATS is for bus event
+	// publishing (cross-service notifications); inber-server is fully
+	// functional without it. Treating an absent NATS as a warning lets
+	// inber run on hosts that don't have a bus deployed (e.g. remote
+	// runners that just need to drive Anthropic sessions).
 	if g.bus == nil {
-		log.Error("FAIL: NATS not connected", nil)
-		failed++
+		log.Warn("WARN: NATS not connected — bus event publishing disabled", nil)
 	} else if err := g.bus.Publish("health.inber.startup", map[string]string{"status": "selftest"}); err != nil {
-		log.Error("FAIL: NATS publish test", map[string]interface{}{"error": err})
-		failed++
+		log.Warn("WARN: NATS publish failed — bus event publishing disabled", map[string]interface{}{"error": err})
 	} else {
 		log.Info("PASS: NATS connected", nil)
 	}
