@@ -36,7 +36,6 @@ git checkout main --quiet
 git pull --ff-only --quiet
 
 COMMITS_FILE="$(mktemp)"
-trap 'rm -f "$COMMITS_FILE"' EXIT
 
 {
   echo "# Upstream harness commits since ${SINCE}"
@@ -102,9 +101,87 @@ $(cat "$COMMITS_FILE")
 EOF
 )"
 
-# --dangerously-skip-permissions because this runs unattended under the
-# scheduler. Scoped to the inber repo cwd. WebSearch needed for paper hunt.
-exec claude -p \
-  --dangerously-skip-permissions \
-  --add-dir "$REPO_DIR" \
-  "$PROMPT"
+# Run the prompt through llm-bridge-server the same way bridge-ui creates a
+# session: POST /sessions to spawn, POST /sessions/{id}/send to deliver the
+# turn, then stream /sessions/{id}/events until a result/error terminates
+# the turn. No local `claude` CLI involved — the server starts the harness
+# under whatever instance config we point at.
+LLM_BRIDGE="${LLM_BRIDGE_URL:-http://localhost:8160}"
+INSTANCE_ID="${HARNESS_WATCH_INSTANCE_ID:-inst-cc-local}"
+CLIENT_ID="harness-watch-$(date -u +%s)"
+
+CREATE_BODY=$(jq -nc \
+  --arg inst "$INSTANCE_ID" \
+  --arg cid "$CLIENT_ID" \
+  '{
+    harness:     "claude_code",
+    instance_id: $inst,
+    client_id:   $cid,
+    source:      "harness-watch",
+    auto_start:  true
+  }')
+
+SESSION_JSON=$(curl -sfS -X POST "$LLM_BRIDGE/sessions" \
+  -H "Content-Type: application/json" \
+  -d "$CREATE_BODY")
+
+BRIDGE_ID=$(printf '%s' "$SESSION_JSON" | jq -r '.bridge_id // empty')
+if [[ -z "$BRIDGE_ID" ]]; then
+  echo "harness-watch: failed to create session: $SESSION_JSON" >&2
+  exit 1
+fi
+echo "harness-watch: bridge session $BRIDGE_ID"
+
+PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
+curl -sfS -X POST "$LLM_BRIDGE/sessions/$BRIDGE_ID/send" \
+  -H "Content-Type: application/json" \
+  -d "{\"message\":${PROMPT_JSON}}" >/dev/null
+
+# Stream the session's SSE; stop on the first result/error event of the
+# current turn. We use a fifo so the curl runs as a tracked background
+# process — without that, breaking out of the read loop would orphan curl
+# with its pipe still open, and the scheduler would hang on EOF forever.
+FIFO="$(mktemp -u)"
+mkfifo "$FIFO"
+curl -sN "$LLM_BRIDGE/sessions/$BRIDGE_ID/events" \
+  -H 'Accept: text/event-stream' >"$FIFO" &
+CURL_PID=$!
+exec 3<"$FIFO"
+rm -f "$FIFO"
+
+cleanup() {
+  exec 3<&- 2>/dev/null || true
+  kill "$CURL_PID" 2>/dev/null || true
+  wait "$CURL_PID" 2>/dev/null || true
+  rm -f "$COMMITS_FILE"
+}
+trap cleanup EXIT
+
+status=1
+ev_type=""
+while IFS= read -r -u 3 line || [[ -n "$line" ]]; do
+  case "$line" in
+    "event: "*)
+      ev_type="${line#event: }"
+      ;;
+    "data: "*)
+      data="${line#data: }"
+      case "$ev_type" in
+        result)
+          printf '%s\n' "$data" | jq -r '.result.text // empty'
+          status=0
+          break
+          ;;
+        error)
+          printf '%s\n' "$data" | jq -r '.error.message // .error // .' >&2
+          status=1
+          break
+          ;;
+      esac
+      ;;
+    "")
+      ev_type=""
+      ;;
+  esac
+done
+exit "$status"
