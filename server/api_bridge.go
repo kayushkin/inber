@@ -312,11 +312,11 @@ func (g *Server) handleBridgeSendStream(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		g.logError(req.Agent, "bridge-stream", req.Message, err)
 		errEvent := msg.Event{
-			Type:      msg.EventError,
-			Harness:   "inber",
-			SessionID: req.SessionKey,
-			Timestamp: time.Now(),
-			Error:     &msg.ErrorEvent{Message: err.Error()},
+			Type:            msg.EventError,
+			Harness:         "inber",
+			BridgeSessionID: req.SessionKey,
+			Timestamp:       time.Now(),
+			Error:           &msg.ErrorEvent{Message: err.Error()},
 		}
 		data, _ := json.Marshal(errEvent)
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.EventError, data)
@@ -413,11 +413,11 @@ func (g *Server) handleBridgeHistory(w http.ResponseWriter, r *http.Request, id 
 		// User message event.
 		if row.InputText != nil && *row.InputText != "" {
 			userEvent := msg.Event{
-				Type:      "user_message",
-				Harness:   "inber",
-				SessionID: id,
-				Timestamp: timeOrNow(row.StartedAt),
-				Result:    &msg.ResultEvent{Text: *row.InputText},
+				Type:            "user_message",
+				Harness:         "inber",
+				BridgeSessionID: id,
+				Timestamp:       timeOrNow(row.StartedAt),
+				Result:          &msg.ResultEvent{Text: *row.InputText},
 			}
 			if data, err := json.Marshal(userEvent); err == nil {
 				events = append(events, data)
@@ -427,10 +427,10 @@ func (g *Server) handleBridgeHistory(w http.ResponseWriter, r *http.Request, id 
 		// Assistant result event.
 		if row.OutputText != nil && *row.OutputText != "" {
 			resultEvent := msg.Event{
-				Type:      msg.EventResult,
-				Harness:   "inber",
-				SessionID: id,
-				Timestamp: timeOrNow(row.CompletedAt),
+				Type:            msg.EventResult,
+				Harness:         "inber",
+				BridgeSessionID: id,
+				Timestamp:       timeOrNow(row.CompletedAt),
 				Result: &msg.ResultEvent{
 					Text:     *row.OutputText,
 					NumTurns: row.Turns,
@@ -822,9 +822,9 @@ func parseIntFromString(s string) (int, error) {
 // streamEventToBridge converts inber's StreamEvent to llm-bridge's msg.Event.
 func streamEventToBridge(e StreamEvent, sessionID string) msg.Event {
 	bridgeEvent := msg.Event{
-		Harness:   "inber",
-		SessionID: sessionID,
-		Timestamp: time.Now(),
+		Harness:         "inber",
+		BridgeSessionID: sessionID,
+		Timestamp:       time.Now(),
 	}
 
 	switch e.Kind {
