@@ -60,12 +60,47 @@ failed sub-task to a specific agent role or tool — surfacing that
 attribution on the inber-party dashboard would be a small win even without
 automated rewriting.
 
+## SWE-Edit: Rethinking Code Editing for Efficient SWE-Agent
+
+[arXiv:2604.26102](https://arxiv.org/abs/2604.26102) — submitted 2026-04-28
+
+Frames code editing as suffering from a "context coupling problem": the main
+agent ends up loading large files just to apply small edits, which pollutes
+its working context and inflates token cost across every subsequent turn.
+SWE-Edit decomposes editing into two specialized subagents — a **Viewer**
+that extracts task-relevant code on demand, and an **Editor** that executes
+modifications from a high-level plan inside its own clean context window —
+so the parent agent only sees the plan and the final diff, not the
+intermediate file contents. They also train an 8B model with GRPO to
+adaptively pick edit modes (find-and-replace vs. structural rewrite) instead
+of hardcoding one. On SWE-bench Verified: +2.1% resolved rate, -17.9%
+inference cost. The architectural pattern is the takeaway, not the trained
+model — keeping bulky read content out of the parent's context is a
+cache-friendliness story as much as a quality story.
+
+**What inber should consider:** Inber's `tools/` exposes Read and Edit as
+flat tools that share the parent agent's context — so a 5K-line file pulled
+in for one Edit becomes part of every subsequent turn's prompt. The
+SWE-Edit decomposition maps cleanly onto inber's existing subagent surface:
+an `editor` subagent that takes a high-level edit plan + target path,
+performs Read+Edit internally, and returns only the resulting diff, would
+keep the parent's context (and its prompt cache prefix) stable across
+edits. This pairs well with the existing `read cache` work
+(commit e295f48) and `cache-optimization.md` — the goal in both cases is
+to keep the cached prefix from being invalidated by transient bulk content.
+Worth a sketch in `docs/multi-agent-design.md` before committing to the
+pattern.
+
 ## Cross-cutting takeaway
 
 The April-30 corpus sharpens a thesis the April-29 sweep already noted:
 **the harness, not the model, is the unit of progress, and harnesses are
 becoming search targets, not artifacts.** Both 2604.25850 and 2604.20801
 beat hand-tuned baselines by treating the harness as a typed, observable,
-mutable object. Inber's component layout is already amenable to this — the
-gap is in the trajectory/feedback plumbing required to close the loop. Worth
-revisiting once `trace/` exports stabilize.
+mutable object. SWE-Edit (2604.26102) sharpens it from a different angle:
+when the harness *can't* be searched, **moving expensive context off the
+parent's hot path via specialist subagents** is the next-best lever, and
+it's the same lever inber already pulls with its read cache and
+prompt-cache work. Inber's component layout is already amenable to this —
+the gap is in the trajectory/feedback plumbing required to close the loop.
+Worth revisiting once `trace/` exports stabilize.
