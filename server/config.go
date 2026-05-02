@@ -4,6 +4,7 @@ package server
 import (
 	"encoding/json"
 	"os"
+	"time"
 )
 
 // Config defines the server's runtime configuration.
@@ -35,6 +36,10 @@ type Config struct {
 	// OpenClaw proxy — forward bus messages where orchestrator=openclaw.
 	OpenClawURL   string `json:"openclaw_url,omitempty"`   // e.g. "http://localhost:18789"
 	OpenClawToken string `json:"openclaw_token,omitempty"` // bearer token
+
+	// BridgeSessionTTL is how long a bridge- session can be idle before the
+	// reaper removes it. Defaults to 1 hour. Set to 0 to disable.
+	BridgeSessionTTL time.Duration `json:"bridge_session_ttl,omitempty"`
 }
 
 // AgentConfig defines one agent.
@@ -47,6 +52,9 @@ type AgentConfig struct {
 	Thinking  int64    `json:"thinking"`
 	Tools     []string `json:"tools"`             // tool allowlist (empty = all)
 }
+
+// BridgeSessionTTL is the default TTL for idle bridge sessions.
+const defaultBridgeSessionTTL = time.Hour
 
 // LoadConfig loads a server configuration from a JSON file.
 func LoadConfig(path string) (Config, error) {

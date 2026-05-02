@@ -70,6 +70,19 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// DeleteSession removes a session and all its requests from the database.
+func (s *Store) DeleteSession(key string) error {
+	_, err := s.db.Exec(`DELETE FROM requests WHERE session_key = ?`, key)
+	if err != nil {
+		return fmt.Errorf("delete requests for session %s: %w", key, err)
+	}
+	_, err = s.db.Exec(`DELETE FROM sessions WHERE key = ?`, key)
+	if err != nil {
+		return fmt.Errorf("delete session %s: %w", key, err)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------

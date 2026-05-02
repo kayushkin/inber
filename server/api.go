@@ -43,6 +43,9 @@ func (g *Server) Serve(ctx context.Context) error {
 		Handler: mux,
 	}
 
+	// Start bridge session reaper.
+	g.startBridgeSessionReaper(ctx)
+
 	// Shutdown on context cancellation.
 	go func() {
 		<-ctx.Done()
