@@ -2,13 +2,14 @@ package server
 
 // session_reaper.go — periodic cleanup of idle bridge sessions.
 //
-// Bridge sessions (keys starting with "bridge-") are created per request by
-// the llm-bridge-compatible API and are never explicitly closed by the client.
-// Without cleanup they accumulate indefinitely. The reaper runs every
-// reaperInterval and removes sessions that haven't been active for longer than
-// BridgeSessionTTL (default 1 hour).
+// Bridge sessions have keys of the form "agent:<name>:bridge-<timestamp>" and
+// are created per request by the llm-bridge-compatible API — never explicitly
+// closed by the client. Without cleanup they accumulate indefinitely.
+// The reaper runs every reaperInterval and removes sessions that haven't been
+// active for longer than BridgeSessionTTL (default 1 hour).
 //
-// Only bridge- prefixed sessions are touched; main and named sessions are safe.
+// Only bridge sessions (containing ":bridge-") are touched; main and named
+// sessions are safe.
 
 import (
 	"context"
@@ -55,7 +56,7 @@ func (g *Server) reapBridgeSessions(ttl time.Duration) {
 
 	g.sessions.Range(func(key, val any) bool {
 		sessionKey := key.(string)
-		if !strings.HasPrefix(sessionKey, "bridge-") {
+		if !strings.Contains(sessionKey, ":bridge-") {
 			return true
 		}
 
