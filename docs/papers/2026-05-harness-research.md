@@ -91,6 +91,34 @@ to keep the cached prefix from being invalidated by transient bulk content.
 Worth a sketch in `docs/multi-agent-design.md` before committing to the
 pattern.
 
+## ContextWeaver: Selective and Dependency-Structured Memory Construction
+
+[arXiv:2604.23069](https://arxiv.org/abs/2604.23069) — submitted 2026-04-24
+
+Missed by the May-1 sweep. Frames the limitation of sliding-window and
+prompt-compression memory as a loss of **causal structure**: later steps
+silently rely on earlier reasoning that compaction has already discarded.
+ContextWeaver organizes the trajectory as a graph where each step links
+to the earlier steps it depends on; retrieval traverses dependencies
+rather than recency or embedding similarity, and root-to-step paths are
+compactly summarized into reusable units. A small validation layer folds
+execution feedback back into the graph. On SWE-Bench Verified and Lite,
+beats sliding-window in pass@1 while reducing both reasoning steps and
+token usage.
+
+**What inber should consider:** Inber's `memory-store` retrieves by
+embedding similarity + importance decay; the conversation summarization
+in `engine/` works on recency. Neither tracks *which* prior step a
+current step depends on. ByteRover (2604.01599, April sweep) argued for
+LLM-curated hierarchical markdown; ContextWeaver argues for execution-
+derived dependency graphs. The two are complementary, not competing —
+the hierarchy organizes *what* is remembered, the dependency graph
+organizes *which subset is needed for the current step*. Lowest-effort
+inber experiment: when summarizing a conversation, emit a
+"depends_on: [step_ids]" edge per surviving summary node and use it as a
+secondary retrieval key, in addition to embeddings. `docs/smart-truncation.md`
+is the right place to sketch this.
+
 ## Cross-cutting takeaway
 
 The April-30 corpus sharpens a thesis the April-29 sweep already noted:

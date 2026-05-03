@@ -326,3 +326,71 @@ This repository provides practical implementations of 21 key agentic design patt
 5. **Standardized Interfaces**: MCP and AgentCard patterns enable agent ecosystem growth
 
 The patterns in this repository provide a comprehensive roadmap for enhancing inber's agent orchestration, particularly around parallel execution, state management, and robust error handling. The modular, composable nature of these patterns aligns well with inber's architecture philosophy.
+
+---
+
+## Harness-watch — May 2026: Codex shipping patterns
+
+Three concrete primitives that landed in [openai/codex](https://github.com/openai/codex)
+between 2026-04-26 and 2026-05-03. Codex doesn't yet have its own
+`docs/comparisons/codex.md`, so the observations live here as cross-cutting
+patterns inber could adopt.
+
+### 1. Multi-environment context per turn
+
+[PR 20646](https://github.com/openai/codex/pull/20646) (stack: 20669, 20647) —
+extends the rendered `environment_context` block so a single turn can carry
+multiple selected environments, each with its own id and cwd. The model picks
+an environment id, and process tools route via that `environment_id`. Single-
+and zero-environment turns still go through the legacy cwd-only render path,
+so this is purely additive.
+
+**What inber should consider:** Inber's `forge` already manages isolated git
+worktree slots per agent session, but the *current run's* tool execution still
+binds to a single cwd. Codex's pattern is the natural next step: surface every
+available worktree to the model in one prompt, let it pick, and route the
+tool-call to that worktree. This is a small change to inber's tool dispatch —
+add an optional `environment_id` parameter to file/exec tools and resolve it
+through `forge` — but it unlocks the agent reasoning over multiple
+checkouts/branches in one turn without spawning subagents per worktree.
+
+### 2. Self-describing memory extensions
+
+[PR 20602 + 20606](https://github.com/openai/codex/pull/20606) — Codex's
+memory subsystem now supports pluggable "extensions." Each extension lives
+under `memories/extensions/<name>/` and ships an `instructions.md` that tells
+the consolidation agent how to read/write that extension's notes. The
+write-pipeline seeds the `instructions.md` template the first time it lands.
+Extension-specific behavior (an `ad_hoc` extension, a `prune` extension)
+lives in dedicated modules under `memories/write/src/extensions/` rather than
+a flat helper file.
+
+**What inber should consider:** Inber's `memory-store` is a single uniform
+schema (importance, decay, embeddings). Codex is asserting that *different
+kinds of memory want different curation rules* — a hard rule, a personal fact,
+an ad-hoc working note — and the consolidation agent should be told the rule
+by the memory itself, not by hardcoded handlers. This maps cleanly onto
+inber's existing memory tagging — a `kind` column plus a per-kind
+`instructions.md` lookup would let agents author new memory categories without
+shipping new code. Worth a sketch in `docs/memory-extraction-evaluation.md`
+alongside the ByteRover comparison.
+
+### 3. Effective config lockfile (export/replay)
+
+[PR 20405](https://github.com/openai/codex/pull/20405) — Codex now writes
+`<thread_id>.config.lock.toml` at session start, capturing the *resolved*
+config after CLI overrides, defaults, feature aliases, model-catalog values,
+and prompt setup have all been layered. A later run can load that lockfile,
+regenerate the effective config, and fail-early on drift. There's an explicit
+"allow_codex_version_mismatch" flag for tolerating binary drift while still
+comparing the rest.
+
+**What inber should consider:** Inber's reproducibility story today is
+"replay the session log." That doesn't capture the *resolved* state of agent
+config, model selection, tool registry, or memory snapshot at the moment of
+the run. A config lockfile per session — written by the engine when a run
+starts, validated against on replay — would turn "I can't reproduce this
+trace" into a structured diff. This composes well with the trajectory-export
+work already foreshadowed for evolution loops (see April Zup paper, AHE
+paper). Smallest first cut: have `engine/` dump a resolved `agent.lock.json`
+into the session directory.
