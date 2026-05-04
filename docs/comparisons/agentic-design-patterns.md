@@ -394,3 +394,85 @@ trace" into a structured diff. This composes well with the trajectory-export
 work already foreshadowed for evolution loops (see April Zup paper, AHE
 paper). Smallest first cut: have `engine/` dump a resolved `agent.lock.json`
 into the session directory.
+
+## Harness-watch — May 2026: MCP capability negotiation goes richer
+
+Two independent harnesses landed expansions of the MCP `initialize`
+handshake in the last week. Both push the same idea: **the host advertises
+non-tool capabilities (UI rendering, user elicitation) during MCP init,
+and tool servers light up features against those capabilities.** This is a
+shift from MCP being a tool-call transport to being a richer
+capability-negotiated channel.
+
+### 1. Goose MCP Apps — host UI capability flows into MCP init, tool results carry replayable payloads
+
+[PR 8623](https://github.com/block/goose/pull/8623) +
+[PR 8632](https://github.com/block/goose/pull/8632) (goose). Goose 2 (the
+ACP client) declares an MCP-Apps host capability during ACP `initialize`;
+`goose serve` stores it per ACP connection; the runtime translates it into
+the downstream MCP `initialize` payload as
+`capabilities.extensions["io.modelcontextprotocol/ui"] = {mimeTypes:
+["text/html;profile=mcp-app"]}`. When an app-capable tool completes, the
+runtime reads the `ui://...` resource the tool returns, attaches the
+hydrated snapshot to `tool_result.meta.goose.mcpApp`, and forwards it
+through `tool_call_update._meta.goose` for both live render and replay.
+The payload survives session reload, so reopening an old session
+reconstructs the rich tool-result view without re-running the tool. Two
+architectural points worth pulling out: (a) host UI capability is an
+*ACP-client property*, not a runtime guess from platform — the runtime
+stops inferring; (b) the rich payload is *backend-owned and persisted*,
+not derived in the UI from raw tool output.
+
+**What inber should consider:** Tool-store MCP servers in inber today
+return text/JSON; BridgeUI renders a generic tool result. The Goose
+pattern maps cleanly onto inber's three-layer setup: (1) BridgeUI declares
+a UI capability shape during dash's MCP init to tool-store; (2) tool-store
+MCP servers can return a `ui://session/<id>/...` resource alongside their
+text; (3) llm-bridge-server reads the resource at tool-completion time and
+attaches it to the canonical message under a stable `_meta` key, so it
+flows through the bus → log-store → bridge-ui replay path identically to
+plain tool output. The persistence-on-tool-result detail matters: without
+it, rich payloads get lost the moment the session reloads, and we end up
+re-fetching or losing fidelity. Worth a sketch in
+`docs/multi-agent-design.md` or a new `docs/mcp-apps.md` before
+prototyping — there is a real chance llmux/dash diverge on how they want
+to render `ui://` resources, so the *backend payload contract* should be
+nailed down first.
+
+### 2. Codex — MCP elicitation capability adoption
+
+[PR 20562](https://github.com/openai/codex/pull/20562) (codex). Codex
+moves to the **2025-06-18 MCP elicitation capability shape**, the
+spec-blessed channel for an MCP tool to ask the user for input mid-call
+(approve a destructive action, pick from N options, supply a missing
+field) without the tool inventing its own ad-hoc protocol. Goose 2's MCP
+init in PR 8623 above already advertises `elicitation: {}` in its
+capability block — i.e., two harnesses converging on the same canonical
+spec in the same week.
+
+**What inber should consider:** Inber's permission/guard layer currently
+intercepts dangerous tool calls and surfaces them via the existing
+permission-prompt flow (HookEvent awaiting_resolution, shipped 2026-05-01
+— see `project_permission_prompt_followups`). MCP elicitation is the same
+shape one layer down: the *tool itself* asks the user a question through
+the host. For tool-store MCP servers, supporting elicitation means
+inber's MCP client (in llm-bridge-server) needs to advertise
+`elicitation: {}` on init and route incoming elicitation requests through
+the same UI surface the permission prompts use. This is a small wire-up
+job, not an architecture change — but it should land before tool-store
+authors start inventing their own clarification protocols and we end up
+with N incompatible flavors.
+
+### Cross-cutting takeaway
+
+The theme is **capability-negotiated MCP**: the host says what it can do
+(render UI, ask the user a question, sample from a model) on init, the
+tool server tailors its responses to fit, and the resulting payloads
+travel as first-class metadata on tool results — replayable, persisted,
+and decoupled from any one frontend. Inber's tool-store + bridge-ui +
+log-store split is already the right shape for this; the pieces missing
+are (a) a richer init handshake on the llm-bridge-server MCP client and
+(b) a stable `_meta` slot on canonical tool-result messages so rich
+payloads survive the bus → log-store → bridge-ui round trip. Both are
+small changes that compose with each other and with the existing
+permission-prompt work.
