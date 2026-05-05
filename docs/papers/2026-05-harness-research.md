@@ -119,6 +119,43 @@ inber experiment: when summarizing a conversation, emit a
 secondary retrieval key, in addition to embeddings. `docs/smart-truncation.md`
 is the right place to sketch this.
 
+## MemRouter: Memory-as-Embedding Routing for Long-Term Conversational Agents
+
+[arXiv:2605.00356](https://arxiv.org/abs/2605.00356) — submitted 2026-05-01
+
+Picked up on the 2026-05-05 sweep. Where ContextWeaver above attacks the
+*read* side of memory (which prior steps does the current step depend on?),
+MemRouter attacks the *write* side: which turns are even worth admitting to
+long-term memory in the first place. The standard recipe — let the answer-
+backbone LLM decide per-turn whether to store — is expensive (an extra
+generation per turn) and noisy. MemRouter replaces it with an embedding-
+based admission classifier: encode the turn together with recent context,
+project through a frozen LLM backbone, and predict store/skip with a
+12M-parameter classification head. On LoCoMo with Qwen2.5-7B as the QA
+backbone, learned admission beats LLM-based admission on overall F1 (52.0
+vs 45.6) and cuts memory-management latency from ~970 ms to ~58 ms (~17×).
+A factorial ablation isolates +10.3 F1 attributable to learned admission
+alone (vs. random storage), so the win is the policy, not the embedding
+choice.
+
+**What inber should consider:** Inber's `create_memory` tool currently
+delegates the admission decision to the agent itself — the model picks an
+`importance` score in [0,1] when it chooses to call the tool
+(`memory/tools.go:121`). This is the LLM-decoder-per-turn pattern MemRouter
+argues against, just paid in the parent agent's tokens instead of a side
+call. There are two ways to read MemRouter for inber:
+(1) *defensive* — keep the create_memory tool but score its `importance`
+arg with a small classifier post-hoc, demoting low-confidence stores to a
+cheaper tier (or refusing them) so the agent can be sloppy about importance
+without polluting the store; (2) *aggressive* — strip the admission burden
+off the agent entirely and run a write-side classifier over every assistant
+turn, removing create_memory from the tool list. The former is a one-shot
+experiment compatible with current behaviour; the latter is the bigger
+architectural bet but would also free up an agent-visible tool slot. Worth
+sketching in `docs/memory-extraction-evaluation.md` alongside the
+ByteRover/ContextWeaver thread, since all three papers are now arguing
+that memory operations should not live on the agent's hot path.
+
 ## Cross-cutting takeaway
 
 The April-30 corpus sharpens a thesis the April-29 sweep already noted:
@@ -132,3 +169,12 @@ it's the same lever inber already pulls with its read cache and
 prompt-cache work. Inber's component layout is already amenable to this —
 the gap is in the trajectory/feedback plumbing required to close the loop.
 Worth revisiting once `trace/` exports stabilize.
+
+The 2026-05-05 addition (MemRouter, 2605.00356) extends the same hot-path
+argument to the memory-write decision: just as SWE-Edit moves bulky
+*reads* off the parent's context, MemRouter moves the per-turn *write*
+decision off the parent's decoder. ContextWeaver, ByteRover, and now
+MemRouter together cover the three legs of the memory pipeline — what to
+admit (write), how to organize what's admitted (structure), and what to
+retrieve for the current step (read) — and all three argue that the agent
+should not be the one paying for these decisions inline.
