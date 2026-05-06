@@ -178,3 +178,67 @@ MemRouter together cover the three legs of the memory pipeline — what to
 admit (write), how to organize what's admitted (structure), and what to
 retrieve for the current step (read) — and all three argue that the agent
 should not be the one paying for these decisions inline.
+
+## RL for LLM Multi-Agent Systems through Orchestration Traces
+
+[arXiv:2605.02801](https://arxiv.org/abs/2605.02801) — submitted 2026-05-04
+
+Taxonomy paper, not a system. Defines an **orchestration trace** as a
+temporal interaction graph whose events are sub-agent spawning, delegation,
+communication, tool use, return, aggregation, and stopping decisions, then
+slices the multi-agent harness design space along three axes: reward design
+(8 families, including parallelism speedup, split correctness, aggregation
+quality), credit attribution (8 signal-bearing units, token → team), and
+five orchestration sub-problems — *spawning timing, delegation targeting,
+communication strategy, aggregation approach, stopping criteria*. Surveys
+84 papers and crosswalks the academic methods to public industrial
+deployments (Kimi Agent Swarm, OpenAI Codex, Anthropic Claude Code). The
+paper's most concrete gap-call: **no published RL training method for the
+stopping decision** — every system uses a heuristic. Releases a structured
+orchestration-trace schema for reproducibility.
+
+**What inber should consider:** Inber's multi-agent design
+(`docs/multi-agent-design.md`) already commits to a hierarchical
+spawn-with-return-value model and explicitly defers agent-to-agent
+messaging, multi-turn sub-agent conversations, and lifecycle management to
+"future". 2605.02801 gives a vocabulary for those deferrals: each is a
+specific orchestration sub-problem (delegation targeting, communication
+strategy, aggregation, stopping) that can be added independently. Two
+concrete uses: (1) align inber's `trace/` event schema with the paper's
+orchestration-trace schema so traces are usable as evaluation input later
+without a re-export pass — currently inber logs spawn/completion events
+(line 175 of multi-agent-design.md) but doesn't tag them with the
+sub-problem each event belongs to; (2) the stopping-decision gap is
+actionable today as a heuristic — `spawn_agent` returns when the child
+agent decides it's done, so a parent has no rubric for "did I get enough
+back to commit?" beyond model judgement. Worth a `BACKLOG.md` entry on a
+sufficiency-check before the parent acts on a child's return value, since
+the paper flags this as the place where every existing system is winging
+it.
+
+## Agent Capsules: Quality-Gated Granularity Control for Multi-Agent LLM Pipelines
+
+[arXiv:2605.00410](https://arxiv.org/abs/2605.00410) — submitted 2026-05-01
+
+Treats *granularity* — how many agents collapse into a single LLM call —
+as a runtime decision gated on output quality, not a design-time choice.
+Three execution modes form an escalation ladder: standard (one call per
+agent), two-phase, and sequential dispatch toward per-agent calls; mode
+switches are gated by a rolling quality average. Reports 51% fewer fine-mode
+input tokens vs a hand-tuned 14-agent LangGraph pipeline at +0.020 quality,
+and 68% fewer tokens than DSPy/MIPROv2 at +0.052 quality on a 5-agent due
+diligence task. No training data, no per-pipeline engineering — the policy
+is automatic and topology-aware.
+
+**What inber should consider:** Inber currently spawns one sub-agent per
+delegated task (`spawn_agent` is 1:1 with a child invocation). For
+specialist roles where the per-call overhead dominates the actual work —
+e.g. a quick lookup that doesn't need its own context — Agent Capsules
+suggests the orchestrator could batch several sub-tasks into a single
+compound call to one specialist, escalating to per-call only when quality
+on the rolling-average drops. Concrete experiment: pick the cheapest
+specialist (`researcher` or similar) and add a batched-input variant of
+`spawn_agent` that accepts a list of sub-tasks; measure tokens-per-task
+and end-result quality vs the current 1:1 spawn. The win is largest in
+fan-out cases where today inber pays N full system-prompt re-instantiations
+for N sub-tasks that share most of their context.
