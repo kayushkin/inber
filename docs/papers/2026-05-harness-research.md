@@ -242,3 +242,74 @@ specialist (`researcher` or similar) and add a batched-input variant of
 and end-result quality vs the current 1:1 spawn. The win is largest in
 fan-out cases where today inber pays N full system-prompt re-instantiations
 for N sub-tasks that share most of their context.
+
+## Terminus-4B: Specialist Subagent at a Smaller Model Tier
+
+[arXiv:2605.03195](https://arxiv.org/abs/2605.03195) — submitted 2026-05-04
+
+A 4B-parameter Qwen3-4B fine-tune (SFT + RL with rubric-LLM-as-judge
+reward) trained specifically as a **terminal-execution subagent** for a
+larger frontier-model orchestrator. The architectural claim is the
+interesting bit: rather than the parent agent issuing terminal commands
+itself and absorbing the verbose stdout/stderr (build logs, test output,
+stack traces) into its own context, the parent delegates to a
+single-tool subagent whose only job is to drive a Terminal tool, bounded
+by a turn limit and a system prompt instructing it to return a structured
+summary. The subagent eats the noise; the parent gets the gist. Reports
+~30% reduction in main-agent token usage with no degradation on SWE-Bench
+Pro and an internal SWE-Bench C# variant — and the 4B subagent sometimes
+exceeds Claude Sonnet/Opus and GPT-5.3-Codex on the narrow execution
+slice it was trained for.
+
+**What inber should consider:** Inber's `spawn_agent` is currently
+same-model — a child invocation runs on whatever the parent runs on.
+Terminus-4B argues the model tier should itself be a delegation knob: the
+subagent that summarises a 50KB build log doesn't need a frontier model,
+and putting a small model there saves money and keeps the parent's
+context clean for the same reason SWE-Edit's viewer/editor split does.
+The concrete inber-shaped experiment: register a "shell-summariser"
+subagent role wired to a cheap model (Haiku 4.5 today, an SLM later) and
+route long-running shell operations through it instead of letting them
+fan out into the parent's tool history. This is a smaller commitment
+than fine-tuning a model — the structural win is just **isolated context
++ smaller tier**, which inber can capture today using off-the-shelf
+models. It also pairs naturally with Agent Capsules (2605.00410): the
+shell-summariser is the kind of specialist where batched-input would
+matter most.
+
+## MemFlow: Intent-Routed Memory Tiers for Frozen SLM Agents
+
+[arXiv:2605.03312](https://arxiv.org/abs/2605.03312) — submitted 2026-05-05
+
+A training-free memory orchestration framework for small (≤2B) language
+models. A **Router Agent** classifies each query by intent into one of
+three tiers — *profile lookup* (cheap factual hit), *targeted retrieval*
+(context-specific evidence), or *deep reasoning* (full memory traversal)
+— and dispatches to a Memory Agent that compiles evidence under a
+dynamic token budget; an Answer Agent generates the response from that
+compact context. Doubles accuracy over full-context SLM baselines on
+LongMemEval/LoCoMo/LongBench with a frozen Qwen3-1.7B. The novelty vs
+the existing ByteRover/ContextWeaver/MemRouter thread: prior work moves
+the memory *write* decision off the agent's hot path; MemFlow moves the
+memory *read* decision off it too — the model never picks which tier to
+hit, the router does.
+
+**What inber should consider:** Inber's `memory-store` exposes a single
+search verb to agents (semantic vector search with importance/decay).
+MemFlow says that's two abstractions short: agents shouldn't be
+choosing between "look up a fact I told you" and "trawl long-term
+context for relevant evidence" inside the same tool — that decision
+collapses cheap and expensive paths into one prompt-time judgement.
+Concrete inber move: split the existing memory tool into a tiered
+surface (`memory.profile_get(key)`, `memory.recall(query)`,
+`memory.deep_search(query)`) and let an internal classifier — not the
+agent — pick the tier from the query string. This is the read-side
+pair to MemRouter's write-side classifier and lands the same thesis on
+the same store. Worth a section in `docs/memory-extraction-evaluation.md`
+mapping the three-tier taxonomy onto inber's existing memory schema,
+since the importance/decay metadata already in `memory.db` is most of
+what a tier router would need to dispatch on. The combined direction —
+write classifier + read router + agent-curated hierarchy — is now a
+coherent architecture across the four papers (ByteRover, ContextWeaver,
+MemRouter, MemFlow), and inber is the first system on this list with all
+the substrate to actually adopt it without a rewrite.
