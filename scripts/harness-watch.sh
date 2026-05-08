@@ -10,6 +10,12 @@
 
 set -euo pipefail
 
+# systemd scheduler runs us with a minimal PATH (no $HOME/bin), where `gh`
+# lives. Without this, the per-harness `gh api` calls below fail silently
+# (stderr swallowed by `2>/dev/null`) and every commit feed is reported as
+# "(failed to fetch ...)". Prepend $HOME/bin so `gh` resolves.
+export PATH="$HOME/bin:$PATH"
+
 REPO_DIR="${REPO_DIR:-$HOME/repos/inber}"
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-7}"
 SINCE="$(date -u -d "${LOOKBACK_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)"
