@@ -313,3 +313,103 @@ write classifier + read router + agent-curated hierarchy — is now a
 coherent architecture across the four papers (ByteRover, ContextWeaver,
 MemRouter, MemFlow), and inber is the first system on this list with all
 the substrate to actually adopt it without a rewrite.
+
+## LCM: Lossless Context Management (Volt)
+
+[arXiv:2605.04050](https://arxiv.org/abs/2605.04050) — paper dated 2026-02-14,
+arXiv announcement May 2026. Picked up on the 2026-05-08 sweep.
+
+The first paper this sweep cycle that benchmarks directly against Claude
+Code with a published, open-source competitor. Volt (forked from OpenCode)
+runs Opus 4.6 + Haiku 4.5 and beats Claude Code on OOLONG long-context
+across **every** length from 32K → 1M (overall 74.8 vs 70.3, +12.6 at 512K).
+Two engine-managed mechanisms drive the gap:
+
+- **Hierarchical Summary DAG** — older messages are auto-compacted into a
+  multi-level summary tree, but every node retains a lossless pointer to
+  the original; an `lcm_expand` tool lets the agent re-hydrate a specific
+  branch on demand. This is *not* truncation-with-DB-recovery (what inber
+  has today via smart-truncation) — the summaries themselves form a
+  navigable structure the agent can walk, instead of a flat list of
+  "see-also" handles.
+- **Operator-Level Recursion / LLM-Map** — engine-managed parallel
+  primitives that *replace model-written loops*. The model declares
+  "map this transform over this dataset"; the engine handles iteration,
+  concurrency, schema validation, and retries. The framing the authors
+  use — "GOTO → structured control flow" for LLM control — is the load-
+  bearing analogy: the engine, not the model, owns iteration.
+
+**What inber should consider:** Both mechanisms are directly applicable
+and partially complementary to existing inber work.
+
+The summary-DAG is the natural next step *after* `docs/smart-truncation.md`:
+inber already stashes truncated content in the session DB and exposes a
+retrieval handle, but the retrieval surface is flat. Promoting the DB
+schema to a hierarchy (per-turn summary → topic-level summary → session
+summary, with parent pointers) and exposing an `expand(node_id)` tool
+turns the existing storage into LCM's navigable DAG with minimal new
+code. This also pairs with the ContextWeaver dependency-graph thread —
+the DAG would naturally be the substrate dependency edges live on.
+
+LLM-Map is the more interesting structural commitment: today inber's only
+parallel primitive is `spawn_agent`, which is general-purpose and pays the
+full system-prompt cost per call (the same pain Agent Capsules / 2605.00410
+flagged). A typed `map(transform, dataset)` tool — engine-evaluated, with
+schema validation and bounded concurrency — would let the agent fan out
+over e.g. "score these 50 candidate files for relevance" without spawning
+50 children or writing a model-generated loop that the engine can't
+verify. Worth a section in `docs/multi-agent-design.md` as a complement
+to spawn_agent rather than a replacement, since the use cases differ
+(spawn_agent: open-ended sub-task with judgement; LLM-Map: bounded,
+schema-validated transform). Volt is open-source, so the implementation
+shape is inspectable rather than guessed.
+
+The cross-cutting note: LCM is the second paper this cycle (after
+SWE-Edit) explicitly arguing that **the engine should reclaim control
+flow from the agent**. SWE-Edit moves bulk reads off the parent's
+context; LCM moves iteration off the parent's reasoning. Inber's `engine/`
+is already the right place to host this — the question is which model-
+written control-flow patterns are worth promoting to engine primitives.
+
+## ARISE: Repository-Graph Primitives for Fault Localization
+
+[arXiv:2605.03117](https://arxiv.org/abs/2605.03117) — submitted 2026-05-04.
+
+Augments an LLM coding agent with a **multi-granularity program graph**
+(file/class/function structural layer + statement-level data-flow layer
+with definition-use edges) and exposes data-flow slicing as a *first-class
+queryable agent tool* — not a natural-language summary the agent has to
+re-derive. On SWE-bench Lite (300 issues, 11 Python repos): +17.0
+Function Recall@1, +15.0 Line Recall@1, 22.0% Pass@1 (4.7pt gain over
+baseline). The interesting bit isn't the absolute numbers — it's that the
+gain comes from **adding a tool the agent didn't have**, not from prompt
+or model changes.
+
+**What inber should consider:** Inber's current code-understanding surface
+is the standard CC-style trio (Read/Grep/Glob) plus `codeindex/`. Grep is
+syntactic; codeindex gives lookup-by-symbol. Neither answers "where do
+the values flowing into this variable come from?" — the agent has to
+reconstruct that by reading multiple files into its context (the
+SWE-Edit problem this sweep already flagged). ARISE says: don't make the
+agent re-derive data-flow inline; precompute it into a graph and expose a
+slice tool.
+
+For inber this is a `tools/`-side experiment, not an architectural one.
+A `code.dataflow_slice(symbol, direction)` tool that returns the
+def-use chain instead of N file excerpts would (a) keep the parent's
+context stable across a multi-file investigation (cache-friendly), and
+(b) replace several Read calls with one structured call — the same
+pattern shift `docs/cache-optimization.md` is already chasing. Worth a
+note in `docs/comparisons/agentic-design-patterns.md` under a "structured
+code primitives" section, since this generalizes beyond Python (Go has
+similar tooling via `go/types` + `go/ssa` — building this for inber's
+own Go codebase is a tractable starting point).
+
+## Sweep note (2026-05-08)
+
+Upstream commit feeds for all eight tracked harness repos failed this
+run — paper-only update. The two findings above are the new entries
+since 2026-05-05; both passed the not-already-covered check against
+existing inber docs (`docs/smart-truncation.md`, `docs/cache-optimization.md`,
+`docs/data-flow.md`, `docs/comparisons/agentic-design-patterns.md`).
+Neither LCM nor ARISE was in the May-1 or May-5 sweep corpus.
