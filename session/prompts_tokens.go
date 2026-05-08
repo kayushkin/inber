@@ -3,10 +3,19 @@ package session
 import (
 	"encoding/json"
 
-	"github.com/kayushkin/inber/memory"
-
 	"github.com/anthropics/anthropic-sdk-go"
 )
+
+// estimateTokens is a coarse char-to-token approximation (~3 chars/token)
+// used only to render token counts inside human-readable prompts/*.md files.
+// Kept local so the session package does not depend on the memory layer;
+// budget enforcement uses memory-store's estimator at call sites that matter.
+func estimateTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	return (len(text) + 2) / 3
+}
 
 // estimateToolTokens estimates the token count for tool definitions.
 func estimateToolTokens(tools []anthropic.ToolUnionParam) int {
@@ -15,10 +24,10 @@ func estimateToolTokens(tools []anthropic.ToolUnionParam) int {
 		total += 50
 		if tool.OfTool != nil {
 			desc := tool.OfTool.Description.Or("")
-			total += memory.EstimateTokens(desc)
+			total += estimateTokens(desc)
 			// Rough schema estimate from JSON size
 			if data, err := json.Marshal(tool.OfTool.InputSchema); err == nil {
-				total += memory.EstimateTokens(string(data))
+				total += estimateTokens(string(data))
 			}
 		}
 	}
@@ -29,7 +38,7 @@ func estimateToolTokens(tools []anthropic.ToolUnionParam) int {
 func estimateSystemTokens(blocks []anthropic.TextBlockParam) int {
 	total := 0
 	for _, b := range blocks {
-		total += memory.EstimateTokens(b.Text)
+		total += estimateTokens(b.Text)
 	}
 	return total
 }
@@ -41,7 +50,7 @@ func estimateMessageTokens(messages []anthropic.MessageParam) int {
 		total += 4
 		for _, block := range msg.Content {
 			if block.OfText != nil {
-				total += memory.EstimateTokens(block.OfText.Text)
+				total += estimateTokens(block.OfText.Text)
 			} else if block.OfToolUse != nil || block.OfToolResult != nil {
 				total += 50
 			}

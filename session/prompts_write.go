@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kayushkin/inber/memory"
-
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
@@ -95,7 +93,7 @@ func writeSystemFiles(promptsDir string, blocks []anthropic.TextBlockParam, bloc
 
 	totalTokens := 0
 	for i, block := range blocks {
-		tokens := memory.EstimateTokens(block.Text)
+		tokens := estimateTokens(block.Text)
 		totalTokens += tokens
 
 		// Determine block name/slug
@@ -164,7 +162,7 @@ func writeSystemPrompt(sb *strings.Builder, blocks []anthropic.TextBlockParam, b
 	}
 	sb.WriteString("## System Prompt\n\n")
 	for i, block := range blocks {
-		tokens := memory.EstimateTokens(block.Text)
+		tokens := estimateTokens(block.Text)
 		label := ""
 		if i < len(blockNames) && blockNames[i].ID != "" {
 			label = " — " + blockNames[i].ID
@@ -191,7 +189,7 @@ func writeAllMessages(sb *strings.Builder, messages []anthropic.MessageParam, st
 		for _, block := range msg.Content {
 			if block.OfText != nil {
 				text := block.OfText.Text
-				msgTokens += memory.EstimateTokens(text)
+				msgTokens += estimateTokens(text)
 				if len(text) > 80 {
 					contentPreview = strings.ReplaceAll(text[:80], "|", "\\|") + "..."
 				} else {
