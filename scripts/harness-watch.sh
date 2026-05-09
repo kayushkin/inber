@@ -120,11 +120,12 @@ CREATE_BODY=$(jq -nc \
   --arg inst "$INSTANCE_ID" \
   --arg cid "$CLIENT_ID" \
   '{
-    harness:     "claude_code",
-    instance_id: $inst,
-    client_id:   $cid,
-    source:      "harness-watch",
-    auto_start:  true
+    harness:      "claude_code",
+    instance_id:  $inst,
+    client_id:    $cid,
+    source:       "harness-watch",
+    session_type: "autonomous",
+    auto_start:   true
   }')
 
 SESSION_JSON=$(curl -sfS -X POST "$LLM_BRIDGE/sessions" \
