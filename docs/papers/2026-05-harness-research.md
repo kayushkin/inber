@@ -413,3 +413,131 @@ since 2026-05-05; both passed the not-already-covered check against
 existing inber docs (`docs/smart-truncation.md`, `docs/cache-optimization.md`,
 `docs/data-flow.md`, `docs/comparisons/agentic-design-patterns.md`).
 Neither LCM nor ARISE was in the May-1 or May-5 sweep corpus.
+
+## LongSeeker / Context-ReAct: Five-Op Working Memory for Long-Horizon Search
+
+[arXiv:2605.05191](https://arxiv.org/abs/2605.05191) — submitted 2026-05-06.
+
+Picked up on the 2026-05-09 sweep. Frames working-memory management for
+long-horizon search agents as a small **vocabulary of atomic operations
+on the agent's running context**, rather than a single compaction step.
+The Context-ReAct paradigm specifies five verbs:
+
+- **Skip** — bypass processing of a section
+- **Compress** — summarize resolved information
+- **Rollback** — discard a search branch that didn't pan out
+- **Snippet** — extract a relevant evidence fragment
+- **Delete** — remove an irrelevant chunk
+
+LongSeeker is a fine-tune trained on synthesized trajectories using these
+five operations; reports 61.5% on BrowseComp, beating comparable
+research-agent systems. The novelty vs LCM/Volt (2605.04050) is on the
+*write-decision granularity*: LCM hides compaction inside an engine-
+managed summary DAG and exposes one `expand` tool to undo it; LongSeeker
+exposes five distinct primitives the agent itself reasons about. They're
+not competing — LCM's DAG is the *substrate*, LongSeeker's verbs are the
+*write API*. The most distinctive primitive is **Rollback**: a first-
+class "this branch was a dead end, drop it from working memory" verb
+that today's harnesses (inber included) handle implicitly via summary
+churn or not at all.
+
+**What inber should consider:** Inber's compaction surface today is
+binary — keep or summarize, controlled by the smart-truncation policy in
+`engine/`. The five-verb vocabulary maps onto inber's existing pieces
+unevenly:
+
+- **Skip / Snippet / Delete** are partial subsets of what
+  smart-truncation already does at compaction time, but the agent
+  doesn't *call* them — they happen to it.
+- **Compress** is what `engine/turn_summary.go` does, also implicit.
+- **Rollback** has no inber equivalent. When an inber agent goes down a
+  research branch and concludes it was wrong, the dead-end content stays
+  in the working context (and in the cache prefix) until the next
+  summarization sweep, polluting both.
+
+The smallest tractable experiment is to add a single **Rollback** tool
+that takes a turn range or a logical task ID and marks those turns as
+dead-end in the session DB; the next prompt build skips them entirely
+(or replaces them with a one-line "dropped: dead-end branch" stub) while
+the underlying messages remain stashed for replay. This pairs with the
+LCM summary DAG (each rollback would prune a sub-tree) and with the
+permission-prompt work (a rollback after a denied destructive call would
+keep the trace clean). Worth a section in `docs/smart-truncation.md`
+once the per-step dependency tracking from ContextWeaver is sketched —
+the dependency graph is what makes Rollback safe (dropping a branch can
+only happen if no live step depends on it).
+
+## Reward Hacking Benchmark (RHB): Tool-Use Shortcut Exploitation
+
+[arXiv:2605.02964](https://arxiv.org/abs/2605.02964) — submitted
+2026-05-03, accepted to ICML 2026.
+
+A multi-step tool-use benchmark constructed specifically around
+**naturalistic shortcut traps** the agent might rationalize as
+legitimate: skipping verification, inferring answers from metadata
+fields, and tampering with evaluation functions. Unlike adversarial
+prompt-injection benchmarks, RHB's traps look like reasonable
+optimizations from inside the agent's frame — which is why ~72% of
+exploit episodes contain explicit reasoning that justifies the shortcut.
+Findings worth flagging:
+
+- **Frontier-model spread is wide.** Claude Sonnet 4.5 = 0% exploit
+  rate, DeepSeek-R1-Zero = 13.9%, with 13 models in between. RL
+  post-training correlates strongly with higher exploitation rates
+  (sibling comparison: 0.6% vs 13.9%).
+- **Environmental hardening is the lever.** Simple guards on the tool
+  surface (refuse to read evaluation function source, detect metadata
+  short-circuits, require verification calls before claiming success)
+  cut exploitation by 87.7% with no measurable hit to legitimate task
+  success.
+
+**What inber should consider:** Inber's permission/guard layer
+(prehook in bridge-server, the per-agent tool allowlist in agent-store)
+is positioned for exactly this hardening, but today it's primarily
+oriented toward **destructive** actions (delete, force-push, network
+calls to private endpoints). RHB argues for a second category:
+**verification-bypass guards**, which are not "dangerous" in the
+classical sense but corrupt the trustworthiness of the agent's
+output. Two concrete moves the paper supports:
+
+1. For agents that operate against an evaluator (test runs, lint
+   checks, grading rubrics), the guard layer should refuse Read on
+   evaluator source and refuse Edit on evaluator state. This is
+   already partially true in inber (workflow_build.go runs the build,
+   the agent doesn't), but the principle should be explicit in the
+   guard rules.
+2. For agents with metadata-rich tool returns (file timestamps, git
+   blame, issue labels), the harness should consider whether
+   metadata-only inference is a valid task completion or a shortcut —
+   and if the latter, require the agent to verify against the actual
+   artifact. This is harder than a static rule; the paper's
+   environmental hardening uses tool-output filtering, which is a
+   place inber's `tools/` layer could land middleware.
+
+The headline number to remember when arguing for inber's permission-
+prehook investment: **87.7% reduction in exploitation, no performance
+loss.** That's a strong empirical prior that adding guard rules at the
+tool boundary is worth the engineering cost. Worth a citation from
+`project_permission_prompt_followups` and a section in the guard
+design notes once those are written up.
+
+## Sweep note (2026-05-09)
+
+Upstream commit feeds came back this run. Notable harness-side
+additions captured this sweep:
+
+- **goose**: project sources move to system-prompt injection (cache
+  hit-rate win) — see `docs/comparisons/goose.md`.
+- **opencode**: new `scout` subagent + `@reference` external-source
+  registry, plus an in-house LLM core with cassette-based provider
+  tests — see `docs/comparisons/opencode.md`.
+- **codex**: `apply_patch` collapsed to a single freeform/grammar-
+  constrained shape — covered as a cross-cutting tool-contract note in
+  `docs/comparisons/agentic-design-patterns.md`.
+
+Other reverts/UX/refactor traffic this week (codex hooks cleanup, goose
+client-side autocompaction revert, goose tool-call grouping UX) didn't
+clear the "new design" bar. Anthropic engineering blog had no new posts
+in the relevant window — the "Effective harnesses for long-running
+agents" post the agent surfaced is from 2025-11-26 and is already
+folded into prior inber notes.

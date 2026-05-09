@@ -165,3 +165,16 @@ Inber's smart truncation and context loading is more automatic and fine-tuned.
 **Low Priority:**
 5. **Desktop client** — Electron or similar GUI (inber's TUI is sufficient for now)
 6. **Effect-style structured concurrency** — Go already handles this well with goroutines
+
+---
+
+## Harness-watch — 2026-05-09: `scout` agent + `@reference` external sources
+
+[PR 24149](https://github.com/sst/opencode/pull/24149) (merged 2026-05-08) adds a built-in `scout` subagent dedicated to **research over external repos**, distinct from the existing `general` subagent that operates on the working tree. Two design pieces worth noting:
+
+- **Named external references.** Config lets users register git repos or local dirs as first-class `@<name>` references. The scout agent receives those names as targets; opencode handles cloning into a managed cache, exposing them via two new managed tools `repo_clone` and `repo_overview`. The agent never sees a clone URL or a path — only the alias.
+- **Research-only tool surface.** Scout's tool list is read/search/overview only; it cannot write to the working tree or shell out beyond the managed clone cache. The contract is "go look at this thing and report back" — the parent gets the report, not the side effects of the look-around.
+
+**What inber should consider:** Two of inber's existing subagents (notably the documentation-researcher and the upstream-comparison agents implied by harness-watch itself) are already in scout's shape conceptually — research-only with bounded read surface — but they currently use the same Read/Grep/Bash trio as executor agents and manage their own cwd. The opencode pattern argues for a **named-reference layer** between the user and the subagent: instead of agents chasing paths, the harness owns a registry of "places to look" with managed clone/cache and a stable alias the model can reason about. For inber, the natural home is `forge` (which already manages worktree slots) extended with a read-only "external repo" slot type — and a `research` tool category that's allowlisted to those slots only. Worth a sketch in `docs/multi-agent-design.md`, paired with the SWE-Edit viewer/editor decomposition (2604.26102) which is the same "isolated read-only context" pattern from a different angle.
+
+[PR 24712](https://github.com/sst/opencode/pull/24712) (merged 2026-05-08) is a separate but related move: opencode replaces its dependency on Vercel's AI SDK with an in-house Effect-based `packages/llm` covering 10+ providers, with a recorded-cassette test harness (`http-recorder`) that replays HTTP traffic against typed schemas. The cassette pattern is the borrowable bit — inber's provider bridges (`llm-bridge-anthropic`, `llm-bridge-openai`, `llm-bridge-google`) are integration-tested against live APIs today; a recorded-cassette layer would let the bridge tests run hermetically in CI without losing the wire-format coverage.

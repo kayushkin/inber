@@ -476,3 +476,46 @@ are (a) a richer init handshake on the llm-bridge-server MCP client and
 payloads survive the bus → log-store → bridge-ui round trip. Both are
 small changes that compose with each other and with the existing
 permission-prompt work.
+
+## Harness-watch — 2026-05-09: One tool, one shape (codex apply_patch)
+
+Codex this week collapsed `apply_patch` from two invocation paths to one.
+[PR 21651](https://github.com/openai/codex/pull/21651) deletes the
+function-style (JSON-args) registration of `apply_patch`; [PR
+21687](https://github.com/openai/codex/pull/21687) flips the freeform/
+grammar-constrained variant to default-on. The grammar variant lets the
+model emit the patch payload as a natural diff body inside a custom tool
+call instead of stuffing it inside a JSON string parameter — the diff
+format is the tool-call format.
+
+The design statement is the interesting part, not the diff: **two ways to
+invoke the same tool is a contract bug, not a feature.** Both shapes were
+maintained for several releases; codex's read of the data is that having
+both paths created surface ambiguity for the model (which shape to pick),
+the harness (two parsers to keep in sync), and the test corpus (two
+trajectory shapes per task). Collapsing to a single canonical shape is a
+deliberate tightening, and the choice of the freeform/grammar shape over
+the JSON-args shape is itself a vote: when a tool's payload has a
+natural format (a unified diff, a SQL query, a shell command), making
+that format *be* the tool-call body avoids a layer of escape/quote/
+re-parse that the model has to navigate inside its tokens.
+
+**What inber should consider:** Inber's tool surface today is JSON-args
+across the board — `Read`, `Edit`, `Bash`, `Grep`, etc. Most of those
+tools have payloads that are unambiguously JSON-friendly (paths,
+patterns, flags). The exception is `Edit`: the `old_string`/`new_string`
+parameters are quoted blobs of source code that the model has to escape
+into JSON, and that escaping is a known source of "edit didn't apply
+because of a stray backslash" failures. Codex's bet is that the patch
+shape should be the tool body, not a JSON-encoded string; for inber,
+the smallest version of that bet is to add a freeform/diff-body variant
+of `Edit` (or a new `ApplyPatch`) that takes a unified diff as the body
+and reduces the model's escaping burden. This is a tools-side
+experiment, not an architectural one — but it's worth measuring against
+inber's existing edit-failure rate before committing.
+
+The cross-cutting principle, worth flagging beyond the apply_patch
+specifics: **when a tool has multiple invocation shapes, the harness
+owns a contract bug.** Inber's tool registry should pick one shape per
+tool and never carry two. If a new shape proves better, the migration
+is a one-shot replacement, not an additive co-existence.
