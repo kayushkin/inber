@@ -118,11 +118,12 @@ INSTANCE_ID="${HARNESS_WATCH_INSTANCE_ID:-inst-cc-local}"
 CREATE_BODY=$(jq -nc \
   --arg inst "$INSTANCE_ID" \
   '{
-    harness:      "claude_code",
-    instance_id:  $inst,
-    source:       "harness-watch",
-    session_type: "autonomous",
-    auto_start:   true
+    harness:     "claude_code",
+    instance_id: $inst,
+    purpose:     "harness-watch",
+    origin:      "harness-watch.sh",
+    type:        "autonomous",
+    auto_start:  true
   }')
 
 SESSION_JSON=$(curl -sfS -X POST "$LLM_BRIDGE/sessions" \
