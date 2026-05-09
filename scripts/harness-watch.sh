@@ -114,15 +114,12 @@ EOF
 # under whatever instance config we point at.
 LLM_BRIDGE="${LLM_BRIDGE_URL:-http://localhost:8160}"
 INSTANCE_ID="${HARNESS_WATCH_INSTANCE_ID:-inst-cc-local}"
-CLIENT_ID="harness-watch-$(date -u +%s)"
 
 CREATE_BODY=$(jq -nc \
   --arg inst "$INSTANCE_ID" \
-  --arg cid "$CLIENT_ID" \
   '{
     harness:      "claude_code",
     instance_id:  $inst,
-    client_id:    $cid,
     source:       "harness-watch",
     session_type: "autonomous",
     auto_start:   true
@@ -132,15 +129,15 @@ SESSION_JSON=$(curl -sfS -X POST "$LLM_BRIDGE/sessions" \
   -H "Content-Type: application/json" \
   -d "$CREATE_BODY")
 
-BRIDGE_ID=$(printf '%s' "$SESSION_JSON" | jq -r '.bridge_id // empty')
-if [[ -z "$BRIDGE_ID" ]]; then
+SESSION_ID=$(printf '%s' "$SESSION_JSON" | jq -r '.session_id // empty')
+if [[ -z "$SESSION_ID" ]]; then
   echo "harness-watch: failed to create session: $SESSION_JSON" >&2
   exit 1
 fi
-echo "harness-watch: bridge session $BRIDGE_ID"
+echo "harness-watch: bridge session $SESSION_ID"
 
 PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
-curl -sfS -X POST "$LLM_BRIDGE/sessions/$BRIDGE_ID/send" \
+curl -sfS -X POST "$LLM_BRIDGE/sessions/$SESSION_ID/send" \
   -H "Content-Type: application/json" \
   -d "{\"message\":${PROMPT_JSON}}" >/dev/null
 
@@ -150,7 +147,7 @@ curl -sfS -X POST "$LLM_BRIDGE/sessions/$BRIDGE_ID/send" \
 # with its pipe still open, and the scheduler would hang on EOF forever.
 FIFO="$(mktemp -u)"
 mkfifo "$FIFO"
-curl -sN "$LLM_BRIDGE/sessions/$BRIDGE_ID/events" \
+curl -sN "$LLM_BRIDGE/sessions/$SESSION_ID/events" \
   -H 'Accept: text/event-stream' >"$FIFO" &
 CURL_PID=$!
 exec 3<"$FIFO"

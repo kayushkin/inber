@@ -89,9 +89,8 @@ func (g *Server) handleBridgeHarnesses(w http.ResponseWriter, r *http.Request) {
 
 // bridgeSession mirrors llm-bridge's ManagedSession JSON shape (3-ID model).
 type bridgeSession struct {
-	BridgeID    string    `json:"bridge_id"`
+	SessionID   string    `json:"session_id"`
 	HarnessID   string    `json:"harness_id,omitempty"`
-	ClientID    string    `json:"client_id,omitempty"`
 	DisplayName string    `json:"display_name"`
 	Harness     string    `json:"harness"`
 	State       string    `json:"state"`
@@ -104,7 +103,7 @@ type bridgeSession struct {
 
 func sessionInfoToBridge(s *SessionInfo) bridgeSession {
 	return bridgeSession{
-		BridgeID:    s.Key,
+		SessionID:   s.Key,
 		HarnessID:   s.Key,
 		DisplayName: s.Agent,
 		Harness:     "inber",
@@ -131,7 +130,6 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 			DisplayName string `json:"display_name,omitempty"`
 			AgentID     string `json:"agent_id,omitempty"`
 			AutoStart   bool   `json:"auto_start,omitempty"`
-			ClientID    string `json:"client_id,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -152,8 +150,7 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 
 		now := time.Now()
 		sess := bridgeSession{
-			BridgeID:    sessionKey,
-			ClientID:    req.ClientID,
+			SessionID:   sessionKey,
 			DisplayName: req.DisplayName,
 			Harness:     "inber",
 			State:       string(msg.SessionIdle),
@@ -468,7 +465,7 @@ func (g *Server) handleBridgeStop(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	jsonResponse(w, bridgeSession{
-		BridgeID: id,
+		SessionID: id,
 		Harness:  "inber",
 		State:    string(msg.SessionAborted),
 	})
@@ -487,7 +484,7 @@ func (g *Server) handleBridgeInterrupt(w http.ResponseWriter, r *http.Request, i
 	}
 
 	jsonResponse(w, bridgeSession{
-		BridgeID: id,
+		SessionID: id,
 		Harness:  "inber",
 		State:    string(msg.SessionIdle),
 	})
@@ -576,7 +573,6 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 
 	var req struct {
 		DisplayName string `json:"display_name,omitempty"`
-		ClientID    string `json:"client_id,omitempty"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
@@ -605,8 +601,7 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 
 	w.WriteHeader(http.StatusCreated)
 	jsonResponse(w, bridgeSession{
-		BridgeID:    childKey,
-		ClientID:    req.ClientID,
+		SessionID:   childKey,
 		DisplayName: displayName,
 		Harness:     "inber",
 		State:       string(msg.SessionIdle),
