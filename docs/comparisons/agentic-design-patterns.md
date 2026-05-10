@@ -519,3 +519,73 @@ specifics: **when a tool has multiple invocation shapes, the harness
 owns a contract bug.** Inber's tool registry should pick one shape per
 tool and never carry two. If a new shape proves better, the migration
 is a one-shot replacement, not an additive co-existence.
+
+## Harness-watch — 2026-05-10: Subagent denies must propagate (opencode #26597 + arXiv 2605.05440)
+
+Two signals from the same week converge on a design gap that inber's
+permission layer has not yet addressed: **delegation across an agent
+boundary is a permission-propagation event, and it has more than one
+scope to carry.**
+
+[opencode PR 26597](https://github.com/sst/opencode/pull/26597) (merged
+2026-05-09) fixes a Plan Mode escape: opencode has two permission
+scopes, an *agent* ruleset (e.g. Plan Mode's `edit: deny *`) and a
+*session* ruleset, and the `task` tool that spawns subagents was only
+forwarding the parent **session's** denies. A plan-mode session calling
+`task` to spawn a `general` subagent silently produced a child with
+full edit/write rights. The fix extracts a shared
+`subagent-permissions.ts` helper that merges *both* scopes' denies
+into the spawned subagent — and the regression test imports the
+production helper so an inline reimplementation in `task.ts` can't
+silently drop the agent-scope step again.
+
+[arXiv:2605.05440 — Authorization Propagation in Multi-Agent AI
+Systems](https://arxiv.org/abs/2605.05440) (submitted 2026-05-06)
+formalizes exactly this class of bug as the general problem.
+Authorization invariants must be maintained "as non-human principals
+retrieve data, delegate tasks, and synthesize results across changing
+boundaries"; the paper identifies three sub-problems (transitive
+delegation, aggregation inference, temporal validity) and seven
+structural requirements, and notes that "ordinary system behavior, not
+only adversarial action" already produces these failures in production
+deployments. The opencode bug is a clean instance of the transitive-
+delegation case: a guard at one boundary fails to compose with the
+next boundary down.
+
+**What inber should consider:** Inber's permission gating now lives in
+the bridge-server prehook (per `project_permission_prompt_followups`),
+which is a single check at one boundary. The system has at least two
+*scopes* it could attach denies to today — per-agent (agent-store
+config) and per-session (the prehook ruleset that lives with the
+session) — and at least one place where delegation crosses a boundary
+without a documented contract: subagent spawning via the agent system
+(forge worktree slots + spawned agents from agent-store). Concrete
+moves the convergent signals support:
+
+- Audit subagent spawning paths to confirm the prehook applies to the
+  child's tool calls under the **union** of parent-agent and parent-
+  session denies, not just the child's own ruleset. The opencode bug
+  shape — "the child got a fresh permission context that quietly
+  dropped the parent's restrictions" — is the failure mode to look
+  for.
+- Make the propagation logic a *single shared function* called by the
+  spawn path and asserted by a regression test that imports the same
+  function. The opencode fix is small (one helper, one test) precisely
+  because the prior version inlined the merge in two places.
+- Treat permission propagation as a first-class harness concern, not a
+  per-tool concern. The paper's framing — "identity governance as
+  infrastructure, evaluated continuously, enforced at every interaction
+  boundary" — argues against bolting on per-tool denylists and for a
+  uniform propagation rule applied at every spawn, hand-off, or
+  retrieval step.
+
+A complementary design point from earlier work the paper cites
+([arXiv:2603.05344](https://arxiv.org/abs/2603.05344)) is that the
+strongest version of subagent permission scoping is **schema-level
+filtering** — the child's tool schema literally omits the tools it
+can't use, so the model never sees a denied capability and the
+runtime check becomes a defense-in-depth layer rather than the only
+guard. Worth pairing with the opencode pattern when inber writes up
+its subagent permission contract: agent-scope denies should also
+filter the tool schema the child sees, with the prehook as the
+fallback.
