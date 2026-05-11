@@ -78,26 +78,26 @@ func (g *Server) handleAgentConfigGet(w http.ResponseWriter) {
 		if err != nil {
 			continue
 		}
-		orchConfigs, err := g.agentStore.GetAgentOrchestrators(aos.ID)
+		harnessConfigs, err := g.agentStore.GetAgentHarnesses(aos.ID)
 		if err != nil {
 			continue
 		}
-		for _, ao := range orchConfigs {
-			if ao.OrchestratorID != "inber" {
+		for _, ah := range harnessConfigs {
+			if ah.HarnessID != "inber" {
 				continue
 			}
 			entries = append(entries, agentConfigEntry{
 				Slug:            a.Slug,
 				DisplayName:     a.DisplayName,
 				Emoji:           a.Emoji,
-				Model:           ao.ModelPrimary,
-				MaxTurns:        ao.MaxTurns,
-				MaxInputTokens:  ao.MaxInputTokens,
-				MaxResponseTime: ao.MaxResponseTime,
-				ThinkingBudget:  ao.ThinkingBudget,
-				ContextBudget:   ao.ContextBudget,
-				Enabled:         ao.Enabled,
-				Shelved:         ao.Shelved,
+				Model:           ah.ModelPrimary,
+				MaxTurns:        ah.MaxTurns,
+				MaxInputTokens:  ah.MaxInputTokens,
+				MaxResponseTime: ah.MaxResponseTime,
+				ThinkingBudget:  ah.ThinkingBudget,
+				ContextBudget:   ah.ContextBudget,
+				Enabled:         ah.Enabled,
+				Shelved:         ah.Shelved,
 			})
 		}
 	}
@@ -122,46 +122,46 @@ func (g *Server) handleAgentConfigPatch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	orchConfigs, err := g.agentStore.GetAgentOrchestrators(agent.ID)
+	harnessConfigs, err := g.agentStore.GetAgentHarnesses(agent.ID)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	var ao *agentstore.AgentOrchestrator
-	for i := range orchConfigs {
-		if orchConfigs[i].OrchestratorID == "inber" {
-			ao = &orchConfigs[i]
+	var ah *agentstore.AgentHarness
+	for i := range harnessConfigs {
+		if harnessConfigs[i].HarnessID == "inber" {
+			ah = &harnessConfigs[i]
 			break
 		}
 	}
-	if ao == nil {
+	if ah == nil {
 		jsonError(w, "agent not registered with inber", http.StatusNotFound)
 		return
 	}
 
 	// Apply patches
 	if patch.Model != nil {
-		ao.ModelPrimary = *patch.Model
+		ah.ModelPrimary = *patch.Model
 	}
 	if patch.MaxTurns != nil {
-		ao.MaxTurns = *patch.MaxTurns
+		ah.MaxTurns = *patch.MaxTurns
 	}
 	if patch.MaxInputTokens != nil {
-		ao.MaxInputTokens = *patch.MaxInputTokens
+		ah.MaxInputTokens = *patch.MaxInputTokens
 	}
 	if patch.MaxResponseTime != nil {
-		ao.MaxResponseTime = *patch.MaxResponseTime
+		ah.MaxResponseTime = *patch.MaxResponseTime
 	}
 	if patch.ThinkingBudget != nil {
-		ao.ThinkingBudget = *patch.ThinkingBudget
+		ah.ThinkingBudget = *patch.ThinkingBudget
 	}
 	if patch.ContextBudget != nil {
-		ao.ContextBudget = *patch.ContextBudget
+		ah.ContextBudget = *patch.ContextBudget
 	}
-	ao.UpdatedAt = time.Now().Unix()
+	ah.UpdatedAt = time.Now().Unix()
 
-	if err := g.agentStore.UpsertAgentOrchestrator(ao); err != nil {
+	if err := g.agentStore.UpsertAgentHarness(ah); err != nil {
 		jsonError(w, "update failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
