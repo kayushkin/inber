@@ -214,3 +214,11 @@ Turn 3: 2594 read, 3060 created (stable pattern)
 - **Cache keepalive pings** (Aider-style): prevent 5-min expiration during idle
 - **4th breakpoint**: could split conversation history at a midpoint for very long sessions
   (early history rarely changes, late history grows — two-prefix strategy)
+
+## 2026-05-11 — retarget BP3 to the latest user message
+
+opencode's [PR 26786](https://github.com/sst/opencode/pull/26786) (auto-placement) anchors its message-side breakpoint on the **latest user message**, not the second-to-last message. The named insight: a single user turn expands into multiple assistant↔tool API calls that all share the prefix up to that user message, so a user-anchored BP gets hit by every intra-turn round-trip. Inber's current BP3 ("second-to-last message" — see `engine/build_prompts.go`) misses that win for tool-loop turns.
+
+**Action:** retarget BP3 to the latest user message; measure intra-turn cache hit rate on a multi-tool-call turn before/after. Same change also makes the `auto`-style "always cache" default safe to flip (Anthropic's 5m cache write is 1.25×, read is 0.1× — single reuse beats no-cache).
+
+Companion empirical result from [arXiv:2601.06007](https://arxiv.org/abs/2601.06007) ("Don't Break the Cache"): 41–80% API cost reduction and 13–31% TTFT improvement across providers when dynamic content is kept *out* of the cached prefix — already this doc's thesis, but now backed by 500+ session measurements. See `docs/papers/2026-05-harness-research.md` for the writeup.

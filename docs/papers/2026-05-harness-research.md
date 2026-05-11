@@ -541,3 +541,59 @@ clear the "new design" bar. Anthropic engineering blog had no new posts
 in the relevant window — the "Effective harnesses for long-running
 agents" post the agent surfaced is from 2025-11-26 and is already
 folded into prior inber notes.
+
+## Don't Break the Cache: An Evaluation of Prompt Caching for Long-Horizon Agentic Tasks
+
+[arXiv:2601.06007](https://arxiv.org/abs/2601.06007) — measures prompt
+caching across OpenAI, Anthropic, and Google over 500+ agent sessions
+on autonomous web-search tasks with ~10k-token system prompts. Three
+strategies compared: full-context caching, system-prompt-only caching,
+and selective caching that excludes dynamic tool results. Headline
+numbers: **41-80% API cost reduction** and **13-31% TTFT improvement**.
+The non-obvious result: naive full-context caching can *increase*
+latency in some configurations because cache writes are not free and
+mis-targeted breakpoints invalidate downstream prefixes. Concrete
+recommendations from the paper:
+
+- Place dynamic content at the **end** of the system prompt (so it sits
+  after the last cache breakpoint).
+- Avoid dynamic traditional function calling (i.e. don't mutate tool
+  definitions per turn).
+- Exclude dynamic tool results from cached blocks.
+- Benefits scale linearly across 500-50,000 token prompts and 3-50
+  tool calls — the strategy doesn't degrade as sessions grow.
+
+**What inber should consider:** This is empirical confirmation of the
+strategy already encoded in `docs/cache-optimization.md` — stable-first
+ordering, explicit `__CACHE_BOUNDARY__` between stable system blocks
+and the dynamic group, recent-files dedup. The paper's measured
+numbers (41-80% / 13-31%) are useful as an external prior when
+arguing for further cache investment; inber's own measured 54%
+reduction in cache writes per turn (April 2026) sits inside that
+band. Two action-items the paper sharpens:
+
+- The "avoid dynamic function calling" finding argues against any
+  scheme that adds per-turn synthetic tools (e.g. context-window
+  injectors disguised as tools). Inber doesn't do this today, but
+  the proposed memory-tool surface in the harness-layer set
+  (`docs/cache-optimization.md` cross-refs to `HARNESS-LAYER.md`)
+  should keep tool definitions stable across the session.
+- The "naive caching can increase latency" warning is the empirical
+  reason behind opencode's 2026-05-11 default flip to `cache: 'auto'`
+  with a *placement policy* rather than `cache: 'all'`. See
+  `docs/comparisons/opencode.md` 2026-05-11 entry — pair this paper
+  with that PR sequence as the joint citation when retargeting BP3
+  to the latest user message in `engine/build_prompts.go`.
+
+## Sweep note (2026-05-11)
+
+This week's harness commits clear the bar in one place: opencode's
+declarative cache-policy work (PRs 26779/26786/26798) flips the
+default to auto-placement and introduces a user-message-anchored
+breakpoint that inber's current scheme misses. Captured in the
+opencode comparison and cross-linked from `docs/cache-optimization.md`.
+Codex's file-watcher / skills-watcher / hooks cleanup sweep is pure
+modularity and didn't clear the bar. Goose's client-side
+autocompaction revert is a useful negative result (cautionary tale
+about client-injected `/compact` polluting the visible transcript)
+but inber's compaction is server-side, so no action.
