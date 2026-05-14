@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/kayushkin/inber/agent/registry"
 	"github.com/kayushkin/inber/logger"
@@ -25,15 +26,25 @@ import (
 func main() {
 	addr := flag.String("addr", ":8200", "API listen address")
 	configFile := flag.String("config", "", "Config file (JSON)")
+	requireChecks := flag.String("require", "", "Comma-separated allowlist of selftest checks that are fatal at startup (nats,agent-store,workspace,anthropic-key). Unlisted checks are demoted to WARN. Empty = legacy default (agent-store only).")
+	apiKeyFromAuthStore := flag.String("api-key-from-auth-store", "", "If non-empty, resolve ANTHROPIC_API_KEY from auth-store (http://localhost:8303) at startup using this value as X-Auth-App. Requires AUTH_STORE_TOKEN env var.")
 	flag.Parse()
 
-	if err := run(*addr, *configFile); err != nil {
+	if err := run(*addr, *configFile, *requireChecks, *apiKeyFromAuthStore); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, configFile string) error {
+func run(addr, configFile, requireChecks, apiKeyApp string) error {
+	if apiKeyApp != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := resolveAnthropicFromAuthStore(ctx, apiKeyApp); err != nil {
+			return fmt.Errorf("resolve anthropic credential: %w", err)
+		}
+	}
+
 	var cfg server.Config
 
 	if configFile != "" {
@@ -47,6 +58,17 @@ func run(addr, configFile string) error {
 	}
 
 	cfg.ListenAddr = addr
+
+	if requireChecks != "" {
+		var checks []string
+		for _, name := range strings.Split(requireChecks, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				checks = append(checks, name)
+			}
+		}
+		cfg.RequireChecks = checks
+	}
 
 	// Wire bus integration from env vars.
 	if natsURL := os.Getenv("NATS_URL"); natsURL != "" {

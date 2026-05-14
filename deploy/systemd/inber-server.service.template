@@ -1,0 +1,19 @@
+[Unit]
+Description=Inber server
+After=network.target nats.service auth-store.service
+
+[Service]
+Type=simple
+ExecStart=__HOME__/bin/inber-server --addr :8200 --require=nats,workspace --api-key-from-auth-store=inber-server
+Environment=AUTH_STORE_URL=http://127.0.0.1:8303
+Environment=AUTH_STORE_TOKEN=__AUTH_STORE_TOKEN__
+Environment=NATS_URL=nats://localhost:4222
+Environment=LOGSTACK_URL=http://localhost:8088
+Environment=HOME=__HOME__
+Environment=PATH=__HOME__/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=__HOME__/repos/inber
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

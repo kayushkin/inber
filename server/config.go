@@ -40,6 +40,13 @@ type Config struct {
 	// BridgeSessionTTL is how long a bridge- session can be idle before the
 	// reaper removes it. Defaults to 1 hour. Set to 0 to disable.
 	BridgeSessionTTL time.Duration `json:"bridge_session_ttl,omitempty"`
+
+	// RequireChecks is the allowlist of selftest check names that are
+	// fatal at startup. Any check not in this list is demoted to WARN.
+	// If nil/empty, the legacy behavior applies (agent-store is the only
+	// fatal check). Valid names: "nats", "agent-store", "workspace",
+	// "anthropic-key".
+	RequireChecks []string `json:"require_checks,omitempty"`
 }
 
 // AgentConfig defines one agent.

@@ -1,6 +1,6 @@
 # `/api/oneshot` — Deployment Spec
 
-Status: endpoint code is committed (`a148065`), inber-server cannot currently start on the host so the endpoint is unreachable. This doc tracks the remaining changes another agent needs to make in this repo (and one host-side change) to get oneshot live.
+Status: endpoint code is committed (`a148065`); deploy blockers 1–3 are landed in this commit. The host pin in auth-store (`intended_app='inber-server'` on the chosen credential row) is still required before oneshot calls will route to a funded key — that's the only remaining manual step.
 
 ## Goal
 
@@ -29,7 +29,7 @@ Without those last three the `server` package didn't build.
 
 ## Required changes (deploy blockers)
 
-### 1. Make inber-server startable when agent-store is broken
+### 1. Make inber-server startable when agent-store is broken — DONE
 
 **Where:** `cmd/inber-server/main.go` (the selftest path — find the `selftest` call near the bottom of `main()` / `run()`) and `server/server.go` (where `agentStore` is opened around line 142-149).
 
@@ -49,7 +49,7 @@ I'd lean toward the allowlist — it generalizes to other future flaky dependenc
 
 Acceptance: with the flag set in the systemd unit, inber-server starts and serves `/api/health` even when agent-store can't be opened. Agent-store-dependent endpoints (`/api/agents`, `/api/agents/config`) can 503 — that's fine, the oneshot path doesn't touch them.
 
-### 2. Resolve `ANTHROPIC_API_KEY` from auth-store at startup
+### 2. Resolve `ANTHROPIC_API_KEY` from auth-store at startup — DONE
 
 **Where:** `cmd/inber-server/main.go` — add a flag, resolve early in `run()`, set the env var before any agent code reads it.
 
@@ -68,7 +68,7 @@ Reference implementation already exists at `~/repos/scheduler/cmd/kanban-classif
 
 Pin the credential routing first by setting `intended_app='inber-server'` on the credential row in auth-store (`sqlite3 ~/.config/auth-store/auth.db`). Without that, the resolver falls back to the dry generic key (`cred_aiauth_anthropic_api`) and oneshot calls will hit "credit balance too low" — same outage that started this whole thread.
 
-### 3. Update the systemd unit
+### 3. Update the systemd unit — DONE (templated in repo)
 
 **Where:** `~/.config/systemd/user/inber-server.service` (host-side, NOT in the repo).
 
@@ -87,7 +87,7 @@ Environment=HOME=/home/kayushkincom
 
 (Note: the current `serve` positional arg is silently swallowed by flag parsing — the binary is built from `cmd/inber-server/main.go` which only has `-addr` and `-config` flags. Removing `serve` from the ExecStart is a cosmetic cleanup.)
 
-If inber has a `deploy.sh` analog like the rest of the ecosystem, the systemd unit template + host drop-in should land there. If not, leave a `docs/systemd/inber-server.service.template` and document the install steps.
+Now in place: `deploy/systemd/inber-server.service.template` (with `__HOME__`/`__AUTH_STORE_TOKEN__` placeholders, kept under `deploy/` per the oss-prep-systemd convention) and `./deploy.sh` at repo root. Run `AUTH_STORE_TOKEN=<token> ./deploy.sh` — builds `~/bin/inber-server`, substitutes the template into `~/.config/systemd/user/inber-server.service` (mode `600`, contains the bearer), reloads, restarts, and curls `/api/health`.
 
 ## Optional follow-ups (not blockers)
 
