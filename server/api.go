@@ -13,6 +13,7 @@ func (g *Server) Serve(ctx context.Context) error {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/run", g.handleRun)
+	mux.HandleFunc("/api/oneshot", g.handleOneShot)
 	mux.HandleFunc("/api/spawn", g.handleSpawn)
 	mux.HandleFunc("/api/fork-spawn", g.handleForkSpawn)
 	mux.HandleFunc("/api/sessions", g.handleSessions)

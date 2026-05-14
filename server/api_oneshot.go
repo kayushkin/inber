@@ -1,0 +1,159 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/logger"
+)
+
+// defaultOneShotModel is used when the caller omits Model in a OneShotRequest.
+const defaultOneShotModel = "claude-haiku-4-5-20251001"
+
+// OneShotRequest is a stateless single-turn LLM call.
+//
+// When Schema is set, the response is hard-forced via tool_choice: the model
+// MUST call a synthetic tool named "output" whose input schema is the provided
+// Schema. The tool's input is returned in OneShotResponse.Parsed.
+type OneShotRequest struct {
+	Prompt       string          `json:"prompt"`
+	SystemPrompt string          `json:"system_prompt,omitempty"`
+	Model        string          `json:"model,omitempty"`
+	Schema       json.RawMessage `json:"schema,omitempty"`
+	MaxTokens    int             `json:"max_tokens,omitempty"`
+}
+
+// OneShotResponse carries the result of a stateless single-turn call.
+type OneShotResponse struct {
+	Text       string          `json:"text,omitempty"`
+	Parsed     json.RawMessage `json:"parsed,omitempty"`
+	Usage      OneShotUsage    `json:"usage"`
+	DurationMs int64           `json:"duration_ms"`
+	StopReason string          `json:"stop_reason"`
+	Model      string          `json:"model"`
+}
+
+type OneShotUsage struct {
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+}
+
+// POST /api/oneshot
+//
+// Stateless single-turn LLM call. Bypasses sessions, queue, memory, and the
+// inber agent loop entirely. Uses ANTHROPIC_API_KEY from the process env.
+func (g *Server) handleOneShot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req OneShotRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Prompt == "" {
+		jsonError(w, "prompt required", http.StatusBadRequest)
+		return
+	}
+
+	model := req.Model
+	if model == "" {
+		model = defaultOneShotModel
+	}
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+
+	client := anthropic.NewClient()
+
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(model),
+		MaxTokens: int64(maxTokens),
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(req.Prompt)),
+		},
+	}
+	if req.SystemPrompt != "" {
+		params.System = []anthropic.TextBlockParam{{Text: req.SystemPrompt}}
+	}
+
+	// Schema → synthetic "output" tool with tool_choice forced to it.
+	if len(req.Schema) > 0 {
+		params.Tools = []anthropic.ToolUnionParam{
+			{
+				OfTool: &anthropic.ToolParam{
+					Name:        "output",
+					Description: anthropic.String("Respond by calling this tool with structured output matching the schema."),
+					InputSchema: anthropic.ToolInputSchemaParam{
+						Properties: json.RawMessage(req.Schema),
+					},
+				},
+			},
+		}
+		params.ToolChoice = anthropic.ToolChoiceUnionParam{
+			OfTool: &anthropic.ToolChoiceToolParam{
+				Name: "output",
+				Type: "tool",
+			},
+		}
+	}
+
+	start := time.Now()
+	resp, err := client.Messages.New(r.Context(), params)
+	if err != nil {
+		logger.WithComponent("oneshot").Error("api call failed", map[string]interface{}{
+			"error": err.Error(),
+			"model": model,
+		})
+		jsonError(w, "api call failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	out := OneShotResponse{
+		DurationMs: time.Since(start).Milliseconds(),
+		StopReason: string(resp.StopReason),
+		Model:      string(resp.Model),
+		Usage: OneShotUsage{
+			InputTokens:         int(resp.Usage.InputTokens),
+			OutputTokens:        int(resp.Usage.OutputTokens),
+			CacheCreationTokens: int(resp.Usage.CacheCreationInputTokens),
+			CacheReadTokens:     int(resp.Usage.CacheReadInputTokens),
+		},
+	}
+
+	for _, block := range resp.Content {
+		switch block.Type {
+		case "text":
+			out.Text += block.Text
+		case "tool_use":
+			if block.Name == "output" {
+				out.Parsed = json.RawMessage([]byte(block.Input))
+			}
+		}
+	}
+
+	// Schema was requested but the model didn't call the output tool — fail loud.
+	if len(req.Schema) > 0 && len(out.Parsed) == 0 {
+		jsonError(w, fmt.Sprintf("schema-forced call did not return a tool_use block (stop_reason=%s)", out.StopReason), http.StatusBadGateway)
+		return
+	}
+
+	logger.WithComponent("oneshot").Info("call completed", map[string]interface{}{
+		"model":        out.Model,
+		"stop_reason":  out.StopReason,
+		"input_tokens": out.Usage.InputTokens,
+		"output_tokens": out.Usage.OutputTokens,
+		"duration_ms":  out.DurationMs,
+		"schema":       len(req.Schema) > 0,
+	})
+
+	jsonResponse(w, out)
+}

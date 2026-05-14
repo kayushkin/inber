@@ -70,10 +70,10 @@ func (g *Server) handleAgentConfigGet(w http.ResponseWriter) {
 
 	var entries []agentConfigEntry
 	for _, a := range agents {
-		if a.Orchestrator != "inber" {
+		if a.Harness != "inber" {
 			continue
 		}
-		// Get full orchestrator config for limits
+		// Get full harness config for limits
 		aos, err := g.agentStore.GetAgentBySlug(a.Slug)
 		if err != nil {
 			continue

@@ -13,7 +13,6 @@ type MemoryStore = asmemory.MemoryStore
 type CompactionResult = asmemory.CompactionResult
 type BuildContextRequest = asmemory.BuildContextRequest
 type PrepareSessionConfig = asmemory.PrepareSessionConfig
-type Session = asmemory.Session
 type ToolMetadata = asmemory.ToolMetadata
 type RecentFile = asmemory.RecentFile
 type Embedder = asmemory.Embedder

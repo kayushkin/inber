@@ -76,10 +76,6 @@ func (m *mockMemoryStore) UpdateToolUsageSummary(toolName, summary string, ttlSe
 	return nil
 }
 
-func (m *mockMemoryStore) SaveSession(sess memory.Session) error {
-	return nil
-}
-
 func (m *mockMemoryStore) TrackMemoryUsage(memoryID, sessionID string, turnNumber int, usageType string) error {
 	return nil
 }
