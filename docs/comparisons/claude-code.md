@@ -157,4 +157,60 @@ func LoadProjectContext() (*ProjectConfig, error) {
 1. **Tool interface standardization** — Enables permission system
 2. **Enhanced session metadata** — Better session management UI
 
+## Harness-watch — 2026-06-02: asyncRewake hook, tiered security review, path-sensitive permission escalation
+
+The `security-guidance` plugin update (commits `441892ec`, `ccadef7d`) plus
+CHANGELOG 2.1.160 surfaced several harness primitives.
+
+### 1. `asyncRewake` — background review re-wakes a stopped agent with findings
+
+The plugin's `hooks.json` uses a PostToolUse entry with `if: "Bash(git commit:*)"`,
+`asyncRewake: true`, `rewakeMessage`, and `rewakeSummary`: on `git commit`/`push`
+it kicks off a background agentic security review *without blocking the turn*, and
+when results land the harness **re-wakes** the (possibly already-stopped) agent by
+injecting `rewakeMessage` + findings as a new turn. A true async-feedback primitive,
+distinct from a synchronous PreToolUse gate, guarded by a TTL loop counter
+(`stop_hook_fire_count`, max firings, content-based dedup) to prevent
+fix→re-review→re-fire loops.
+
+**What inber should consider:** add an async post-tool hook channel — a hook can
+return "pending" and later re-wake a stopped/idle session by injecting a synthetic
+user turn (summary + payload), guarded by a per-session fire-count TTL to prevent
+re-wake loops.
+
+### 2. Three-layer cost-tiered security review
+
+security-guidance v2 layers three escalating reviewers: (1) instant regex warnings
+on Edit/Write for ~25 dangerous patterns (`yaml.load`, `pickle.load`, raw
+`innerHTML`, hardcoded secrets); (2) a fast LLM diff review on the **Stop hook**
+feeding high-severity findings back so Claude self-fixes before the user sees the
+reply; (3) an SDK-driven agentic reviewer on `git commit` that uses Read/Grep/Glob
+to trace cross-file data flow (IDOR/auth-bypass/SSRF a single diff misses). Org
+policy is concatenated `claude-security-guidance.md` at user→project→project-local
+scope with an 8KB budget that truncates project-local first. The escalation ladder
+(cheap-always / medium-on-stop / expensive-on-commit) is reusable.
+
+**What inber should consider:** model the PreToolUse prehook as a tiered ladder
+rather than a single gate — cheap regex/heuristic on every edit, a Stop-time
+fast-model diff review that self-corrects before responding, and an expensive
+cross-file agentic review only on commit-class tools — sharing a layered
+user/project/local policy file.
+
+### 3. Path-sensitive permission escalation (the write *is* the execution vector)
+
+CHANGELOG 2.1.160: even in `acceptEdits`/auto modes, Claude Code now prompts before
+writing files that can silently cause code execution — shell-init (`.zshenv`,
+`.zlogin`, `.bash_login`), `~/.config/git/`, build-tool config (`.npmrc`,
+`.yarnrc*`, `bunfig.toml`, `.bazelrc`, `.pre-commit-config.yaml`, `.devcontainer/`).
+A "safe" edit-only mode isn't safe when the edited file is itself an execution
+vector. Also: a single-file grep/egrep/fgrep now satisfies the read-before-edit
+precondition (any tool that observed current contents counts, not just Read).
+
+**What inber should consider:** give the prehook a path-pattern escalation list —
+writes to shell-init / VCS-config / build-tool config files always escalate to Ask,
+overriding acceptEdits/auto, because the write itself is an execution primitive. And
+if inber enforces a read-before-edit invariant, let any content-observing tool
+(grep/search returning file lines) mark the file "seen" for the turn, not just the
+dedicated Read tool.
+
 The permission system would have the highest impact on daily usability while being relatively straightforward to implement given inber's existing tool architecture.

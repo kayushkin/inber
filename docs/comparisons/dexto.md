@@ -90,3 +90,79 @@ When a sub-agent needs approval (tool confirmation), propagate the request up to
 ## Key Takeaway
 
 Dexto's YAML-driven agent definitions and multi-interface runtime make it the most accessible agent framework for getting started. For inber, the main takeaways are: **YAML export/import for agent configs** (portability), **OpenTelemetry for observability** (industry-standard tracing), and **approval propagation for sub-agents** (safety UX). The fundamental architectural difference — single-process vs distributed services — means inber is more robust for production multi-agent workloads, but Dexto is easier to prototype with.
+
+## Harness-watch — 2026-06-02: turn-loop rebuild (PR 796)
+
+[PR 796](https://github.com/truffle-ai/dexto/pull/796) ("Rebuild runtime storage,
+skills, and turn execution architecture") is a substantial rewrite with several
+inber-relevant primitives.
+
+### 1. Checkpointable TurnDriver with serializable state
+
+Dexto replaces the AI SDK's internal model→tool→model loop with an explicit
+`TurnDriver` (`prepareNextModelStep` / `runNextModelStep` / `executeToolCalls` /
+`decideNextStep` / `checkpoint` / `finish` / `fail` / `dispose`). Each step is one
+model request plus explicit post-model tool execution, and the driver exposes a
+serializable, Zod-validated `TurnDriverState` (`parseTurnDriverState`) so a turn
+can be checkpointed and resumed at safe boundaries by a host.
+
+**What inber should consider:** refactor inber's `RunTurn` into an explicit step
+driver that emits a serializable checkpoint after each model step/tool batch, so a
+crashed or killed agent (cf. the autoworker process leak) can resume mid-turn from
+memory-store instead of replaying the whole turn.
+
+### 2. Durable, idempotent tool-execution records (deterministic IDs + setIfAbsent)
+
+A `ToolExecutionStore` with `createToolExecutionId()` and a `setIfAbsent(...)`
+primitive (across memory/SQLite/Postgres backends) makes tool execution and
+approval writes durable and idempotent: a replayed/resumed step re-issuing the
+same tool call is detected and not double-executed, and tool-call/tool-result
+pairing is preserved even on failure, denial, or cancellation.
+
+**What inber should consider:** give inber's tool layer a deterministic
+tool-execution id (hash of session+step+tool+args) persisted via an idempotent
+`setIfAbsent` in the prehook path, so resumed turns and retried bus deliveries
+never double-run a side-effecting tool, and every tool call always has a paired
+terminal result row.
+
+### 3. Split busy-session input into `steer` (active-turn) vs `follow-up` (next-turn) queues
+
+Dexto splits the single message queue into a durable `steerQueue` (inject into the
+currently running turn) and `followUpQueue` (defer to the next turn), surfaced as
+`steer()`/`followUp()` APIs and `/api/steer/{sessionId}` / `/api/follow-up/{sessionId}`
+routes; composers map Enter→send/steer based on processing state and
+Alt+Enter→queue follow-up. "Change what the agent is doing now" and "here's the
+next task" become first-class distinct concepts.
+
+**What inber should consider:** model mid-turn steering and next-turn follow-up as
+two distinct durable queues on inber sessions (over the NATS bus / si adapters)
+instead of one undifferentiated inbound stream, so a user can redirect an
+in-flight agent without conflating it with the next request.
+
+### 4. TOCTOU file-safety guard at the approval boundary
+
+`write_file`/`edit_file` now hash the content previewed at *approval* time and
+reject execution if the file changed before the actual write (plus workspace-handle
+path normalization rejecting escapes) — closing the time-of-check/time-of-use gap
+where a user approves a diff but the on-disk file has since changed.
+
+**What inber should consider:** in the PreToolUse prehook, capture a content/file
+hash of what the user actually approved for write/edit tools and re-verify it at
+execution time, denying if the target changed since approval — a concrete TOCTOU
+defense for the permission gate.
+
+### 5. Core-provided ToolPresentation snapshots (note the edge-presentation tension)
+
+PR 796 adds `ToolPresentation` / `ToolPresentationSnapshotV1` so tool headers,
+arg/result summaries, chips, and approval actions are produced by *core* and
+shipped to clients, rather than each interface parsing tool names/args. This
+tensions with inber's "presentation belongs at the edge" directive.
+
+**What inber should consider:** bridge-ui parses tool names client-side today; if
+that drifts across clients, have the harness emit a *versioned, transparent*
+presentation hint blob (structured data, not formatted strings) that bridge-ui
+renders uniformly — keeping the edge in control while eliminating per-client
+tool-name parsing drift. (The per-session model auth profiles / ChatGPT-Login in
+[PR 804](https://github.com/truffle-ai/dexto/pull/804) are largely redundant with
+inber's model-store, except the runtime auth-profile switch projected into the
+model call — minor.)

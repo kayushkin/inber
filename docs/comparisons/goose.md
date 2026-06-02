@@ -194,4 +194,56 @@ The key insight: **Goose's architecture is more modular and extensible**, while 
 - **System-prompt injection at the agent layer.** Project instructions previously came from the desktop client and were prepended to every user turn. Now the project source is read server-side and injected into the *system prompt* once per conversation. This is a direct prompt-cache hit-rate win — the cacheable prefix stops being invalidated by a per-turn prepended payload.
 - **Storage as `.md` + YAML frontmatter under `Paths::data_dir()/projects/`.** Project definitions live as plain files with structured metadata (name, description, instructions, working dirs), making them human-editable and version-controllable. Skills become project-scoped via the same working-dir scan.
 
+## Harness-watch — 2026-06-02: blocking Stop hooks, keyed prompt fragments, live context window
+
+### 1. Honor blocking Stop hook decisions, capped by a consecutive-block counter
+
+[PR 9468](https://github.com/block/goose/pull/9468) routes Stop hooks through the
+same blocking-decision path as PreToolUse: a Stop hook returning
+`{"decision":"block","reason":...}` at turn-end now feeds the reason back to the
+agent as a hidden user message and the loop *continues* (within `max_turns`)
+instead of ending. To prevent infinite re-engagement it adds
+`GOOSE_STOP_HOOK_BLOCK_CAP` — once consecutive Stop denials exceed it, goose
+overrides the block, warns, and ends the turn (mirrors Claude Code's
+`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`). The novel piece is a turn-end policy gate
+that can re-engage the agent with a reason, bounded by a counter.
+
+**What inber should consider:** add a Stop-style turn-end gate to the PreToolUse
+prehook layer — a policy can return block+reason at turn completion, re-injected
+as hidden context to resume the loop, guarded by an env-tunable consecutive-block
+cap so a misbehaving policy can't trap the agent in an infinite turn loop.
+
+### 2. Keyed runtime system-prompt fragments + trust the live context window
+
+[PR 9478](https://github.com/block/goose/pull/9478) adds an ACP method to set the
+session system prompt at runtime, supporting both base-prompt replacement and
+**keyed** additional-instruction fragments (each named so it can be individually
+added/cleared) — composable, addressable system-prompt segments, not one opaque
+blob. [PR 9455](https://github.com/block/goose/pull/9455) fixes `AcpProvider`
+reporting a static `context_limit` even when the wrapped downstream server
+advertises its real context size via `usage_update`; it now tracks the latest
+advertised size in an `AtomicU64` and uses that, falling back to static config
+only when nothing was advertised — so truncation/compaction decisions use the
+live model's real window.
+
+**What inber should consider:** compose inber's system prompt from named,
+individually add/clear-able fragments (identity card, project `INBER.md`, tool
+inventory) so sources can be swapped without rebuilding the whole prefix; and
+when a provider advertises its real context window, drive truncation/memory-
+compaction from that live value rather than a static per-model constant
+(single-source-of-truth).
+
+### 3. Skill token-count CLI (observability)
+
+[PR 9326](https://github.com/block/goose/pull/9326) adds a `goose skills` command
+that enumerates discovered skills and reports the token count each contributes.
+
+**What inber should consider:** surface per-source token cost (skill-store /
+SKILL.md entries, project context blocks, tool inventory) in inber's CLI tool
+surface, so the user can see what's consuming the system-prompt/context budget —
+useful for tuning what stays cacheable. (The related
+`GOOSE_MAX_TOOL_RESPONSE_SIZE` configurable truncation in
+[PR 9256](https://github.com/block/goose/pull/9256) is already covered by inber's
+`docs/smart-truncation.md`.)
+
 **What inber should consider:** Inber has at least two surfaces today that prepend per-turn rather than inject into the system prompt — the conversation summary header and the project-context block built by `engine/turn_prompt.go`. Whatever is *stable for the duration of a session* (project-level `INBER.md`, agent identity card, tool inventory description) belongs in the system prompt where it'll cache, not in the user turn where each new turn pushes it past the cache breakpoint. The goose pattern also argues for promoting any "project" concept inber adopts (today closest to forge worktree slots + agent-store config) to a server-side source rather than something the chat frontend owns. Worth a section in `docs/cache-optimization.md` cross-referencing `reference-based-prompt-architecture.md` — the two notes already converge on this thesis.

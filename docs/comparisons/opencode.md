@@ -188,3 +188,56 @@ A three-PR sequence in opencode's new in-house `packages/llm` lands a declarativ
 - [PR 26798](https://github.com/sst/opencode/pull/26798) (merged 2026-05-11) flips the default from `cache: 'none'` to `cache: 'auto'`. Reasoning quoted in the PR: "Anthropic 5-minute cache write = 1.25× base, read = 0.1× — single reuse within 5 min already beats no-cache." On providers that cache server-side (OpenAI, Gemini), `auto` is a no-op, so the default is universally safe.
 
 **What inber should consider:** Inber's `engine/build_prompts.go` puts BP3 on the *second-to-last message* (per `docs/cache-optimization.md`). For single-turn-then-stop conversations that's fine, but inber's tool-loop turns make multiple assistant↔tool round-trips per user turn — opencode's user-message anchor is strictly better in that case, since every intra-turn API call shares the prefix up to that user message. Worth a follow-up in `docs/cache-optimization.md` to retarget BP3 from "second-to-last message" to "latest user message" and measure the intra-turn hit rate explicitly. The shared breakpoint cap with priority allocation is also worth porting — inber currently emits 3 fixed BPs but as the system grows (e.g. when 4th-BP for history midpoint is added per the doc's "Future Considerations") a centralized allocator avoids over-marking. Independent of placement: flipping inber's default to *always* cache is the right move per the same cost arithmetic.
+
+## Harness-watch — 2026-06-02: PermissionV2, CoW workspace clones, full-session-diff trap
+
+### 1. PermissionV2 — structured (action, resource) rules with project-scoped remembered grants
+
+[PR 30287](https://github.com/sst/opencode/pull/30287) replaces opencode's legacy
+permission storage with a location-scoped (per-project) service whose unit is a
+structured Rule of `{action, resource, effect: allow|deny|ask}`. User decisions
+persist as normalized **remembered grants** in a SQL table keyed by a unique
+`(project_id, action, resource)` index — an approval is scoped to a project, not a
+global session, and is listable/addable/removable independently. Legacy wire
+schemas are isolated in `PermissionLegacy`; additive `permission.v2.*` SDK events
+are exposed. Meaningfully richer than the build/plan agent-level scoping already
+in this doc.
+
+**What inber should consider:** restructure the PreToolUse prehook's grant model
+from per-session yes/no into a persisted `(project, action, resource) →
+{allow|deny|ask}` ruleset table, so "always allow" decisions survive across
+sessions and are project-scoped, not global.
+
+### 2. Copy-on-write workspace cloning, distinct from git worktrees
+
+[PR 30117](https://github.com/sst/opencode/pull/30117) adds a standalone Rust
+`worktree` crate that creates managed workspace clones via real filesystem
+**copy-on-write** (`clonefile` on APFS, `FICLONE`/reflink on Linux btrfs/XFS),
+not git worktrees, with a `CowStrategy` that fails loud (`CowUnavailable`) when the
+FS lacks reflinks. It tracks clone ancestry (a clone records its source, queryable
+via `ancestors`). CoW gives near-instant, space-efficient whole-tree clones
+*including untracked files and build artifacts and non-git dirs* — which git
+worktrees cannot.
+
+**What inber should consider:** add a CoW clone slot type to forge (reflink via
+`FICLONE` on the host FS, fail loud if unsupported) for instant whole-tree agent
+sandboxes that capture untracked files and build state, with source-ancestry
+recorded per slot — complementing, not replacing, the git-worktree slots.
+
+### 3. Automatic full-session snapshot diffs are an O(history) trap
+
+[PR 30127](https://github.com/sst/opencode/pull/30127) removed automatic
+full-session snapshot diffing after a snapshot-heavy session recomputed a
+whole-session diff every turn (hundreds of snapshot parts, multi-MB diff). The fix
+returns empty session-level diff data while keeping message-scoped turn diffs
+(`session.diff({messageID})`) and explicit revert diffs intact. This doc already
+flags snapshot/checkpoint adoption as high priority — this is the cautionary
+footnote.
+
+**What inber should consider:** if/when forge gets checkpoint/snapshot support,
+scope diff computation to the current turn/message only — never recompute a
+full-session diff per turn, or diff cost scales with total session history.
+(The `run --replay` mode in [PR 30239](https://github.com/sst/opencode/pull/30239)
+and editable queued prompts in [PR 30103](https://github.com/sst/opencode/pull/30103)
+are minor UX layered on existing recording/queue plumbing inber's log-store
+already enables — low priority.)

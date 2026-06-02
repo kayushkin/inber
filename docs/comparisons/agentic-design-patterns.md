@@ -589,3 +589,89 @@ guard. Worth pairing with the opencode pattern when inber writes up
 its subagent permission contract: agent-scope denies should also
 filter the tool schema the child sees, with the prehook as the
 fallback.
+
+## Harness-watch — 2026-06-02: Codex idle-steering, log compaction, per-tool concurrency
+
+Codex still has no own comparison file; its patterns live here. Five
+non-trivial codex changes landed this window.
+
+### 1. Goal extension: idle-turn steering toward a persisted goal
+
+[PR 25096](https://github.com/openai/codex/pull/25096) adds an extension-owned
+`GoalApi` (get/set/clear a thread-level goal); [PR 25576](https://github.com/openai/codex/pull/25576)
+moves the *steering* prompts into three embedded templates — `continuation.md`
+(keep going), `budget_limit.md` (approaching turn/cost budget),
+`objective_updated.md` (goal changed mid-run) — with XML-escaped user objectives
+and budget-counter variables; [PR 25577](https://github.com/openai/codex/pull/25577)
+removes the Plan-mode early-return from `try_start_turn_if_idle`, keeping
+idle-injection a generic turn-lifecycle primitive with mode policy at the caller
+boundary. Together: when a session goes idle, inject a steering message
+re-pointing the agent at a standing goal, kept-alive in-process rather than by
+respawning.
+
+**What inber should consider:** inber's kanban task-completion-loop drives goals
+by *spawning fresh sessions* (scoper + dispatcher). Add an in-session
+idle-injection goal loop (a continuation / budget / objective-changed steering
+set) as a cheaper alternative to full session revival for goals that fit one
+context window.
+
+### 2. Cold rollout (session-log) compression with a materialize-before-append invariant
+
+A four-PR stack ([25089](https://github.com/openai/codex/pull/25089),
+[25087](https://github.com/openai/codex/pull/25087),
+[25654](https://github.com/openai/codex/pull/25654),
+[25659](https://github.com/openai/codex/pull/25659)) zstd-compresses cold session
+rollouts behind a flag. The load-bearing rule: writers only ever append to plain
+`.jsonl`; a `.jsonl.zst` is purely a cold *read* form, and any write path (resume,
+metadata append) must **materialize back to plain JSONL first** (the guarded
+failure is appending raw JSONL bytes onto a zstd file). The compactor scans only
+*archived* (never active) sessions, caps two in-flight jobs, and uses a 6-hour
+staleness lock-file to throttle rescans.
+
+**What inber should consider:** inber's log-store keeps full session event logs
+forever. Compress only archived (never active) logs to `.zst` with a hard
+"plain form is the only write target, materialize-before-append" invariant and a
+throttled, bounded-concurrency background compactor — reclaims disk without ever
+risking a resumable session.
+
+### 3. Per-tool parallel-call safety flag, not a global serial default
+
+[PR 25702](https://github.com/openai/codex/pull/25702): standalone web-search
+inherited the shared *serial* executor lock and ran one call at a time though the
+backend is concurrency-safe. The fix has the tool *advertise* parallel-call
+support, with a test asserting the flag. Parallel-safety is a per-tool property
+the tool declares and the executor honors — a conservative serial default
+silently bottlenecks safe tools.
+
+**What inber should consider:** give inber tools an explicit `parallel-safe`
+capability flag honored by the executor (read/grep/web-search safe; write/edit/
+bash sharing a cwd not), rather than a single global serial-vs-parallel switch.
+
+### 4. `followup_task`: re-task a still-running subagent in place
+
+[PR 25636](https://github.com/openai/codex/pull/25636) renames MultiAgentV2's
+`assign_task` → `followup_task`, surfacing the design point: the *initial spawn*
+is separate from a dedicated tool whose only job is sending an *additional* task
+to an existing, still-running agent — long-lived subagents you re-task without
+respawning. The trace reducer keeps accepting the legacy `assign_task` event name
+so older logs still classify.
+
+**What inber should consider:** inber's subagents are spawn-and-collect. Add a
+`followup` tool to re-task a running subagent in place — and, like codex, keep the
+old event name accepted in any trace/log reducer when renaming such a tool.
+
+### 5. Guardian auto-review: headless default must not silently disable the policy
+
+[PR 23767](https://github.com/openai/codex/pull/23767) adds an
+`auto_review_model_override` catalog field so a parent model can steer auto-review
+to a different reviewer slug; [PR 23763](https://github.com/openai/codex/pull/23763)
+fixes `codex exec` (headless) unconditionally forcing `approval_policy = never`,
+which silently bypassed the reviewed write path even when the reviewer was
+`AutoReview`. Principle: a global headless convenience default must not quietly
+turn off a safety layer that was explicitly configured.
+
+**What inber should consider:** audit that inber's "unattended → auto-approve"
+scheduler default cannot silently bypass the permission prehook when a
+review/approval policy was explicitly configured; consider a separate
+reviewer-model slot (with a catalog override) gating writes, distinct from the
+executing model.
