@@ -241,3 +241,24 @@ full-session diff per turn, or diff cost scales with total session history.
 and editable queued prompts in [PR 30103](https://github.com/sst/opencode/pull/30103)
 are minor UX layered on existing recording/queue plumbing inber's log-store
 already enables — low priority.)
+
+## Harness-watch — 2026-06-03: `scout` agent removed — walking back the dedicated-subagent + managed-tool design
+
+[PR 30435](https://github.com/sst/opencode/pull/30435) (merged 2026-06-02) **deletes
+the `scout` subagent** documented in the 2026-05-09 entry above — along with its
+prompt and its managed `repo_clone` / `repo_overview` tools — and replaces it with
+"simpler reference guidance using `Read`, `Glob`, and `Grep`." The whole external-
+reference feature is now gated behind `OPENCODE_EXPERIMENTAL_REFERENCES`. So within
+~three weeks opencode shipped a dedicated research subagent with a bespoke managed-
+clone tool surface, then reverted to letting a general agent do reference lookups
+with the ordinary read/search trio.
+
+**What inber should consider:** this directly tempers the 2026-05-09 recommendation
+to build a scout-shaped named-reference layer in `forge`. The signal: a *dedicated
+research subagent + bespoke managed tools* was more machinery than the job needed —
+general-purpose read tools pointed at a cloned path did the same work. Before inber
+invests in a `research` agent type and a managed external-repo slot, prefer the
+cheaper version first: keep one general agent, give it read/grep/glob over a path the
+harness clones, and only graduate to a dedicated subagent + alias registry if that
+demonstrably falls short. Ship the feature behind an experimental flag, as opencode
+did, so walking it back costs nothing.

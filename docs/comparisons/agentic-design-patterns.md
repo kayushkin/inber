@@ -675,3 +675,66 @@ scheduler default cannot silently bypass the permission prehook when a
 review/approval policy was explicitly configured; consider a separate
 reviewer-model slot (with a catalog override) gating writes, distinct from the
 executing model.
+## Harness-watch — 2026-06-03: Codex permission profiles, environment-scoped grants, per-thread multi-agent runtime
+
+Codex still has no own comparison file; its patterns live here. Three related
+changes this window, all about *where a permission/runtime decision is scoped*.
+
+### 1. Permission profiles subsume sandbox policy
+
+[PR 25926](https://github.com/openai/codex/pull/25926) expresses implicit sandbox
+defaults as built-in `PermissionProfile` objects, and [PR 25739](https://github.com/openai/codex/pull/25739)
+derives the built-in profiles from raw policies (with [PR 25943](https://github.com/openai/codex/pull/25943)
+removing the dead profile→sandbox fallback). The move: the legacy `SandboxPolicy`
+was the primary shape; now a named *permission profile* is, and sandbox mode is one
+projection of it. Defaults become explicit and observable rather than hidden in a
+policy projection — trusted/untrusted roots resolve to `:workspace` (write),
+trust-undecided roots to `:read-only`, unsandboxed Windows to `:read-only`.
+
+**What inber should consider:** inber currently keeps sandbox/filesystem confinement
+and the permission prehook as separate concepts. Codex's unification argues for a
+single named **permission profile** (e.g. `read-only`, `workspace`, `trusted`) that
+*derives* the sandbox confinement, the prehook's allow/deny defaults, and the
+auto-approve posture together — instead of three knobs that can silently disagree.
+Make the default profile per-root *observable* (logged at session start), not an
+implicit fallback.
+
+### 2. Permission grants keyed by environment id, not cwd
+
+A stack ([25850](https://github.com/openai/codex/pull/25850),
+[25858](https://github.com/openai/codex/pull/25858),
+[25862](https://github.com/openai/codex/pull/25862)) makes remembered
+("sticky") permission grants environment-aware: grants are now indexed by
+`environment_id` at turn and session scope, and the pending request retains the
+selected `TurnEnvironmentSelection` so the approval records against the correct
+environment. Previously, with both local and remote executors in play, a grant was
+effectively cwd-only and could leak across executor contexts. The external
+`request_permissions` API is unchanged; omitted targeting still binds to the primary
+turn environment.
+
+**What inber should consider:** this is the harness-level enforcement of "approval
+in one context doesn't extend to the next." If/when inber runs a turn across more
+than one executor (local worktree + remote/sandbox environment), a remembered grant
+must be keyed by `(environment, action, resource)` — never by cwd alone — or an
+approval granted in a throwaway sandbox silently authorizes the same action against
+the real tree. Relative-path permission requests must resolve against the *selected*
+environment, not a turn-global cwd.
+
+### 3. Multi-agent runtime resolved per thread, from persisted metadata
+
+A stack ([25720](https://github.com/openai/codex/pull/25720)–[25724](https://github.com/openai/codex/pull/25724),
+plus [25841](https://github.com/openai/codex/pull/25841) keeping startup prewarm
+aligned) adds typed multi-agent-runtime metadata and **resolves the effective
+runtime per thread** from persisted metadata + inherited runtime + current model
+selection, with a tested remote-runtime override. This extends the MultiAgentV2 /
+`followup_task` work (2026-06-02 entry): a thread now carries which runtime its
+subagents execute on (local vs remote), persisted so resume picks the same one, and
+prewarm targets the *resolved* runtime rather than a global default.
+
+**What inber should consider:** inber's subagent execution backend is effectively a
+process-global choice. Codex makes it a per-thread, persisted property: each session
+records its multi-agent runtime so a resumed or revived session re-binds to the same
+executor, and any warm-up cost is paid against the resolved runtime, not a default
+that may be wrong. Worth a field on inber's session/thread record (kanban task-
+completion-loop revival especially) capturing the intended subagent runtime so
+revived sessions don't silently switch executors mid-goal.
