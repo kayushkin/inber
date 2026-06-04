@@ -137,3 +137,46 @@ async-off-hot-path × parallel-per-block × validate-before-commit design that i
 implementable on inber's existing background-job substrate. AgentTrust is the
 most directly portable to the permission prehook (verdict enum widening +
 deobfuscation normalizer + cache-aware judge).
+
+## 2026-06-04 sweep — skills as a context-budget problem
+
+Two papers picked up alongside the harness-watch finding that four harnesses
+shipped skills systems the same week (agentic-design-patterns.md, 2026-06-04).
+Both are in-window (mid/late May) and converge on the same thesis: a large
+skill/tool surface is a context-budget liability, so the harness must be
+selective about what reaches the model.
+
+### The Scaling Laws of Skills in LLM Agent Systems
+
+[arXiv:2605.16508](https://arxiv.org/abs/2605.16508) — submitted 2026-05-15.
+
+Empirical study across 15 frontier models and 1,141 skills: skill-routing
+accuracy **decays logarithmically as the library grows**, and full skill text
+(not just names/descriptions) carries the routing signal. Law-guided
+organization of the library lifted routing from 71.3% → 91.7%.
+
+**What inber should consider:** this is the quantitative case for codex's
+per-turn catalog over a static global registry — putting the whole `SKILL.md`
+library in front of the model measurably degrades selection as the library
+grows. Inber should (a) cap what's resolved into any single turn (environment-
+scoped per-turn catalog), and (b) keep enough skill *body* (not just a one-line
+description) in the candidate set for the model to route correctly — a tension
+with naive truncation. Pairs with goose's per-skill token accounting (goose.md
+§3) as the budget meter.
+
+### Tool-Schema Compression Enables Agentic RAG Under Constrained Context Budgets
+
+[arXiv:2605.26165](https://arxiv.org/abs/2605.26165) — submitted 2026-05-24.
+
+Shows tool/skill schemas themselves consume a large share of the context budget;
+under an 8K-token cap, compressing the schemas lifted task accuracy from ~2.6%
+to ~22%. The representation of the tool surface — not just which tools — is a
+first-order cost.
+
+**What inber should consider:** inber's tool inventory and SKILL.md descriptions
+sit in the cacheable system-prompt prefix, so their *size* directly trades
+against everything else in the window. Worth measuring the schema/description
+footprint (goose-style token counts) and applying a compressed-schema rendering
+for the long tail of rarely-used tools, expanding to full schema only when a tool
+is actually selected for the turn — the read-side analogue of the per-turn skill
+catalog above.

@@ -166,3 +166,23 @@ tool-name parsing drift. (The per-session model auth profiles / ChatGPT-Login in
 [PR 804](https://github.com/truffle-ai/dexto/pull/804) are largely redundant with
 inber's model-store, except the runtime auth-profile switch projected into the
 model call — minor.)
+
+## Harness-watch — 2026-06-04: `interaction:blocked` as a distinct event from `llm:response`
+
+[PR 811](https://github.com/truffle-ai/dexto/pull/811) introduces a dedicated
+`interaction:blocked` event that fires *before* a real LLM call when a policy
+blocks the interaction, and tightens `llm:response` to represent **only** actual
+model output (required provider/model/token/finish-reason fields). The blocked
+event flows through the same agent/session event buses consumed by TUI, web, and
+A2A subscribers — so a synthetic "this was denied" message and a genuine model
+turn are no longer the same event shape on the wire.
+
+**What inber should consider:** this maps directly onto inber's tracked
+`user_message` dual-emit / `TurnsView` dedup problem (the prompt and policy-block
+synthetics currently ride the same stream and get reconciled at render). Adopt
+dexto's split at the *event contract* level: emit policy-blocked interactions as a
+distinct typed event (carry the prehook verdict + reason), and reserve the
+assistant/response event for real model output with required usage fields. Stream
+subscribers (bridge-ui TurnsView, kanban curators reading session state) then never
+have to guess whether a message came from the permission prehook or the model —
+removing the render-time dedup entirely instead of patching it.

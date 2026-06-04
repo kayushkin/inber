@@ -738,3 +738,72 @@ executor, and any warm-up cost is paid against the resolved runtime, not a defau
 that may be wrong. Worth a field on inber's session/thread record (kanban task-
 completion-loop revival especially) capturing the intended subagent runtime so
 revived sessions don't silently switch executors mid-goal.
+## Harness-watch — 2026-06-04: Skills as a context-budget problem (codex per-turn catalog vs. static registries) + MAv2 isolation/compaction polish
+
+Four harnesses shipped skills systems in the same week, and the *design split*
+is the story. The question every one of them is answering: a growing
+`SKILL.md` library can't all live in context, so when and how do you load it?
+
+### 1. Codex: per-turn skill catalog, injected as prompt fragments (not tools)
+
+A stack ([#25953](https://github.com/openai/codex/pull/25953) scaffold,
+[#25959](https://github.com/openai/codex/pull/25959) turn-input contributors,
+[#26167](https://github.com/openai/codex/pull/26167) v1 prompt injection,
+[#26106](https://github.com/openai/codex/pull/26106) per-turn catalog) builds a
+`codex-skills-extension` that resolves the *available* skill catalog **per turn**.
+The key move is #26106: skills moved from a `TurnLifecycleContributor` hook (which
+only had a turn id) to a `TurnInputContributor` that fires *during turn assembly,
+after the turn's environments are resolved* — so the catalog query is scoped to
+the turn's executor authorities (environment ids, cwds). Selected skills are then
+**injected as prompt fragments**, not exposed as tools, with bounded rendering
+(SKILL.md truncation) and per-thread mutable skills state. Selections resolve from
+structured `UserInput::Skill`, `skill://` paths, skill-file mentions, and text
+mentions.
+
+By contrast, [opencode #30617](https://github.com/sst/opencode/pull/30617)
+(SkillV2 registry, multi-source directory/URL discovery) and
+[cline #11161](https://github.com/cline/cline/pull/11161) (plugin-bundled skills,
+deduped discovery, skills as a first-class plugin capability per
+[#11244](https://github.com/cline/cline/pull/11244)) build **static registries** —
+skills discovered once and merged into a global list. Goose already supplies the
+*measurement* side inber documented earlier (`goose skills` per-skill token counts,
+goose.md §3). So the field is splitting into discover-globally vs. resolve-per-turn,
+with codex furthest toward context-efficiency.
+
+**What inber should consider:** inber loads its skill/SKILL.md surface into the
+system prompt once per session (good for caching). Codex's per-turn injection is
+the opposite trade — worse cache locality, but the catalog never carries skills
+irrelevant to *this* turn's environment. The synthesis worth prototyping: keep a
+small, stable, cacheable *core* skill set in the system prompt, but resolve an
+*environment-scoped extension catalog* per turn (keyed by the same worktree/agent-
+store environment inber already tracks) and inject only those as prompt fragments
+with bounded rendering. Pair it with goose-style per-skill token accounting so the
+per-turn injection has a visible budget. This matches the "Scaling Laws of Skills"
+finding (papers/2026-06): routing accuracy decays logarithmically with library
+size, so *not* putting the whole library in front of the model is the win.
+
+### 2. Codex MAv2: subagent metadata hidden by default; compaction rewrites instead of drops
+
+Two refinements past the per-thread runtime work (2026-06-03 entry).
+[#26114](https://github.com/openai/codex/pull/26114) flips `hide_spawn_agent_metadata`
+to **true by default**: the `spawn_agent` tool spec no longer shows the parent
+model/reasoning_effort/service_tier or "available model overrides" — a deliberate
+isolation boundary so a parent can't (by default) micromanage a subagent's model.
+[#26144](https://github.com/openai/codex/pull/26144) + [#26179](https://github.com/openai/codex/pull/26179)
+formalize a three-phase agent lifecycle: running → **completed-but-open (still
+consuming a concurrency slot)** → closed; workers may not `close_agent` themselves,
+parents must reclaim the slot. Separately, [#26251](https://github.com/openai/codex/pull/26251)
+changes remote compaction to **rewrite oversized tool outputs to smaller versions
+rather than deleting them**, preserving the causal tool-call↔result pairing
+("incrementality") even under token pressure.
+
+**What inber should consider:** (a) inber's subagent spawn currently lets the
+parent pass model overrides freely — make metadata-hiding the default and require
+an explicit flag to expose it, so subagent model choice is an isolation boundary
+not an accident. (b) Track that a *finished* subagent still occupies a concurrency
+slot until explicitly reaped — relevant to the kanban task-completion-loop, where
+"done" sessions that aren't closed silently starve the pool. (c) When inber's
+`turn_summary.go` compacts, prefer **shrinking** large tool results (head/tail +
+elision marker) over dropping them, so the tool-call→result link survives
+compaction — a cheaper variant of the parallel-per-block compaction in the
+papers doc.
