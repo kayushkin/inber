@@ -262,3 +262,54 @@ cheaper version first: keep one general agent, give it read/grep/glob over a pat
 harness clones, and only graduate to a dedicated subagent + alias registry if that
 demonstrably falls short. Ship the feature behind an experimental flag, as opencode
 did, so walking it back costs nothing.
+
+## Harness-watch — 2026-06-05: versioned "context epochs" + event-sourced admitted→promoted prompt lifecycle; the background-subagent anti-poll prompt
+
+### 1. Context epochs: persist the system context as an immutable baseline + chronological deltas
+
+[PR 30789](https://github.com/sst/opencode/pull/30789) replaces "rebuild the
+privileged system context from scratch every turn/restart" with a **Context
+Epoch** model: one immutable baseline plus a structured snapshot of context
+*sources* (env/date, ambient + upward-project `AGENTS.md`) per epoch, in a new
+`session_context_epoch` table. Changed context is admitted as durable
+chronological `Message.system(...)` history **only at safe provider-turn
+boundaries** (so an update can't split a tool call from its result), baselines
+are replaced after model switches or completed compactions, and optimistic-
+concurrency + location-fencing stop concurrent session moves from recreating
+stale context. It rides on [PR 30785](https://github.com/sst/opencode/pull/30785),
+which event-sources prompt admission as two durable facts: `prompt.admitted`
+(accepted intent, pending input) and `prompt.promoted` (became model-visible
+transcript at a safe runner boundary), separating `evt_*` event identity from
+`msg_*` transcript identity.
+
+**What inber should consider:** inber rebuilds its system prefix from
+`engine/turn_prompt.go` per turn; this is the opposite discipline — persist the
+*exact* context the model saw as an immutable baseline + chronological system-
+message deltas keyed by durable message id, mutated only at provider-turn
+boundaries. It makes context reproducible across restarts/revivals (kanban
+task-completion-loop especially) and removes silent turn-to-turn drift, while
+preserving cache locality on the unchanged baseline. The admitted→promoted split
+also generalizes the dexto `interaction:blocked` lesson (dexto.md): model
+"prompt submitted" and "prompt entered context" as separate durable events so
+queued/steered input survives a restart and you can reconstruct exactly when each
+prompt became visible.
+
+### 2. The background-subagent completion-notify prompt only works if it bans polling AND orders the agent to end its turn
+
+[PR 30790](https://github.com/sst/opencode/pull/30790) (building on the prompt
+consolidation in [PR 30687](https://github.com/sst/opencode/pull/30687)) is a
+7-line wording tweak whose lesson is concrete: opencode's background tasks use a
+push-notification model ("you will be notified automatically when it finishes"),
+but the parent kept **polling background tasks and re-investigating the same
+files**. The fix reinforces the synthetic tool output to explicitly *(a)* forbid
+polling/asking for status, *(b)* forbid duplicating work "with the same files or
+topics it is using", and *(c)* "end your response" / "work on non-overlapping
+tasks." "You will be notified automatically" alone was not enough.
+
+**What inber should consider:** this maps onto inber's async-spawning model and
+the harness's own push/wake mechanics (you are re-invoked when tracked work
+finishes — polling is wasted). When `spawn_agent` runs detached, the synthetic
+completion-pending tool result inber returns to the parent should carry the same
+three clauses verbatim — *don't poll, don't touch its files/topics, end your
+turn* — not just "you'll be notified." Cheap, high-leverage prompt hygiene worth
+folding into `docs/async-spawning.md`.

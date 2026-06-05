@@ -247,3 +247,24 @@ useful for tuning what stays cacheable. (The related
 `docs/smart-truncation.md`.)
 
 **What inber should consider:** Inber has at least two surfaces today that prepend per-turn rather than inject into the system prompt — the conversation summary header and the project-context block built by `engine/turn_prompt.go`. Whatever is *stable for the duration of a session* (project-level `INBER.md`, agent identity card, tool inventory description) belongs in the system prompt where it'll cache, not in the user turn where each new turn pushes it past the cache breakpoint. The goose pattern also argues for promoting any "project" concept inber adopts (today closest to forge worktree slots + agent-store config) to a server-side source rather than something the chat frontend owns. Worth a section in `docs/cache-optimization.md` cross-referencing `reference-based-prompt-architecture.md` — the two notes already converge on this thesis.
+
+## Harness-watch — 2026-06-05: bound sub-tasks by turn budget the agent can see, not a wallclock timeout it can't
+
+[PR 9571](https://github.com/block/goose/pull/9571) removes the 5-minute
+`CHECK_TIMEOUT_SECS` wall-clock cap on review subprocesses and replaces it with
+`--max-turns`, extending the turn cap to the main per-file reviewer passes (which
+previously had none) and — the key move — **adding a "## Turn budget" section to
+the subagent's prompt so it sees its remaining allowance.** The stated rationale:
+a wall-clock timeout is "opaque to subagents and could kill in-progress work with
+no findings," whereas a turn count is a budget the agent can reason about and
+adapt to (e.g. wrap up and emit partial findings before it runs out).
+
+**What inber should consider:** inber's autoworker / scoper / dispatcher
+sub-sessions and any `spawn_agent` child today are bounded mainly by wall-clock /
+external watchdogs. Swap (or pair) those for an agent-visible **turn budget**:
+pass a max-turns limit into the child and surface "N turns remaining" in its
+prompt, so a hard kill becomes a planning constraint and the child emits partial
+results instead of dying silently with nothing. This composes with the
+turn-limit-based review timeout goose already replaced, and with the kanban
+task-completion-loop's dispatcher closure logic — a turn budget is a cleaner
+"this sub-card is over its allowance" signal than a timestamp.

@@ -807,3 +807,43 @@ slot until explicitly reaped — relevant to the kanban task-completion-loop, wh
 elision marker) over dropping them, so the tool-call→result link survives
 compaction — a cheaper variant of the parallel-per-block compaction in the
 papers doc.
+
+
+## Harness-watch — 2026-06-05: Codex scoped context discovery (AGENTS.md through the execution environment + logical paths) and tool-surface ≠ tool-availability
+
+### 1. Context/instruction discovery must run against the environment the agent actually executes in
+
+[PR 26205](https://github.com/openai/codex/pull/26205) routes workspace
+`AGENTS.md` resolution through the selected `EnvironmentManager` filesystem
+instead of the host FS, so remote workspaces and child agents read instructions
+from *their own* environment, and introduces `LoadedAgentsMd` (ordered
+user/project/internal sources) that the thread exposes so the app-server reports
+**exactly what was loaded** rather than re-deriving a guess. [PR 26465](https://github.com/openai/codex/pull/26465)
+fixes the ancestor walk to follow the **logical** (configured) path, not the
+symlink-canonicalized physical path — so `logical-repo/workspace` loads
+`logical-repo/AGENTS.md` as its parent, matching user intent (file reads still
+follow symlinks; only the discovery walk uses the logical path).
+
+**What inber should consider:** as inber's memory/per-harness context layer
+(project_memory_layer_split) and forge worktree slots mature, instruction/context
+discovery (`INBER.md`, project blocks) must run against the **agent's actual
+execution environment** — the worktree/sandbox/remote runtime the child runs in,
+not the orchestrator host — and inber should report the *actually-loaded* sources
+back to bridge-ui/curators, not a re-derived list (closes the report-vs-reality
+gap). And when walking ancestors for project context, walk the logical configured
+path so a symlinked worktree doesn't silently reparent which `INBER.md` applies.
+
+### 2. Tool-surface exclusion is presentation-scoped, not capability removal
+
+[PR 26320](https://github.com/openai/codex/pull/26320) lets `code_mode` exclude
+tool namespaces from its *nested tool surface and descriptions* while the tools
+stay registered, still appear in mixed mode, and remain reachable via top-level
+`tool_search` (deferred-tool guidance is derived after filtering so `exec` never
+advertises a hidden tool). The design point: separate "what's discoverable on a
+given surface" from "what's available." This is a direct analogue of inber's own
+deferred-tool / `tool_search` layering (TOOL-ROUTING) — a tool can be absent from
+one presentation layer's schema (saving prefix budget) yet still fetchable on
+demand, which pairs with the tool-schema-compression paper (papers/2026-06).
+(Codex also moved reasoning-effort to a model-advertised open string set —
+[#26444](https://github.com/openai/codex/pull/26444)/[#26446](https://github.com/openai/codex/pull/26446)
+— a sound "defer capability knobs to model metadata" pattern, mostly plumbing.)

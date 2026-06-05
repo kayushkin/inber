@@ -180,3 +180,79 @@ footprint (goose-style token counts) and applying a compressed-schema rendering
 for the long tail of rarely-used tools, expanding to full schema only when a tool
 is actually selected for the turn — the read-side analogue of the per-turn skill
 catalog above.
+
+## 2026-06-05 sweep — harness as a measurable surface, spawn-boundary security, memory-as-workload, provider routing
+
+Four new in-window arXiv papers (none overlapping the IDs above or in
+`2026-05-harness-research.md`).
+
+### Harness-Bench: Measuring Harness Effects across Models in Realistic Agent Workflows
+
+[arXiv:2605.27922](https://arxiv.org/abs/2605.27922) — submitted 2026-05-27.
+
+Empirical argument that "agent capability" is a property of a *model-harness
+configuration*, not the base model, measured across 5,194 trajectories along
+seven harness dimensions: context, tools, state, constraints, permissions,
+tracing, recovery. Its sharpest finding is recurring **execution-alignment
+failures** — plausible model reasoning decoupling from actual tool feedback,
+workspace state, and verifiable output contracts. It names the exact design
+surface inber's engine already owns and gives a vocabulary for ablating each
+lever independently.
+
+**What inber should consider:** report inber results as model-harness pairs (a
+config, not a model), and add an explicit execution-alignment guard in the engine
+loop that re-grounds the model on actual tool output / workspace state before
+accepting a turn's conclusion — the loop-level complement to Slipstream's
+compaction-validation check above.
+
+### When Child Inherits: Modeling and Exploiting Subagent Spawn in Multi-Agent Networks
+
+[arXiv:2605.08460](https://arxiv.org/abs/2605.08460) — submitted 2026-05-08.
+
+Threat model for subagent spawning: a compromised parent propagates to children
+via four vectors — insecure memory inheritance, weak resource control, stale
+post-spawn state, and improper termination authority — with defenses based on
+security invariants enforced at the spawn boundary. This is the security
+counterpart to the Code-as-Harness "durable plan file passed to children" design
+above: the moment spawn state becomes inheritable, its attack surface is inherited
+too.
+
+**What inber should consider:** treat the `spawn_agent` boundary as a privilege
+boundary — sanitize/scope inherited memory + plan-file context, hand children
+narrowed tool/resource leases (tie into auth-store leases), and keep termination
+authority with the parent/engine, never the child (which echoes codex MAv2's
+"workers may not close_agent themselves", agentic-design-patterns 2026-06-04).
+Enforce it in the bridge-server permission prehook.
+
+### Is Agent Memory a Database? Rethinking Data Foundations for Long-Term AI Agent Memory (GEM)
+
+[arXiv:2605.26252](https://arxiv.org/abs/2605.26252) — submitted 2026-05-25.
+
+Argues record-level CRUD storage (what most agent memory, including a vector
+store, effectively is) provably cannot satisfy four needs — bounded growth,
+semantic revision, capacity-driven forgetting, and writeable (non-read-only)
+retrieval — and proposes Governed Evolving Memory with four *state-level*
+operators (ingestion, revision, forgetting, retrieval) on a property-graph
+backend. Memory is a data-management workload, not a storage problem.
+
+**What inber should consider:** inber's `memory-store` today is closer to
+append + decay + read; add a **revision + governed-forgetting** path so stale or
+superseded memories are semantically merged/retired rather than only
+down-weighted — directly relevant to the memory-layer split work
+(project_memory_layer_split) before it accretes contradictory facts.
+
+### Latency-Quality Routing for Functionally Equivalent Tools in LLM Agents
+
+[arXiv:2605.14241](https://arxiv.org/abs/2605.14241) (v2) — submitted 2026-05-14,
+revised 2026-05-28.
+
+Addresses routing *after* tool selection: when one tool interface is served by
+multiple providers differing in latency/quality, rank by "quality per service
+cycle" (latency as service capacity) via a contextual bandit with LLM-as-judge
+feedback, rather than an additive speed-vs-quality reward. This is the layer below
+inber's tool-selection logic.
+
+**What inber should consider:** tool-store already abstracts one interface over
+MCP/CLI/local implementations — route per-call by learned quality-per-latency
+rather than a static preference order. Complements the tool-schema/skill-routing
+papers (which decide *which interface*) by deciding *which provider* behind it.
