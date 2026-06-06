@@ -313,3 +313,41 @@ completion-pending tool result inber returns to the parent should carry the same
 three clauses verbatim — *don't poll, don't touch its files/topics, end your
 turn* — not just "you'll be notified." Cheap, high-leverage prompt hygiene worth
 folding into `docs/async-spawning.md`.
+
+## Harness-watch — 2026-06-06: v2 context-management subsystem — session-scoped prompt-cache key, provider-neutral overflow recovery, centralized tool-output bounding
+
+A coherent batch landed on the v2 runner after the epoch/prompt-lifecycle work
+(06-05 entry), turning context handling into a deliberate subsystem:
+
+- **Session-scoped prompt cache key** ([PR 31036](https://github.com/sst/opencode/pull/31036)).
+  The v2 runner now sets the provider `promptCacheKey` to the durable Session ID
+  on every turn. Previously unrelated sessions sharing the same system prefix
+  routed through the same cache combination; past ~15 req/min they overflowed to
+  additional backend machines and lost cache locality. Keying by session keeps
+  follow-up/tool-loop reuse while distributing unrelated sessions.
+- **Provider-neutral context-overflow recovery** ([PR 31005](https://github.com/sst/opencode/pull/31005)).
+  A normalized "context-overflow" classification across OpenAI/Anthropic/Bedrock,
+  then: on overflow *before* durable assistant output, force a compaction that
+  bypasses the local pressure estimate, rebuild, and retry **exactly once** (a
+  second overflow is terminal); assistant persistence is deferred until real text
+  or tool activity, so recovery only fires for invisible pre-output. Invariant:
+  one logical provider turn gets at most one overflow recovery.
+- **Centralized tool-output bounding** ([PR 30999](https://github.com/sst/opencode/pull/30999)).
+  A single aggregate cap (2000 lines / 50 KiB UTF-8) applied in `ToolRegistry.settle`
+  after tool-specific processing; oversized output spills to uniquely-named files
+  in a managed dir (7-day cleanup) with bounded head/tail previews kept inline,
+  and oversized structured results are converted to bounded JSON without mutating
+  the validated value.
+
+**What inber should consider:** all three are directly applicable.
+(1) inber's cache strategy (`docs/cache-optimization.md`) should key the
+provider cache by `BridgeSessionID`, not a shared prefix hash — this is the
+operational complement to the "Don't Break the Cache" paper (papers/2026-05)
+and matters as soon as concurrent autoworker/kanban sessions share a system
+prefix. (2) inber treats context overflow as a turn error; a normalized
+provider-neutral overflow classifier + *force-compact-and-retry-once* path
+(distinct from the periodic pressure-based compaction) would recover the common
+"one oversized turn" case without losing the session, with a hard one-retry cap
+to avoid loops. (3) tool-output bounding belongs at the registry settle point
+(one cap for every tool) with spill-to-file + head/tail preview, rather than
+per-tool truncation — this pairs with inber's `smart-truncation.md`.

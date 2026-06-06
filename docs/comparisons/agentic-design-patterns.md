@@ -847,3 +847,25 @@ demand, which pairs with the tool-schema-compression paper (papers/2026-06).
 (Codex also moved reasoning-effort to a model-advertised open string set —
 [#26444](https://github.com/openai/codex/pull/26444)/[#26446](https://github.com/openai/codex/pull/26446)
 — a sound "defer capability knobs to model metadata" pattern, mostly plumbing.)
+
+## Harness-watch — 2026-06-06: org-level managed permission allowlists — a non-overridable policy layer above user/agent-selectable profiles
+
+[PR 24852](https://github.com/openai/codex/pull/24852) adds
+`allowed_permission_profiles` to codex's layered requirements files: a **closed
+allowlist** of which permission profiles a user/session may select at all.
+Profiles set `true` are permitted; missing or `false` are denied — including
+built-ins like `:danger-full-access`, blocked unless explicitly allowed. It
+merges across requirement layers (higher layers override specific entries) and
+forces `default_permissions` to resolve to an allowed profile. This sits *above*
+the per-session permission-profiles + env-scoped grants documented in the 06-03
+entry: those are what a session chooses; this bounds what it is allowed to
+choose, set by whoever owns the deployment, not the user or the agent.
+
+**What inber should consider:** inber's permission prehook
+(`project_permission_prompt_followups`) decides per-call allow/deny but has no
+notion of a *deployment-level ceiling* on which permission posture a session may
+even request. A small closed-allowlist layer — keyed in deploy config, merged
+ambient→project, defaulting to deny-by-omission for dangerous postures
+(full-FS, unsandboxed exec) — would let unattended surfaces (autoworker, kanban
+task-completion-loop) run under a hard org ceiling that a steered or
+prompt-injected agent cannot widen, independent of the per-call prehook logic.
