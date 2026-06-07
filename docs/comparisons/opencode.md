@@ -351,3 +351,24 @@ provider-neutral overflow classifier + *force-compact-and-retry-once* path
 to avoid loops. (3) tool-output bounding belongs at the registry settle point
 (one cap for every tool) with spill-to-file + head/tail preview, rather than
 per-tool truncation — this pairs with inber's `smart-truncation.md`.
+
+## Harness-watch — 2026-06-07: a stateful, frecency-ranked search backend behind the *same* grep/glob tool contract
+
+[PR 27802](https://github.com/sst/opencode/pull/27802) swaps the ripgrep backend
+of opencode's existing grep/glob tools for `@ff-labs/fff` — a native stateful
+file/fuzzy finder with a background scan thread, fs watcher, mmap content index,
+and **frecency + query-history DBs**. A ~550-LOC Search service wraps it
+(`fileSearch`/`glob`/`directorySearch`/`mixedSearch` + grep with plain|regex|fuzzy
+modes, time budget, cursor pagination) with a **full ripgrep fallback** on
+unavailable/timeout/error. Crucially it adds **no new agent tools**: the grep/glob
+descriptions change by one line each (dropping the "sorted by modification time"
+claim), the old per-file `fs.stat` mtime-sort is deleted in favor of fff's
+relevance/frecency scores, and `read.ts` now calls `search.open()/trackQuery()` so
+**file Reads feed back into future search ranking**.
+
+**What inber should consider:** inber's Grep/Glob are stateless ripgrep shell-outs
+ranked only by mtime. Consider a stateful search service behind the *same* tool
+contract that (a) ranks by frecency/relevance instead of mtime, (b) closes a
+read→rank feedback loop (a file the agent just read should rank higher in the next
+search), and (c) keeps a ripgrep fallback when the native index isn't warm — a
+backend swap, so the agent-facing tool schema (and its cached prefix) stays stable.

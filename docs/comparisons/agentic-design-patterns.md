@@ -869,3 +869,29 @@ ambient→project, defaulting to deny-by-omission for dangerous postures
 (full-FS, unsandboxed exec) — would let unattended surfaces (autoworker, kanban
 task-completion-loop) run under a hard org ceiling that a steered or
 prompt-injected agent cannot widen, independent of the per-call prehook logic.
+
+## Harness-watch — 2026-06-07: a single per-model flag can flip tool-execution locus AND the request contract ("Responses Lite")
+
+Codex added an opt-in **Responses Lite** mode gated by a per-model catalog flag
+(`ModelInfo.use_responses_lite`) and signaled on the wire by a transport header
+([#26487](https://github.com/openai/codex/pull/26487) catalog flag +
+reasoning/parallel override, [#26490](https://github.com/openai/codex/pull/26490)
+standalone tools, [#26542](https://github.com/openai/codex/pull/26542) transport
+header + WS reconnect). In Lite mode the provider runs **no hosted tools**, so the
+harness must emit empty hosted-tool specs and route web-search/image-gen through
+its own client-executed "standalone" executors — and the same flag also forces
+`reasoning.context=all_turns` and disables `parallel_tool_calls`. Two design
+points: (1) one model-advertised capability flag flips both *where a tool
+executes* (hosted vs harness-owned) and *the shape of the request* (reasoning
+persistence, parallelism); (2) the marker is **request-scoped over HTTP but
+connection-scoped over WebSocket**, so a pooled socket opened for the opposite
+mode must be reconnected or it silently sends the wrong contract.
+
+**What inber should consider:** model "where does this tool execute" as a
+first-class, model-driven dimension in the tool-contract layer (TOOL-ROUTING) —
+don't assume a hosted/server-side tool is always available; a per-model flag
+should be able to swap a tool to a harness-owned executor *and* adjust request
+knobs (thinking, parallel calls) in one switch. Operationally: any keep-alive /
+connection pooling in inber's transport must key the pooled connection on
+connection-scoped contract markers and force-reconnect on change — the same
+hazard class as the opencode session-scoped prompt-cache key (opencode 2026-06-06).

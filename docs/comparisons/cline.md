@@ -82,3 +82,31 @@ Cline watches for diagnostic errors after file changes and proactively fixes iss
 ## Key Takeaway
 
 Cline's most transferable innovation is **AST-based context management** — using code structure analysis to build efficient, relevant context within token budgets. This would directly improve inber's coding task performance. The checkpoint system is also valuable for any agent with file write access. Cline's strict human-in-the-loop model is the opposite of inber's autonomous approach, but the underlying tools (code indexing, checkpointing, compiler monitoring) are universally useful.
+
+## Harness-watch — 2026-06-07: skills travel *bundled inside plugins*, discovered as extra search roots (no plugin-specific skill format)
+
+[PR 11161](https://github.com/cline/cline/pull/11161) lets a plugin ship skills by
+placing a normal `skills/<name>/SKILL.md` tree inside the package; the plugin
+system contributes additional **skill search roots** rather than a plugin-specific
+skill API. The same SKILL.md loader (frontmatter + body, identical to
+workspace/global/managed skills) parses them — the only new logic is walking up
+from each plugin entry file to the package root and adding `<root>/skills` when
+present, gated by the same `plugins` config (disabled plugins are filtered before
+their skill dirs are considered). [#11219](https://github.com/cline/cline/pull/11219)
+groups discovered skills in settings **by owning plugin** using filesystem
+ownership (so opening settings never executes plugin code), and
+[#11220](https://github.com/cline/cline/pull/11220) restores enabled skills to the
+`/` slash autocomplete alongside the searchable picker.
+
+**What inber should consider:** inber's skill-store (`:8301`) is a centralized flat
+registry (one row per SKILL.md, ingested by cloning whole repos). Cline's inverse
+pattern offers two cheap wins: (1) **group-by-source** — skill-store already stores
+`source` per skill, so a "these N skills came from upstream X" view in the
+dash/bridge-ui Skills surface gives the same provenance UX without flattening it
+away. (2) **co-distribution** — Cline ships skills next to plugin tools so one
+install brings both; inber splits skill-store and tool-store (`:8302`) with no link
+between a tool and its sibling skill from the same upstream. Worth deciding whether
+to join them by shared source-group. The key reusable stance: keep bundled skills
+**file-backed** (no imperative registration API) so they behave identically to
+standalone skills — which matches inber's "everything is a SKILL.md row" model and
+argues against ever inventing a plugin-specific skill format.

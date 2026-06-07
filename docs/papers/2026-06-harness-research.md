@@ -224,6 +224,18 @@ authority with the parent/engine, never the child (which echoes codex MAv2's
 "workers may not close_agent themselves", agentic-design-patterns 2026-06-04).
 Enforce it in the bridge-server permission prehook.
 
+*Payload-confidentiality complement (codex [PR 26210](https://github.com/openai/codex/pull/26210), 2026-06-07):*
+codex MAv2 now treats the inter-agent `message` arg of `spawn_agent`/`send_message`/`followup_task`
+as opaque ciphertext that the orchestrator never sees in plaintext (encrypt/decrypt
+happen server-side in the Responses API). A literal port isn't feasible for inber —
+that mechanism only works because OpenAI controls both the encrypting model and the
+decrypting server, and Anthropic exposes no equivalent encrypted-tool-arg primitive.
+The transferable narrow lesson: inber's defenses above cover integrity/authority but
+not *confidentiality of the payload itself*. When bridge-server persists subagent
+spawn messages / plan-file context into rollouts and OTel telemetry, treat that
+inter-agent task text as redact-at-rest rather than freely loggable (ties to
+CONTEXT-MIGRATION + the spawn-boundary prehook).
+
 ### Is Agent Memory a Database? Rethinking Data Foundations for Long-Term AI Agent Memory (GEM)
 
 [arXiv:2605.26252](https://arxiv.org/abs/2605.26252) — submitted 2026-05-25.
@@ -256,3 +268,77 @@ inber's tool-selection logic.
 MCP/CLI/local implementations — route per-call by learned quality-per-latency
 rather than a static preference order. Complements the tool-schema/skill-routing
 papers (which decide *which interface*) by deciding *which provider* behind it.
+
+## 2026-06-07 sweep — cacheable-prefix privacy, memory cost-profiling, plan-vs-execute diagnostics, structured retrieval
+
+### CachePrune: Privacy-Aware and Fine-Grained KV Cache Sharing for Efficient LLM Inference
+
+[arXiv:2605.23640](https://arxiv.org/abs/2605.23640) — submitted 2026-05-22.
+
+Cross-user prefix-cache sharing leaks inputs through a reuse side channel, so most
+systems disable sharing and lose the win. CachePrune does **token/span-level**
+cacheability: a detector masks sensitive spans and only the privacy-irrelevant
+segments (system instructions, public material) are made reusable — eliminating the
+side channel while cutting TTFT 4.5× and raising cache hit rate 44% on vLLM.
+
+**What inber should consider:** this is the formal version of inber's cacheable
+system-prompt prefix strategy (CACHE-RULES / CC-VERIFIED). The shared prefix — tool
+inventory + SKILL.md descriptions — is exactly the "privacy-irrelevant, safe to
+share across sessions" segment, while per-session/user context is not. Making that
+split explicit (a span-level "this is shareable prefix" boundary) lets inber
+aggressively cache the common harness prefix across concurrent sessions without
+leaking session context — pairs with the opencode session-scoped cache key
+(comparisons/opencode 2026-06-06), which solves the *locality* side of the same
+problem.
+
+### Agent Memory: Characterization and System Implications of Stateful Long-Horizon Workloads
+
+[arXiv:2606.06448](https://arxiv.org/abs/2606.06448) — submitted 2026-06-04.
+
+First systems-level characterization of agent memory: a taxonomy along four axes
+(flat retrieval, LLM-mediated extraction, consolidating fact stores, agentic control
+flows) and a **phase-aware profiling harness** attributing cost to memory
+*construction*, *retrieval*, and *generation*. Key finding: construction
+(write/consolidate) — not just retrieval — is a first-order serving cost, and the
+dominant cost center differs sharply by design.
+
+**What inber should consider:** complements the already-documented GEM paper
+(2605.26252) from the cost side — GEM says *what operators* memory needs, this says
+*what they cost*. Add phase-aware (construction vs retrieval vs generation)
+token/latency accounting to `memory-store` (bridge-server :8160), goose-style
+per-phase meters, so the memory-layer-split work (`project_memory_layer_split`) can
+choose a memory design by measured cost profile, not feature parity alone.
+
+### Agent Planning Benchmark: A Diagnostic Framework for Planning Capabilities in LLM Agents
+
+[arXiv:2606.04874](https://arxiv.org/abs/2606.04874) — submitted 2026-06-03.
+
+A planning-specific diagnostic (4,209 cases, 22 domains, five settings) built because
+end-to-end success can't separate *planning* failures from *execution* failures.
+Notably includes robustness axes under **extraneous tools, broken tools, and
+unsolvable tasks** (calibrated refusal), and shows APB-guided plan refinement lifts
+downstream execution on ToolSandbox / τ²-bench.
+
+**What inber should consider:** isolates the plan-vs-execute decoupling that
+Harness-Bench (2605.27922) names but doesn't diagnose. Two concrete uses: (1) add
+broken-tool / extraneous-tool / unsolvable-task cases to inber's own eval harness so
+a tool-store regression surfaces as a planning-robustness drop, and (2) the
+extraneous/broken-tool axis is the eval counterpart to the tool-schema-compression
+and skill-routing threads — measure whether per-turn catalog trimming actually
+improves robustness, not just token cost.
+
+### Structure-Aware RAG: Structured Retrieval Augmented Generation from Noisy Data for Conversational Agents
+
+[arXiv:2605.24366](https://arxiv.org/abs/2605.24366) — submitted 2026-05-23.
+
+Argues text- and graph-RAG degrade on noisy/irrelevant retrieved context, and uses
+**tables as an intermediate structured representation** that strips noise while
+preserving load-bearing facts, plus a quality-aware table-metadata step. The
+representation of retrieved context — not just retrieval recall — drives quality.
+
+**What inber should consider:** a retrieval angle inber hasn't covered. For inber's
+retrieval surfaces (noteboard search, skill-store SKILL.md lookup, memory-store
+reads), consider rendering results as a normalized structured table before they
+enter the cached context rather than raw concatenated text — same token budget, less
+noise, and it dovetails with the tool-schema-compression principle that the
+*rendering* of context is a first-order cost.
