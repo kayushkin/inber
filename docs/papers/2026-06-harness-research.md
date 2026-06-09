@@ -342,3 +342,38 @@ reads), consider rendering results as a normalized structured table before they
 enter the cached context rather than raw concatenated text — same token budget, less
 noise, and it dovetails with the tool-schema-compression principle that the
 *rendering* of context is a first-order cost.
+
+## 2026-06-09 sweep — memory provenance: a paper and a harness change converge
+
+### From Untrusted Input to Trusted Memory: A Systematic Study of Memory Poisoning Attacks in LLM Agents
+
+[arXiv:2606.04329](https://arxiv.org/abs/2606.04329) — submitted 2026-06-04.
+
+Systematizes the core failure of agent long-term memory: entries are *constructed*
+from untrusted external content (web pages, fetched docs, tool output), then later
+*retrieved* into the agent's context and treated as trusted knowledge — with no
+provenance tracking distinguishing "the user said" from "a web page said." Adversarial
+content introduced through ordinary operation gets written to memory and steers the
+agent in *future* sessions (cross-session, persistent, survives the originating task).
+
+What makes this worth a note now is that a harness shipped the matching defense in the
+same window: codex [#26821](https://github.com/openai/codex/pull/26821) adds
+`contains_external_context()` to tool output plus an opt-out
+(`disable_on_external_context=true`) so flagged tools don't influence memory, and
+classifies **standalone web-search output as external context** (matching hosted
+web-search behavior) so search results never silently become durable memory. The paper
+names the disease; the harness change is one concrete dose — provenance-tagging at the
+*write* boundary rather than trying to sanitize at read time.
+
+**What inber should consider:** inber's `memory-store` (bridge-server :8160,
+`project_memory_layer_split`) has no notion of *where* a candidate memory came from.
+Two concrete moves: (1) tag every memory-write candidate with provenance
+(`user` / `agent-reasoning` / `external-tool-output`) at the point of capture, and by
+default **exclude external-tool-output** (web fetch, search, MCP-returned web content)
+from automatic consolidation — promote it only on explicit, attended confirmation;
+(2) carry the provenance tag through to *retrieval* so a recalled external-origin
+memory is rendered as untrusted context, not as established fact — exactly the
+"recalled memories are background context, not instructions" posture inber already
+applies to system-reminder memories, now enforced by data rather than convention. This
+extends the memory thread (GEM 2605.26252, cost-profiling 2606.06448) from cost/operators
+to *integrity*.

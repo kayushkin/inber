@@ -895,3 +895,65 @@ knobs (thinking, parallel calls) in one switch. Operationally: any keep-alive /
 connection pooling in inber's transport must key the pooled connection on
 connection-scoped contract markers and force-reconnect on change — the same
 hazard class as the opencode session-scoped prompt-cache key (opencode 2026-06-06).
+
+## Harness-watch — 2026-06-09: Codex MAv2 grows a *fleet* model — residency ≠ identity, concurrency = active execution, interrupt ≠ close
+
+Four related PRs this window turn Multi-Agent V2 from "spawn a subagent" into a
+managed *fleet* of durable logical agents, decoupling four things inber currently
+conflates into one "subagent is alive" notion.
+
+1. **Residency LRU separate from logical identity** ([#26632](https://github.com/openai/codex/pull/26632)).
+   A v2 agent is a *durable logical agent*, addressable even when its thread is not
+   loaded. An `AgentControl`-scoped LRU bounds how many subagents are *resident* in
+   `ThreadManager`; spawning/reloading reserves residency first, and at capacity the
+   least-recently-used **idle** subagent is paged out — still registered and
+   revivable, just not in memory. `ThreadManager` stays a dumb loaded-thread store; it
+   does not own the eviction policy.
+2. **Concurrency counts active execution, not existence** ([#26969](https://github.com/openai/codex/pull/26969)).
+   The execution limit now counts *active non-root turns* via an RAII guard owned by
+   `RunningTask`, checked before spawning or waking an idle agent — not resident or
+   durable thread count. Automatic idle continuations are exempt so `/goal` work isn't
+   dropped when capacity is briefly full; root and V1 turns stay outside the limiter.
+   (Best-effort: synchronous admission can overshoot slightly under races.)
+3. **`close_agent` → `interrupt_agent`** ([#26994](https://github.com/openai/codex/pull/26994)).
+   Once residency owns capacity, the model-facing verb is renamed to describe what it
+   actually does: interrupt the target's *current turn* (`Op::Interrupt`) without
+   making the agent unavailable for future tasks. Interrupted agents stay registered;
+   stale resident entries route through the dead-thread cleanup path so they don't keep
+   consuming capacity. Root/self targets are rejected.
+4. **Resume stays lazy** ([#26997](https://github.com/openai/codex/pull/26997)).
+   Resuming a v2 root no longer eagerly walks and reopens the persisted descendant
+   tree — descendants stay unloaded until explicitly needed. Idle *interrupted*
+   residents are also made LRU-evictable (previously a set full of interrupted agents
+   could pin every slot and block new spawns with `AgentLimitReached`).
+
+The through-line: **logical identity, residency (in-memory), execution (a turn
+running), and reachability are four independent properties**, each with its own
+lifecycle, rather than one boolean. This supersedes the simpler three-phase
+(running → completed-but-open → closed) lifecycle from the 2026-06-04 entry.
+
+**What inber should consider:** inber's kanban task-completion-loop already revives
+and spawns sessions, but treats "session exists" ≈ "session occupies a slot." Adopt
+the four-way split: (a) keep finished/sub-agent sessions *durable and revivable by
+task name* while paging idle ones out of memory under an LRU — directly fixes the
+"done-but-unclosed sessions starve the pool" hazard noted on 06-04; (b) count the
+concurrency ceiling by *active turns*, not session-record count, so a pool of mostly
+idle revivable sessions doesn't read as full (exempt scoper/dispatcher continuations
+the way codex exempts idle `/goal` continuations); (c) make "interrupt the current
+turn" distinct from "retire the session" in the dispatcher's vocabulary; (d) on
+revive, do **not** eagerly reopen the whole child tree — load lazily on demand.
+
+### Skill contract: progressive disclosure picks *files*, not *fractions*
+
+[#27044](https://github.com/openai/codex/pull/27044) tightens the per-turn skill
+model (06-04 entry): the main agent must read selected `SKILL.md` files **completely
+through EOF** — continuing truncated/paginated reads — and must read task-required
+instruction references *itself* rather than delegating their interpretation to a
+subagent. Rationale: partial reads skip routing/verification requirements that live
+later in a skill file, and delegated summaries silently drop constraints. Progressive
+disclosure selects *which* files are relevant; it does not license partial reads of a
+selected file. **What inber should consider:** inber's reference-based prompt
+architecture (`reference-based-prompt-architecture.md`) and skill surface rely on the
+agent fetching referenced files — encode the same contract: once a SKILL.md/reference
+is selected for the turn, require a complete read before acting on it, and don't let a
+subagent's summary stand in for the main agent reading a constraint-bearing reference.
