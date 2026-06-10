@@ -372,3 +372,28 @@ contract that (a) ranks by frecency/relevance instead of mtime, (b) closes a
 read→rank feedback loop (a file the agent just read should rank higher in the next
 search), and (c) keeps a ripgrep fallback when the native index isn't warm — a
 backend swap, so the agent-facing tool schema (and its cached prefix) stays stable.
+
+## Harness-watch — 2026-06-09: cache identity has *two* layers — the provider cache key AND the gateway routing-affinity header
+
+[PR 31511](https://github.com/sst/opencode/pull/31511) adds a one-line `X-Session-Id`
+header (= the session ID) to every non-opencode provider request, alongside the
+existing `x-session-affinity` header. The rationale is the part inber hasn't
+documented: enterprise/Anthropic-compatible **proxies that front multiple upstream
+accounts** use `X-Session-Id` to pin all requests from a session to the *same
+upstream account*, because the cached prompt prefix physically lives on that one
+account's KV cache. Without it the gateway load-balances a multi-turn conversation
+across accounts and every turn is a cold prefix → cache miss → higher latency+cost.
+This is **distinct from the `promptCacheKey` work** (06-06 entry, PR 31036): the
+provider cache key decides *which cache entry* a request matches; the routing header
+decides *which backend machine/account physically holds that cache*. Both must agree
+on the same session identity or you still miss — opencode now sends both.
+
+**What inber should consider:** inber routes provider traffic through its own gateway
+layer (llm-gateway / vibeproxy) that can front multiple model-store credentials per
+provider. Setting `promptCacheKey = BridgeSessionID` (already recommended on 06-06)
+only wins if the gateway *also* pins that session to the same upstream account. Add a
+session-affinity header (e.g. `X-Session-Id: <BridgeSessionID>`) on outbound provider
+requests **and** have the gateway hash on it for upstream account selection — otherwise
+concurrent autoworker/kanban sessions get scattered and the provider-side cache key is
+moot. The two changes are a pair, not alternatives; document them together in
+`docs/cache-optimization.md`.

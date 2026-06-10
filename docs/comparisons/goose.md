@@ -268,3 +268,30 @@ results instead of dying silently with nothing. This composes with the
 turn-limit-based review timeout goose already replaced, and with the kanban
 task-completion-loop's dispatcher closure logic — a turn budget is a cleaner
 "this sub-card is over its allowance" signal than a timestamp.
+
+## Harness-watch — 2026-06-09: org-managed security gates that read *strictly from process env*, so persisted config can't impersonate them
+
+[PR 9612](https://github.com/block/goose/pull/9612) replaces goose's old
+`DEFAULT_SECURITY_*` "seed-once" defaults with runtime **override** env vars
+(`SECURITY_PROMPT_ENABLED_OVERRIDE`, `SECURITY_COMMAND_CLASSIFIER_ENABLED_OVERRIDE`)
+that take precedence over user config and turn prompt-injection / command-injection
+detection on by default for internal users — kept on, with no way for the user to
+disable it. The mechanically interesting bit: a single `get_override` helper reads
+the value **strictly from `std::env::var`, never the config store**, so a value a
+user persisted into their own config can't masquerade as the org-managed setting.
+When the env vars are unset, behaviour is unchanged and the user's own settings
+apply. ([PR 9690](https://github.com/block/goose/pull/9690) then re-tunes the
+detector's confidence thresholds.) This is the same *non-overridable policy layer*
+shape as codex's org-level managed permission allowlists (agentic-design-patterns,
+06-06 entry), generalised from "what tools are allowed" to "is a safety feature on".
+
+**What inber should consider:** inber's permission/security toggles (PreToolUse
+prehook gating, auto-allow for unattended autoworkers, any future injection
+detection) are configured per-agent/per-session. For settings that must be
+org-enforced rather than agent-selectable — e.g. "unattended workers may auto-allow
+file writes but NOT network egress", or "injection screening is always on" — read the
+enforcing value from a source the agent/session config **cannot write to** (process
+env / a root-owned file), with a strict precedence: env-override > agent-store config
+> default. The anti-spoofing rule is the point: a session must not be able to persist a
+value that impersonates the org-managed one. Pairs with the `feedback_audit_deployed_env`
+lesson — deployed env is already the source of truth for "what's actually enforced".
