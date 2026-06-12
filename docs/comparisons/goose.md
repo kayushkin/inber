@@ -295,3 +295,25 @@ env / a root-owned file), with a strict precedence: env-override > agent-store c
 > default. The anti-spoofing rule is the point: a session must not be able to persist a
 value that impersonates the org-managed one. Pairs with the `feedback_audit_deployed_env`
 lesson — deployed env is already the source of truth for "what's actually enforced".
+
+## Harness-watch — 2026-06-11: a provider-neutral *thinking-effort* enum that maps onto each provider's native reasoning knob
+
+[PR 9743](https://github.com/block/goose/pull/9743) adds **canonical thinking modes** —
+a small fixed enum of reasoning-effort levels (low/medium/high-style) that goose defines
+once and then translates per-provider onto whatever that provider actually exposes:
+Anthropic's thinking-token budget, OpenAI's `reasoning_effort`, and others that have no
+knob at all collapse to a no-op. [PR 9711](https://github.com/block/goose/pull/9711) then
+surfaces the same level as an **ACP config option**, so a client (or recipe) sets one
+abstract dial and goose maps it down at the provider boundary. The point is that
+"how hard to think" becomes a portable, first-class session setting that survives a
+model swap, instead of a provider-specific magic number leaking into every call site.
+
+**What inber should consider:** inber routes across providers (claudecode, jig, forgecode,
+…) and each has a different reasoning control — Anthropic thinking budget vs. OpenAI
+effort vs. none. Define one canonical effort enum at the bridge layer and translate it in
+each harness adapter (the same place that already maps model ids), so a kanban card / task
+can request `effort: high` once and have it mean the right thing regardless of which
+provider the dispatcher picks — and degrade to a no-op rather than erroring on providers
+with no knob. Keeps the routing decision (which model) orthogonal to the effort decision
+(how hard it thinks), and stops per-provider reasoning params from being hard-coded at
+spawn sites. Lives naturally next to the model-store mapping (`reference_model_store`).

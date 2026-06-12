@@ -377,3 +377,30 @@ memory is rendered as untrusted context, not as established fact — exactly the
 applies to system-reminder memories, now enforced by data rather than convention. This
 extends the memory thread (GEM 2605.26252, cost-profiling 2606.06448) from cost/operators
 to *integrity*.
+
+## Beyond Compaction: Structured Context Eviction for Long-Horizon Agents
+
+[arXiv:2606.11213](https://arxiv.org/abs/2606.11213) — submitted ~2026-06-11.
+
+Frames the long-horizon problem precisely: the context window is finite but the work
+trajectory is not, so every tool call / file read / retrieved doc accumulates and the
+model's *effective reasoning budget shrinks each turn*. Instead of the usual answer —
+summarise-and-replace (compaction), which is lossy and blocking — it proposes **Context
+Window Lifecycle (CWL)**: graduated, *semantically-aware eviction* that drops the
+lowest-value history entries to keep the window within budget, giving an effectively
+unbounded working horizon without a single destructive summarisation step. Eviction is
+structured (entries have lifecycle/value, not just recency) rather than a flat sliding
+window. Pairs directly with this cycle's harness move toward *budget self-awareness*:
+codex's context-remaining tool ([#27518](https://github.com/openai/codex/pull/27518),
+agentic-design-patterns) lets the agent *read* the shrinking budget; CWL is what the
+engine *does* about it when the agent doesn't checkpoint in time.
+
+**What inber should consider:** inber's `smart-truncation` / `context-loading` currently
+lean on truncation + (eventual) compaction, which is the lossy-summarise path this paper
+argues against for long autoworker/scoper runs. Add a value/lifecycle tag to history
+entries (tool-output age, whether a file was re-read, whether a result was superseded)
+and evict graduated lowest-value entries to stay within budget *before* falling back to
+summarisation — keep compaction as the last resort, not the first. The structured-eviction
+unit also composes with the provenance work (2606.04329 above): external-tool-output is
+both lower-trust *and* a natural first eviction candidate. Candidate section in
+`docs/smart-truncation.md`.

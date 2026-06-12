@@ -957,3 +957,28 @@ architecture (`reference-based-prompt-architecture.md`) and skill surface rely o
 agent fetching referenced files — encode the same contract: once a SKILL.md/reference
 is selected for the turn, require a complete read before acting on it, and don't let a
 subagent's summary stand in for the main agent reading a constraint-bearing reference.
+
+### Context budget as a tool the agent can query, not just a number it's told
+
+[codex #27518](https://github.com/openai/codex/pull/27518) adds a **context-remaining
+tool** the model can invoke mid-turn to read how much of its context window is still
+available, alongside [#27663](https://github.com/openai/codex/pull/27663) which keys the
+token-budget context by `thread_id` so the figure is per-conversation rather than
+global. The shift is from *passive* budget signalling — a token count injected into the
+system prompt or a silent truncation the model never sees — to an *on-demand* contract:
+the agent decides when it needs to know, and gets an authoritative answer it can act on
+(wrap up, summarise, spawn a fresh sub-thread) before the engine forces a compaction.
+This is the same posture as goose's "trust the live context window" (goose.md, 06-02
+entry) but exposed *through the tool surface* instead of a prompt fragment, so the model
+can branch on it deterministically.
+
+**What inber should consider:** inber tracks remaining context centrally (smart-truncation
+/ context-loading) but the agent only learns about pressure *reactively*, when truncation
+or compaction has already happened. Add a cheap read-only `context_remaining` tool (or a
+field on an existing status tool) that returns remaining tokens for the **current bridge
+session**, keyed by session id the way codex keys by thread — so a long autoworker/scoper
+run can voluntarily checkpoint to `memory-store` and hand off to a fresh session *before*
+hitting the wall, rather than getting silently compacted mid-task. Pairs with the
+budget-eviction paper below (`docs/papers/2026-06-harness-research.md`, Beyond Compaction):
+the tool gives the agent the signal, graduated eviction is what the engine does when the
+agent doesn't act on it in time.
