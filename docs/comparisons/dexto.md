@@ -139,6 +139,14 @@ two distinct durable queues on inber sessions (over the NATS bus / si adapters)
 instead of one undifferentiated inbound stream, so a user can redirect an
 in-flight agent without conflating it with the next request.
 
+**Refinement (2026-06-13, [PR 839](https://github.com/truffle-ai/dexto/pull/839)):** steer
+messages drained from the queue *before the first model request* are now held until the
+**next model boundary** rather than folded into the opening request. The takeaway for
+inber: steer injection points are the gaps *between* model calls, not arbitrary moments —
+a steer that arrives before any model turn has run has no boundary to attach to yet, so it
+defers to the first real one. Apply steers only at model-call boundaries so they never
+corrupt an in-flight assistant message or a partially-built first request.
+
 ### 4. TOCTOU file-safety guard at the approval boundary
 
 `write_file`/`edit_file` now hash the content previewed at *approval* time and
