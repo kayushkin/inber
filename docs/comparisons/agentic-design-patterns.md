@@ -982,3 +982,34 @@ hitting the wall, rather than getting silently compacted mid-task. Pairs with th
 budget-eviction paper below (`docs/papers/2026-06-harness-research.md`, Beyond Compaction):
 the tool gives the agent the signal, graduated eviction is what the engine does when the
 agent doesn't act on it in time.
+
+## Harness-watch — 2026-06-14: split-credential storage — key in the OS vault, large ciphertext in namespaced files
+
+Codex landed a four-PR encrypted-auth stack this window:
+[#27504](https://github.com/openai/codex/pull/27504) (feature/config gate),
+[#27535](https://github.com/openai/codex/pull/27535) (auth-specific secret namespaces),
+[#27539](https://github.com/openai/codex/pull/27539) (CLI auth on encrypted local
+secrets), and [#27541](https://github.com/openai/codex/pull/27541) (MCP OAuth on the same
+backend). The forcing function is mundane but instructive: Windows Credential Manager caps
+a generic credential blob at 2,560 bytes, and serialized ChatGPT-login / OAuth-refresh
+payloads blow past it. The design response is the reusable part — **don't put the secret in
+the OS keyring, put only the *encryption key* there**, and store the (large) ciphertext in
+an `age`-encrypted file on disk. Two further moves: (1) **per-auth-class namespacing** —
+separate encrypted files (`cli_auth.age`, `mcp_oauth.age`, `local.age`) rather than one
+credential blob, so CLI-auth and MCP-OAuth have isolated blast radius and rotate
+independently; (2) **migration with stale-copy cleanup** — on a successful encrypted save
+(and on logout) the old plaintext `auth.json` / direct-keyring / fallback copies are
+actively deleted, so a credential never lingers in two stores after the format flips.
+
+**What inber should consider:** inber's `auth-store` (`:8303`, `reference_auth_store`) is
+the canonical vault and already does OAuth refresh + lease enforcement, but it stores
+credentials directly. Two cheap, independent borrows: (a) for oversized payloads
+(multi-field OAuth refresh blobs, provider session bundles) adopt the **key-in-vault /
+ciphertext-at-rest split** so the vault row holds a small key reference and the bulk
+ciphertext lives in an encrypted partition — keeps the hot path small and bounds what a
+single vault read exposes; (b) **namespace credentials by consumer-class** (per-service /
+per-harness) instead of one flat table, so a leak or rotation is scoped to one namespace
+rather than the whole vault. The migration discipline is the must-have regardless of (a)/(b):
+when auth-store rewrites or re-keys a credential, delete the prior representation in the
+same transaction — pairs with `feedback_audit_deployed_env` (a credential lingering in two
+places is exactly the "what's actually live" drift that audit lesson is about).
