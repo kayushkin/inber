@@ -317,3 +317,29 @@ provider the dispatcher picks — and degrade to a no-op rather than erroring on
 with no knob. Keeps the routing decision (which model) orthogonal to the effort decision
 (how hard it thinks), and stops per-provider reasoning params from being hard-coded at
 spawn sites. Lives naturally next to the model-store mapping (`reference_model_store`).
+
+## Harness-watch — 2026-06-15: unified cross-tool security telemetry schema + pattern-detector calibration
+
+[PR 9713](https://github.com/block/goose/pull/9713) makes goose emit its security
+findings (prompt-injection, data-exfil egress, adversary ALLOW/BLOCK, tool-execution
+user decisions) under a **single standardized OTLP schema** shared across goose's
+sibling agent tools (Sandpit, BuilderBot): `security.event_type / .action /
+.confidence / .threat_type`, plus `session.user / .host / .agent_type` as correlation
+pivots (cached once per process via `OnceLock`, propagated to every log record in a
+reply-stream span). The point is operational: with consistent field names, *one* query
+surfaces threats across every tool instead of per-tool bespoke parsing. Separately,
+[PR 9690](https://github.com/block/goose/pull/9690) is a calibration lesson — the
+pattern detectors fired at Medium/0.60 on routine input (any single `\uXXXX`, any
+nested `$(...)`), flooding anyone running a threshold ≤0.60; the fix tightens patterns
+to require a stronger signal (3+ consecutive unicode escapes, not one) so a hit is
+actually meaningful.
+
+**What inber should consider:** inber's security surface is *spread across services* —
+the PreToolUse prehook (`project_permission_prompt_followups`), autoworker auto-allow,
+herald — each logging in its own shape. Define one canonical security-event schema
+(`event_type / action / confidence / threat_type` + `session_id / agent_type` pivots)
+emitted by every gate, so a single healthcheck/observability query can answer "what got
+blocked/flagged across all bridge sessions today" without per-service grepping. And take
+the calibration lesson directly: any pattern-based deny rule should be tuned against
+real traffic and require a strong signal before it fires at a blocking confidence —
+a detector that cries wolf on `$(dirname …)` gets globally disabled and protects nothing.

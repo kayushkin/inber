@@ -397,3 +397,23 @@ requests **and** have the gateway hash on it for upstream account selection — 
 concurrent autoworker/kanban sessions get scattered and the provider-side cache key is
 moot. The two changes are a pair, not alternatives; document them together in
 `docs/cache-optimization.md`.
+
+## Harness-watch — 2026-06-15: advertise MCP client `roots` so servers scope to the workspace
+
+[PR 32230](https://github.com/sst/opencode/pull/32230) has opencode advertise the MCP
+client **`roots` capability** and answer `roots/list` with the instance's working
+directory as a `file://` URI, registered before connection on both the plain and OAuth
+client paths. `listChanged` is deliberately omitted because roots are fixed for an
+instance-scoped client. MCP `roots` is the standard channel by which a client tells a
+server which filesystem boundaries it's allowed to operate within — without it, a
+filesystem/git MCP server has no authoritative notion of "the workspace" and either
+guesses or operates unbounded.
+
+**What inber should consider:** inber's tool-store (`reference_tool_store`) wires MCP
+servers but, like most harnesses, likely connects without advertising roots. Have the
+MCP client layer advertise `roots` and serve `roots/list` with the active session's
+workspace dir (one fixed root, no `listChanged`) so filesystem-touching MCP servers
+auto-scope to the right project instead of the server's launch cwd — relevant once
+autoworker/kanban sessions run concurrent MCP-backed tools in different repos. It's a
+small handshake addition with a real blast-radius payoff (servers can't wander outside
+the declared root) and composes with the existing per-session permission gating.
