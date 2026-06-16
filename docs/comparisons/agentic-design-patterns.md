@@ -1013,3 +1013,32 @@ rather than the whole vault. The migration discipline is the must-have regardles
 when auth-store rewrites or re-keys a credential, delete the prior representation in the
 same transaction — pairs with `feedback_audit_deployed_env` (a credential lingering in two
 places is exactly the "what's actually live" drift that audit lesson is about).
+
+## Harness-watch — 2026-06-16: a nested review/approval agent must NOT inherit skills or memory (trust boundary)
+
+Codex [#28285](https://github.com/openai/codex/pull/28285) ("guardian: isolate review
+context from skills and memories") hardens the Guardian — codex's nested approval/review
+agent that ingests the **parent session transcript as untrusted evidence** to score an
+action. Two changes, both about keeping the derived review session minimal and trustworthy:
+(1) **skip skill/plugin discovery** when building Guardian turns, so a `$skill` mention
+sitting in the assessed transcript stays *visible only as transcript text* and is never
+expanded into an injected skill body — i.e. the transcript can't smuggle new instructions
+into the reviewer (a prompt-injection vector); (2) **disable memory context and the memory
+tools** in the derived Guardian config, because user/project memory is unrelated
+model-visible context that biases an approval decision and bloats the request. The general
+rule: when you spin up a sub-agent to *judge* a transcript, the transcript is data, not a
+control channel — auto-injection of skills/memories that's correct for a *working* agent is
+a contamination + injection risk for a *reviewing* one.
+
+**What inber should consider:** inber's review/verify/approval surfaces (security-guidance
+v2's agentic reviewer, `/code-review` subagents, the PreToolUse prehook when it escalates to
+an LLM judge) all ingest parent context, and inber now auto-selects skills
+(`reference_skill_store`) and injects memory (`project_memory_layer_split`, memory-store on
+:8160). Give the review/judge sub-agent a **derived config that disables skill auto-selection
+and memory injection by default** — the judged transcript must reach it as inert evidence,
+not as a source of `$skill`/memory directives the parent (or an attacker upstream of the
+parent) can use to steer the verdict. Concretely: a "reviewer" agent-type/bundle whose
+resolver returns zero skills and no memory tools, and a request-layout test asserting that a
+skill mention in the input transcript appears only as quoted text. Composes with the
+isolate-subagent-model boundary (06-04 entry) and the tiered security-review ladder
+(claude-code.md) — same instinct, applied to the reviewer's *context* rather than its model.
