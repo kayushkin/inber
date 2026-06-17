@@ -194,3 +194,40 @@ assistant/response event for real model output with required usage fields. Strea
 subscribers (bridge-ui TurnsView, kanban curators reading session state) then never
 have to guess whether a message came from the permission prehook or the model —
 removing the render-time dedup entirely instead of patching it.
+
+## Harness-watch — 2026-06-17: media as a first-class retention class + provider-edge attachment projection
+
+Two context/attachment fixes that each carry a transferable design point for inber's
+text-centric truncation + transparent-bridge model.
+
+**1. Age-tiered media retention ([PR 837](https://github.com/truffle-ai/dexto/pull/837)).**
+Fixes a context-manager bug where images/media returned *by tool results* were dropped before
+LLM formatting, so the model couldn't analyse media a tool produced. The fix rehydrates recent
+tool-returned media within the existing media-retention window, while keeping *older* tool
+media compacted/excluded (blob-backed resources preserved) so large tool outputs don't inflate
+later prompts. The idea worth extracting is the **age-tiered media policy**: media is a
+first-class retention class with its own recency window — rehydrate-when-recent,
+compact-when-old — not flat text.
+- **What inber should consider:** give inber's context manager / `smart-truncation` an explicit
+  media-retention class — keep tool-returned images/media rehydrated within a recency window
+  and reference-compact (blob pointer) older media — instead of letting media fall through the
+  text-oriented truncation path and silently disappear before the model sees it. Folds into the
+  structured-eviction value/lifecycle tagging in `smart-truncation.md` (media =
+  high-value-when-recent, evict-to-blob-pointer when old) and the CWL paper thread.
+
+**2. Text-doc inlining at the provider-adapter edge ([PR 848](https://github.com/truffle-ai/dexto/pull/848)).**
+Providers/models don't consistently accept *text* documents (e.g. markdown attachments) as
+native file parts. At the formatter boundary (the Vercel provider-adapter), dexto now inlines
+text-like local uploads as plain text into the message, while preserving non-text and remote
+files as native file parts — UI/history attachment behaviour stays intact. The design point:
+the provider bridge is the correct place to project an attachment into whatever shape *that*
+provider accepts, because file-part support is a per-provider capability the canonical message
+shouldn't assume.
+- **What inber should consider:** ensure inber's provider bridges (`llm-bridge-anthropic`/
+  `-openai`/`-google`) own the projection of attachment/document parts into each provider's
+  accepted shape — inline text-like docs as content where native document parts aren't
+  supported, keep binary/remote as file parts — so a text attachment in the canonical
+  `msg.Conversation` never silently drops because a given provider lacks document-part support.
+  This is a per-provider capability decision at the bridge edge, consistent with "presentation/
+  projection belongs at the edge" (note: *projection* at the edge, not lossy transform — the
+  attachment still reaches the model, just in a provider-accepted shape).

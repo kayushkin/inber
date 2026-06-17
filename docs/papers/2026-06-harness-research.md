@@ -404,3 +404,61 @@ summarisation — keep compaction as the last resort, not the first. The structu
 unit also composes with the provenance work (2606.04329 above): external-tool-output is
 both lower-trust *and* a natural first eviction candidate. Candidate section in
 `docs/smart-truncation.md`.
+
+## 2026-06-17 sweep — harness-as-measurable-adapter, typed-graph session resume, tool-call activation by width
+
+### Claw-SWE-Bench: A Benchmark for Evaluating OpenClaw-style Agent Harnesses on Coding Tasks
+
+[arXiv:2606.12344](https://arxiv.org/abs/2606.12344) (submitted 2026-06-10; repo
+`opensquilla/claw-swe-bench`). A general-purpose agent doesn't natively satisfy SWE-bench's
+clean-Docker-workspace + patch + prediction contract, so harnesses are hard to compare fairly.
+Claw-SWE-Bench defines an **adapter protocol** (fixed prompt, runtime budget, workspace
+contract, patch-extraction procedure, evaluator) over 350 multilingual instances (8 langs, 43
+repos, from SWE-bench-Multilingual + Verified-Mini), plus an 80-instance cost/rank-aware Lite
+subset. Headline: the same model+harness scores **19.1% Pass@1 with a bare adapter vs 73.4%
+with the full adapter** — adapter/scaffold design, not the model, dominates. The patch is
+always `git diff` taken by the runner *after the agent exits*, never agent-reported. This is
+the eval counterpart to Harness-Bench (2605.27922, 06-05 sweep).
+
+**What inber should consider:** this lands squarely on inber's `llm-bridge-*` harness/adapter
+layer. Two concrete moves: (a) measure inber-via-llm-bridge as a *configuration* on a standard
+adapter contract so harness changes are attributable, not confounded with model choice; (b)
+adopt the "**extract the patch from `git diff` after exit, never trust agent-reported
+diffs**" rule in the forge-worktree result path — it makes results tamper-resistant and aligns
+with the verification-bypass / reward-hacking thread.
+
+### TokenMizer: Graph-Structured Session Memory for Long-Horizon LLM Context Management
+
+[arXiv:2606.06337](https://arxiv.org/abs/2606.06337) (Shweta Mishra, independent; 2026-06-04;
+open-source `tokenmizer`). An open-source proxy that models session history as a **typed
+knowledge graph** (14 node types, 7 edge types) instead of flat text, so resumable structure —
+architectural decisions, task-status transitions, file-modification histories, resolved errors
+— isn't silently lost when history exceeds the effective context window. An 8-layer compression
+pipeline + semantic cache produce compact "resume blocks." This is the coding-session-flavoured
+mechanism behind the memory-graph thread (GEM 2605.26252, 06-05 sweep) and complements CWL's
+structured eviction (06-09).
+
+**What inber should consider:** the session-resume use case maps onto inber's compaction/resume
+path (`engine/turn_summary.go` + `memory-store`): emit a typed-graph "resume block"
+(decision / file-history / task-transition nodes) as the durable session checkpoint rather than
+a flat prose summary — recall of decisions survives a window overflow, and it composes with the
+durable-plan-file (Code-as-Harness) idea and structured eviction (CWL).
+
+### Pushing the Limits of LLM Tool Calling via Experiential Knowledge Integration and Activation (KATE)
+
+[arXiv:2606.10875](https://arxiv.org/abs/2606.10875) (CAS / UCAS; 2026-06-09). Multi-step
+tool-use failures stem from insufficient tool-related knowledge *and* poor activation of it.
+Two findings are actionable without retraining: instance-level knowledge ("here's a worked
+example of this tool") beats abstract intent-level guidance; and at inference, **expanding the
+*width* of reasoning (parallel sampling + aggregation) activates latent experiential knowledge
+better than expanding *depth* (longer single chains)**, which shows diminishing returns. KATE
+also adds knowledge-aware post-training (RL > SFT), but the width-over-depth and
+instance-over-abstract levers need no training.
+
+**What inber should consider:** for inber's harder tool-routing/tool-call decisions, a small
+parallel-sample-and-aggregate step over candidate calls may beat longer single-chain reasoning
+— cheap to prototype in the engine's tool-selection path. And when inber injects tool guidance
+(tool-store descriptions, skill bodies), prefer a concrete worked example over abstract intent
+text. Pairs with the tool-routing-decay / schema-compression papers (2605.16508, 2606 sweeps):
+those decide *which* tool surface reaches the model; KATE is about reliably *activating* the
+right call once it's there.

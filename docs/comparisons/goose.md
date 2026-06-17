@@ -343,3 +343,36 @@ blocked/flagged across all bridge sessions today" without per-service grepping. 
 the calibration lesson directly: any pattern-based deny rule should be tuned against
 real traffic and require a strong signal before it fires at a blocking confidence —
 a detector that cries wolf on `$(dirname …)` gets globally disabled and protects nothing.
+
+## Harness-watch — 2026-06-17: sharpen the delegate contract on both ends — typed reference-context *in*, structured status *out*
+
+Two `summon` (delegate) PRs tighten goose's subagent contract in a way inber's spawn/dispatcher
+path doesn't yet document. Both are the "names/enums tell the truth, presentation at the edge"
+doctrine applied to delegation.
+
+**1. Typed `context` distinct from `instructions` ([PR 9518](https://github.com/block/goose/pull/9518)).**
+Delegates are "blind" — a child sees only `instructions` (the directive) plus `source`, so
+parents today cram reference material (file contents, constraints, prior findings) into
+`instructions`, conflating *what to do* with *what to know*. The PR adds an optional `context`
+param injected into the child's **system prompt** under a `# Reference Context` heading,
+keeping task-direction and background-knowledge as distinct typed inputs.
+- **What inber should consider:** give inber's `spawn_agent`/delegate path a typed `context`
+  input separate from the task instruction, injected into the child's system-prompt prefix
+  (where it caches) under a stable heading — so parents stop conflating "what to know" with
+  "what to do," and background material doesn't invalidate the child's cacheable prefix the
+  way an inlined instruction blob does. Composes with the existing "pass a durable plan-file
+  path" idea: children read large reference *by path*, inline small `context`.
+
+**2. Structured result envelope instead of prose ([PR 9521](https://github.com/block/goose/pull/9521)).**
+`load(task_id)` now returns structured `CallToolResult.meta` — `task_status`
+(`completed`/`failed`/`panicked`/`cancelled`), `turns_taken`, `duration_secs` — instead of
+signalling completion only via markdown (`✓ Completed`). A parent can finally distinguish
+"extension failed to connect" vs "hit turn limit" vs "model refused" vs "panicked" without
+parsing prose, so it can make a sound retry/escalation decision.
+- **What inber should consider:** have inber's subagent/delegate collection path return a typed
+  result envelope — granular `status` enum (completed/failed/turn-limit/refused/panicked/
+  cancelled), `turns_taken`, `duration` — as structured metadata, not markdown, so the kanban
+  task-completion-loop dispatcher decides retry/escalation/close on a field instead of
+  string-matching prose. Directly aligns with `feedback_status_enum_granularity` (keep the
+  enum granular, map to pills at the edge) and is the *outbound* twin of codex #28375
+  (error-precedence forwarded to the parent, agentic-design-patterns 06-17).

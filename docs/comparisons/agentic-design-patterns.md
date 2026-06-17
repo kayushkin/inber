@@ -1042,3 +1042,54 @@ resolver returns zero skills and no memory tools, and a request-layout test asse
 skill mention in the input transcript appears only as quoted text. Composes with the
 isolate-subagent-model boundary (06-04 entry) and the tiered security-review ladder
 (claude-code.md) — same instinct, applied to the reviewer's *context* rather than its model.
+
+## Harness-watch — 2026-06-17: three small Codex inter-agent contracts (interruptible wait, error precedence, typed envelope)
+
+Codex landed three message/tool-contract refinements that sharpen the steer-queue and
+multi-agent threads already tracked here. They share one principle: *the boundary between
+agents should carry typed, observable signals — not opaque blobs or events that overwrite
+each other.*
+
+**1. Interruptible `sleep` tool ([PR 28429](https://github.com/openai/codex/pull/28429)).**
+A native `sleep` tool (behind a `sleep_tool` flag) takes a bounded `duration_ms` and pauses
+the agent — but ends early the moment steered user input or mailbox (inter-agent) input
+arrives, and reports elapsed wall-clock in both completed and interrupted outputs. It's a
+first-class `SleepItem` retained in thread history, not a shelled-out `sleep`. The novel bit
+is the *coupling*: a voluntary back-off wait wired into the same steer/mailbox queues, so it
+is cancellable and visible instead of an opaque blocked subprocess.
+- **What inber should consider:** give inber a native `wait`/`sleep` tool whose pause is
+  cancelled at the next steer/mailbox boundary (the same model-call boundary dexto's 06-13
+  refinement defines), emitting a history-retained wait item — so an autoworker/scoper
+  polling for external work backs off without a dead shell `sleep`, and a user steer or a
+  sub-agent message wakes it immediately rather than after the full delay. This is the
+  agent-facing complement to the `feedback_polling_loops` rule (no leading-sleep polling).
+
+**2. Terminal subagent-error precedence ([PR 28375](https://github.com/openai/codex/pull/28375)).**
+When a subagent exhausted retries it emitted `Error`, but the generic lifecycle then emitted
+`TurnComplete(None)`, which *overwrote* `Errored` with `Completed(None)` — so "failed child"
+looked identical to "child that finished with no answer," and an unattended root silently
+continued. The fix gives terminal-error *precedence* in the status reducer (a closing
+`TurnComplete` can no longer erase an immediately-preceding `Errored`), forwards the retained
+error to the parent capped at 1,000 model-visible tokens, and attaches a `next_action` hint
+pointing at `followup_task`. It stays queue-only (seen at the next sampling boundary).
+- **What inber should consider:** in the kanban task-completion-loop dispatcher, ensure a
+  child session's terminal-error status takes precedence over its closing "turn complete"
+  event so a failed sub-card can't be rolled up as an empty success — and forward a bounded
+  error excerpt plus a concrete recovery action (revive/re-task) to the parent rather than a
+  null completion. Pairs with goose #9521 below (structured status out of a delegate).
+
+**3. Typed plaintext-header inter-agent envelope ([PR 28368](https://github.com/openai/codex/pull/28368)).**
+MAv2 messages now carry a uniform routing envelope — `Message Type: <NEW_TASK | MESSAGE |
+FINAL_ANSWER>` / `Task name:` (recipient) / `Sender:` / `Payload:` — so the model always sees
+*what kind* of interaction occurred, *who* sent it, and *which* agent it targets in one
+shape. The wire trick: no new Responses API field — an encrypted delivery is just a plaintext
+`input_text` header item immediately followed by the existing `encrypted_content` item, so
+the *routing metadata stays model-visible while the payload stays encrypted*. `NEW_TASK`
+starts a turn, `MESSAGE` is a queued send that doesn't, `FINAL_ANSWER` is the terminal
+child→parent result (also used for errored/shutdown/missing agents).
+- **What inber should consider:** give inber's inter-agent/sub-agent messages a uniform typed
+  envelope (message-type + sender + recipient/task path + payload) so a receiver branches
+  deterministically on interaction kind, and keep the routing header model-visible even when
+  the payload is opaque/encrypted — one self-describing shape across spawn, mid-flight
+  message, and final answer instead of distinct ad-hoc notification formats.
+
