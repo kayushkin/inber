@@ -1093,3 +1093,34 @@ child→parent result (also used for errored/shutdown/missing agents).
   the payload is opaque/encrypted — one self-describing shape across spawn, mid-flight
   message, and final answer instead of distinct ad-hoc notification formats.
 
+## Harness-watch — 2026-06-18: environment is part of the approval cache key + an explicit approval-mode precedence ladder
+
+Two Codex changes finish wiring the *execution environment* into the permission layer (the
+2026-06-03 entry keyed remembered grants by environment id; these extend it to the
+**command-approval cache** and the **default approval mode**).
+
+**1. Command-approval cache keyed by environment id ([PR 28738](https://github.com/openai/codex/pull/28738)).**
+The "sticky" approval cache for `shell` / `unified-exec` previously keyed on `(command, cwd)`
+only — so `echo ok` approved in local `/workspace` was silently reused for `echo ok` in an
+*executor's* `/workspace`. The fix adds the selected environment id to the cache key, carries
+it through the approval request so the client can show *which* environment is being approved
+(surfaced as a required-nullable `environmentId` in the inline TUI prompt), and keeps older
+approval events compatible when the field is absent.
+- **What inber should consider:** wherever inber caches a remembered command approval (the
+  prehook's allow/deny memory), the key must be `(environment, command, resource)` — never
+  `(command, cwd)` alone — or an approval granted against a throwaway sandbox/worktree
+  authorizes the same command against the real tree. Show the environment in the approval
+  prompt so the human knows which tree they're authorizing. This is the command-level
+  counterpart to the 06-03 sticky-grant rule.
+
+**2. App-level default approval mode with a documented precedence ladder ([PR 27965](https://github.com/openai/codex/pull/27965)).**
+Adds `[apps._default] default_tools_approval_mode` and pins an *explicit* resolution order:
+**managed (org policy) → per-tool `approval_mode` → per-app default → `apps._default` default
+→ built-in `auto` fallback**. The value is exposed through `config/read` so clients can show
+the effective mode.
+- **What inber should consider:** inber's approval posture is resolved across several layers
+  (org/managed allowlist per 06-06, per-tool prehook rules, session/profile defaults). Make the
+  precedence a single documented, *queryable* ladder — most-specific binding wins, with one
+  named final fallback — rather than implicit ordering scattered across the prehook. Expose the
+  *effective* mode for a given tool so it's observable at session start, not inferred.
+

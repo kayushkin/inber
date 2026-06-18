@@ -462,3 +462,49 @@ parallel-sample-and-aggregate step over candidate calls may beat longer single-c
 text. Pairs with the tool-routing-decay / schema-compression papers (2605.16508, 2606 sweeps):
 those decide *which* tool surface reaches the model; KATE is about reliably *activating* the
 right call once it's there.
+
+## 2026-06-18 sweep — cache-continuity as a compaction constraint, harness recursion
+
+### TokenPilot: Cache-Efficient Context Management for LLM Agents
+
+[arXiv:2606.17016](https://arxiv.org/abs/2606.17016) (Zhejiang Univ. et al.; submitted
+2026-06-16). Names the trade-off the whole compaction/eviction thread has been dancing around:
+text pruning and dynamic memory eviction shrink the token footprint, but their *unconstrained
+sequence mutations alter the prompt layout, causing prefix mismatches that invalidate the
+prompt cache* — so you can spend more on cache misses than you save on tokens. TokenPilot keeps
+both granularities cache-aware: (a) **Ingestion-Aware Compaction** stabilizes the prompt prefix
+and strips open-world environmental noise *at the ingestion gate* (before it ever enters the
+cached prefix), and (b) **Lifecycle-Aware Eviction** tracks each segment's residual utility and
+offloads only on a *conservative batch-turn schedule* so evictions don't constantly break the
+prefix. Reports 61% / 56% cost reductions on PinchBench and Claw-Eval.
+
+**What inber should consider:** this is the missing constraint on inber's compaction/eviction
+path (`engine/turn_summary.go`, structured eviction per CWL 2606.11213). inber leans hard on
+prompt caching (the ScheduleWakeup cache-TTL economics are the same), so any mid-prefix edit —
+dropping a stale tool result, rewriting an early summary — silently invalidates the cached
+prefix from that point on, and the cache-miss cost can exceed the token saving. Two rules to
+adopt: (1) do lossy compaction **at the ingestion gate** (when a tool result first arrives) so
+the durable prefix is born clean and is never mutated afterward; (2) **batch evictions on a turn
+schedule** rather than per-turn, and only ever evict from the *tail* — never rewrite the cached
+head. Make "does this edit touch the cached prefix?" an explicit check before any compaction
+write.
+
+### Recursive Agent Harnesses
+
+[arXiv:2606.13643](https://arxiv.org/abs/2606.13643) (submitted 2026-06-11). Generalizes the RLM
+idea (model recursion — see [llm-gateway-rlm](../comparisons/llm-gateway-rlm.md)) to **harness
+recursion**: the recursive unit is no longer a bare model call but a *full agent harness* with
+filesystem, code execution, and planning. A parent agent **writes and runs an executable script
+that spawns subagent harnesses in parallel** for fine-grained fan-out, and falls back to ordinary
+structured function calls for small subtasks. The paper explicitly frames this as the pattern
+behind Anthropic's "dynamic workflows."
+
+**What inber should consider:** this is the formal name for the code-orchestrates-subagents shape
+inber already touches via the Workflow tool (a script body fanning out `agent()` calls). The
+paper's load-bearing claim is the *dispatch heuristic* — spawn a full recursive harness only for
+fine-grained parallel workloads; use a plain function/tool call for small subtasks — because a
+recursive harness carries real fixed overhead (its own context, tools, planning loop). inber's
+orchestration layer (kanban task-completion-loop, autoworker) should make that the explicit
+routing rule: decompose-and-fan-out to child harnesses when a subtask is independent and
+parallelizable, inline tool calls otherwise, rather than spawning a session per sub-step by
+default.
