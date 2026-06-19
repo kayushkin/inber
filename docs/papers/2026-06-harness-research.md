@@ -508,3 +508,31 @@ orchestration layer (kanban task-completion-loop, autoworker) should make that t
 routing rule: decompose-and-fan-out to child harnesses when a subtask is independent and
 parallelizable, inline tool calls otherwise, rather than spawning a session per sub-step by
 default.
+
+## 2026-06-19 sweep — ownership-typed token budgets as a defense against multi-agent overrun
+
+### Token Budgets: An Empirical Catalog of 63 LLM-Agent Budget-Overrun Incidents, with an Affine-Typed Rust Mitigation
+
+[arXiv:2606.04056](https://arxiv.org/abs/2606.04056)
+
+Catalogs 63 confirmed production budget-overrun incidents across 21 orchestration frameworks
+(2023–2026), each backed by a quoted GitHub issue, organized into an eight-cluster failure
+taxonomy (plus 47 supplementary structural entries). The recurring root cause is that a token /
+cost budget is treated as a plain mutable number passed around between threads — so it gets
+**double-spent** (two subagents debit the same allowance concurrently), **cloned** (a budget
+copied into a fan-out, each branch spending the full amount), or **used after delegation** (a
+parent keeps spending a budget it already handed to a child). The mitigation is `token-budgets`,
+a Rust crate that models a budget as an **affine resource**: cloning it, spending it twice, or
+using it after it's been delegated are *compile errors*, not runtime overruns.
+
+**Why it matters for inber / what to consider:** this is the failure-mode companion to the Codex
+shared rollout-ledger finding (`docs/comparisons/agentic-design-patterns.md`, 06-19 entry) and to
+inber's own Workflow shared token pool (`budget.spent()` is cross-agent across the main loop and
+every sub-workflow). The pool is exactly the shape the paper says fails: a single allowance many
+concurrent agents debit. inber doesn't need Rust affine types, but it should borrow the *invariant*
+— a delegated budget slice must be **owned by exactly one agent at a time**: when a workflow fans
+out, partition the remaining pool into explicit per-branch slices (or a single serialized ledger
+with atomic debits) rather than letting N agents read-then-spend the same `remaining()` value, and
+treat "parent spends after handing a slice to a child" as a bug to assert against. Cheapest concrete
+step: make the cross-agent debit atomic and log any debit that would cross zero, so an overrun is an
+observable event rather than a silent ceiling breach.

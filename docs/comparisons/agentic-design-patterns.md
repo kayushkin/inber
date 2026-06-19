@@ -1124,3 +1124,50 @@ the effective mode.
   named final fallback — rather than implicit ordering scattered across the prehook. Expose the
   *effective* mode for a given tool so it's observable at session start, not inferred.
 
+## Harness-watch — 2026-06-19: volatile context as compaction-surviving reminders + a shared multi-thread token ledger
+
+A coherent Codex stack this window separates *stable* context (injected once, cache-safe)
+from *volatile* context (re-derived per turn / re-stated after compaction), and builds a
+general reminder mechanism for the volatile half.
+
+**1. Turn-scoped vs thread-scoped context contributions ([PR 28911](https://github.com/openai/codex/pull/28911)).**
+The single `ContextContributor` trait is split into thread-scoped (assembled once for the
+conversation) and turn-scoped (assembled from turn-local state at each request) contribution
+methods. The cacheable, slow-changing fragments stay in the stable prefix; only the volatile
+fragments get re-assembled per turn — a structural separation that keeps the prompt prefix
+cache-stable while still letting extensions inject fresh per-turn state.
+
+**2. Reminders that are force-refreshed after every compaction (current-time: [PR 28822](https://github.com/openai/codex/pull/28822) + [28824](https://github.com/openai/codex/pull/28824); rollout budget: [PR 28746](https://github.com/openai/codex/pull/28746) + [28494](https://github.com/openai/codex/pull/28494)).**
+Two unrelated features land on the *same* delivery shape: a **developer message recorded into
+history immediately before a due model request**, on a configurable cadence
+(`reminder_interval_model_requests` for the clock; `reminder_interval_tokens` for the budget),
+with one explicit invariant — **the reminder is always re-stated immediately after a compaction
+event**, because compaction destroys the prior copy and the model would otherwise silently lose
+the time / remaining-budget state. This is push, not pull: the engine restates volatile state
+the model can't recompute, rather than exposing a tool the model must remember to call (contrast
+the 06-09 *pull* `context_remaining` tool).
+
+**3. A shared rollout token ledger across ALL threads under one rollout ([PR 28746](https://github.com/openai/codex/pull/28746) + [28494](https://github.com/openai/codex/pull/28494)).**
+Distinct from the existing per-thread `token_budget`: `rollout_budget` is one ledger every
+subagent thread debits from when it samples, with **separately weighted sampling vs prefill
+tokens** (`sampling_token_weight` 1.0, `prefill_token_weight` 0.1 by default) so cache-read
+prefill counts at a fraction of fresh generation. Lives in shared `AgentControl` state; crossing
+a threshold appends the model-visible "you have N weighted tokens left in the shared session"
+reminder. Pairs with the Token Budgets paper below (`docs/papers/2026-06-harness-research.md`,
+06-19 sweep) — that paper catalogs the failure modes a shared budget hits when accounting isn't
+ownership-typed.
+
+**What inber should consider:**
+- For state the model can't recompute and that compaction silently drops — remaining shared
+  budget, current wall-clock time, an active goal/deadline — adopt the **restate-after-compaction
+  invariant**: the compaction step should re-emit those reminders into the fresh context, not just
+  the summary. inber's summarization path currently rebuilds a digest; it should also carry a small
+  set of *live volatile fragments* re-derived at restate time, not summarized from stale copies.
+- Mirror the **thread-scoped / turn-scoped split** in inber's context assembly so the cache-stable
+  prefix (system prompt, skills catalog, repo bundle) never moves while volatile fragments (time,
+  budget, goal) are layered in per turn — the cache-continuity discipline from the TokenPilot entry
+  (06-18) applied at the contributor boundary.
+- inber's Workflow already has a **shared token pool across the main loop + all sub-workflows**
+  (`budget.spent()` is cross-agent). Borrow the **prefill/sampling weighting** so cache-read tokens
+  don't burn the budget at full rate, and push a threshold reminder into long autoworker/scoper fleets
+  rather than only hard-failing at the ceiling.
