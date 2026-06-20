@@ -1171,3 +1171,55 @@ ownership-typed.
   (`budget.spent()` is cross-agent). Borrow the **prefill/sampling weighting** so cache-read tokens
   don't burn the budget at full rate, and push a threshold reminder into long autoworker/scoper fleets
   rather than only hard-failing at the ceiling.
+
+
+## Harness-watch — 2026-06-20: delegation policy as mutable per-turn state (not static prompt) + the description cap belongs at the render edge, not at storage
+
+Two Codex stacks this window both push the same boundary: keep the *durable* artifact
+full-fidelity, and shape only what the **model sees** at the rendering edge — for delegation
+policy and for skill descriptions respectively.
+
+**1. Multi-agent delegation mode is a per-turn/thread selection injected incrementally, not baked into the system prompt ([PR 28685](https://github.com/openai/codex/pull/28685), [28792](https://github.com/openai/codex/pull/28792)).**
+MAv2 previously carried an explicit-request-only delegation rule inside its *static* usage hint —
+to flip a session to proactive delegation you'd have to rewrite static guidance and prior context.
+The stack makes delegation mode (`explicitRequestOnly` | `proactive`) a **session selection settable
+via `turn/start.multiAgentMode` / `thread/start.multiAgentMode`**, with the effective model-visible
+mode derived *per turn* (gated default-off behind `features.multi_agent_mode`; unset → `explicitRequestOnly`).
+The rule moves **out of the static usage hint into a bounded, tagged developer-context fragment** that is
+emitted in initial context and **only re-emitted when the effective mode changes** — historical rollout
+items are never rewritten; cold resume restores the latest persisted effective mode. Selected value is
+kept distinct from effective value (`null` = no client selection) and persisted in `TurnContextItem` as
+the resume baseline. This is the *same* volatile-vs-stable split as the 06-19 reminder work, now applied
+to a *policy*: don't bake the orchestration policy into the cached prefix (expensive to change, drifts on
+resume) — inject it as an incremental developer message that updates only on transition.
+
+**2. The orchestrator's skill/MCP surface is gated independently from the worker surface ([PR 28942](https://github.com/openai/codex/pull/28942)).**
+Orchestrator-provided skills and Codex Apps MCP tools add model-visible instructions/resources/tools
+*beyond* the local workspace. `[orchestrator.skills].enabled` and `[orchestrator.mcp].enabled`
+(both default `true`, carried in the config lock) let a host disable the **orchestrator-owned** surfaces
+without touching regular skills or regular MCP servers — disabling orchestrator skills suppresses the
+`skills` namespace and its injected context entirely. The delegating agent's tool surface is a separate,
+separately-revocable axis from the executing agent's.
+
+**3. Skill-description cap belongs at the model-visible list boundary, not at load/migration ([PR 29006](https://github.com/openai/codex/pull/29006)).**
+A refinement of the 06-04 per-turn skill-catalog entry. Codex previously enforced a 1024-char description
+limit *while loading/migrating* skills — which rejected valid skills and discarded metadata non-model
+consumers need. The fix: **preserve full `description`/`metadata`/`SKILL.md` on disk**, and cap to
+1021 chars + `...` **only when rendering** the implicit available-skills catalog and the on-demand
+`skills.list` response. Implicit selection stays two-tier: a bounded catalog (name + capped description +
+locator) lets the model make the semantic pick, then `skills.read` pulls the full resource. Same family as
+the 06-05 "tool-surface exclusion is presentation-scoped, not capability removal" rule.
+
+**What inber should consider:**
+- inber's spawn path passes delegation behavior implicitly via agent-store config + prompt. Make
+  **delegation mode a per-session selection with an effective value derived per turn**, and deliver any
+  proactive-vs-explicit policy as an **incremental developer/system fragment re-emitted only on change**
+  (and re-stated after compaction, per 06-19) — not as static system-prompt text that forces a prefix
+  rewrite and silently reverts on resume. Persist the effective mode as the resume baseline.
+- Add a config axis that gates the **orchestrator/parent's** own skill + MCP/tool surface separately from
+  the worker's. In the kanban task-completion-loop and Workflow fan-outs, the dispatcher/parent often
+  needs a *narrower* tool surface than its workers; today they share one allowlist.
+- When inber renders its skills catalog into the prompt, **cap at the render boundary, not at ingest** —
+  keep full SKILL.md + descriptions in skill-store (other consumers and `skills.read`-equivalents need
+  them) and truncate only the model-visible catalog line, with goose-style per-skill token accounting on
+  the rendered slice.
