@@ -417,3 +417,26 @@ auto-scope to the right project instead of the server's launch cwd — relevant 
 autoworker/kanban sessions run concurrent MCP-backed tools in different repos. It's a
 small handshake addition with a real blast-radius payoff (servers can't wander outside
 the declared root) and composes with the existing per-session permission gating.
+
+## Harness-watch — 2026-06-19: a mid-run prompt must enter history as a *plain* user message — the steering wrapper busts the cache
+
+[PR 33039](https://github.com/sst/opencode/pull/33039) removes the "steering-only system
+reminder wrapper" that opencode used to wrap a prompt submitted **while a turn was already
+running** (a steer/interjection). The wrapper rewrote the user message into a tagged
+system-reminder shape before it entered history; the fix sends the mid-run prompt "as a
+normal user message" and adds a test asserting "the next LLM input preserves the exact
+user message shape." The unstated cache mechanic is the point: a steer arrives at the
+*tail* of an already-cached conversation, so wrapping it perturbs the bytes appended after
+the last cache breakpoint and forces the next request to re-process from an earlier point
+than it should — the interjection itself becomes a cache-busting prefix mutation. Sending
+it verbatim keeps the appended suffix identical to what a normal turn would have produced,
+so the cached prefix still matches.
+
+**What inber should consider:** inber injects messages mid-turn (llm-bridge-claudecode's
+message injection, herald/`ask` relays, autoworker steers). Any such interjection should
+land in history as a **plain user message with the exact shape a normal turn produces** —
+do not wrap it in a system-reminder/steering envelope or retag it, because that mutates the
+suffix appended after the live cache breakpoint and turns a cheap append into a cold
+re-prefill. Presentation/role decoration belongs at the render edge, not baked into the
+stored message — and add a test that pins "injected prompt == normal-turn user-message
+shape" so a future wrapper can't silently regress cache hit-rate.

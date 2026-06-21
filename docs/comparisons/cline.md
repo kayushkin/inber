@@ -122,3 +122,28 @@ Two benchmark-driven context changes landed this window.
 **2. Parallel tool calls are a prompt problem, not a runtime problem** ([PR 11514](https://github.com/cline/cline/pull/11514)). Benchmark traces showed Cline emitting ~1 tool call per assistant turn vs OpenCode batching 2–4; because each turn resends the accumulated conversation, one-tool turns multiply the resend cost of every prior result. The fix was purely additive prompting — system-prompt + per-tool-description guidance to batch independent reads/searches/fetches/safe commands into one response — leaving runtime scheduling untouched. Note the open hypothesis: a **singular** tool surface (`read_file` vs `read_files`) may matter, because many models are trained to express parallelism as multiple separate tool-call blocks rather than an array arg.
 
 **What inber should consider:** tool-calls-per-turn is a measurable cost lever independent of whether tools run concurrently. Audit inber's per-turn tool-call count on multi-read tasks; if it skews to one-per-turn, add explicit batch-independent-calls guidance to the agent system prompt and tool descriptions before touching the executor's concurrency config. Weigh exposing singular tool variants if traces show models reluctant to use array-shaped batch tools.
+
+## Harness-watch — 2026-06-19: truncation becomes universal + `tool_use.input` joins the budget (the 50k backstop drops to 8k)
+
+[PR 11475](https://github.com/cline/cline/pull/11475) reworks the `MessageBuilder`
+backstop named in the 06-13 entry. Three contract changes worth stealing. **(1) The
+truncation gate was an opt-in allowlist** — only seven built-in tools were capped, so
+MCP/`createTool()`/`editor`/`apply_patch` results bypassed the per-result cap *yet still
+counted toward the budget*, meaning one huge MCP blob made the budget loop uselessly
+shrink other tools' results and still overflow. Now **every** tool result is truncated
+(the `targetToolNames` param is gone). **(2) `tool_use.input` (model-generated tool
+arguments) was invisible to the budget** — a 400KB `query` arg counted for nothing and
+couldn't be reclaimed; now input strings count toward the aggregate *and* are truncated
+as a last resort, so the budget is "always reclaimable, never one-sided." **(3) The
+per-result cap drops 50,000 → 8,000 chars** (env-overridable for A/B), with binary
+carrier blocks (`image`/`document`/`audio`/`video` with string `data`) protected by a
+*known-type allowlist* so a textual `{type:"log",data}` payload can't dodge every cap,
+and orphaned results fall back to `tool_result.name` when the paired `tool_use` is gone.
+
+**What inber should consider:** inber's `smart-truncation` caps tool *results*. Close the
+same two gaps: (a) make the request-build truncation **universal** — no per-tool
+allowlist, or an unbounded MCP/custom-tool result both evades the cap and starves the
+budget; (b) count and last-resort-truncate **model-generated tool-call arguments**, not
+just results — a model that emits a megabyte `query`/`content` arg is an equal budget
+risk and today inber only bounds the response side. Protect binary carriers by an
+explicit type set, never by "has a `data` field."

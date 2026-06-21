@@ -1223,3 +1223,42 @@ the 06-05 "tool-surface exclusion is presentation-scoped, not capability removal
   keep full SKILL.md + descriptions in skill-store (other consumers and `skills.read`-equivalents need
   them) and truncate only the model-visible catalog line, with goose-style per-skill token accounting on
   the rendered slice.
+
+## Harness-watch — 2026-06-20: give each context window a stable opaque identity + expose its lineage to the model
+
+Two Codex PRs add a context-identity primitive distinct from the token-budget *accounting*
+documented on 06-19. The unit being named is the **context window** — the span of history
+between two compaction/`new_context` boundaries.
+
+**1. UUIDv7 window IDs ([PR 28953](https://github.com/openai/codex/pull/28953)).** A context
+window was identified only by a thread-local monotonic `window_number`. The PR keeps that
+number but adds a **UUIDv7 `window_id`** to `CompactedItem`: a stable opaque identity that
+stays fixed for the life of a window and *rotates* when compaction or `new_context` opens the
+next one. It's generated/rotated with the auto-compaction state and **reconstructed on resume
+and rollback** (legacy records where the numeric id meant the window number are still
+accepted). Notably the UUID is used **only in the model-visible token-budget context** —
+request headers/metadata keep `thread_id:window_number` — i.e. a stable identity for the
+*model's* reasoning, decoupled from the wire identity used for routing.
+
+**2. Window lineage ([PR 29256](https://github.com/openai/codex/pull/29256)).** The rendered
+`<token_budget>` fragment now carries `thread_id`, `first_window_id`, `previous_window_id`,
+and the current window id — all UUIDv7, all **stable across compaction, resume, and rollback**
+(persisted in compacted checkpoints, restored during reconstruction, optional-field-compatible
+with older records). The model can now tell "this is the thread's *first* window" from "I am N
+compactions deep, and the window just before me was X" — lineage it cannot otherwise recover
+once the prior window's text is summarized away.
+
+**What inber should consider:**
+- inber tracks compaction as a summarization event but gives the compacted span no durable
+  **identity**. Assign each context window a stable opaque id (UUIDv7 or similar) that rotates
+  on compaction and survives resume/rollback, and expose `first`/`previous`/`current` window
+  ids in the model-visible budget/state fragment — so a long autoworker/scoper session can
+  reason about *how deep into compaction it is* and reference a prior window without its text.
+  This is the identity layer under the 06-19 restate-after-compaction reminder work.
+- Keep the **model-facing identity distinct from the wire identity**: the reasoning id (stable,
+  lineage-bearing) need not equal the routing/cache key (`thread_id:window_number`,
+  `BridgeSessionID`). This mirrors `reference_harness_session_id_contract` — the id the model
+  sees is not automatically the id the transport keys on; conflating them is the bug.
+- Lineage ids are a cheap substrate for the kanban task-completion-loop and bundle-store: a
+  durable per-window id lets the dispatcher correlate "which compaction window produced this
+  artifact / this card update" across resumes without diffing summarized prose.
