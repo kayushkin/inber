@@ -376,3 +376,23 @@ parsing prose, so it can make a sound retry/escalation decision.
   string-matching prose. Directly aligns with `feedback_status_enum_granularity` (keep the
   enum granular, map to pills at the edge) and is the *outbound* twin of codex #28375
   (error-precedence forwarded to the parent, agentic-design-patterns 06-17).
+
+## Harness-watch — 2026-06-22: non-blocking peek at a running delegate (wait/kill is not the only choice)
+
+**`summon` peek mode ([PR 9519](https://github.com/block/goose/pull/9519)).** `load(task_id)` on an
+async delegate was binary: block until it finishes, or `load(cancel)` to kill it. The PR adds
+`load(task_id, peek: true)` — a **non-blocking, non-destructive status read** of a still-running
+child: its description, elapsed wall-time, turns-taken, how long it's been idle, and the count of
+buffered (un-collected) tool-call outputs. The parent can inspect progress without committing to
+wait-or-kill. This is the *mid-flight* complement to the 06-17 structured result envelope (#9521),
+which only typed the *terminal* outcome.
+
+**What inber should consider:**
+- Give inber's spawn/collect path and the kanban task-completion-loop **dispatcher a non-blocking
+  peek** on a running subagent (turns-taken, idle duration, buffered-output count) so it can make
+  revive / keep-waiting / escalate decisions **without blocking the 5-min curator tick or killing
+  the child**. This directly addresses `feedback_polling_loops` (no leading sleeps) — a peek is a
+  cheap point-in-time read, not a wait — and pairs with the agent-visible turn-budget idea
+  (goose 06-05) and the typed status envelope (06-17): peek reports `turns_taken` against the
+  budget the child already knows. An idle-too-long peek is a concrete signal a worker is stuck at
+  awaiting_permission, the exact failure mode `project_autoworker_leak` fixed reactively.

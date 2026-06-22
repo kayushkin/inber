@@ -536,3 +536,43 @@ with atomic debits) rather than letting N agents read-then-spend the same `remai
 treat "parent spends after handing a slice to a child" as a bug to assert against. Cheapest concrete
 step: make the cross-agent debit atomic and log any debit that would cross zero, so an overrun is an
 observable event rather than a silent ceiling breach.
+
+## 2026-06-22 sweep — keep less context on purpose; make the context manager a separate component
+
+### Less Context, Better Agents: Efficient Context Engineering for Long-Horizon Tool-Using LLM Agents
+
+[arXiv:2606.10209](https://arxiv.org/abs/2606.10209) (submitted 2026-06-08).
+
+On a 50-task tool-using benchmark (GPT-5 over MCP tools), feeding the **full** history scored 71.0%
+task completion; **pruning to the last 5 tool call/response pairs** raised it to 79.0%; adding
+automated summarization of the dropped middle reached **91.6% at lower token cost**. The mechanism
+is blunt and empirical: verbose tool responses both overflow the window and inject *stale state*
+(an old directory listing, a superseded file read) that the model acts on — pruning removes the
+stale evidence as a side effect, and summarization preserves the durable conclusions.
+
+**What inber should consider:** this is direct evidence that inber's compaction should be a *default*
+policy, not a last-resort overflow trigger. The "keep last N tool exchanges verbatim + summarize the
+rest" recipe (N≈5) is cheap to A/B against inber's current retention and plausibly improves *both*
+reliability and cost — the reliability win comes from evicting stale tool state, which a window that
+never compacts keeps re-surfacing. Pairs with the 06-09 *Beyond Compaction* structured-eviction
+finding (`agentic-design-patterns`): both say un-pruned tool output is an active correctness hazard,
+not just a token-budget one. Concrete step: measure inber autoworker/scoper runs with and without an
+always-on last-N+summarize pass before treating full-history as the safe default.
+
+### Learning Agent-Compatible Context Management for Long-Horizon Tasks (AdaCoM)
+
+[arXiv:2605.30785](https://arxiv.org/abs/2605.30785) (submitted 2026-05-29).
+
+Trains a **separate external LLM** (end-to-end RL) to manage a *frozen* agent's context via flexible
+modify/summarize/drop actions, rather than retraining the agent or hard-coding one fixed
+summarization rule. The target is exactly the closed-model setting inber lives in — you can't
+fine-tune the policy model (Claude via API / `claude -p`), and different models/tasks want different
+context strategies — so the manager is a decoupled component you *can* tune.
+
+**What inber should consider:** model compaction as a **pluggable context-manager component decoupled
+from the harness and the agent**, so the strategy can be swapped or tuned per model/task without
+touching the agent loop — a clean fit for inber's harness-layer separation
+(`project_harness_layer_design`, the CONTEXT-MIGRATION doc). Even without RL, the architectural
+takeaway holds: don't bake one summarization rule into the engine; make it a named strategy object
+the harness selects, so the last-N+summarize recipe above and a structured-eviction recipe can
+coexist and be A/B-tested behind one seam.

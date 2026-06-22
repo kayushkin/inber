@@ -1262,3 +1262,38 @@ once the prior window's text is summarized away.
 - Lineage ids are a cheap substrate for the kanban task-completion-loop and bundle-store: a
   durable per-window id lets the dispatcher correlate "which compaction window produced this
   artifact / this card update" across resumes without diffing summarized prose.
+
+## Harness-watch — 2026-06-22: offer volatile state as a pull-tool, not only a pushed reminder; tier web access
+
+Two Codex PRs this week, each a *contract* refinement rather than a new mechanism.
+
+**1. Clock as an on-demand tool ([PR 29011](https://github.com/openai/codex/pull/29011)).** The
+current-time work documented on 06-19 (#28822/#28824) was *push* — the engine restates the
+wall-clock in a compaction-surviving reminder. This adds the *pull* path: a read-only
+`clock`/current-time tool the model can **invoke** to get the same UTC string (structured JSON in
+Code Mode). It's the exact pull-vs-push split codex already drew for `context_remaining` (06-09):
+the same volatile fact is now available both as a fragment the engine restates *and* as a tool the
+model calls when it needs to branch on it deterministically.
+
+**2. Graduated web-access tier ([PR 28489](https://github.com/openai/codex/pull/28489); rename-only
+[#29095](https://github.com/openai/codex/pull/29095)).** `web_search` gains a third mode, `indexed`,
+between `cached` and `live`: queries run live but page *fetches* are restricted to a server-admitted
+URL allowlist. One resolved mode is computed once and shared by both the hosted and standalone
+executors, so the two surfaces can't drift to different trust levels for the same turn.
+
+**What inber should consider:**
+- Where inber injects volatile state as a reminder (time, remaining budget, turn count, current
+  card/plan id), also expose a **cheap read-only tool form** of the same fact. A pushed fragment
+  forces the model to *react* to whatever was last restated; a pull-tool lets it *decide when* to
+  re-check and branch deterministically — and it bridges the gap between compaction restates. Pair,
+  don't replace: keep the push for passive awareness, add the pull for control flow.
+- Model tool web/network access as a **graduated trust tier** (cached → indexed → live), **resolved
+  once per turn and shared by every executor** (tool-store CLI tools, MCP fetchers, the browser
+  MCPs), rather than a per-tool boolean. A single resolved tier that every fetch path reads from
+  prevents the "search tool is sandboxed but the MCP fetcher isn't" drift, and gives the
+  approval/policy layer one axis to gate instead of N.
+- Minor but real ([#28260](https://github.com/openai/codex/pull/28260)): codex added a default-on
+  `auto_compaction` flag you can **turn off so a run fails loud on context overflow** instead of
+  silently compacting. For inber's reproducible/optimization runs (evals, scoper decompositions) a
+  silent compaction window corrupts the experiment — offer a per-session "no auto-compaction, error
+  on overflow" mode. (Aligns with the host "fail fast and loud" directive.)
