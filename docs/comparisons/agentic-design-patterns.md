@@ -1297,3 +1297,56 @@ executors, so the two surfaces can't drift to different trust levels for the sam
   silently compacting. For inber's reproducible/optimization runs (evals, scoper decompositions) a
   silent compaction window corrupts the experiment — offer a per-session "no auto-compaction, error
   on overflow" mode. (Aligns with the host "fail fast and loud" directive.)
+
+## Harness-watch — 2026-06-23: deferring MCP tools behind tool_search becomes the unconditional default (not a scale/flag trigger)
+
+[Codex PR 29486](https://github.com/openai/codex/pull/29486) flips the policy
+documented on 06-05 (tool-surface exclusion is presentation-scoped) into a
+**default**. Previously MCP tools were only placed behind `tool_search` when a
+feature flag was set *or* there were ≥100 installed tools — so the model's tool
+flow depended on both rollout config and tool count. Now, whenever the
+model/provider supports `tool_search` + namespaced tools, **all** effective MCP
+tools are deferred unconditionally; the model never sees them in the first
+request — it receives `tool_search`, searches, gets the matching tool, then calls
+it on the next turn. Direct exposure is kept only as a fallback for older
+model/provider combos that can't search. The `tool_search_always_defer_mcp_tools`
+flag and the 100-tool threshold are both **retired**. The design point: deferral
+isn't a scale optimization you switch on when the prefix gets big — it's the
+correct steady-state shape for *external* tools, so make it the default and
+delete the knob.
+
+**What inber should consider:** inber already has the deferred-tool / `tool_search`
+machinery (TOOL-ROUTING), but if it still gates deferral on a threshold or an
+opt-in flag (the way codex used to), adopt codex's stance: default external/MCP
+and tool-store CLI tools to deferred whenever the active model supports
+search-then-call, and keep eager exposure only as the can't-search fallback.
+Two concrete consequences worth pre-empting: (a) the first turn's prompt should
+carry `tool_search` + in-process/native tools only, never the full external
+catalog — this is the prefix-budget win, and it's stable per session so it stays
+cacheable; (b) any test/eval that assumes a tool is callable on turn 1 must be
+reworked to the search→receive→call two-turn flow, or it will silently pass
+against the fallback path and never exercise the real one.
+
+**Two smaller identity/control refinements the same week:**
+- *Root session id survives cold resume* ([#29327](https://github.com/openai/codex/pull/29327)).
+  A cold-resumed subagent kept its durable thread id but could be handed a *new*
+  session id, splitting one agent tree across multiple sessions after a restart.
+  Codex now persists the **root** session id in every rollout `SessionMeta` and
+  restores it before re-initializing the resumed session, so a nested tree
+  (`root R → parent P → child C`) still rolls up to `R` after resume; legacy
+  rollouts with no `session_id` synthesize it from `id` for back-compat. This
+  extends the context-window-identity thread (06-19/06-20): inber's nested trees
+  (autoworker, kanban task-completion-loop) need the **tree-root** identity to be
+  durable across revive/resume, not just the per-window id — otherwise parent
+  rollup and curator closure see a tree fragmented across sessions after a host
+  restart.
+- *One delegation-mode enum, with a "tools-without-policy-text" option*
+  ([#29324](https://github.com/openai/codex/pull/29324)). Three controls that
+  could disagree (`multiAgentMode`, `features.multi_agent_mode`,
+  `usage_hint_enabled`) collapse into one sticky enum: `none` (multi-agent tools
+  available but **no delegation-policy text injected**), `explicitRequestOnly`
+  (default), `proactive`. The reusable point for inber: keep "are delegation
+  tools present" and "is delegation-policy prose in context" as **independent**
+  axes — some sessions want the orchestration surface without paying the
+  policy-prompt tokens — and report the concrete resolved mode every turn rather
+  than a nullable that clients must re-derive.
