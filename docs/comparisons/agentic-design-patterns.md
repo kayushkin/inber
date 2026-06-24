@@ -1350,3 +1350,65 @@ against the fallback path and never exercise the real one.
   axes — some sessions want the orchestration surface without paying the
   policy-prompt tokens — and report the concrete resolved mode every turn rather
   than a nullable that clients must re-derive.
+
+## Harness-watch — 2026-06-24: token-budget compaction = fresh-window *reset* (no LLM summarization) + code-mode host-handshake protocol
+
+Two codex changes this window, both about what happens at the boundary where a
+turn's context is rebuilt.
+
+**1. Under `Feature::TokenBudget`, compaction is a hard reset to a new context
+window — not a summarization round-trip** ([#29743](https://github.com/openai/codex/pull/29743),
+followed by [#29762](https://github.com/openai/codex/pull/29762)). The usual
+compaction path asks the server (or a local model) to summarize old history and
+carries the summary forward. Token-budget compaction instead routes manual
+`/compact` and inline auto-compaction through `start_new_context_window`: it drops
+all prior user/assistant transcript and tool output and installs a *fresh* window
+seeded only with the standard injected context (AGENTS.md, world-state baseline,
+the compaction-surviving reminders). No server summarization call is made. It's
+still a "compaction" from the client/hook lifecycle's view — pre/post compact hooks
+fire and a `ContextCompaction` item is emitted — but observable side effects aside,
+nothing of the old conversation survives except what the injected context already
+re-states. This is the natural endpoint of the volatile-context-as-reminders thread
+(06-19): once your durable state lives in reminders that survive compaction, a
+reset is cheaper, deterministic, and avoids the summarizer's lossy paraphrase.
+
+**What inber should consider:** inber's compaction (CONTEXT-MIGRATION / smart-truncation)
+assumes summarize-then-continue. Add a **reset-mode compaction** as a selectable
+strategy: when a session's durable state is fully captured in compaction-surviving
+injected context (plan-file path, world-state baseline, persistent reminders), drop
+the transcript and start a fresh window instead of paying a summarization round-trip
+— while still firing the same compact hooks / emitting the same `ContextCompaction`
+event so the kanban curator and any Stop-time reviewers see an identical lifecycle.
+The precondition is the hard part: reset-mode is only safe if nothing
+decision-relevant lives *only* in the transcript, so gate it on "is durable state
+externalized?" Pairs with *Less Context Better Agents* (2606.10209, last-N+summarize)
+and *Beyond Compaction* (budget-eviction) already in `docs/papers/2026-06-harness-research.md`.
+
+**2. Code mode gets a transport-neutral host↔runtime handshake protocol**
+([#29515](https://github.com/openai/codex/pull/29515); cluster also renames
+`CodeModeService` and drops `Session::is_alive()`). Codex's "code mode" is the
+tool-execution-as-code architecture: the model writes code that runs in a sandbox
+and calls back to the host for tool execution, instead of emitting one tool-call
+block per action. This PR is additive scaffolding — versioned `protocol-version`,
+capability negotiation, session-identifier types, and explicit `ClientToHost` /
+`HostToClient` JSON envelopes for connect/open/close, with strict unknown-field
+rejection and round-trip wire tests; cell, tool-callback, and failure-domain
+messages are deferred. The design stance worth noting: code mode is being built as
+a **versioned, capability-negotiated wire protocol between two actors** (host and
+code runtime), not as an in-process call — so the runtime can be sandboxed/remote
+and the host can refuse incompatible versions at handshake.
+
+**What inber should consider:** the empirical case for code mode is real — *From Tool
+Orchestration to Code Execution: A Study of MCP Design Choices*
+([arXiv:2602.15945](https://arxiv.org/abs/2602.15945)) shows a code-execution MCP
+agent (CE-MCP) significantly cuts token usage and execution latency vs per-tool
+calls by delegating orchestration/data-shuffling to a sandbox, **but vastly expands
+the attack surface** (it catalogs 16 attack classes incl. exception-mediated code
+injection and unsafe capability synthesis). So if inber ever lets an agent batch
+tool orchestration as sandboxed code (instead of N MCP round-trips), copy codex's
+framing: make it a **versioned, capability-negotiated handshake between the host and
+an isolated runtime** — never an in-process eval — so the host can pin the protocol
+version, scope which tool callbacks the runtime may invoke, and contain the blast
+radius. This composes with the MCP `roots` scoping (opencode 06-15) and the
+tiered-permission ladder (claude-code 06-02): code mode is exactly the surface where
+those containment controls earn their keep.
