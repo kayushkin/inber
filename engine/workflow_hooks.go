@@ -2,9 +2,9 @@ package engine
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/kayushkin/repo-store/repodetect"
 )
 
 // WorkflowHooks orchestrates auto-commit, auto-format, and auto-test.
@@ -40,21 +40,20 @@ func NewWorkflowHooks(repoRoot, sessionID, agentName string, cfg AutoWorkflowCon
 	return h
 }
 
-// detectProject determines the project type based on files in the repo.
+// detectProject sets the project type used to pick build/format/test commands.
+// It delegates to the shared repodetect ruleset (the single source of truth, in
+// repo-store) rather than a local first-match copy: detection now sees every
+// language present (a Go service with a React frontend reports both), and
+// PrimaryLanguage collapses that to the one command-selection key the workflow
+// hooks need. Preference order is backend-first (go > rust > python > node), so
+// a mixed backend+frontend repo selects the backend's commands.
 func (h *WorkflowHooks) detectProject() {
-	if _, err := os.Stat(filepath.Join(h.repoRoot, "go.mod")); err == nil {
-		h.projectType = "go"
+	sig, err := repodetect.Detect(h.repoRoot)
+	if err != nil {
+		h.projectType = ""
 		return
 	}
-	if _, err := os.Stat(filepath.Join(h.repoRoot, "package.json")); err == nil {
-		h.projectType = "node"
-		return
-	}
-	if _, err := os.Stat(filepath.Join(h.repoRoot, "Cargo.toml")); err == nil {
-		h.projectType = "rust"
-		return
-	}
-	h.projectType = ""
+	h.projectType = sig.PrimaryLanguage()
 }
 
 // OnToolResult runs after a tool completes.
