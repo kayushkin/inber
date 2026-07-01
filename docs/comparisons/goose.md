@@ -396,3 +396,31 @@ which only typed the *terminal* outcome.
   (goose 06-05) and the typed status envelope (06-17): peek reports `turns_taken` against the
   budget the child already knows. An idle-too-long peek is a concrete signal a worker is stuck at
   awaiting_permission, the exact failure mode `project_autoworker_leak` fixed reactively.
+
+## Harness-watch — 2026-07-01: a volatile block in `system` still busts the *message* cache — put it after the last message breakpoint
+
+**[PR #10030](https://github.com/block/goose/pull/10030) — keep turn-context out of the Anthropic prefix cache.**
+goose injects a per-turn "turn-context" block (current time to the minute, cwd, turn budget,
+compaction status) onto the request before every Anthropic call. Because it sat *upstream* of the
+message `cache_control` breakpoints and changed every minute, its bytes were inside the cached
+prefix and the hash missed **every** call — goose paid cache *creation* (1.25× input) instead of
+*reads* (0.10×) on the whole conversation, turn after turn. The fix relocates the volatile block to
+the **tail of the messages, after the last breakpoint**. The load-bearing detail: a trailing
+`system` block is *not* enough — Anthropic hashes `tools → system → messages`, so a changing
+`system` entry still precedes the message breakpoints and re-creates the message cache. Their
+isolation test nails it: volatile-in-prefix → `read 0 / creation 1946`; volatile-as-trailing-system
+→ `read 2162 / creation 1946` (message cache still lost); volatile-as-message-tail →
+`read 3885 / creation 0` (fully preserved).
+
+**What inber should consider:** inber has the *exact* structure goose's rejected fix has. `engine/turn_prompt.go`
+places `cache_control` on the last stable block before `__CACHE_BOUNDARY__` and keeps the volatile
+blocks (fleet status, recent files, context injectors) at the **tail of the `system` array** — the
+"trailing system block" case. Since inber also carries message-side breakpoints (BP3, the latest
+user message — see `cache-optimization.md`), that volatile system tail sits before the message
+breakpoints in the `tools → system → messages` hash and **re-creates the message cache every turn**,
+silently, exactly as goose measured. Action: move inber's per-turn volatile blocks out of `system`
+and append them as the **last message** (after the final `cache_control`), leaving only truly stable
+content in `system`; then re-run the `cache-optimization.md` before/after harness on a multi-turn
+session and confirm `creation → 0` on the conversation prefix. This is the missing enforcement half
+of that doc's own thesis — the doc keeps dynamic content out of the *system* prefix but doesn't
+account for volatile system content invalidating the *message* prefix downstream.

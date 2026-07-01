@@ -222,3 +222,17 @@ opencode's [PR 26786](https://github.com/sst/opencode/pull/26786) (auto-placemen
 **Action:** retarget BP3 to the latest user message; measure intra-turn cache hit rate on a multi-tool-call turn before/after. Same change also makes the `auto`-style "always cache" default safe to flip (Anthropic's 5m cache write is 1.25×, read is 0.1× — single reuse beats no-cache).
 
 Companion empirical result from [arXiv:2601.06007](https://arxiv.org/abs/2601.06007) ("Don't Break the Cache"): 41–80% API cost reduction and 13–31% TTFT improvement across providers when dynamic content is kept *out* of the cached prefix — already this doc's thesis, but now backed by 500+ session measurements. See `docs/papers/2026-05-harness-research.md` for the writeup.
+
+## 2026-07-01 — volatile *system* content silently busts the *message* cache
+
+goose [PR #10030](https://github.com/block/goose/pull/10030) proves (with an Anthropic isolation
+test) that keeping volatile bytes out of the *system* prefix is not sufficient: because Anthropic
+hashes `tools → system → messages`, a per-turn block placed even at the **tail of `system`** still
+precedes the message breakpoints and re-creates the *message* cache every call. inber has this exact
+shape — `engine/turn_prompt.go` keeps volatile blocks (fleet status, recent files, injectors) at the
+tail of the `system` array while BP3 caches the latest user message downstream, so the conversation
+prefix is being re-created every turn. **Action:** move per-turn volatile blocks out of `system` and
+append them as the **last message** (after the final `cache_control`); verify `creation → 0` on the
+conversation prefix with the harness above. Full analysis + measurements: `comparisons/goose.md`
+(07-01 entry). Companion paper: TokenPilot ([arXiv:2606.17016](https://arxiv.org/abs/2606.17016),
+`papers/2026-06-harness-research.md`) — batch-turn eviction so shrinking context doesn't churn the prefix.

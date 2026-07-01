@@ -576,3 +576,28 @@ touching the agent loop — a clean fit for inber's harness-layer separation
 takeaway holds: don't bake one summarization rule into the engine; make it a named strategy object
 the harness selects, so the last-N+summarize recipe above and a structured-eviction recipe can
 coexist and be A/B-tested behind one seam.
+
+---
+
+## Harness-watch addendum — 2026-07-01 sweep
+
+### TokenPilot: Cache-Efficient Context Management for LLM Agents
+
+[arXiv:2606.17016](https://arxiv.org/abs/2606.17016) (June 2026).
+
+Argues that the usual context-shrinking tactics — text pruning, dynamic memory eviction — quietly
+*hurt* because their "unconstrained sequence mutations" reorder the prompt, causing prefix
+mismatches and cache invalidation: you save tokens on paper and lose the cache in practice.
+TokenPilot is dual-granularity: (1) **Ingestion-Aware Compaction** at the harness's ingestion gate,
+which stabilizes the prompt prefix and strips open-world environmental noise *before* it enters
+context; and (2) **Lifecycle-Aware Eviction**, which tracks each segment's residual utility and
+offloads it on a **conservative batch-turn schedule** rather than per-turn — so evictions don't
+churn the prefix every step. Reported ~56–61% cost reduction with no task-quality loss.
+
+**What inber should consider:** inber's `smart-truncation.md` / memory-eviction path evicts on a
+per-request budget check, which is precisely the "mutate the sequence every turn" pattern TokenPilot
+warns invalidates the cache. Adopt the **batch-turn eviction cadence**: only re-shape context every
+K turns (or on a compaction boundary), so the cacheable prefix stays byte-stable between reshapes
+and the eviction win isn't cancelled by cache re-creation. Directly compounds with the goose #10030
+finding (`comparisons/goose.md`, 07-01) and the AdaCoM pluggable-context-manager takeaway above:
+make "when to reshape" an explicit, cadence-controlled policy, not an every-turn side effect.
