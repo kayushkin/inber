@@ -23,15 +23,15 @@ func TestHooksInterceptTools(t *testing.T) {
 	})
 	
 	// Add a tool
-	ag.AddTool(tools.Shell())
+	ag.AddTool(tools.ShellCommands())
 	
 	// Manually trigger a tool call simulation
 	// In a real scenario, this would happen during Agent.Run()
 	// For this test, we verify the tool structure is compatible
 	
-	shellTool := tools.Shell()
-	if shellTool.Name != "shell" {
-		t.Errorf("tool name should be 'shell', got %s", shellTool.Name)
+	shellTool := tools.ShellCommands()
+	if shellTool.Name != "shell_commands" {
+		t.Errorf("tool name should be 'shell_commands', got %s", shellTool.Name)
 	}
 	
 	// Verify Run function exists and is callable
@@ -51,10 +51,10 @@ func TestHooksInterceptTools(t *testing.T) {
 
 func TestToolWrapperPreservesFields(t *testing.T) {
 	tools := []agent.Tool{
-		tools.Shell(),
-		tools.ReadFile(),
-		tools.WriteFile(),
-		tools.EditFile(),
+		tools.ShellCommands(),
+		tools.ReadFiles(),
+		tools.WriteFiles(),
+		tools.EditFiles(),
 		tools.ListFiles(),
 	}
 	

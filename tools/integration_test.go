@@ -15,9 +15,9 @@ func TestToolsIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	// Test shell tool
-	shellTool := tools.Shell()
-	if shellTool.Name != "shell" {
-		t.Errorf("expected name 'shell', got %s", shellTool.Name)
+	shellTool := tools.ShellCommands()
+	if shellTool.Name != "shell_commands" {
+		t.Errorf("expected name 'shell_commands', got %s", shellTool.Name)
 	}
 	
 	result, err := shellTool.Run(ctx, `{"command": "echo hello"}`)
@@ -29,7 +29,7 @@ func TestToolsIntegration(t *testing.T) {
 	}
 
 	// Test write_file tool
-	writeTool := tools.WriteFile()
+	writeTool := tools.WriteFiles()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	input := `{"path": "` + testFile + `", "content": "test content"}`
 	
@@ -51,7 +51,7 @@ func TestToolsIntegration(t *testing.T) {
 	}
 
 	// Test read_file tool
-	readTool := tools.ReadFile()
+	readTool := tools.ReadFiles()
 	input = `{"path": "` + testFile + `"}`
 	
 	result, err = readTool.Run(ctx, input)
@@ -63,7 +63,7 @@ func TestToolsIntegration(t *testing.T) {
 	}
 
 	// Test edit_file tool
-	editTool := tools.EditFile()
+	editTool := tools.EditFiles()
 	input = `{"path": "` + testFile + `", "old_text": "test", "new_text": "edited"}`
 	
 	result, err = editTool.Run(ctx, input)
