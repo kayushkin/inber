@@ -17,10 +17,17 @@ func OpenDB(repoRoot string) (*SQLiteStore, error) {
 	}
 
 	dbPath := filepath.Join(dir, "sessions.db")
-	db, err := sql.Open("sqlite", dbPath+"?_journal=wal&_timeout=5000")
+	// modernc.org/sqlite only understands _pragma=NAME(VALUE); it silently ignores
+	// DSN keys it does not recognise, so a mattn-style ?_journal=wal&_timeout=5000
+	// applies neither pragma and reports no error.
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open sessions db: %w", err)
 	}
+	// busy_timeout alone does not stop modernc surfacing SQLITE_BUSY to concurrent
+	// writers; a single connection serialises them. Safe here: this package uses no
+	// transactions, so nothing can hold the connection while waiting for another.
+	db.SetMaxOpenConns(1)
 
 	if err := migrate(db); err != nil {
 		db.Close()

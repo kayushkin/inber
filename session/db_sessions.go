@@ -36,16 +36,21 @@ func (d *SQLiteStore) SetTask(sessionID, task string) error {
 
 // ListActiveStatus returns running agents with their latest turn time and task.
 // Cleans up stale sessions (dead PIDs) as a side effect.
+//
+// Turn count and latest-turn time are aggregated in Go rather than by SQL. The
+// timestamp columns hold a Go time.Time as the driver encodes it, which SQLite's
+// own date functions cannot parse (strftime returns NULL on it). The driver does
+// decode the column back into a time.Time — but only for a *bare column*, whose
+// declared type it can see. An expression such as COALESCE(MAX(t.started_at), ...)
+// has no declared type, so the driver hands back a string and the scan fails. So
+// every timestamp here is selected as a bare column, and the aggregation that
+// would otherwise wrap one happens below.
 func (d *SQLiteStore) ListActiveStatus() ([]ActiveAgentStatus, error) {
 	rows, err := d.db.Query(`
-		SELECT s.id, s.agent, s.model, COALESCE(s.task,''), s.pid,
-			COALESCE(strftime('%s', s.started_at), 0),
-			COUNT(t.turn),
-			COALESCE(strftime('%s', COALESCE(MAX(t.started_at), s.started_at)), 0)
+		SELECT s.id, s.agent, s.model, COALESCE(s.task,''), s.pid, s.started_at, t.started_at
 		FROM sessions s
 		LEFT JOIN turns t ON s.id = t.session_id
 		WHERE s.status = 'running'
-		GROUP BY s.id
 		ORDER BY s.started_at DESC
 	`)
 	if err != nil {
@@ -53,24 +58,58 @@ func (d *SQLiteStore) ListActiveStatus() ([]ActiveAgentStatus, error) {
 	}
 	defer rows.Close()
 
-	var result []ActiveAgentStatus
-	var stale []string
+	// One row per (session, turn); a session with no turns yields a single row with
+	// a NULL turn timestamp. Preserve the query's session ordering.
+	var order []string
+	byID := make(map[string]*ActiveAgentStatus)
+	pids := make(map[string]int)
 	for rows.Next() {
-		var a ActiveAgentStatus
-		var pid int
-		var startedAtUnix, lastTurnUnix int64
-		err := rows.Scan(&a.SessionID, &a.Agent, &a.Model, &a.Task, &pid, &startedAtUnix, &a.Turns, &lastTurnUnix)
-		if err != nil {
+		var (
+			sessionID, agent, model, task string
+			pid                           int
+			startedAt                     time.Time
+			turnStartedAt                 sql.NullTime
+		)
+		if err := rows.Scan(&sessionID, &agent, &model, &task, &pid, &startedAt, &turnStartedAt); err != nil {
 			return nil, err
 		}
-		a.StartedAt = time.Unix(startedAtUnix, 0)
-		a.LastTurn = time.Unix(lastTurnUnix, 0)
-		if !isProcessAlive(pid) {
-			stale = append(stale, a.SessionID)
+
+		a := byID[sessionID]
+		if a == nil {
+			a = &ActiveAgentStatus{
+				SessionID: sessionID,
+				Agent:     agent,
+				Model:     model,
+				Task:      task,
+				StartedAt: startedAt,
+				LastTurn:  startedAt, // no turns yet: the session start is the latest activity
+			}
+			byID[sessionID] = a
+			pids[sessionID] = pid
+			order = append(order, sessionID)
+		}
+
+		if turnStartedAt.Valid {
+			a.Turns++
+			if turnStartedAt.Time.After(a.LastTurn) {
+				a.LastTurn = turnStartedAt.Time
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var result []ActiveAgentStatus
+	var stale []string
+	for _, id := range order {
+		a := byID[id]
+		if !isProcessAlive(pids[id]) {
+			stale = append(stale, id)
 			continue
 		}
 		a.Duration = time.Since(a.StartedAt)
-		result = append(result, a)
+		result = append(result, *a)
 	}
 
 	// Clean up stale sessions

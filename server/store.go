@@ -18,10 +18,19 @@ type Store struct {
 // NewStore opens or creates the server database.
 func NewStore(dbPath string) (*Store, error) {
 	os.MkdirAll(filepath.Dir(dbPath), 0755)
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	// modernc.org/sqlite only understands _pragma=NAME(VALUE); it silently ignores
+	// DSN keys it does not recognise, so a mattn-style ?_journal_mode=WAL&_busy_timeout=5000
+	// applies neither pragma and reports no error.
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open server db: %w", err)
 	}
+	// busy_timeout alone does not stop modernc surfacing SQLITE_BUSY to concurrent
+	// writers, and this DB is written from concurrent HTTP handlers. A single
+	// connection serialises them. Safe here: this package uses no transactions, so
+	// nothing can hold the connection while waiting for another.
+	db.SetMaxOpenConns(1)
+
 	if err := migrateGatewayDB(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate server db: %w", err)
