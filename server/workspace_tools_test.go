@@ -333,10 +333,16 @@ func TestToolsForAgent(t *testing.T) {
 		toolNames[tool.Name] = true
 	}
 
-	for _, expected := range []string{"spawn_agent", "sessions_list", "steer_agent", "merge_workspace", "reject_workspace", "fix_workspace", "list_workspaces"} {
+	for _, expected := range []string{"spawn_agent", "steer_agent", "merge_workspace", "reject_workspace", "fix_workspace", "list_workspaces"} {
 		if !toolNames[expected] {
 			t.Errorf("orchestrator missing tool: %s", expected)
 		}
+	}
+
+	// sessions_list is deliberately NOT a tool. The orchestrator reads the live
+	// session list out of its system prompt instead — see TestOrchestratorGetsSessionStatusWithoutASessionsListTool.
+	if toolNames["sessions_list"] {
+		t.Error("sessions_list is no longer a tool; the orchestrator gets session status via a context injector")
 	}
 
 	// Non-orchestrator agent does NOT get workspace tools.
@@ -345,6 +351,25 @@ func TestToolsForAgent(t *testing.T) {
 		if tool.Name == "merge_workspace" || tool.Name == "reject_workspace" || tool.Name == "fix_workspace" {
 			t.Errorf("non-orchestrator should not have tool: %s", tool.Name)
 		}
+	}
+}
+
+// TestOrchestratorGetsSessionStatusWithoutASessionsListTool pins the capability
+// that replaced the sessions_list tool when it was deleted. The orchestrator no
+// longer calls a tool to enumerate sessions; contextInjectorsFor hands it a
+// live session block in its system prompt, and only the orchestrator gets one.
+// Without this, dropping sessions_list from the tool list above would look like
+// the orchestrator had simply lost the ability to see its sub-agents.
+func TestOrchestratorGetsSessionStatusWithoutASessionsListTool(t *testing.T) {
+	mock := &mockWorkspaceManager{}
+	srv := newTestServer(t, mock)
+
+	if got := srv.contextInjectorsFor("session:1", "claxon"); len(got) == 0 {
+		t.Error("orchestrator got no context injectors — it can no longer see the session list at all")
+	}
+
+	if got := srv.contextInjectorsFor("session:2", "brigid"); got != nil {
+		t.Errorf("non-orchestrator should get no session status, got %d injectors", len(got))
 	}
 }
 

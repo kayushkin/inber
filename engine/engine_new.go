@@ -274,7 +274,7 @@ func setupAgentRegistry(agentConfig *registry.AgentConfig, client *anthropic.Cli
 // needsSpawnTools checks if the agent configuration requires spawn tools.
 func needsSpawnTools(tools []string) bool {
 	for _, tool := range tools {
-		if tool == "spawn_agent" || tool == "sessions_list" || tool == "spawn_*" {
+		if tool == "spawn_agent" || tool == "spawn_*" {
 			return true
 		}
 	}

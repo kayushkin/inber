@@ -71,9 +71,9 @@ Create `agents.json` in the project root with system configuration:
       "model": "claude-sonnet-4-5",
       "thinking": 0,
       "tools": [
-        "shell",
-        "read_file",
-        "write_file"
+        "shell_commands",
+        "read_files",
+        "write_files"
       ],
       "context": {
         "tags": ["code"],

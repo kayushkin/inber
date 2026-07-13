@@ -20,19 +20,19 @@ func TestToolScoping(t *testing.T) {
 				Name:   "minimal-agent",
 				Model:  "claude-3-haiku-20240307",
 				System: "You are a minimal agent",
-				Tools:  []string{"read_file"},  // Only one tool
+				Tools:  []string{"read_files"},  // Only one tool
 			},
 			"power-agent": {
 				Name:   "power-agent",
 				Model:  "claude-3-sonnet-20240229",
 				System: "You are a powerful agent",
-				Tools:  []string{"shell", "read_file", "write_file", "edit_file"}, // Multiple tools
+				Tools:  []string{"shell_commands", "read_files", "write_files", "edit_files"}, // Multiple tools
 			},
 			"read-only-agent": {
 				Name:   "read-only-agent",
 				Model:  "claude-3-haiku-20240307",
 				System: "You are a read-only agent",
-				Tools:  []string{"read_file", "list_files"}, // Read-only tools
+				Tools:  []string{"read_files", "list_files"}, // Read-only tools
 			},
 		},
 		agents:   make(map[string]*agent.Agent),
@@ -48,7 +48,7 @@ func TestToolScoping(t *testing.T) {
 	
 	// Check that the agent has exactly 1 tool (read_file)
 	minimalTools := getAgentToolNames(minimalAgent)
-	expectedMinimal := []string{"read_file"}
+	expectedMinimal := []string{"read_files"}
 	if !equalStringSlices(minimalTools, expectedMinimal) {
 		t.Errorf("Minimal agent tools mismatch. Expected: %v, Got: %v", expectedMinimal, minimalTools)
 	}
@@ -60,7 +60,7 @@ func TestToolScoping(t *testing.T) {
 	}
 	
 	powerTools := getAgentToolNames(powerAgent)
-	expectedPower := []string{"shell", "read_file", "write_file", "edit_file"}
+	expectedPower := []string{"shell_commands", "read_files", "write_files", "edit_files"}
 	if !equalStringSlices(powerTools, expectedPower) {
 		t.Errorf("Power agent tools mismatch. Expected: %v, Got: %v", expectedPower, powerTools)
 	}
@@ -72,21 +72,21 @@ func TestToolScoping(t *testing.T) {
 	}
 	
 	readOnlyTools := getAgentToolNames(readOnlyAgent)
-	expectedReadOnly := []string{"read_file", "list_files"}
+	expectedReadOnly := []string{"read_files", "list_files"}
 	if !equalStringSlices(readOnlyTools, expectedReadOnly) {
 		t.Errorf("Read-only agent tools mismatch. Expected: %v, Got: %v", expectedReadOnly, readOnlyTools)
 	}
 
 	// Test that agents don't have tools they weren't configured for
-	if containsString(minimalTools, "shell") {
+	if containsString(minimalTools, "shell_commands") {
 		t.Error("Minimal agent should not have shell tool")
 	}
 	
-	if containsString(readOnlyTools, "shell") {
+	if containsString(readOnlyTools, "shell_commands") {
 		t.Error("Read-only agent should not have shell tool")
 	}
 	
-	if containsString(readOnlyTools, "write_file") {
+	if containsString(readOnlyTools, "write_files") {
 		t.Error("Read-only agent should not have write_file tool")
 	}
 }
@@ -102,7 +102,7 @@ func TestInvalidToolHandling(t *testing.T) {
 				Name:   "invalid-tool-agent",
 				Model:  "claude-3-haiku-20240307",
 				System: "You are an agent with invalid tools",
-				Tools:  []string{"read_file", "nonexistent_tool", "write_file"}, // Invalid tool in the middle
+				Tools:  []string{"read_files", "nonexistent_tool", "write_files"}, // Invalid tool in the middle
 			},
 		},
 		agents:   make(map[string]*agent.Agent),

@@ -18,18 +18,38 @@ func TestToolRegistry(t *testing.T) {
 	}
 
 	// Test Get
-	tool, err := tr.Get("read_file")
+	tool, err := tr.Get("read_files")
 	if err != nil {
-		t.Errorf("Get(read_file) failed: %v", err)
+		t.Errorf("Get(read_files) failed: %v", err)
 	}
-	if tool.Name != "read_file" {
-		t.Errorf("expected tool name read_file, got %s", tool.Name)
+	if tool.Name != "read_files" {
+		t.Errorf("expected tool name read_files, got %s", tool.Name)
 	}
 
 	// Test unknown tool
 	_, err = tr.Get("unknown_tool")
 	if err == nil {
 		t.Error("expected error for unknown tool")
+	}
+}
+
+// TestRegistryKeyIsTheToolsOwnName pins the invariant that a tool is reachable
+// under exactly the name it declares. Registering under a separately-supplied
+// string is what let the registry keys and tool-store's names drift apart when
+// tool-store renamed read_file -> read_files and friends: the agent configs and
+// the tests kept asking for names no tool answered to, and nothing caught it.
+func TestRegistryKeyIsTheToolsOwnName(t *testing.T) {
+	tr := NewToolRegistry()
+
+	for _, name := range tr.List() {
+		tool, err := tr.Get(name)
+		if err != nil {
+			t.Fatalf("Get(%s) failed for a name List() returned: %v", name, err)
+		}
+		if tool.Name != name {
+			t.Errorf("tool registered under key %q declares Name %q — a config asking for %q gets a tool that calls itself %q",
+				name, tool.Name, name, tool.Name)
+		}
 	}
 }
 
@@ -47,7 +67,7 @@ func TestToolRegistry_Register(t *testing.T) {
 	}
 
 	// Register the test tool
-	tr.Register("test_tool", testTool)
+	tr.Register(testTool)
 
 	// Verify it was registered
 	retrieved, err := tr.Get("test_tool")
