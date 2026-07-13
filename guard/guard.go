@@ -178,10 +178,15 @@ func (g *Guard) IsRepeating() bool {
 
 // --- Tool classification (stubs) ---
 
+// Every name below must be one a tool actually answers to — a name no tool has
+// is not a safe default, it is a hole: isDangerous silently stopped matching the
+// write tools when tool-store renamed write_file -> write_files, so Assist mode
+// would have waved writes through without approval. TestClassifiedToolsExist
+// pins each name against the real tool set.
+
 func isReadOnly(tool string) bool {
-	// TODO: classify tools by read/write/execute
 	switch tool {
-	case "read_file", "list_files", "search_files", "memory_load", "memory_search",
+	case "read_files", "list_files", "ripgrep", "memory_expand", "memory_search",
 		"repo_map", "recent_files", "web_search":
 		return true
 	}
@@ -189,9 +194,8 @@ func isReadOnly(tool string) bool {
 }
 
 func isDangerous(tool string) bool {
-	// TODO: classify tools that need approval in Assist mode
 	switch tool {
-	case "shell_commands", "write_file", "edit_file", "delete_file", "deploy":
+	case "shell_commands", "write_files", "edit_files", "deploy":
 		return true
 	}
 	return false
