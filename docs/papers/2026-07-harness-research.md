@@ -1,12 +1,19 @@
 # Harness Research — July 2026
 
-Notes from the harness-watch sweep on 2026-07-13. Four arXiv papers from the
-last ~30 days that passed the not-already-covered check against
-`2026-04/05/06-harness-research.md` and `agentic-design-patterns.md` (highest
-previously-cited ID: 2606.17016 TokenPilot).
+Notes from the July harness-watch sweeps. Every paper here passed the
+not-already-covered check against `2026-04/05/06-harness-research.md` and
+`agentic-design-patterns.md`, and every `published` date was confirmed against the
+arXiv Atom API rather than a search snippet (search results routinely surface
+out-of-window work with in-window-looking IDs).
 
-Two of the four (routing) are best read as a **pair that disagrees**, and the
-disagreement is the point — see the cross-cutting note at the bottom.
+- **2026-07-13 sweep** — four papers; the two routing papers are best read as a
+  **pair that disagrees**, and the disagreement is the point (cross-cutting note
+  at the end of that section).
+- **2026-07-14 sweep** — six papers in three groups (non-summarizable context;
+  the approval-view fidelity gap; retrieval as a trajectory-time loop). Jump to
+  `# 2026-07-14 sweep` below.
+
+# 2026-07-13 sweep
 
 ## ActPlane: Programmable OS-Level Policy Enforcement for Agent Harnesses
 
@@ -171,3 +178,166 @@ LLM Agents"* (2026-07-07) — read-only pre-execution gates that inspect a propo
 tool call *against current state* before allowing a write; 29.6%→42.0% on
 τ²-bench airline. Same permission-boundary slot as ActPlane but weaker for inber
 (non-coding benchmark, domain-specific gates).
+
+---
+
+# 2026-07-14 sweep
+
+Six further in-window papers (all `published` dates confirmed against the arXiv
+Atom API, not search snippets). They fall into three groups, and each group lands
+on a section written the same day in `agentic-design-patterns.md`.
+
+## Group A — some context is not summarizable, and compaction is where safety dies
+
+**Governance Decay: How Context Compaction Silently Erases Safety Constraints in
+Long-Horizon LLM Agents** — [arXiv:2606.22528](https://arxiv.org/abs/2606.22528)
+(2026-06-21). The finding is stark: in-context governance constraints that agents
+reliably obey *while visible* get dropped by the summarizer, and the violation rate
+goes **0% → 30%** (up to 59% on some models) purely as a function of compaction. The
+conditional is the proof: when the constraint survives the summary, violations stay
+at **0%**; when it is dropped, **38%**. They then demonstrate a **Compaction-Eviction
+Attack** — adversarial context crafted to bias the summarizer into omitting the
+policy — which defeats every model tested. The mitigation, *Constraint Pinning*
+(quarantine constraints from the lossy path entirely), restores 0%.
+
+**Plans Don't Persist: Why Context Management Is Load Bearing for LLM Agents** —
+[arXiv:2606.22953](https://arxiv.org/abs/2606.22953) (2026-06-22). Using "replay
+pairing" (same trajectory with and without the plan in history, measuring
+hidden-state divergence), plan signal **collapses 4.1× within a single
+action-observation step**: models do not internalize plans as persistent state, they
+depend on the plan text remaining *literally* in context. Naive plan eviction costs
+**34.7pp** on ALFWorld — and the negative result is the valuable half:
+**probe-gated re-surfacing does not recover it.** Once the trajectory has drifted,
+putting the plan back does not undo the drift. Prevention only; there is no repair.
+
+**What inber should consider:** these two papers are the research statement of the
+same structural claim as the 07-13/07-14 compaction entries in
+`agentic-design-patterns.md`, and together they say something sharper than either
+alone: **a compactor that is allowed to see and rewrite everything is a compactor
+that will eventually delete the one thing that was load-bearing.** The harness needs
+a **pinned region** — content re-rendered verbatim every turn, at a stable position,
+which the summarizer is structurally incapable of touching. Two concrete inber
+consequences: **(a)** inber's `conversation/summarize.go` renders *all* old messages
+into `messagesToText(oldMessages)` and hands them to a model — so any behavioral
+constraint that arrived as prompt text (`CLAUDE.md` directives, "surface ambiguity
+before implementing", the auto-ship rules) is inside the blast radius and can be
+summarized away mid-session, silently, with no error. inber is *partly* immune where
+enforcement is a prehook rather than prompt text — which is a strong argument for
+migrating *any* rule that actually matters out of the prompt and into the
+permission-store, since a prehook rule cannot be summarized away. **(b)** The
+Compaction-Eviction Attack is the nastier half and inber is exposed: a hostile file
+that inber *reads into context* can bias its own summarizer into dropping a
+constraint. That makes "what may the summarizer see" a security boundary, not just a
+budget one. And per *Plans Don't Persist*, inber's plan/todo state must be
+re-rendered verbatim each turn rather than left to survive as history — with the
+explicit warning that a "detect decay, then re-inject" recovery scheme, which is the
+obvious thing to build, **is measured not to work.**
+
+## Group B — the approval view can lie, and the retry path is where privilege escalates
+
+**Unicode TAG-Block Concealment of Tool-Metadata Payloads in MCP: An Approval-View
+Fidelity Gap** — [arXiv:2607.05744](https://arxiv.org/abs/2607.05744) (2026-07-07).
+Nothing in MCP requires that the bytes rendered in the one-time tool-approval dialog
+match the bytes injected into the model's context on every later turn. Unicode's TAG
+block (U+E0000–U+E007F) has **no glyph in any mainstream terminal or IDE renderer**,
+so a payload is invisible to the human approver and survives byte-for-byte into the
+tokenizer. 8/8 techniques across 5 MCP metadata surfaces defeated client-side
+defenses against a real client/server pair.
+
+**When Lower Privileges Suffice: Over-Privileged Tool Selection in LLM Agents** —
+[arXiv:2606.20023](https://arxiv.org/abs/2606.20023) (2026-06-18). Agents routinely
+select a higher-privilege tool when a sufficient lower-privilege one exists — and
+**transient tool failures amplify escalation**. The retry path is where privilege
+creep happens.
+
+**What inber should consider:** 2607.05744 is a direct extension of the 07-13
+authority entry ("consent must be attributable to a principal outside the model's
+reach"). That entry assumed the consent *dialog* was trustworthy; this paper breaks
+that assumption — **the human can approve a string that is not the string the model
+receives.** inber's `tool-store` (:8302) ingests MCP servers and its prehook renders
+approval prompts, so the fix belongs at both ends: **sanitize or reject
+non-renderable codepoint ranges in tool `name`/`description`/schema at
+tool-store ingestion time** (they have no legitimate use in tool metadata), and
+**re-verify tool metadata on every turn, not only at first approval** — a server can
+change its `tools/list` response *after* you approved it, which is the same TOFU
+problem codex #32301 solved for hook code with a content-hash pin. The rule
+generalizes: *whatever bytes you showed a human, hash them; if the bytes you are
+about to send differ, the approval is void.* 2606.20023 adds a smaller but
+actionable note that composes with ActPlane's "return semantic denials, not
+`EPERM`": inber's prehook denials are an escalation surface, because an agent that
+gets an opaque failure retries with a bigger hammer (`shell` instead of the scoped
+tool). Denials should say *why*, and inber should log the low→high tool swap after a
+failure as the escalation signal it is.
+
+## Group C — retrieval is a trajectory-time loop, not a session-start step
+
+**SING: Synthetic Intention Graph for Scalable Active Tool Discovery** —
+[arXiv:2606.16591](https://arxiv.org/abs/2606.16591) (2026-06-15). Dumping all
+schemas is expensive and imposes a closed-world inventory; one-shot embedding
+retrieval misaligns isolated tool descriptions with the agent's *evolving* intention.
+SING builds an intention → tool-capability → tool-collaboration graph and retrieves
+**dynamically as task state changes**. On a 7,471-tool corpus: Global Recall@5 up to
+**+59.8%**.
+
+**SWE-MeM: Learning Adaptive Memory Management for Long-Horizon Coding Agents** —
+[arXiv:2606.28434](https://arxiv.org/abs/2606.28434) (2026-06-26). Rather than a
+fixed "compact at 80% full" rule, memory becomes a **tool the agent calls**, deciding
+when/what/how to compress from trajectory state, task progress, and remaining budget
+(trained with memory-aware GRPO doing step-level credit assignment across the
+compaction boundary). 43.4% / 60.2% on SWE-bench Verified at 4B / 30B, beating
+static-compression baselines on both quality *and* tokens.
+
+**What inber should consider:** SING is the **third voice in the bundle-store
+argument** the 07-13 cross-cutting note left open (2606.17519 "shortlist helps a lot"
+vs. 2606.16364 "crowded catalogs are mostly a myth"), and it reframes the question
+usefully: both of those measure *one-shot* selection, while SING's claim is that the
+retrieval **timing** is the actual bug — the capability you need typically only
+becomes apparent *after* decomposition or an observation, so a bundle resolved once
+at session start is resolving against an intention the agent does not have yet. That
+matters directly for inber's Phase 1 resolver: **re-run selection during the
+trajectory, not only at session start**, and rank on **co-occurrence** edges (the
+tool you need next is best predicted by the tool you just used) rather than on
+description-embedding similarity alone. Combined with the codex shadow-selection
+entry from the same day, this gives inber a full build order: *shadow first, measure
+recall against the full-catalog baseline, re-run selection per turn, rank on
+co-occurrence.* SWE-MeM is the analogous move one layer over — even without any RL
+training, **exposing the remaining context budget as an observable and offering a
+`compact(what)` tool** lets a frontier model make a keep/drop decision that a generic
+summarizer, which has no idea which files are still live, cannot. Note the tension
+with Group A, and resolve it explicitly: an agent-invoked compactor is *still* a
+compactor, so the pinned region (constraints, plan) must be outside its reach too —
+"the agent chose to drop it" is not a defense.
+
+## Also in-window, logged but not written up
+
+- **TraceLab: Characterizing Coding Agent Workloads for LLM Serving** —
+  [arXiv:2606.30560](https://arxiv.org/abs/2606.30560) (2026-06-29). A real trace of
+  ~4,300 Claude Code + Codex sessions (~350k LLM steps, ~430k tool calls), with
+  analysis code. Two directly useful findings: the tool-call distribution is heavily
+  tailed (a handful of tools dominate — load the rest lazily), and prefix-cache hit
+  rates are high but imperfect, with **cache damage concentrated around human-paced
+  idle gaps** (a session resumed after a pause pays full prefill). Free ground truth
+  against which to check inber's own cache assumptions instead of guessing.
+- **Don't Blame the LLM: How Scaffolding Evolution Shapes Coding Agent Quality** —
+  [arXiv:2607.03691](https://arxiv.org/abs/2607.03691) (2026-07-04). Holds the model
+  fixed and varies *only* the harness across 35 sequential Qwen Code CLI releases;
+  regressions practitioners blamed on the model were the scaffold. Argues for a
+  pinned harness-vs-harness regression eval — which is what inber's
+  `repo-build-guard`/`repo-deploy-guard` do for buildability but not for behavior.
+- **When Does Restricting a Coding Agent to `execute_code` Help?** —
+  [arXiv:2607.10569](https://arxiv.org/abs/2607.10569) (2026-07-12). Three-arm
+  ablation on Claude Code + Codex: a single `execute_code` tool is cheaper than or
+  tied with tool-rich rivals in 3 of 4 (regime × agent) cells — but the cheapest tool
+  surface **depends on the task regime**, so there is no universal answer. A caution
+  against inber adopting code-mode as a blanket default.
+
+**Cross-cutting takeaway (2026-07-14 sweep):** every paper in Groups A and B is an
+instance of one claim — **the harness's own lossy record of a thing is not the
+thing.** A summary is not the constraint (2606.22528). A summary is not the plan
+(2606.22953). The approval dialog's rendering is not the tool metadata (2607.05744).
+This is the same thesis the 07-13 sweep reached from ActPlane and Self-GC, now with a
+much sharper edge: in every case, the *gap* between the record and the referent is
+directly attackable, and in two of the three the attack has been demonstrated. The
+harness-side answer, which the 07-14 `agentic-design-patterns.md` entries converge on
+independently, is always the same — **keep the canonical artifact, make the derived
+view rebuildable from it, and never let the derived view be the only copy.**
