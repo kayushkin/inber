@@ -12,6 +12,11 @@ out-of-window work with in-window-looking IDs).
 - **2026-07-14 sweep** — six papers in three groups (non-summarizable context;
   the approval-view fidelity gap; retrieval as a trajectory-time loop). Jump to
   `# 2026-07-14 sweep` below.
+- **2026-07-18 sweep** — two papers that reframe this cycle's permission-enforcement
+  thread as *isolation*: a five-boundary isolation taxonomy (a lens for inber's
+  own harness-control-matrix) and a subagent-orchestration benchmark whose headline
+  is that the leader's bottleneck is **least-privilege granting**, not perception.
+  Jump to `# 2026-07-18 sweep` below.
 
 # 2026-07-13 sweep
 
@@ -341,3 +346,78 @@ directly attackable, and in two of the three the attack has been demonstrated. T
 harness-side answer, which the 07-14 `agentic-design-patterns.md` entries converge on
 independently, is always the same — **keep the canonical artifact, make the derived
 view rebuildable from it, and never let the derived view be the only copy.**
+
+---
+
+# 2026-07-18 sweep
+
+Two in-window papers (`published` dates confirmed against the arXiv Atom API). Both
+land on the **permission-enforcement** area the 07-13/07-14 sweeps flagged as the
+live one — but they name it *isolation* and give it structure, which is exactly the
+missing frame for inber's existing boundary-audit work. This partly revises the
+07-14 "multi-agent orchestration was quiet" note: the orchestration paper below was
+already on arXiv (06-30) inside the window and the earlier sweep missed it.
+
+## A five-boundary isolation taxonomy for the harness-control-matrix
+
+**Isolation as a First-Class Principle for LLM-Agent System Safety: Concepts,
+Taxonomy, Challenges and Future Directions** —
+[arXiv:2607.12406](https://arxiv.org/abs/2607.12406) (2026-07-14). A survey whose one
+load-bearing move is to argue that prompt injection, tool misuse, and memory
+poisoning are not distinct bug classes but the *same* structural failure — a lost
+isolation boundary — and to organize the whole literature by **where** the boundary
+sits: five interfaces — **user↔agent, agent↔tool, agent↔execution, agent↔agent,
+system↔environment**. The value is diagnostic, not a mechanism: given a failure, it
+locates *which* boundary leaked first and *how* the compromise propagates across the
+others, and it argues for "isolation-by-construction" (the boundary is a structural
+property of the harness, not a runtime check the agent can talk its way around) —
+the same conclusion ActPlane reached (07-13) from the enforcement-below-tool-names
+angle.
+- **What inber should consider:** inber already has the raw material — the
+  *harness-control-matrix* memory is a 39-boundary audit of llm-bridge (3/18/18) and
+  inber (0/27/12). But it is scored per-component (guard/trace/checkpoint), not
+  per-*interface*. Re-project that matrix onto these five boundaries and the gaps
+  read differently: inber's `permission-store` covers **agent↔tool** and
+  **agent↔execution**; **MCP descoping** and browser-MCP OOM were a
+  **system↔environment** leak; **team-orchestration / task-completion-loop** subagents
+  are an **agent↔agent** boundary with (per the next paper) almost no least-privilege
+  enforcement today. The concrete move is one table in `HARNESS-LAYER` mapping each
+  of the five boundaries to inber's enforcement point and marking the ones that are
+  hot-path stubs (inber's guard/trace/checkpoint already are) — turning a component
+  checklist into a leak-path map.
+
+## The subagent-orchestration bottleneck is privilege-granting, not perception
+
+**ClawArena-Team: Benchmarking Subagent Orchestration and Dynamic Workflows in
+Language-Model Agents** — [arXiv:2606.31174](https://arxiv.org/abs/2606.31174)
+(2026-06-30). Isolates the *management* ability of a single LLM acting as team leader:
+the main agent is deliberately crippled (text-only perception, partial workspace
+access) and commands a fixed local subagent pool, so score deltas reflect delegation
+skill, not raw capability. Scoring is execution-based (no LLM judge) — the
+**Subagent-Management Score** multiplies task correctness by a **least-privilege ×
+modality-routing** factor. Three findings matter for inber: (1) the bottleneck is
+**privilege granting** — *no* model exceeds 50% workspace-permission precision, i.e.
+leaders systematically over- or under-grant subagent access; (2) cost and management
+quality are **decoupled** (API cost spans >100×, score <4×; cheap open models sit on
+the Pareto frontier); (3) leaderboard scores cluster within ~10 points while actual
+orchestration behavior diverges >10×, so a single aggregate score hides the skill.
+- **What inber should consider:** inber's *team-orchestration* / *task-completion-loop*
+  currently spawns subagents with whatever the leader hands them; there is no
+  least-privilege-granting step and no measurement of whether the grant was right.
+  Two cheap actions: (a) make the dispatcher's subagent-spawn carry an explicit
+  scoped grant (which repo paths / tools / MCPs) rather than inheriting the parent's
+  full surface — this is the **agent↔agent** boundary the isolation paper names, and
+  it dovetails with the already-scaffolded `repo-store`/`bundle-store` per-task
+  skill/tool selection; (b) because cost ⟂ quality here, do **not** reach for a
+  bigger leader model to fix bad delegation — log workspace-permission precision
+  (granted-vs-needed) as the metric and treat over-granting as the defect. The paper
+  is a benchmark, not a method, so the takeaway is the *diagnostic*, not code to port.
+
+**Cross-cutting takeaway (2026-07-18 sweep):** the two papers are the same claim at
+two altitudes — **least-privilege at every interface is the harness's job, and the
+agent can neither be trusted to enforce it nor scored on whether it did by a single
+number.** 2607.12406 says *where* the boundaries are; 2606.31174 measures the one
+boundary (agent↔agent, via privilege grants) that current models fail hardest, and
+shows a bigger model does not buy the fix. For inber this points at one artifact — a
+boundary map with an enforcement point and a granted-vs-needed measurement per
+interface — rather than more per-component guard stubs.

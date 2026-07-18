@@ -231,3 +231,30 @@ shouldn't assume.
   This is a per-provider capability decision at the bridge edge, consistent with "presentation/
   projection belongs at the edge" (note: *projection* at the edge, not lossy transform — the
   attachment still reaches the model, just in a provider-accepted shape).
+
+## Harness-watch — 2026-07-15: keep provider-readable tool media out of the model process heap ([PR 889](https://github.com/truffle-ai/dexto/pull/889))
+
+A distinct axis from the 06-17 media work: that entry was about **context tokens**
+(which media to keep in prompt history); this one is about **process memory**. When a
+tool returns a large blob-backed resource, dexto's history builder used to `read()` it —
+downloading the bytes and base64-expanding them **into the model process heap** — even
+when the media would only ever be sent to the provider as a reference or elided as a
+placeholder. The fix asks the artifact store for a **provider-readable URL first**: if the
+store can hand back an `https://` URL for an image, it passes that URL straight to the
+provider; if the media is being placeholdered anyway (binary type, or filtered by
+`allowedMediaTypes`), it emits a compact text placeholder from *metadata only*
+(mime/size/name) and never touches the bytes. Only stores without provider-readable URLs
+fall back to the download-and-inline path. The design point: **history assembly should
+resolve media to the cheapest faithful representation the provider will accept — a remote
+URL — and must not pay heap for bytes it is about to reference or drop.**
+- **What inber should consider:** this is the missing footnote to inber's own MCP-media
+  OOM (`project_mcp_descoping`: browser MCPs cost ~890MB/session and OOM'd the box) and to
+  the `msg.Conversation` assembly in `llm-bridge-server`. inber's provider bridges
+  (`-anthropic`/`-openai`/`-google`) all accept image/document parts *by URL*, yet the
+  path that materializes tool-returned media into a conversation should be audited for the
+  same trap: does it read+base64 a large tool/MCP artifact into the server heap when it
+  could pass the artifact-store URL through, or (when the part will be truncated/placeholdered
+  by the media-retention class) render a metadata-only placeholder without ever loading the
+  bytes? This is squarely the "layers are transparent — no lossy transform, pass the
+  reference through" rule at the media edge, and it caps a real memory-footprint failure
+  mode, not just token count. Cheap audit, potentially large RSS win on media-heavy sessions.
