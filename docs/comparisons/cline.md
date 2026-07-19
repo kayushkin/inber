@@ -147,3 +147,38 @@ budget; (b) count and last-resort-truncate **model-generated tool-call arguments
 just results — a model that emits a megabyte `query`/`content` arg is an equal budget
 risk and today inber only bounds the response side. Protect binary carriers by an
 explicit type set, never by "has a `data` field."
+
+## Harness-watch — 2026-07-19: a spawned teammate needs three things its lead has — a registry that hides tools it can't call, an errored run that reads as *failed*, and a mid-run credential refresh
+
+Cline's SDK "teams" feature (a lead agent spawns parallel teammates and blocks in
+`team_await_runs`) shipped a three-PR postmortem of one real July-15 incident, and each
+PR is a transferable multi-agent lesson. This is inber's first team/teammate coverage.
+**(1)** [PR 12371](https://github.com/cline/cline/pull/12371) — `team_spawn_teammate` is
+lead-only, enforced by a runtime role check that *throws* `Only the lead agent can manage
+teammates.` — but the tool was still in each teammate's registry. The teammate model
+can't know it's forbidden, so it tries anyway: **every one of the seven teammate
+transcripts made exactly two rejected spawn attempts (14 wasted reasoning turns) before
+giving up.** Fix: build teammate toolsets with `includeSpawnTool:false` so the capability
+isn't in the registry at all. **(2)** [PR 12370](https://github.com/cline/cline/pull/12370)
+— a teammate whose model stream failed returned an `AgentResult{finishReason:"error"}`
+rather than throwing; the queue only treated *thrown* errors as failures, so the run was
+recorded `status:"completed"` with the real error buried in `resultSummary.textPreview`.
+Consequence: the run-level retry machinery (`retryCount`/`maxRetries`) **never engaged for
+model errors** — it only fed off exceptions — and the lead/human had to infer death from a
+`"completed"` + `Unauthorized…` preview. **(3)** [PR 12369](https://github.com/cline/cline/pull/12369)
+— a teammate died ~30 min in on a raw 401 (OAuth expired after 8 good iterations / ~1M
+input tokens); no credentials were wiped, it just needed a refresh, yet the user had to
+notice and manually re-dispatch. Fix: refresh expired OAuth and retry the run once.
+
+**What inber should consider:** inber delegates to sub-agents (Irish-named fleet) and this
+maps straight onto that surface. (a) **A capability a sub-agent can never use must be
+absent from its tool registry, not merely rejected at execution** — a guard that throws
+still costs the model reasoning turns discovering the tool is forbidden and can loop; scope
+the delegate's toolset by role at build time. (b) **A sub-agent whose model call *returns*
+an error (vs *throws*) must surface as `failed`, not `completed`** — echoes inber's
+existing "status enums preserve granular truth" rule, and it's the precondition for
+delegate-level retry to fire at all; a status collapsed to `completed` silently disables
+the retry path. (c) **A long-blocked delegate should treat a mid-run credential expiry as
+recoverable** — refresh and retry once before bubbling a failure the parent must hand back
+to a human. All three failure modes only appear once delegates run *long and parallel*,
+which is exactly inber's target regime.
