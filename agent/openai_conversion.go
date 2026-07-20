@@ -18,7 +18,12 @@ func ConvertAnthropicToolsToOpenAI(tools []Tool) []OpenAITool {
 		// to get a clean map[string]interface{}
 		schemaBytes, _ := json.Marshal(t.InputSchema)
 		json.Unmarshal(schemaBytes, &schemaMap)
-		
+
+		// Normalize the schema into the dialect strict OpenAI-compatible validators
+		// accept before forwarding it. This runs on the marshaled copy above, so the
+		// canonical anthropic InputSchema is never mutated.
+		normalizeSchemaForOpenAI(schemaMap)
+
 		result[i] = OpenAITool{
 			Type: "function",
 			Function: OpenAIFunctionSchema{
@@ -29,6 +34,56 @@ func ConvertAnthropicToolsToOpenAI(tools []Tool) []OpenAITool {
 		}
 	}
 	return result
+}
+
+// normalizeSchemaForOpenAI recursively rewrites a JSON Schema so it is accepted by
+// strict OpenAI-compatible tool-schema validators (OpenAI structured outputs,
+// Moonshot/Kimi, and similar). Today it rewrites every "oneOf" combinator to "anyOf",
+// recursing into nested subschemas ($defs, properties, items, and the combinator
+// arrays themselves).
+//
+// The rewrite is a provably-safe widening: any value valid under "oneOf" is also valid
+// under "anyOf" (oneOf requires exactly one branch to match, anyOf requires at least
+// one), so no argument that was legal before is newly rejected. Strict validators such
+// as Moonshot's reject a "$ref → oneOf" as false-positive infinite recursion and 400
+// the whole turn; OpenAI structured outputs likewise accepts "anyOf" and rejects
+// "oneOf". A tool schema authored by a codegen that emits "oneOf" (common for
+// enums-with-per-variant-docs and tagged unions) would otherwise fail the entire
+// request against those backends.
+//
+// The node is mutated in place. Only the marshaled copy passed by the caller is
+// touched; the canonical anthropic InputSchema is never modified.
+func normalizeSchemaForOpenAI(node interface{}) {
+	switch n := node.(type) {
+	case map[string]interface{}:
+		if oneOf, ok := n["oneOf"]; ok {
+			delete(n, "oneOf")
+			if existing, ok := n["anyOf"]; ok {
+				// Pathological: both combinators at the same level. Merging both
+				// branch lists into a single anyOf stays a widening of the original
+				// (oneOf AND anyOf) constraint, so it still never newly rejects.
+				n["anyOf"] = append(asSlice(existing), asSlice(oneOf)...)
+			} else {
+				n["anyOf"] = oneOf
+			}
+		}
+		for _, child := range n {
+			normalizeSchemaForOpenAI(child)
+		}
+	case []interface{}:
+		for _, child := range n {
+			normalizeSchemaForOpenAI(child)
+		}
+	}
+}
+
+// asSlice returns v as a []interface{} if it already is one, otherwise wraps it in a
+// single-element slice so combinator merges never drop a branch.
+func asSlice(v interface{}) []interface{} {
+	if s, ok := v.([]interface{}); ok {
+		return s
+	}
+	return []interface{}{v}
 }
 
 // isAnthropicToolID returns true if the tool ID appears to be from Anthropic.
