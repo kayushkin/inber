@@ -421,3 +421,74 @@ boundary (agent↔agent, via privilege grants) that current models fail hardest,
 shows a bigger model does not buy the fix. For inber this points at one artifact — a
 boundary map with an enforcement point and a granted-vs-needed measurement per
 interface — rather than more per-component guard stubs.
+
+# 2026-07-24 sweep
+
+Two compaction/context papers, both new to inber and both advancing the thread the
+07-22 (`agentic-design-patterns.md`) SelfCompact entry opened: *the summarizer wording
+barely matters; the hard parts are knowing when to compact and giving the model enough
+self-knowledge to decide.* One supplies the missing mechanism, the other the theory
+that says inber's current trigger is provably wrong.
+
+## The model can manage its own context if you show it the context — a typed-block dashboard, training-free
+
+**LLM Agents Are Latent Context Managers: Eliciting Self-Managed Context via State
+Proprioception** ([arXiv:2606.30005](https://arxiv.org/abs/2606.30005) — v1 2026-06-29,
+**v4 2026-07-23**, in-window on the revision). VISTA is a training-free, model-agnostic
+layer that represents working memory as **typed, addressable blocks** and, each turn,
+surfaces the model a **dashboard of per-block token usage, recency, and access history**;
+the model then decides which blocks to keep or archive, and archived blocks are stored as
+**recoverable full-fidelity payloads** (not lossy summaries) it can pull back on demand.
+The thesis is that models already have latent context-management competence but no
+*proprioception* of their own context state, so they compact blind; give them the meter
+and they act well. Result: +four backbones on LOCA-Bench, Gemini-3-Flash 22.7 → 50.7%,
+gains *growing with context pressure* and transferring across backbones (also GAIA,
+BrowseComp-Plus).
+
+**What inber should consider:** this is the concrete mechanism for the 07-22 rubric gap —
+inber's compactor fires on `len(messages) > TriggerMessages` (`summarize.go:14`) and hands
+the model an opaque prose summary; VISTA says the higher-leverage move is to let the model
+*see* its own context and prune it. inber already has the substrate: WorldState-style typed
+sections (memory-store, tool-store, permission context) are exactly VISTA's "typed
+addressable blocks," and reversible noteboard delete + memory-store give the
+**recoverable-archive** half for free. **(a)** Expose a per-block dashboard (token cost,
+last-access turn, access count) as a WorldState section the model reads before deciding to
+archive — cheap, no fine-tune. **(b)** Make compaction *archive-with-recovery*, not
+lossy-summarize: move an evicted block to memory-store as a full-fidelity payload keyed for
+retrieval, so the "which to keep" decision is reversible rather than a one-way summary. This
+is the same rate-distortion point below, made operational.
+
+## Recency and attention are the wrong keep-signals — a rate-distortion frame for why
+
+**What to Keep, What to Forget: A Rate–Distortion View of Memory Compaction in LLMs and
+Agents** ([arXiv:2607.08032](https://arxiv.org/abs/2607.08032), 2026-07-09). Reframes every
+compaction level — KV-cache eviction up to agent-memory consolidation — as one
+rate-distortion problem (which context-derived information to keep, at what fidelity, under
+a budget) with a single objective and a layer-agnostic lower bound, and organizes the field
+into a seven-axis taxonomy. The load-bearing finding: **attention-magnitude and recency
+consistently signal what to keep, yet both fail the same way — they discard information
+*before the query reveals what it needed*.** It also flags that iterative agent compaction
+has no benchmark holding the budget constant across layers, so nobody is measuring the
+thing that matters.
+
+**What inber should consider:** this is the theory under inber's own 07-22 self-critique.
+inber's trigger (message count) and any recency/oldest-first eviction are exactly the
+"decide before the query arrives" failure this paper proves is lossy — you cannot know a
+block's distortion cost until a later turn queries it, which is precisely why VISTA's
+*deferred, model-in-the-loop, recoverable* archive beats an eager summary. Concrete: **(a)**
+don't evict oldest-first on a count threshold; keep blocks recoverable (memory-store) so a
+late query can re-admit them, turning an irreversible keep/forget call into a
+retrieve-on-demand one. **(b)** If inber ever benchmarks its compactor, hold the token
+budget constant across the message-history *and* memory-store layers together — the paper's
+point that per-layer measurement hides the real cost. No code to port; it's the frame that
+tells inber which of its compaction knobs are load-bearing (the trigger and the recovery
+path) and which are noise (the summarizer prompt wording).
+
+**Cross-cutting takeaway (2026-07-24 sweep):** the two papers close the loop the 07-22/07-23
+compaction entries left open. 2607.08032 proves *why* inber's count/recency trigger is wrong
+(keep-signals computed before the query are lossy by construction); 2606.30005 gives the
+*fix that needs no training* (show the model a typed-block usage dashboard and let it
+archive to a recoverable store). For inber both land on stores it already owns —
+WorldState-typed sections as the blocks, memory-store + reversible noteboard as the
+full-fidelity archive — so the work is wiring a context dashboard and making eviction
+recoverable, not building new machinery.
