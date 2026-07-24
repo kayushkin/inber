@@ -1,163 +1,178 @@
 # Herdr Comparison
 
-**Project**: [Herdr](https://herdr.org/)
-**Language**: Not disclosed (hosted platform; no public source or architecture)
-**Focus**: Meta-harness of the *orchestration* kind — a control layer that sits **above** many agent harnesses and routes work between them, rather than a harness that runs an agent
-**Key Claims**: Context/cost/policy/urgency-aware routing, shared workflow memory across agents, human gates for sensitive actions, fleet observability (trace decisions, inspect handoffs, measure throughput)
+**Project**: [Herdr](https://herdr.dev/) — [github.com/ogulcancelik/herdr](https://github.com/ogulcancelik/herdr)
+**Language**: Rust (single binary, no Electron). Vendors `libghostty-vt` (terminal emulation) and `portable-pty`.
+**License**: Apache-2.0
+**Focus**: An **agent multiplexer** — "tmux for coding agents." It runs foreign agent CLIs in PTY panes, *infers each agent's lifecycle state from the outside*, and exposes the whole session over a Unix-socket API so agents can script each other.
+**Key Strengths**: Two-channel agent-state inference (passive terminal scraping + injected lifecycle hooks), a JSON-RPC socket API with a server-owned `agent.wait`, live server handoff that hot-upgrades the daemon without killing agents, native session-identity capture for resume, detach/reattach over SSH.
 
-> **Two projects share this name — do not conflate them.** This doc covers
-> **herdr.org**, the hosted agent-orchestration platform. A separate project,
-> **herdr.dev** ([github.com/ogulcancelik/herdr](https://github.com/ogulcancelik/herdr)),
-> is a Rust TUI terminal multiplexer — "tmux for AI coding agents" — with 14+ agent
-> integrations (Claude Code, Codex, Pi, Amp, Droid, Hermes, OpenCode, Grok, …), built on
-> ratatui/crossterm/tokio, client-server with detach/reattach, AGPL-3.0. That one is a
-> workspace/observability shell closer in spirit to `commander.md` and inber-party, not an
-> orchestrator. See the last section.
+> **Namesake warning (inverted from the first draft of this doc).** `herdr.org` is a
+> closed, hosted "agent orchestration" marketing page with no public source or architecture —
+> not worth a comparison. **This doc is about `herdr.dev`**, the open-source Rust project, which
+> is a different kind of thing (a local terminal multiplexer, not a hosted orchestrator) but is
+> actually inspectable and solves problems inber's llm-bridge ecosystem has. Do not merge the two.
 
-## What "meta-harness" means here
+## Why this is worth studying for inber
 
-The term carries two meanings in the 2026 literature (see `meta-harness.md`):
+Herdr is not an orchestration server and is not trying to be inber. But it has independently built
+production-grade answers to three problems inber's **harness-bridge** layer faces, precisely because
+Herdr wraps *foreign* agent CLIs it did not write:
 
-1. **Harness optimization** — an outer loop that *searches over harness code* (prompts,
-   retrieval, memory, tools) to improve a frozen model. This is the arXiv Meta-Harness
-   paper (2603.28052) and AgentFlow (2604.20801).
-2. **Harness orchestration** — a control layer *above* many agent harnesses that routes,
-   composes, gates, and observes them. This is Herdr, Databricks Omnigent, and friends.
+1. **Knowing an agent's state when the agent doesn't tell you** (PTY-mode / non-structured harnesses).
+2. **Upgrading the long-lived server process without killing the sessions under it.**
+3. **Capturing a foreign agent's resumable session id so you can restart its actual conversation.**
 
-Inber spans both: it is itself an orchestration-type meta-harness (registry + bus topology +
-per-turn agent runtime), which makes Herdr a same-category comparison rather than a
-tool inber merely wraps.
+Inber solves (1) and (3) for harnesses it drives via stream-json (llm-bridge-claudecode reads
+structured events), but has no answer for a harness running in raw PTY mode, and (2) is an open
+landmine (see the "never restart the gateway unattended" directive).
 
 ## Architecture Overview
 
-Herdr publishes a capability description, not an architecture. From its site, it presents as a
-hosted control plane over a fleet of agents:
-
 ```
-Incoming task
-    → Router        — pick model / tool / specialist agent by context, cost, policy, urgency
-    → Workflow memory — shared state: prior decisions, system rules, human feedback
-    → Human gates    — escalate sensitive actions without stalling the automated flow
-    → Fleet observability — trace decisions, inspect handoffs, measure throughput
+herdr (client, any terminal)  ──socket──▶  herdr daemon (server)
+                                              ├── PTY panes (vendored portable-pty + libghostty-vt)
+                                              │     └── foreign agent CLI runs here (claude, codex, pi, …)
+                                              ├── detect/  — per-agent TOML manifests + rule engine
+                                              │     classify pane → idle | working | blocked | done | unknown
+                                              ├── integration/ — injected hook scripts (self-report channel)
+                                              ├── api/  — Unix-socket JSON-RPC (agent.*, pane.*, events.*, layout.*)
+                                              ├── worktree/ — git worktree per workspace
+                                              └── handoff_runtime — hand PTY fds to a replacement server binary
 ```
 
-Positioning: "turn many autonomous workers into one managed system"; "modern AI teams need
-coordination, not another isolated bot." Advertised use cases are org workflows — customer
-operations triage, sales research, engineering intake, compliance. A live counter on the site
-reports 18 active agents, 2,841 routed tasks, and 4 manual reviews, i.e. it sells a
-high-autonomy / low-human-touch routing story.
+Client and server are separate: `ctrl+b q` detaches, `herdr` reattaches, sessions survive restarts,
+and you can reattach over SSH. Keyboard (tmux-style prefix) and mouse are both first-class.
 
-Because no source or design doc is public, everything below compares **stated capabilities and
-positioning** against inber's implemented internals — not code against code.
+## What Herdr Does Well
 
-## What Herdr Does Well (as stated)
+### 1. Two-channel agent-state inference ⭐️ (the standout)
 
-### 1. Policy- and cost-aware routing as a first-class layer ⭐️
+Herdr classifies every agent pane into `idle | working | blocked | done | unknown` using **two
+independent channels**, because it can't assume the agent cooperates:
 
-Herdr's headline is routing on four axes at once — **context, cost, policy, urgency**. Task
-goes to the right model/tool/specialist, not to a single default agent.
+- **Passive: a declarative terminal-scraping rule engine.** Each agent has a versioned TOML manifest
+  (`src/detect/manifests/claude.toml`, `codex.toml`, `grok.toml`, …). Rules match *named regions* of
+  the rendered screen — `osc_title`, `prompt_box_body`, `after_last_horizontal_rule`,
+  `bottom_non_empty_lines(5)`, `whole_recent` — with `priority`, `regex`/`contains`/`any`/`all`/`not`
+  predicates, and flags like `visible_blocker` / `skip_state_update`. Example: Claude's
+  `bash_permission_prompt` rule fires `blocked` when the screen shows "do you want to proceed?" plus a
+  "1. yes / 2. no" body; a transcript-viewer overlay is matched only to *suppress* a state change
+  (`skip_state_update`). Manifests carry `min_engine_version` for forward-compatible updates and can be
+  hot-updated (`manifest_update.rs`) without shipping a new binary.
+- **Active: an injected lifecycle hook.** For "official" agents Herdr installs a small script into the
+  agent's *own* hook system (`integration/assets/claude/herdr-agent-state.sh`). On session events the
+  agent posts `pane.report_agent_session` back to Herdr's socket. This channel's real payload is the
+  **native session id + transcript path** (for resume), not the coarse state — and it's carefully
+  guarded (a `SubagentStop` event is dropped so a subagent finishing never revives an idle main pane).
 
-**Inber connection**: Inber selects a *model* per turn (failover, model health via model-store)
-but routes *tasks* to agents largely by hand — the registry and bus topology are configured, not
-chosen per task by a cost/policy engine. A routing layer that picks the agent (not just the
-model) by cost + policy + urgency is a real gap. Closest existing inber surface: the
-kanban dispatcher/scoper loop and the autoworker, which already pick up work — but they select by
-board/column and availability, not by a cost/policy scoring function.
+The genuinely hard, transferable part is the *reliability* work visible in the CHANGELOG: lifecycle
+reports are **serialized** so out-of-order events can't flip an idle pane to working (OpenCode); state
+transitions wait for **settled** events (Pi); background work is **pinned** so a mid-turn redraw
+doesn't fall back to idle (Grok); a prompt wait reports `agent_prompt_stalled` after 5s rather than
+hanging. State inference from a TUI is a swamp, and Herdr has already mapped it.
 
-### 2. Shared workflow memory across agents
+**Inber connection**: inber's harness bridges (llm-bridge-claudecode et al.) get structured lifecycle
+from stream-json, so they don't need this — *for agents they drive that way*. But inber has a **PTY
+mode** path (the `user_message` dual-emit note records that PTY mode has only the OTel copy; the TUI
+PTY-attach work exists) where no structured stream is available, and the bridge-server exposes an
+`awaiting_user` "?" status + the herald `ask` channel that fundamentally need to answer "is this agent
+blocked waiting for a human right now?" Herdr's manifest engine is a working design for deriving that
+from the rendered screen when the harness won't say. This is the single most reusable idea here.
 
-Herdr keeps runs "grounded in shared state, prior decisions, system rules, and human feedback" —
-memory that spans the *fleet*, not one agent's session.
+### 2. A socket API that makes agents scriptable ⭐️
 
-**Inber connection**: Inber's memory is per-agent/per-session (SQLite semantic memory, memory-store
-on bridge-server :8160). Cross-agent shared state today rides the NATS bus and whatever a curator
-writes back to noteboard/kanban. A named, queryable *workflow memory* that every routed agent reads
-and writes — decisions, system rules, human feedback — maps onto inber's blackboard/kanban thread
-but isn't a single first-class store yet.
+The daemon exposes JSON-RPC over a Unix socket (named pipe on Windows). Methods:
+`agent.start / prompt / read / send_keys / wait / get / list / rename / focus / explain`,
+`pane.wait_for_output`, `pane.report_agent_session`, `events.subscribe`, `events.wait`, `layout.*`,
+`notification.show`, `integration.install/uninstall`. A pane exists with or without an agent;
+`agent.start` targets an *existing* shell pane and never changes layout.
 
-### 3. Human gates that don't stall the flow
+The coordination primitive is **`agent.wait`** — a *server-owned* wait until a named agent reaches a
+state. That's what lets "agents wait on each other": agent A can spawn agent B in a pane, prompt it,
+and block until B goes `done` before continuing. Herdr ships this to agents as a Claude-style SKILL.md
+gated on `HERDR_ENV=1`, so an agent inside a pane can drive the multiplexer.
 
-Escalation of sensitive actions is a named feature, framed as *non-blocking to the rest of the
-fleet* — one task waits for a human while the others proceed.
+**Inber connection**: this is a blackboard/coordination surface built on a socket instead of a bus.
+inber has the stronger substrate (NATS JetStream, persistent + distributed) but no first-class
+"block this agent until that agent reaches state X" verb. Herdr's `agent.wait` (with its
+stall-timeout) is a clean model for a bus-level `wait_for_agent_state` that the team-orchestration /
+kanban-blackboard work would use directly.
 
-**Inber connection**: Inber already has this shape and arguably better plumbing — the PreToolUse
-prehook (permission gating in bridge-server), the noteboard `hold` field + `auto_hold_at_usd` spend
-ceiling, and the herald `ask` channel that relays a question to the user as a dash session. The
-lesson from Herdr is *framing*: present these as one coherent "human gate" concept across the fleet
-with per-task escalation that never blocks sibling tasks, rather than three separate mechanisms.
+### 3. Live server handoff — hot-upgrade without killing agents ⭐️
 
-### 4. Fleet observability: decisions, handoffs, throughput
+`handoff_runtime.rs` transfers **server-owned session state to a replacement server binary**: it hands
+the PTY **master fd**, child pid, size, keyboard-protocol flags, terminal title, and scrollback ANSI to
+the new process, which imports them (`ImportedHandoffRuntime`) and keeps the agents running. It
+deliberately does *not* carry transient coordination (in-flight requests, waits, subscriptions, client
+sockets) — clients reconnect and retry. Plugin `[[startup]]` hooks restore plugin state after handoff.
 
-Herdr sells visibility across the fleet — "trace decisions, inspect handoffs, and measure
-throughput."
+**Inber connection**: this maps **directly** onto the "never restart the live llm-bridge gateway
+unattended" landmine — a gateway restart kills every session, so the directive stops automation at the
+restart step. Herdr's design is the missing mechanism: to ship a new gateway binary, pass the live
+session fds/state to the replacement instead of tearing sessions down. It's harder for inber (sessions
+are subprocess harnesses + SSE streams, not just PTYs), but the shape — "serialize durable
+server-owned state, hand it to the successor, let clients reconnect transient state" — is exactly what
+would let the gateway be upgraded without the manual-only restriction.
 
-**Inber connection**: Inber has the raw material (logstack, the bus, session state, the
-kanban-classifier curator) and a visualization surface in inber-party. What's missing is the
-*handoff* and *routing-decision* view — why a task went to agent X, where it was handed off, and
-fleet-level throughput. inber-party shows agents-as-adventurers and token-as-XP but not the routing
-trace. Surfacing routing/attribution (which the AgentFlow note in `2026-05-harness-research.md`
-also calls out) is the shared takeaway.
+### 4. Native session-identity capture from foreign agents
+
+The injected hook reports `agent_session_id` + `agent_session_path`; `agent_resume.rs` turns a
+persisted `AgentSessionRef` (id *or* path — pi/omp use path, others use id) into an `AgentResumePlan`
+(the argv to relaunch), with a dedupe key so a resumed agent isn't double-started. Only "official"
+sources are trusted (`is_official_agent_source`).
+
+**Inber connection**: this is what llm-bridge-claudecode already does via stream-json (session
+resume/fork), but Herdr does it for agents it *didn't* spawn via an SDK — by injecting a reporter. The
+id/path duality and the "never trust an unofficial source's session id" guard echo inber's
+harness-session-id contract (HarnessSessionID must never equal BridgeSessionID). Worth noting as
+convergent validation of that contract.
 
 ## What Inber Should Adopt
 
-### 1. A task router that scores on cost + policy + urgency (MEDIUM PRIORITY)
+### 1. A manifest-style state classifier for PTY / non-structured harnesses (MEDIUM–HIGH)
 
-Inber picks the *model* per turn but not the *agent* per task. Add a routing step — cost (from
-model-store pricing), policy (permission-store rules), urgency (task priority / SLA), and fit (agent
-skills) — that selects which agent picks up a unit of work. This generalizes the kanban dispatcher
-from "board/column + availability" to a scored decision, and gives the autoworker a principled
-pick beyond "first unblocked, not held." Emit the score so it shows up in observability.
+Give the bridge layer a fallback that infers `working | idle | blocked | done` from a harness's rendered
+output when there's no structured stream — a small versioned rule table per harness, matched against
+screen regions. This is what fills the gap behind `awaiting_user` / the herald `ask` channel for
+PTY-mode or uncooperative harnesses. Steal Herdr's *reliability* rules too: serialize reports, wait for
+settled events, add a stall timeout, let overlays suppress rather than force transitions.
 
-### 2. A first-class fleet/workflow memory (MEDIUM PRIORITY)
+### 2. Live gateway handoff via fd/state passing (HIGH — retires a standing landmine)
 
-Promote cross-agent shared state to a named store every routed agent reads/writes: prior decisions,
-active system rules, and human feedback, keyed by workflow rather than session. inber already has
-the pieces (noteboard, kanban, memory-store, the bus); the gap is a single addressable "workflow
-memory" surface instead of reconstructing fleet state from three sources per turn.
+Design an llm-bridge-server upgrade path that serializes durable per-session state and hands it to a
+replacement process so sessions survive a binary swap, instead of the current "manual restart only"
+rule. Herdr's `HandoffRuntimeState` (what to carry) vs "clients reconnect transient state" (what to
+drop) is the template. Even a partial version — drain-and-resume harness subprocesses across an exec —
+would remove the reason the restart is forbidden unattended.
 
-### 3. A routing-decision / handoff trace in inber-party (LOW–MEDIUM PRIORITY)
+### 3. A server-owned `wait_for_agent_state` coordination verb on the bus (MEDIUM)
 
-Add a view that records, per task: which agent was chosen and *why* (the routing score), every
-handoff, and fleet throughput. This lands on the same infrastructure the AgentFlow
-failure-attribution note recommends — the bus already carries enough run-level signal to attribute a
-sub-task to an agent role or tool. Small win, high legibility.
+Add an `agent.wait`-equivalent to the bus/team-orchestration layer: block a caller until a named agent
+reaches a state, with a stall timeout. It's the primitive multi-agent handoff wants and inber doesn't
+name today.
 
 ## What's Different
 
-| Dimension | Herdr (herdr.org) | Inber |
+| Dimension | Herdr (herdr.dev) | Inber |
 |-----------|-------------------|-------|
-| **Meta-harness kind** | Orchestration (layer *above* harnesses) | Orchestration **and** runtime harness (spans both) |
-| **Task→agent routing** | First-class: context/cost/policy/urgency | Mostly hand-configured; model chosen per turn, agent picked by board/availability |
-| **Shared memory** | Fleet-level "workflow memory" (stated) | Per-agent/session SQLite + memory-store; fleet state via bus/kanban |
-| **Human gates** | One named non-blocking escalation feature | Prehook + noteboard `hold`/`auto_hold_at_usd` + herald `ask` (more plumbing, less unified framing) |
-| **Observability** | Fleet: decisions, handoffs, throughput | logstack + bus + inber-party (RPG framing; no routing/handoff trace yet) |
-| **Openness** | Hosted, closed; no public source/architecture | Internal, but full source + implemented internals |
-| **Deployment** | SaaS control plane | Ecosystem of Go services (registry, bus, model-store, …) |
-| **Evidence level** | Marketing capability claims + a live counter | Running system with inspectable code |
-
-## What's Different — the *other* herdr (herdr.dev, Rust multiplexer)
-
-Included so the two never get merged in future notes:
-
-| Dimension | herdr.dev (Rust TUI) | Inber |
-|-----------|----------------------|-------|
-| **What it is** | tmux-for-agents: workspaces/tabs/panes + live agent-state sidebar (blocked/working/done/idle) | Multi-agent orchestration server + agents |
-| **Scope** | Local terminal workspace / observability shell over CLI agents | Distributed runtime that *is* the agents |
-| **Integrations** | 14+ coding agents (Claude Code, Codex, Pi, Amp, Droid, Hermes, OpenCode, Grok, QoderCLI, OMP, generic) | Anthropic-focused via model-store; harnesses via llm-bridge-* |
-| **Stack** | ratatui 0.30 / crossterm 0.29 / tokio 1; client-server, detach/reattach | Go services + NATS + SQLite |
-| **License** | AGPL-3.0-or-later (+ commercial) | Internal |
-
-herdr.dev overlaps inber-party (a fleet dashboard) and `commander.md` (multi-agent desktop
-orchestrator with worktree isolation) far more than it overlaps inber's engine. If it's ever worth a
-full study, group it with those, not with the orchestration meta-harnesses.
+| **Kind** | Local terminal multiplexer (per-user, terminal-bound) | Distributed multi-agent orchestration server |
+| **Agent relationship** | Wraps foreign agent CLIs it didn't write, in PTY panes | Owns agents + drives foreign harnesses via llm-bridge-* |
+| **State source** | *Inferred* — terminal scrape + injected hook | *Known* natively / parsed from stream-json events |
+| **Coordination** | Unix-socket JSON-RPC, server-owned `agent.wait` | NATS JetStream bus (persistent, distributed) |
+| **Session survival** | Detach/reattach, SSH, **live server handoff** (fd passing) | SSE + subprocess; gateway restart kills sessions (manual-only) |
+| **Isolation** | git worktree per workspace | forge worktree slots per session |
+| **Extensibility** | Plugins (marketplace) + injected integrations | tool-store / skill-store / MCP |
+| **Footprint** | One Rust binary, no runtime deps | Ecosystem of Go services |
+| **Transparency** | Full source, Apache-2.0 | Internal, full source |
 
 ## Key Takeaway
 
-Herdr (herdr.org) is a same-category system to inber's orchestration half, so it's a mirror rather
-than a source of novel mechanism — and since no architecture is public, treat its value as
-**framing, not blueprint**. The one capability it foregrounds that inber under-develops is
-**scored task→agent routing** (cost + policy + urgency + fit), together with a **fleet-level
-workflow memory** and a **routing/handoff trace**. Inber already owns stronger primitives for the
-human-gate and permission story; the gap is presenting routing as a first-class, observable
-decision instead of hand-wired topology. Do **not** merge it with the Rust `herdr.dev` multiplexer —
-that's a separate tmux-for-agents workspace tool that belongs next to commander.md and inber-party.
+Herdr is the wrong *shape* to copy — inber is a server, Herdr is a terminal tool — but it's the right
+place to steal three mechanisms, all born from the fact that **Herdr manages agents it doesn't
+control**, which is exactly inber's harness-bridge situation. In priority order: (1) **live server
+handoff** (fd/state passing to a successor process) directly attacks the "can't restart the gateway
+unattended" landmine; (2) a **manifest-style state classifier** gives the bridge a way to know
+`blocked/idle/working` for PTY-mode harnesses that don't emit structured events; (3) a server-owned
+**`agent.wait`** is the missing coordination verb for multi-agent handoff. The reliability engineering
+around state inference (serialize, settle, stall-timeout, overlay-suppress) is as valuable as the idea.
+Ignore herdr.org.
