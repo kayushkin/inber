@@ -492,3 +492,71 @@ archive to a recoverable store). For inber both land on stores it already owns �
 WorldState-typed sections as the blocks, memory-store + reversible noteboard as the
 full-fidelity archive — so the work is wiring a context dashboard and making eviction
 recoverable, not building new machinery.
+
+# 2026-07-26 sweep
+
+Two new-to-inber papers. One challenges *where* inber's memory store lives; the other is
+meta — how an agent edits the harness it runs on. (The sweep's other hits — SWE-MeM
+[2606.28434], VISTA [2606.30005], TokenPilot [2606.17016] — are already on file above.)
+
+## Memory belongs *inside* the loop — an HTTP memory store is too slow to query per-step
+
+**Memory in the Loop: In-Process Retrieval as Extended Working Memory for Language Agents**
+([arXiv:2607.05690](https://arxiv.org/abs/2607.05690), v1 2026-07-06, v2 2026-07-19).
+Agents observe-reason-act in a loop, but the memory they reason over sits *outside* it: a
+networked store queried at most once per turn because it answers in tens-to-hundreds of ms,
+and querying it per-step can inflate end-to-end latency up to 83×. The paper's thesis is that
+latency is a property of **where the store lives, not the in-loop pattern**: an in-process
+store answers in ~100µs (p50 80–165µs), three orders of magnitude below the network regime,
+and at that speed the per-step tax collapses — memory becomes *extended working memory*, not
+a tool consulted once. The causal result: holding a fixed per-turn memory-latency budget and
+varying only store speed, redundant actions rise monotonically with latency — **0.0 of 12 at
+in-process speed, 7.2 of 12 at a 110 ms cloud round-trip** — and recall improves 0/5 → 3.6–4.8/5.
+Two honest caveats the paper raises itself: an instructed *restate-every-reply* baseline also
+solves recall perfectly, at a token cost that grows with the working set; and the real
+per-step bottleneck is **embedding** (~200–400 ms over the network), so an in-process store
+fronted by a *networked* embedder buys nothing — pairing it with a small **local** embedder
+returns the whole op to ~40 µs.
+
+**What inber should consider:** inber's memory-store is exactly the HTTP-over-network shape
+the paper measures as too slow for hot-path recall — it runs as a service (bridge-server
+:8160) queried at turn boundaries, not per reasoning step. The takeaway is a **two-tier
+split**: (a) an in-process/embedded index co-located with the engine, *with a local
+embedder*, for per-step recall cheap enough to run every step; (b) the HTTP memory-store
+reserved for durable cross-session state where a per-turn round-trip is fine. The
+load-bearing detail inber would hit first is the caveat above — the bottleneck is the
+embedder, not the store, so moving only the store in-process while embeddings stay networked
+is a no-op. This interlocks with the 07-24 VISTA/rate-distortion pair: a *recoverable
+archive* only pays off if re-admitting an evicted block is cheap enough to do mid-trajectory,
+which requires the retrieval path itself to be in-loop-fast — so the in-process split is the
+precondition for "make eviction recoverable" to actually help rather than just move the cost.
+
+## A self-modifying harness needs a behavior→code map, not grep
+
+**Harness Handbook: Making Evolving Agent Harnesses Readable, Navigable, and Editable**
+([arXiv:2607.13285](https://arxiv.org/abs/2607.13285), 2026-07-14). As harnesses evolve,
+developers (and agents) struggle to find *where* a behavior is implemented across a large,
+tightly-coupled codebase. The paper builds an automated **behavior→source map** linking each
+observable harness behavior to its implementation locations, and proposes **Behavior-Guided
+Progressive Disclosure** to route an editing agent from a high-level behavior down to the
+exact — often scattered — sites, verifying candidates against current source. Gains
+concentrate exactly where grep fails: *scattered sites, rarely-executed paths, cross-module
+interactions.*
+
+**What inber should consider:** inber is itself a harness that agents modify (this
+harness-watch job, the modularity work), and its behaviors are scattered precisely as the
+paper describes — *compaction* alone spans `engine/lifecycle.go` + `conversation/summarize.go`
++ `conversation/summary_generation.go`; tool-schema projection lives in
+`agent/openai_conversion.go` + the registry; permission gating sits in bridge-server's
+prehook, in another repo entirely. A harness-editing agent that greps `compaction` never
+finds `summary_generation.go`. Consider a behavior→code index so an editing agent starts from
+behavior, not filename. Low-cost version: **this `docs/comparisons` set is already a partial
+behavior→source index in prose** — the "what inber should consider" bullets routinely name
+the exact file:line — so formalizing the source-location links (or a hand-maintained
+`INBER.md` behavior map) is a small step from what already exists, not new machinery.
+
+**Cross-cutting takeaway (2026-07-26 sweep):** both papers point at inber's *structure*, not
+its prompts. Memory-in-the-loop says inber's memory boundary (HTTP :8160, once-per-turn) is in
+the wrong place for the recoverable-archive strategy the 07-24 sweep recommended to pay off;
+Harness Handbook says the map an agent needs to *edit* that boundary safely already half-exists
+in these comparison docs and should be made into real source links.
