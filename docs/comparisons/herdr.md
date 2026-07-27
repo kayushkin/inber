@@ -71,6 +71,10 @@ transitions wait for **settled** events (Pi); background work is **pinned** so a
 doesn't fall back to idle (Grok); a prompt wait reports `agent_prompt_stalled` after 5s rather than
 hanging. State inference from a TUI is a swamp, and Herdr has already mapped it.
 
+> **Design write-up**: the reliability work below is specified for implementation in
+> `~/repos/llm-bridge-server/SESSION-STATE-RELIABILITY.md` — hardening the shared `derivation.go`
+> state machine (which inber sessions also flow through) plus a passive PTY-mode classifier.
+
 **Inber connection**: inber's harness bridges (llm-bridge-claudecode et al.) get structured lifecycle
 from stream-json, so they don't need this — *for agents they drive that way*. But inber has a **PTY
 mode** path (the `user_message` dual-emit note records that PTY mode has only the OTel copy; the TUI
