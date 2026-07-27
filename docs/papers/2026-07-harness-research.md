@@ -560,3 +560,37 @@ its prompts. Memory-in-the-loop says inber's memory boundary (HTTP :8160, once-p
 the wrong place for the recoverable-archive strategy the 07-24 sweep recommended to pay off;
 Harness Handbook says the map an agent needs to *edit* that boundary safely already half-exists
 in these comparison docs and should be made into real source links.
+
+---
+
+# 2026-07-27 sweep
+
+## AgenticSTS: memory as a *contract about what each decision may see* — bounded, typed-retrieval assembly beats an appended transcript
+
+[arXiv 2607.02255](https://arxiv.org/abs/2607.02255) ("AgenticSTS: A Bounded-Memory Testbed
+for Long-Horizon LLM Agents", July 2026). The paper's framing is the useful part: **memory is
+a contract about what each future decision is allowed to see.** The default contract — append
+every past observation, tool call, and reflection to the next prompt — makes prior context
+trivially accessible but turns it into a jumbled mixture where no single memory component's
+effect can be isolated (and, from the cache line this doc already tracks, wrecks the prefix).
+The alternative it tests: a **bounded contract** where each decision runs from a *fresh user
+message assembled by typed retrieval*, with **no raw cross-decision transcript appended**. The
+testbed exists precisely to measure whether that bounded assembly holds up over long horizons.
+*(Numbers unverified — WebFetch is denied in this job's sandbox; cited for the design thesis,
+not as a measured result.)*
+
+**What inber should consider:** this is the memory-store counterpart to the 07-24 sweep's
+"recoverable archive beats an eager summary" and the 06-24 "fresh-window reset" pattern — and
+it names the design choice inber has *not* made explicit. inber's conversation assembly
+(`engine/turn_context.go`, `conversation/summarize.go`) is fundamentally the *append* contract:
+history accumulates and is trimmed/summarized at a threshold, with memory-store entries layered
+on top. AgenticSTS argues the boundary should sometimes be the other way round — assemble the
+next turn's user message *from typed retrieval against memory-store*, and drop the raw
+transcript rather than summarize it, when the task is at a clean subtask boundary. inber already
+has the pieces: `MemStore` is the typed retrieval surface, and the 07-22 SelfCompact rubric says
+*when* a boundary is clean enough to reset. The concrete step is to make "assemble-from-memory,
+no transcript" a **selectable context contract** at subtask boundaries — not the only mode
+(mid-derivation still needs the raw trace), but an available one — so a long-horizon session can
+run in bounded-token steady state instead of paying summarization round-trips forever. This
+composes with the 07-26 "memory belongs inside the loop" finding: bounded typed-retrieval
+assembly is only affordable if the memory query is in-loop, not a once-per-turn HTTP hop.
