@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kayushkin/repo-store/repodetect"
+	"github.com/kayushkin/repodetect"
 )
 
 // WorkflowHooks orchestrates auto-commit, auto-format, and auto-test.
@@ -41,8 +41,8 @@ func NewWorkflowHooks(repoRoot, sessionID, agentName string, cfg AutoWorkflowCon
 }
 
 // detectProject sets the project type used to pick build/format/test commands.
-// It delegates to the shared repodetect ruleset (the single source of truth, in
-// repo-store) rather than a local first-match copy: detection now sees every
+// It delegates to the shared repodetect ruleset (the single source of truth,
+// its own module) rather than a local first-match copy: detection now sees every
 // language present (a Go service with a React frontend reports both), and
 // PrimaryLanguage collapses that to the one command-selection key the workflow
 // hooks need. Preference order is backend-first (go > rust > python > node), so

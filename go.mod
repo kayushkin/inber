@@ -14,7 +14,7 @@ require (
 	github.com/kayushkin/logstack v0.0.0-20260322075744-a4ca356093f8
 	github.com/kayushkin/memory-store v0.0.0
 	github.com/kayushkin/model-store v0.0.0-20260307230928-77f7530097d2
-	github.com/kayushkin/repo-store v0.0.0-00010101000000-000000000000
+	github.com/kayushkin/repodetect v0.0.0
 	github.com/kayushkin/tool-store v0.0.0
 	github.com/nats-io/nats.go v1.49.0
 	modernc.org/sqlite v1.48.2
@@ -51,7 +51,7 @@ replace github.com/kayushkin/forge => ../forge
 
 replace github.com/kayushkin/tool-store => ../tool-store
 
-replace github.com/kayushkin/repo-store => ../repo-store
+replace github.com/kayushkin/repodetect => ../repodetect
 
 replace github.com/kayushkin/bus => ../bus
 
