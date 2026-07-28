@@ -80,8 +80,13 @@ func SummarizeConversation(
 
 	summary, err := generateSummary(ctx, client, oldText, summaryModel, cfg.MaxSummaryTokens)
 	if err != nil {
-		// Fallback: mechanical summary (no LLM call)
+		// Fallback: mechanical summary (no LLM call). Record the degradation —
+		// a caller that cannot tell an LLM summary from a word-frequency list
+		// will report a successful compaction that silently lost the reasoning.
 		summary = mechanicalSummary(oldMessages)
+		result.SummaryDegraded = true
+		result.SummaryError = err.Error()
+		fmt.Printf("warning: LLM summarization failed, using mechanical fallback: %v\n", err)
 	}
 
 	result.Summarized = true

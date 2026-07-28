@@ -1619,3 +1619,113 @@ The 06-24/06-26 entries tracked codex's code-mode host becoming a standalone, ou
 - **Deferred-tool namespaces move into `WorldState`, and `tool_search` dedupes sources.** [#35063](https://github.com/openai/codex/pull/35063) tracks deferred-tool namespaces in the world state (the same structured-context mechanism the 06-27/07-18 entries documented), and [#35065](https://github.com/openai/codex/pull/35065) stops `tool_search` returning the same deferred source twice — so which tools are deferred vs. surfaced is derived state that survives refresh/resume, not a per-turn recomputation that can drift or double-count.
 
 **What inber should consider:** this is the counter-design to inber's own documented failure mode — Claude Code (and inber's `tools/mcp`) start every stdio MCP server once at session start and kill it on `Close()`, which is exactly what OOM'd the box (`project_mcp_descoping`: ~890MB/session). inber's `tools/mcp/adapter.go` `MCPToolRegistry` is a static map — `AddClient` / `GetAllTools` / `Close`, with **no** `Reconnect`, `Refresh`, or prewarm — and `client.go` spawns the subprocess once in `NewClient`. **(a)** Add a **refresh path** to the registry: reconnect a single named client and re-list its tools without tearing down the session, so an MCP server whose auth was just provisioned in auth-store (or whose config changed in tool-store) comes live mid-session — today the only way to pick up a new MCP credential is a full session restart, which is the thing `feedback_never_restart_gateway_unattended` says not to do. **(b)** Make MCP attach **lazy + prewarmed**, not eager-at-start: keep servers deferred (they already fit the deferred-tool/`tool_search` layering this doc's 06-16 entry describes) and spawn the subprocess in the background on first reference, so the 890MB isn't paid by sessions that never call the tool — this is the memory fix `project_mcp_descoping` reached for by *removing* the browser MCPs from scope, made structural instead of by-hand. **(c)** For code execution specifically, codex's remote-host-with-client-side-network-policy is the shape inber's `bridge-agent --mcp browser` escalation wants: run the heavy/untrusted runtime out-of-process (or off-box) behind a transport, with the harness holding the egress/network-policy decision, rather than in the session's own address space and trust domain. **(d)** Track "which tools are deferred vs. surfaced" as **derived state keyed off the tool registry**, not a value recomputed each turn — so it stays correct across the refresh path in (a) and doesn't double-count a source (the exact bug #35065 fixes).
+
+## Harness-watch — 2026-07-28: an *effective* value must survive revival and be reported when it degrades — codex makes subagent instructions a three-state inheritance contract and hands the model catalog the token budget; cline ships the bug that happens when neither holds
+
+Three findings this window share one spine: a configured value is only real if it can be
+reproduced when the session is revived, and only trustworthy if a fallback says so.
+
+### 1. Subagent developer instructions: unset inherits, blank clears, role wins — and the effective value must survive forks, compaction and cold resume
+
+[codex #35708](https://github.com/openai/codex/pull/35708) adds
+`features.multi_agent_v2.subagent_developer_instructions`, an override applied to subagents
+that define **no** role-specific instructions. The contract is three-state, and that is the
+design: **unset = inherit the parent's, blank = deliberately clear them, present = replace**,
+with role-specific instructions outranking the override. The follow-up
+[#35653](https://github.com/openai/codex/pull/35653) is the load-bearing half — it does
+nothing but test that whatever the effective instructions are, they are carried **without
+duplication** through full forks, bounded forks, compacted histories and cold resume, and that
+a roleless worker lazily reloaded after a cold resume still has them. It also pins the inverse:
+stale *parent usage hints* are stripped on fork while developer messages are kept.
+
+**What inber should consider:** inber sits in the one corner of that matrix codex kept as a
+non-default. `spawn_agent` (`agent/registry/spawn_tool.go:90`) takes exactly `{agent, task}`;
+the child's instructions come wholly from its agent-store registry entry, so the contract is
+*always role-only, never inherit*, with no way to express the other two states. That is fine
+until the parent holds session-specific standing rules the registry entry cannot know — a repo
+convention discovered this session, an approval constraint, the hold-gate policy — at which
+point the only channel is to paste them into `task`, where they read as part of the job rather
+than as instructions. **(a)** Add an optional `instructions` field with codex's three states,
+so *inherit* becomes a choice rather than an accident of which registry column was filled.
+**(b)** The half to actually build first is #35653's, not #35708's: whatever the child's
+effective instructions are, they must be reproduced when the child is **revived**. inber's
+kanban task-completion-loop dispatcher revives sessions, and a revived child that silently
+drops its inherited constraints is the same bug class as cline's sidecar below — persisted
+promise, absent read. **(c)** Copy the strip-hints detail: inherited *instructions* are wanted,
+an inherited *"you have used N tokens"* is a lie to a fresh child.
+
+Two smaller ones worth copying as-is. [#35661](https://github.com/openai/codex/pull/35661)
+reorders the rendered developer message to put `host_skills` **before** the permissions
+section — capabilities first, the constraints on using them last and nearest the task.
+[#35594](https://github.com/openai/codex/pull/35594) changes only a *schema description*:
+`wait_agent`'s timeout now recommends minute-scale waits "that avoid busy polling." A tool's
+description is a cost control, and a one-word edit there is cheaper than any orchestration
+logic — inber's own no-polling rule currently lives in a MEMORY note rather than in the
+schema text the model actually reads.
+
+### 2. The model catalog owns the default token budget; explicit config wins; the resolved value is frozen in the lock
+
+[codex #35608](https://github.com/openai/codex/pull/35608) moves token-budget defaults into
+the **model catalog**: catalog messages carry token-budget settings, applied when no explicit
+configuration exists. Four rules come with it — explicit user settings stay authoritative,
+invalid catalog values are **rejected** rather than clamped, the *resolved* defaults are
+preserved in the exported **config lock** so replay is deterministic, and context-window
+guidance is managed through world state so it updates **once** when the active model changes
+instead of being rebuilt every turn.
+
+**What inber should consider:** inber has the catalog codex is adding fields to — model-store
+(:8155) — and does not use it for this. `agent/models.go:27` returns
+`ContextWindow: 200000` for **every** model, including ones it just found in model-store,
+under the comment "reasonable default since not in model-store"; `engine/build.go:107` then
+derives the prune threshold as `contextWindow / 2`. So inber prunes at a hardcoded 100k
+whatever model is live, while a second unrelated constant — `TokenBudget: 50000`, repeated in
+all four role configs in `conversation/manage_config.go` — drives `ShouldPrune` on the other
+path. **(a)** Add `context_window` to model-store and read it in `GetModelInfo`, deleting the
+literal. **(b)** Keep codex's precedence exactly: explicit engine config beats catalog, and an
+invalid catalog value is rejected, not silently clamped — a clamp is how a bad sync becomes a
+mystery. **(c)** Freeze the *resolved* value on the session at start, codex's config-lock move.
+inber resumes sessions and revives them from kanban; an `ms sync` between the original run and
+the resume would otherwise move the compaction threshold under a conversation already in
+flight — same-session-different-rules, the hazard the datetimeoffset note is a special case of.
+**(d)** The world-state detail is a cache point: render context-window guidance once on model
+change, not per turn, so it stays in the stable prefix `BuildSystemPrompt` already orders for
+caching (`engine/turn_prompt.go:66-72`).
+
+### 3. A fallback that reports success is a lie; a write gated differently from its read is dead state
+
+[cline #12563](https://github.com/cline/cline/pull/12563) fixes two bugs found by manually
+driving the compaction UI shipped a week earlier — both made the "Context compacted" divider
+lie. **First:** the agentic summarizer built its handler from a provider config that lost the
+base URL under the SDK provider spelling, hit the default endpoint, got a 401, logged
+"Agentic compaction failed; falling back to basic compaction" — and rendered the *identical*
+success divider. Every OpenAI-compatible custom-endpoint setup had silently never used agentic
+compaction. **Second:** a manual `/compact` persisted a compacted working context promising
+"the next turn and resumes keep using it," but the **read** path was wired only when
+`compaction.enabled === true`, which defaults false. State was written and never read; every
+later request re-sent the full transcript. A test had pinned the incoherent semantics —
+persist while disabled, never project — and had to be rewritten. The verification method is
+the transferable part: a logging proxy tagging summarizer requests by their system prompt, so
+"agentic ran" is proven on the wire rather than by the UI.
+
+**What inber should consider:** inber had the first bug, worse. `conversation/summarize.go`
+dropped to `mechanicalSummary` — a list of words longer than six letters harvested from the
+transcript — whenever the summarization call failed, and **swallowed the error entirely**: no
+log line, no field on `SummarizeResult`, and `result.Summarized = true` set identically either
+way, under a `[Conversation Summary — N earlier turns condensed]` header that claims a summary
+in both cases. **Fixed in this commit** (`SummaryDegraded` + `SummaryError`, and a warning on
+the fallback). The rule to keep: a fallback on a *quality* path must be visible in the returned
+value, not merely in a log — and in inber's case it was not even in a log, which is the
+"0 `[reaper]` lines ever" failure discovered the same way. Two follow-ons: **(a)** consider
+labelling the injected block itself when degraded, so the model is told it is reading a keyword
+list and not a summary — that changes prompt content, so it is left as a decision rather than
+done here. **(b)** Audit for cline's *second* shape, which inber has not been checked for: a
+write gated on one condition whose read is gated on another. The generalizable check is cheap —
+for every persisted artifact, name the read that consumes it and confirm the two gates are the
+same expression. The compaction memory save (`summarize.go:55`, gated on
+`cfg.SaveToMemory && memStore != nil`) and its re-admission through lazy load / `memory_expand`
+are the first pair to check.
+
+**Cross-cutting:** all three are one rule. codex #35653 tests that inherited instructions
+survive a cold resume; codex #35608 freezes the resolved budget so a resumed session keeps the
+rules it started under; cline #12563 is what the product looks like when neither holds — a
+promise persisted, a read that never fires, and a success message covering for both.

@@ -594,3 +594,111 @@ no transcript" a **selectable context contract** at subtask boundaries — not t
 run in bounded-token steady state instead of paying summarization round-trips forever. This
 composes with the 07-26 "memory belongs inside the loop" finding: bounded typed-retrieval
 assembly is only affordable if the memory query is in-loop, not a once-per-turn HTTP hop.
+
+---
+
+# 2026-07-28 sweep
+
+## Harness-evolution results are measured against unmatched baselines on the tasks they were tuned on
+
+**Rethinking the Evaluation of Harness Evolution for Agents**
+([arXiv:2607.12227](https://arxiv.org/abs/2607.12227), submitted 2026-07-14; AI2/UW authors
+incl. Hajishirzi, Tsvetkov, Dasigi). A negative-result methodology paper aimed at the
+automatic-harness-evolution literature. Two charges: **(a)** harness evolution is itself an
+iterative search that spends inference compute, but it is compared against baselines that get
+no matched budget — so a reported gain may be "more search," not a better architecture; and
+**(b)** the search loop and the final evaluation run on the *same* benchmark, so the result
+measures overfitting to that benchmark rather than a general improvement. Re-run with
+budget-matched test-time-scaling baselines and held-out tasks (Terminal-Bench 2.1, GPT-5.4 and
+Claude Opus 4.6), automatic harness evolution "does not consistently outperform simple
+test-time scaling methods and exhibits limited generalization." *(Abstract-grade — read from
+the arXiv abstract page, not the PDF; no per-config deltas seen.)*
+
+The paired example landed the same week: **Recursive Harness Self-Improvement**
+([arXiv:2607.15524](https://arxiv.org/abs/2607.15524), 2026-07-17, authors incl. Zaharia,
+Tang) argues model and harness co-evolve — a harness is a *data-generating* component because
+its traces become the next model's training data — and refines a prompt-level spec of the
+agent loop via pairwise feedback over its own revision history, claiming low-reasoning-effort
+agents beat max-effort baselines at up to 60% lower inference cost, with the gain attributed
+to task-specific *context management* rather than longer reasoning. Suggestive, and exactly
+the shape 2607.12227 says not to take at face value: 30 *synthetic* tasks, self-selected.
+
+**What inber should consider:** this is a rule for *this job*, not a feature. inber is a
+self-modifying harness and this weekly sweep is a harness-evolution loop — it reads upstream
+diffs and papers, then proposes changes to inber's own scaffolding. The paper names both
+failure modes the loop is exposed to. **(a)** When a proposed change gets evaluated, compare
+it against a **compute-matched** baseline: "rubric-gated compaction beat threshold compaction"
+means nothing if the rubric variant also spends an extra model call per turn — spend the same
+budget on plain retries or a longer context and see if the gain survives. **(b)** Evaluate on
+tasks that were **not** used to pick the change. The concrete risk here is that the docs are
+tuned against the same handful of recurring inber scenarios (the compaction path, the skill
+resolver, the permission gate) that motivated each entry. **(c)** The cheap discipline, given
+inber has no benchmark harness: keep writing the entries, but stop treating an upstream
+harness's *adoption* of a pattern as evidence it works — codex shipping a degradation ladder
+is evidence that codex's team believed it, nothing more. Several entries in this doc set
+already lean on abstract-grade numbers (flagged inline); this paper says the lean should be
+toward the *design thesis*, which transfers, and away from the *deltas*, which do not.
+
+## Self-state attacks: an agent corrupts its own memory and config through calls it is authorized to make
+
+**Self-State Attacks on Self-Hosted AI Agents: How Far Can OS Defenses Go?**
+([arXiv:2607.17986](https://arxiv.org/abs/2607.17986), submitted 2026-07-20, authors incl. Di
+Pietro, Schmidhuber). Thesis: for a self-hosted agent the interesting attack surface is not
+sandbox escape but the agent mutating **its own memory, instructions and configuration**
+through entirely legitimate operations it already holds permission for — so gating at the
+syscall/command boundary cannot see the attack, because nothing unauthorized happens. The
+paper systematizes the space on four axes (Target, Mechanism, Granularity, Temporal) into a
+23-cell matrix with 43 concrete operations on real self-state files, and tests a layered
+defense: access control on the *instruction* and *config* layers, workload-conditioned
+detection on the *memory* layer, periodic backup for recovery. Most cells are covered; a
+residual surface stays "structurally indistinguishable at the OS level." *(Abstract-grade.)*
+
+**What inber should consider:** inber is precisely the deployment this describes, and the
+paper's axis — target *layer*, not target *syscall* — is the axis inber's gating is missing.
+Permission-store keys on **command-string regex**, which sees shell commands and nothing else;
+`memory_save` / `memory_forget` (`memory/tools.go:98,189`) are ordinary always-allowed tools
+that never reach it. The exposure is concrete: `BuildContext` loads `AlwaysLoad` memories —
+identity and standing instructions — into the **stable cached prefix** of every future session
+(`engine/turn_prompt.go:83`, `memory-store/builder.go:26`), `memory_search` prints each hit's
+`ID` (`memory/tools.go:81`), and `memory_forget` soft-deletes **any** ID with no notion of
+which layer it belongs to. So a prompt-injected or merely confused agent can retire its own
+identity/instruction memories for every subsequent session, using two authorized calls, and
+leave no trace the command-regex gate could ever have matched. `memory_save`'s
+model-settable `importance` (0–1) is the softer version: inflate it and crowd the context
+budget. **(a)** Give memories a **layer** (identity/instruction vs. operational) and gate
+writes and forgets on it — the agent freely manages operational memory, while instruction- and
+identity-layer mutations require the same approval path as a destructive command. The field is
+half-present already: `AlwaysLoad` is on the struct and, correctly, *not* exposed in
+`memory_save`'s schema — the gap is that `memory_forget` ignores the distinction the save path
+respects. **(b)** Recovery beats detection here and inber already has the mechanism — noteboard's
+`deleted_at` + `item_revisions` made deletes reversible; memory-store's soft-delete should carry
+the same revision history so an instruction-layer change is inspectable and revertible.
+**(c)** Note the interaction with the open permission-store gate in MEMORY: that note worries
+about `rm -rf /`, and the fix everyone reaches for is a better command regex. This paper says
+the regex is the wrong instrument for the more likely failure — the agent does not need to run
+`rm` to erase its own instructions.
+
+## One object as tools, state and prompt
+
+**NVIDIA-labs OO Agents: Native Python Object-Oriented Agents**
+([arXiv:2607.20709](https://arxiv.org/abs/2607.20709), submitted 2026-07-22). Argues agent
+code is fragmented across four artifacts kept in sync by hand — prompt templates, tool JSON
+schemas, callbacks, workflow graphs — and collapses them into a single object: methods *are*
+the actions, fields *are* the state, docstrings *are* the prompts. The claimed payoff is that
+the developer's interface and the model's interface become the same object, so behavior is
+testable with ordinary tooling instead of trace-staring. *(Abstract-grade, and unusually thin:
+it names SWE-bench Verified, Terminal-Bench 2.0 and ARC-AGI-3 but publishes no figures at
+abstract level. Cited for the thesis only.)*
+
+**What inber should consider:** inber is already most of the way here and should notice the
+one seam where it isn't. `agent.Tool` bundles `Name`, `Description`, `InputSchema` and `Run`
+in one Go value, so a tool is a single object rather than a schema file plus a handler —
+that is the paper's structure. The seam is that `InputSchema` is **hand-written and
+independently parsed**: `agent/registry/spawn_tool.go` declares `type input struct {Agent,
+Orchestrator, Task}` *and* a separate `Properties` map listing the same three fields, with
+nothing tying them together. `memory/tools.go` repeats the pattern. Nothing fails loudly when
+they drift — a field renamed in the struct silently stops binding, and the model keeps being
+told the old name. The fix is small and mechanical: derive the schema from the input struct
+via reflection over json tags (with a `desc:` tag for the descriptions), so the struct is the
+single source of truth. That is worth doing on its own merits and does not depend on the
+paper's unpublished numbers.

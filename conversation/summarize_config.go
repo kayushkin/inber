@@ -49,4 +49,6 @@ type SummarizeResult struct {
 	SummaryTokens   int      // estimated tokens in the summary
 	MemorySaved     bool     // whether full conversation was saved to memory
 	MemoryID        string   // memory ID if saved
+	SummaryDegraded bool     // true when the LLM summary failed and the mechanical fallback was used
+	SummaryError    string   // why the LLM summary failed, when SummaryDegraded is set
 }
