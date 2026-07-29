@@ -702,3 +702,105 @@ told the old name. The fix is small and mechanical: derive the schema from the i
 via reflection over json tags (with a `desc:` tag for the descriptions), so the struct is the
 single source of truth. That is worth doing on its own merits and does not depend on the
 paper's unpublished numbers.
+
+## Involuntary memory is a harness property — inber has the cue vocabulary and fires it in one place
+
+**Delivery, Not Storage: Cue-Anchored Working Memory as a Harness Property for Coding
+Agents** ([arXiv:2607.20972](https://arxiv.org/abs/2607.20972), submitted 2026-07-23,
+Swapnanil Saha). Argues coding agents ship with only *one* kind of memory — documents the
+agent must choose to write and choose to read back — while the load-bearing human tier is
+situational facts retrieved involuntarily when the situation cues them. It contributes a
+cue-anchored model where each memory carries first-class trigger conditions over a
+composable vocabulary (**path, symbol, semantic, event, temporal**) evaluated
+deterministically by the harness. The measurements are the reason to care: with a
+pre-seeded store the agent performed **0 memory operations in 114 turns**; ten facts held
+only in the conversation vanished at the first summary and stayed absent from **106 of 108
+compactions**, with the deprived agent grepping the harness's own session files to rebuild
+them, while the same facts injected from a harness-owned store survived all **138**
+compact-resumes; **39%** of intra-session re-reads re-bought content already paid for
+before a compaction boundary.
+
+**What inber should consider:** inber is *not* the document-only harness the paper attacks,
+and it should get credit for the two things it already has right. All four memory tools are
+voluntary (`memory_search/save/expand/forget`, `memory/tools.go:52,99,151,190`) — the tier
+the paper measures at zero use — but `BuildSystemPrompt` also runs an involuntary channel
+every turn, and because it rebuilds the system prompt from the store rather than from the
+transcript, harness-injected memories survive compaction by construction. That is the
+paper's 138-of-138 result, already true.
+
+The gap is *when the cue is evaluated*. `engine/turn_prompt.go:76` derives cues with
+`memory.AutoTag(userMessage, "user")` — and that is the **only** `AutoTag` call site in
+inber. `PatternTagger` already extracts **file paths** (`memory-store/tagger.go:38-42,117`),
+so the path cue in the paper's vocabulary exists; it is simply never asked about anything
+but the user's opening sentence. A memory tagged `engine/turn_prompt.go` fires only if the
+user happens to type that path, not when the agent opens the file at step 7 of a
+twenty-tool turn — and `buildTurnContext` is called once per user turn
+(`engine/turn_prepare.go:69`), so the cue is never re-evaluated as the turn proceeds.
+`TagWithToolName` (`tagger.go:107`) is the missing half, written and called by nobody.
+**(a)** Re-evaluate cues against what the agent is *touching*, not only what the user
+*said*: feed tool-call arguments — the path on a read/edit, the command on a shell call —
+through the tagger and top up the volatile block. **(b)** That must land **after** the
+`__CACHE_BOUNDARY__` sentinel (`turn_prompt.go:56,70`), in the volatile section, or every
+file the agent opens invalidates the stable prefix — the paper's win is delivery, and
+inber's cache ordering is what keeps delivery cheap. **(c)** Cheapest first step, no new
+machinery: `AutoTag` currently sees the user message only, so give it the turn's tool
+results too and the 39% re-read finding is directly testable against inber's own logs.
+
+## Parallel agents need pre-write admission, not a note telling them to look before they leap
+
+**Claim Plane: Enforceable Change Intents and Dynamic Scope for Parallel Coding Agents**
+([arXiv:2607.21909](https://arxiv.org/abs/2607.21909), submitted 2026-07-24, Maxim
+Nikolaev). Frames concurrent agent work as a **pre-write admission problem** rather than a
+merge-time repair problem. Before implementing, each worker declares a versioned
+`ChangeIntent` — exact base commit, typed resources, dependencies, and operations marked
+*committed* or *contingent*. A deterministic control plane atomically admits compatible
+intents, constrains same-file parallelism to declared regions, serializes unresolved
+overlap, tracks dependency invalidation, and **fails closed on ambiguous authority**. A
+contingent mutation reserves nothing up front; the first attempted write triggers atomic
+scope promotion and re-admission against the current active set. The stated thesis is
+separating *probabilistic planning* from *deterministic authority*. Evidence is explicitly
+feasibility-only — six CooperBench pairs, 6/6 with full serialization, parallel admission
+retained on half under dynamic scope, seven scope promotions, two undeclared mutations
+caught by failing closed. *(Single-author preprint; cited for the architecture, not the
+numbers.)*
+
+**What inber should consider:** this is the paper for the standing "Parallel agent
+collision" note — two nightly workers **will** pick the same only-unblocked todo. inber's
+current answer is advisory (check the target repo's mtimes and untracked files first),
+which is exactly the "continuous supervision" class the paper lists and rejects, and it is
+enforced by nothing. The pieces to build it deterministically are already here: noteboard's
+`hold` field is a fail-safe-by-default exclusion, auth-store already enforces leases,
+kanban-store already links cards to entities, and `isolation: worktree` already gives a
+worker its own tree. **(a)** The smallest real version is an admission step on the todo
+itself — a worker claims with a lease naming the todo id *and the base commit it read*,
+and a second worker is refused rather than warned. That alone converts the collision from
+a duplicated-work incident into a refusal. **(b)** Keep the base-commit field; it is what
+turns "someone else is on it" into "your premise is stale", which is the failure the
+mtime check cannot see. **(c)** Copy *fail closed on ambiguous authority* verbatim — it is
+the inverse of the disabled-deny-rules problem in the open permission-store gate, where
+ambiguity currently resolves to allow. **(d)** Do **not** copy the typed-resource
+declaration yet; asking a model to enumerate the files it will touch before it explores is
+the part of the design least likely to survive contact, and the lease gets most of the
+value without it.
+
+## Also in-window, checked and logged
+
+- **SkillGate** ([2607.25619](https://arxiv.org/abs/2607.25619), 07-28) — screens skill
+  packages before install with a regex prefilter plus an LLM judge on matched snippet
+  windows only (F1 0.817, FPR 1.13%, 77% fewer judge input tokens on SkillsBench, n=1650,
+  9.1% malicious). Relevant because skill-store ingests third-party GitHub repos by
+  `git clone --depth=1` and walks every `SKILL.md` beneath with **no screening step**
+  (`skill-store/ingest.go:30,321`), and one seeded source is a community list. Not written
+  up further because the fix is a decision (add a gate, choose a judge model, choose what
+  happens on flag) rather than a defect — filed here so the exposure is on the record.
+- **Agent Team Work Zone** ([2607.22917](https://arxiv.org/abs/2607.22917), 07-24) —
+  filesystem "workstations" preserving teammate state across compaction and process exit.
+  Confirmatory rather than new: this is what noteboard's `workspace` type plus
+  `jobs.workspace_id` already do, and the paper reports no numbers.
+- **Distributing Security Controls Through Harness Engineering**
+  ([2607.25890](https://arxiv.org/abs/2607.25890), 07-28) — SHarD packages OS sandboxing,
+  skill scanning and tool restriction into a distributable harness built on Pi, scored
+  against a 23-test suite from the OWASP Top 10 for Agentic Applications. The transferable
+  observation is that **model non-determinism produced inconsistent security outcomes**,
+  which is an argument for gating in the harness rather than in the prompt. Logged for the
+  OWASP suite as a possible checklist for the harness-control-matrix.

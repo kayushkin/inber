@@ -1729,3 +1729,117 @@ are the first pair to check.
 survive a cold resume; codex #35608 freezes the resolved budget so a resumed session keeps the
 rules it started under; cline #12563 is what the product looks like when neither holds — a
 promise persisted, a read that never fires, and a success message covering for both.
+
+## Harness-watch — 2026-07-29: a *record of what was dropped* must be typed, named and unforgeable, and a *gate* must see the bytes that will execute — codex gives truncation a schema the model cannot fake, goose stops reviewing a rendering of a tool call, cline ships an allowlist that fails open
+
+Four upstream changes this week are one argument seen from four sides: every place a harness
+*summarizes*, *renders* or *normalizes* something before showing it to a model, a gate or a
+future turn, the summary can lie, and the fix is always to make the reduced form typed and
+attributable rather than prose.
+
+### 1. Truncation is a typed record, not a string — bounded twice, produced only locally, idempotent
+
+[codex #35738](https://github.com/openai/codex/pull/35738) adds a protocol module for executed
+tool-call metadata: `ExecutedToolCall { name, arguments }` where `arguments` is an enum of
+`Raw(Value)` or `Truncated(ExecutedToolCallTruncation { original_bytes, max_bytes,
+omitted_calls, original_name_bytes })`. Four properties come with it. It is bounded **twice** —
+8 KB per call *and* 32 KB per prompt — so no single call and no accumulation of calls can run
+away. Overflow degrades into a **typed record that names what was lost**, not a silent drop.
+The `Truncated` variant can only be constructed locally: deserialized response items and
+model-supplied arguments are prevented from forging truncation markers. And the bounding is
+**idempotent**, so re-bounding an already-bounded prompt is a no-op — which is what makes it
+safe to re-run against a cached prefix.
+
+**What inber should consider:** inber's equivalent is `summarizeToolResultByContent`
+(`conversation/manage_tool_pruning.go:96`) and it fails three of the four properties, one of
+them outright. It **sniffs the tool type from the content** rather than reading the tool name
+off the paired `tool_use` block, using a chain of `strings.Contains` guesses — output holding
+"exit code" is shell, output holding "wrote" is a file write, output with a "/" and >3 lines is
+a directory listing. So a `git log` whose message body contains the word *written* is stamped
+`[wrote file: N bytes]`, and the transcript now asserts something false about what the agent
+did. **The first branch also makes the second unreachable**: the shell branch fires on
+`len(lines) > 5`, the file-read branch requires `lineCount > 20`, and `lineCount > 20` implies
+`len(lines) > 5` — `[read file: %d lines, %d bytes]` is **dead code that can never be
+produced**, and every multi-line file read in a pruned inber transcript is labelled `[shell:
+N lines]` instead. **(a)** Carry the tool `name` in the record, as codex does; it is already
+on the `tool_use` block two fields away, and every guess disappears with it — this deletes the
+dead branch rather than repairing it. **(b)** Keep `original_bytes` unconditionally. inber
+keeps a byte count in two branches and loses it in three (`[shell: %d lines]`,
+`[listed %d files]`, `[search: %d results]`), so for most truncations the transcript cannot say
+how much was dropped — the "No silent caps" rule, violated by the summarizer that exists to
+enforce it. **(c)** Add the per-prompt ceiling. `truncateOldToolResults` has a per-item
+threshold (>200 bytes) and no aggregate bound, so a thousand small results are never touched.
+**(d)** The forgery property matters more here than in codex, because inber's markers are plain
+text inside an ordinary text block: a fetched web page or a repo file containing the literal
+string `[read file: 3 lines, 91 bytes]` is indistinguishable from a marker inber wrote. A
+distinct block type, or at minimum a sentinel the harness owns, restores the distinction.
+
+### 2. The approver must see the bytes that will execute — and normalizing an empty allowlist to "unset" fails open
+
+[goose #10529](https://github.com/aaif-goose/goose/pull/10529) is filed as a security fix and
+is the cleanest statement of the rule: the adversary/reviewer pass was shown a shorthand
+`command` summary of a tool call rather than the full argument object, so **sibling arguments
+alongside `command` were never inspected** — and the shorthand doubled as an injection surface
+into the reviewer's own prompt. The fix serializes the complete argument map as JSON with
+newlines and Markdown fence characters escaped inside strings. Two audit findings closed. The
+companion failure is [cline #12669](https://github.com/cline/cline/pull/12669), which reverts
+a merged skill feature; the reverted PR's review names the reason worth recording — an empty
+skill allowlist `skills: []` was **normalized to `undefined`**, which downstream code reads as
+*no restriction*, so the deny-everything configuration **enabled every skill**.
+
+**What inber should consider:** these are the two halves of inber's own open permission-store
+gate. goose's half: whatever the approver is shown must be the serialized arguments that will
+actually run, escaped for the medium they are embedded in. inber's gating keys on a **command
+string**, which is already a projection of the call rather than the call — the entry above on
+truncation records and the 2026-07-25 entry on tool-call principals both push the same
+direction, and this is the third independent arrival at it. cline's half is sharper and
+cheaper to check: **audit every place inber collapses an empty collection into a nil or absent
+value on a permission path.** In Go this is the `len(x) == 0` versus `x == nil` distinction, and
+the two are routinely treated as one — an explicitly empty allowlist and an unset allowlist are
+opposite intentions that marshal to nearly the same thing through JSON. The standing rule from
+the Claim Plane note applies verbatim: ambiguous authority must fail closed, and `[]` meaning
+"everything" is ambiguity resolving to allow.
+
+### 3. On rebuild, the durable copy is *behind* the live one — name which you want
+
+[cline #12622](https://github.com/cline/cline/pull/12622) fixes a session rebuild that read the
+persisted transcript, which only catches up at assistant-message and turn boundaries, and is
+never flushed by `abort()`. Toggling Plan/Act while the first turn awaited command approval
+therefore rebuilt the session with **zero history**, although the resident agent object held
+the full conversation. The fix adds `readLiveSessionMessages`, which prefers in-memory messages
+and falls back to the transcript, and routes every rebuild coordinator through it. The
+generalizable move is not the fallback but the *naming*: a resume path now declares whether it
+wants live-preferred or durable-only, instead of inheriting whichever reader was nearest.
+
+**What inber should consider:** inber revives sessions from kanban and resumes them from
+scheduler jobs, so it has several rebuild paths and no stated contract about which copy each
+one reads. The check is mechanical and matches the one already recommended for gated
+writes — for each rebuild entry point, name the reader and say whether an interrupted or
+in-flight turn is expected to be present. The interrupt case is where this bites, and inber
+interrupts sessions deliberately: the autoworker hold gate stops a live session, and the reaper
+kills orphans. Both leave exactly the mid-turn state cline lost.
+
+### Also in-window, worth a line each
+
+- [cline #12641](https://github.com/cline/cline/pull/12641) — models emit `insert_line: "3"`
+  and strict validation rejected the whole call, burning a round trip. The fix coerces the
+  string in the **parser** while leaving the JSON Schema advertised to the provider byte-identical
+  as `integer`. Asymmetric tolerance: liberal in what you accept, unchanged in what you
+  promise — and because the tool-definition bytes do not move, the cache prefix does not
+  either. Cheap and directly applicable to inber's hand-written `InputSchema` maps.
+- [codex #35769](https://github.com/openai/codex/pull/35769) +
+  [#35773](https://github.com/openai/codex/pull/35773) extend the skill-catalog budget entry of
+  2026-07-23. Two catalogs (host and executor) that draw from one pool are now allocated
+  **together** under a single budget with an explicit, deterministic eviction order — executor
+  entries retained, then total entries, then description length, then cost — and host skills are
+  dropped first. #35773 makes the budget a flat 2% of the resolved model context window,
+  deleting the 4,000-token absolute cap. The hazard to note if inber copies it: with a shared
+  budget, adding one host skill can silently evict an executor skill and invalidate the whole
+  stable prefix.
+- [opencode #39247 → #39265 → #39373](https://github.com/sst/opencode/pull/39373) — an MCP
+  client v2 migration merged with the session-expiry reconnect logic explicitly deferred and one
+  session-recovery test left `skip`ped, had recovery re-added at the **transport** layer (on a
+  404 for a session-bearing POST: clear the stale session id, reinitialize, replay at most
+  once), then was reverted wholesale three weeks later. Two lessons: a remote tool session is a
+  **lease**, and its reconnect belongs in the transport rather than in every caller; and the
+  skipped test *was* the dropped invariant — `it.skip` is how a migration ships broken.
