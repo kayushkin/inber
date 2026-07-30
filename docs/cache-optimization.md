@@ -236,3 +236,71 @@ append them as the **last message** (after the final `cache_control`); verify `c
 conversation prefix with the harness above. Full analysis + measurements: `comparisons/goose.md`
 (07-01 entry). Companion paper: TokenPilot ([arXiv:2606.17016](https://arxiv.org/abs/2606.17016),
 `papers/2026-06-harness-research.md`) — batch-turn eviction so shrinking context doesn't churn the prefix.
+
+## 2026-07-30 — the API grew a primitive for the trick inber hand-rolled, and it also frees the `tools` array
+
+Anthropic shipped [mid-conversation system messages](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages)
+(generally available) and **mid-conversation tool changes** (beta, header
+`mid-conversation-tool-changes-2026-07-01`, [released 2026-07-24](https://platform.claude.com/docs/en/release-notes/api)
+with Opus 5). Both exist for exactly the reason the 07-01 entry above describes, and the docs
+restate the hashing order verbatim — "`tools`, then `system`, then `messages`". Two distinct wins.
+First, a `{"role": "system"}` message appended in `messages` carries **operator-level priority**
+while sitting after the cached prefix; the docs are explicit that a `user` message "is treated as
+coming from the end user" and that system instructions win when the two conflict. inber already
+does the cache half of this and pays the priority half: `engine/turn_prompt.go:130-155` packs fleet
+status, volatile memories and injector output into `e.Turn.VolatileContext`, and
+`agent/agent_run.go:92-119` splices it into the **last user message** — so inber's own operator
+facts arrive labelled as if the user typed them. Second, the beta decouples the `tools` array from
+the prefix: declare the full tool set once, never edit it, and use `tool_addition` / `tool_removal`
+blocks (which *reference* tools — `tool_reference`, `mcp_tool_reference`, `mcp_toolset_reference`)
+to change what is offered from a point in the conversation onward. `defer_loading: true` withholds
+a declared tool until an addition surfaces it.
+
+**What inber should consider:**
+- Move `VolatileContext` from the last *user* message to a mid-conversation *system* message. Same
+  cache behaviour, correct authority — and it removes the current situation where "[Context]" text
+  competes with the user's own words. Placement rules are strict and inber's loop already satisfies
+  them: the message must immediately follow a `user` turn (a turn carrying `tool_result` blocks
+  counts), must not be first, and must not sit between a `tool_use` and its `tool_result`.
+- **Do not put tool output, retrieved documents or web content in a system message.** The docs call
+  this out as a limitation, and it directly constrains inber: `contextInjectors`
+  (`engine/turn_prompt.go:141-147`) is an open extension point, and anything it injects would
+  inherit operator authority. Keep third-party bytes in `tool_result`.
+- The beta is the real answer to the phase-scoped-toolset question: inber could narrow the offered
+  tool surface per phase, or surface an MCP toolset only when a task needs it, without moving the
+  prefix. Two caveats worth writing down before anyone scopes work. `defer_loading` is **not** a
+  token saving — the full `tools` array is still declared and still hashed, so deferral buys model
+  attention and cache stability, not context-window budget; a catalog-budget argument cannot lean
+  on it. And it is unavailable on Sonnet 5 (Fable 5, Mythos 5, Opus 4.8, Opus 5 only), so the
+  routing layer has to know which models can take the header. inber *can* set it: it talks to the
+  Messages API directly through `anthropic-sdk-go` (`go.mod:6`, `agent/agent_run.go:149`), with no
+  CLI subprocess in the path — the `claude-cli/2.1.44` string at `agent/clients.go:104` is a
+  spoofed user-agent, not a wrapper.
+- Mid-conversation system messages are also the clean mechanism for relaying input that arrived
+  while a turn was in flight, which inber needs: the autoworker hold gate and the reaper both
+  interrupt live sessions. The docs' phrasing guidance is load-bearing — state the fact ("new input
+  arrived: X"), do not phrase it as an override of the user.
+
+## 2026-07-30 — the cache has a *floor*, and a short prefix falls through it
+
+[CAPC (arXiv:2607.15516](https://arxiv.org/abs/2607.15516), 07-17) measures Anthropic's cache
+directly instead of assuming it and reports that the hit rate is not the ρ=1.0 the compression
+literature assumes: on Sonnet 4.6 the cache behaves as **two tiers with a sharp threshold near
+3,500 tokens**, below which the hit rate plateaus at **ρ≈0.83** over 30-call sessions. The cost
+model built on that predicts — and τ-bench confirms — that per-query compression is *negative ROI*
+below a compression ratio of ~6, because a prefix that differs per call cannot be reused at all;
+CAPC instead pairs query-agnostic compression with explicit `cache_control` and a **tier-preserving
+ratio bound** that forbids compressing the cached prefix down across the threshold. Cheapest of
+four strategies in 16/16 LongBench-v2 configs, and the validation set includes a tool-using
+assistant with a 94k-token schema prefix (51.7% cheaper at r=3).
+
+**What inber should consider:** this doc optimizes prefix *stability* and has no notion of a
+minimum prefix *size*, which is a live gap because inber's prefix is dynamically sized —
+`contextBudget()` feeds `BuildContext`, so a small repo, a low-importance turn or a tightened
+budget can shrink the stable block set. Add a floor: if the assembled stable prefix lands under
+~3,500 tokens, there is little point paying the 1.25× write multiplier, and trimming it further is
+actively wrong. Treat the threshold as a number to **re-measure against inber's own model mix**
+rather than a constant to hardcode — the paper's figure is Sonnet 4.6 and inber routes across
+several models. Corollary for any future compression of tool schemas or recent-files blocks: it
+must be query-agnostic (byte-identical across calls in a session), or it converts a cache hit into
+a full-price call.

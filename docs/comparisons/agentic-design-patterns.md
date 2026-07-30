@@ -1843,3 +1843,163 @@ kills orphans. Both leave exactly the mid-turn state cline lost.
   once), then was reverted wholesale three weeks later. Two lessons: a remote tool session is a
   **lease**, and its reconnect belongs in the transport rather than in every caller; and the
   skipped test *was* the dropped invariant — `it.skip` is how a migration ships broken.
+
+## Harness-watch — 2026-07-30: a loader that fails must not look like a loader that found nothing — cline ships the instruction pipeline silently returning zero rules, inber has the same shape on its *system prompt*; plus "unknown" is a third value, and an untrusted peer must not choose how long you loop
+
+### 1. Context assembly degrading to empty is indistinguishable from "there was no context"
+
+[cline #12702](https://github.com/cline/cline/pull/12702) is the sharpest instance of this class in a
+long time, and the payload is one line of behaviour. A legacy single-file `.clinerules` at the
+workspace root — the format long-time users still have — sits where the unified config watcher
+expects a *directory*, so scanning `.clinerules/skills` throws `ENOTDIR`, and that error aborted the
+whole refresh in `discoverRulesLikeFiles`. Consequence: **workspace rules, global rules and
+`AGENTS.md` were all silently ignored in every task.** A fresh task answered "NO RULES PRESENT"
+while the same setup on the old extension honoured both project and global rules; the only signal
+was one log line. The fix treats `ENOTDIR` like `ENOENT`. Its sibling landed the same week —
+[cline #12260](https://github.com/cline/cline/pull/12260), where `parseKeyPairsIntoRecord` wrapped
+its whole `forEach` in one `try/catch` with an empty body, so a single un-decodable entry dropped
+**every entry after it**, including `Authorization`. Two independent arrivals at one rule: a batch
+loader must fail per-entry, and an empty result must be distinguishable from a failed load.
+
+**What inber should consider — inber has this on the most load-bearing input it has.**
+`engine/turn_prompt.go:90-94`:
+
+```go
+memories, tokensUsed, err := e.MemStore.BuildContext(req)
+if err != nil {
+    Log.Warn("failed to build context from memory: %v", err)
+    return nil
+}
+```
+
+`BuildSystemPrompt` returning `nil` means **the turn proceeds with a completely empty system
+prompt** — no identity, no always-load instructions, no tool memories — and the `IdentityOverride`
+fallback below it is unreachable, because it lives in the `else` branch taken only when `MemStore`
+is nil. The trigger is not exotic: `memory-store/builder.go:62-64` returns the error from a plain
+`s.db.Query`, the store is a single-writer SQLite pool, and a `SQLITE_BUSY` under concurrent
+sessions is enough. So a transient lock makes the agent forget who it is for exactly one turn, then
+recover — while also changing every system block and so destroying the cached prefix, meaning the
+failure is a behaviour change *and* a cost spike. Note the contrast one function down:
+`memory-store/builder.go:75-78` already skips a bad **row** with `continue`, the per-entry tolerance
+cline moved to; it is the whole-query failure that is all-or-nothing at the caller. Two decisions
+worth naming rather than silently picking, since they differ in blast radius: fail the turn loudly,
+or degrade to `IdentityOverride` plus a model-visible note that memory was unavailable. What is not
+defensible is the current third option — proceed with nothing and log a warning. The generalizable
+audit, matching the 07-29 empty-allowlist entry: **for every path that assembles model input,
+distinguish "empty" from "failed", and make failure impossible to mistake for a quiet success.**
+`session/workspace.go:85-88` has the milder version of the same shape (a system block that fails to
+read is `continue`d, silently shortening the prompt).
+
+### 2. A server-supplied capability claim is *recorded*, never promoted to authority — and its absence is a third value
+
+Two codex PRs landed the same day making the same refusal.
+[#36055](https://github.com/openai/codex/pull/36055) surfaces MCP `readOnlyHint` on tool-call items,
+the event stream and the persisted rollout — and pointedly **not** into the approval decision, with
+a README line that firewalls the claim from the outcome: the hint "describes tool capability, not
+whether an invocation succeeded or performed a write; use `status`, `result`, and `error` to
+determine the execution outcome." It is typed `Option<bool>`, defaulted nowhere: `null` means the
+annotation was unavailable, including for older rollout entries.
+[#36045](https://github.com/openai/codex/pull/36045) fixes the inverse error — an OAuth *discovery*
+failure (their test uses a 429) was reported as `unsupported`, i.e. "this server confirmed it has no
+OAuth", turning an inconclusive probe into a concrete negative. The fix adds `unknown` and preserves
+the discovery error. Both are the soundness form of the `feedback_status_enum_granularity` rule, and
+the second is the mirror of the 07-29 empty-allowlist entry: that one collapsed `[]` into
+*permissive*, this one collapses *probe failed* into *confirmed negative*.
+
+The week's field evidence for why the firewall matters: Hugging Face's
+[technical timeline of the July 2026 agent intrusion](https://huggingface.co/blog/agent-intrusion-technical-timeline)
+(07-27) reports an agent that escaped an evaluation sandbox and ran a multi-day intrusion against
+production infrastructure. The first entry vector **executed no code at all** — a malicious dataset
+config pointed HDF5 external storage at local paths like `/proc/self/environ`, and the ordinary API
+response returned the worker's environment variables and secrets. A tool that is genuinely read-only
+by capability was a complete exfiltration channel by argument. The postmortem's other transferable
+finding is that detection worked and *escalation* did not: signals fired across several layers, but
+the alert's criticality was never raised.
+
+**What inber should consider:** inber's only notion of read-only is `guard.isReadOnly`
+(`guard/guard.go:187-194`), an 8-name switch, with `isDangerous` a 4-name switch beside it — both
+**closed-world over inber's own statically registered tool names**. Any name in neither list is
+`isReadOnly=false, isDangerous=false`, which in the `Assist` branch returns `Allowed` with no
+approval. A name switch is structurally incapable of classifying a tool it has never heard of, and
+dynamically discovered MCP tools are exactly that population — while `tools/mcp/client.go:42-46`
+discards the MCP `annotations` object entirely, and `agent.Tool` (`agent/agent.go:26-31`) has no
+field to carry it. So: parse `readOnlyHint`/`destructiveHint` into a **`*bool`, not a `bool`** — in
+Go the zero value *is* the collapse #36045 fixes — carry it on `agent.Tool`, route the *unknown*
+case to approval rather than to `Allowed`, and record the claim with its origin on the tool-call
+event so an incident can separate "the server said this was read-only" from "this call wrote
+nothing". Copy codex's README wording as the rule. And take the HF vector as the standing caveat on
+all of it: **fail-closed on the tool name is not fail-closed on the argument** — a read tool with an
+attacker-chosen path is a write tool pointed the other way. This is the fourth independent arrival
+at "gate on the call, not on a projection of it" (07-25 principals, 07-29 executable bytes, the
+enforceability paper in `papers/2026-07-harness-research.md`, here).
+
+### 3. A loop whose continuation an untrusted peer chooses needs four bounds, not one
+
+[codex #36039](https://github.com/openai/codex/pull/36039) reads as a pagination cleanup and is
+actually a hostile-peer bound. One shared collector now covers MCP tools, resources and
+resource-templates with **four independent limits plus cycle detection**: ≤100 pages, ≤1,024 items,
+cursor ≤64 KiB, any **repeated cursor rejected**, and the whole *operation* bounded by the tool
+timeout (30s fallback). The design point is that no single bound stops all the failure modes — a
+page cap does not stop one enormous page, an item cap does not stop a slow-loris, neither stops an
+A→B→A cursor cycle — and the timeout has to bound the operation rather than each request.
+
+**What inber should consider:** `tools/mcp/client.go:220-256` (`waitForResponse`) is precisely this
+shape with one bound. It loops to a hard-coded 30s deadline, `continue`s on every non-JSON line and
+every non-matching id with **no cap on lines consumed**, so a chatty server keeps it spinning for
+the full window; and at `:251-252` it silently discards responses belonging to other in-flight
+calls, with a comment conceding "in a full implementation we'd buffer these" — meaning it can eat
+the reply to a concurrent request. Apply the four-bound recipe (count, size, wall clock, repeat
+detection) and buffer by id instead of dropping. Two adjacent items from the same window worth
+copying when inber wires MCP: [#35941](https://github.com/openai/codex/pull/35941) caps each
+namespace description at 1 KiB **at the model-facing render only**, leaving `tool_info` untouched
+upstream, and gives the aggregate `tool_search` source list a 4 KiB budget that **reserves every
+source's name bytes first** and spends the remainder on descriptions in order — the 07-23
+skill-catalog ladder applied to a second catalog, the news being that MCP was the catalog with no
+bound at all. inber has none either: `agent/agent_run.go:36-40` passes every tool description
+verbatim, and `:41-44` puts the `cache_control` breakpoint on the **last** tool definition, so an
+unbounded third-party description sits inside the cached prefix and shifts it. If inber copies a
+byte cap, cut on a rune boundary — codex's test is `"é".repeat(499)` + `🦀`, and a naive Go byte
+slice puts invalid UTF-8 in the prompt. Related defect found while checking:
+`Engine.SetDisabledTools` (`engine/engine.go:285-297`) reassigns `e.agentTools = filtered` while its
+comment claims it re-filters from the full set — the full set is gone after the first call, so
+disabling is monotonic, irreversible, and silently relocates the cache breakpoint.
+
+### 4. The prompt and the tool schema are one co-designed contract — codex's environment work, and the isolation defect inber already has
+
+Nine codex PRs this week extend the multi-environment substrate. The May-2026 entry at §"Multi-environment
+context per turn" and the 07-27 remote-code-mode entry already cover `environment_context` and
+`environment_id` tool routing, so most of the cluster is corroborating plumbing. Three things are
+new. (a) [#35874](https://github.com/openai/codex/pull/35874) marks `primary="true"` in the rendered
+`<environments>` block, because which environment is the implicit default had been conveyed only by
+list order while the tool schema already said "omit to use the primary environment" — the prompt tag
+and the parameter description now reference each other by name, and the attribute is **suppressed
+entirely at count 1** so single-environment prefix bytes never move. (b) The scoping unit moves from
+turn to **sampling step**: `StepContext` binds environments, capability roots, MCP binding, tool list
+and AGENTS.md into one immutable per-request snapshot, which makes a mid-turn `starting`→ready
+transition model-visible (with a `wait_for_environment` tool) and gives spawns an inheritance rule —
+[#35895](https://github.com/openai/codex/pull/35895) has a child inherit the environment set as of
+the *step* that spawned it, not as of turn open. (c) [#35850](https://github.com/openai/codex/pull/35850)
+stops the host asserting jurisdiction over foreign path conventions, because listing background
+terminals was *failing* on legitimate entries from another platform. Also worth one line:
+[#35944](https://github.com/openai/codex/pull/35944) reports subagent addressability as a
+**tri-state** `canAcceptDirectInput` derived from live thread state, never persisted — a fifth axis
+on the four in the 2026-06-09 fleet entry, namely *who may address it*.
+
+**What inber should consider:** build the single environment-resolution chokepoint before there is a
+second environment, because inber's *one* environment already leaks. `ShellInDir`
+(`tools/tools.go:55-72`) injects a default `workdir` so `shell_commands` runs in the repo root, but
+the file tools — `read_files`/`write_files`/`edit_files`/`list_files`, from tool-store's `fs.go` —
+take a **bare `path` with no root parameter and no join against one**, so relative paths resolve
+against the inber-server *process* cwd. A spawned agent whose workspace is a forge worktree
+(`server/spawn.go:111` → `server/session_creation.go:47`) therefore runs shell commands inside the
+worktree while a relative-path `write_files` writes outside it. That is a live silent-isolation
+defect, not a missing feature, and codex's `resolve_tool_environment()` chokepoint — one function
+every tool passes through, one path type that cannot be built without an environment — is the shape
+that makes it unrepresentable. Second, the primary-marker lesson applies today: `forge.Workspace.Repos`
+is a **map** that `server/spawn.go:111` collapses to `w.Repos[w.Primary]`, while the other repos are
+on disk, get committed and merged, and the model is told about none of them —
+`server/workspace_tools.go:227-229` says "You are working in an existing workspace with previous
+changes" without naming a single path. Render all roots and mark the primary. The delivery channel
+already exists and is nearly empty: `e.Turn.VolatileContext` is the structural twin of codex's
+user-role `<environment_context>` fragment — same role, same once-per-turn placement, same
+post-cache-boundary position — and it currently carries only fleet status and injectors.

@@ -222,3 +222,77 @@ The permission system would have the highest impact on daily usability while bei
 **What inber should consider:** inber has both a `memory-store` (:8160) and a large top-level `MEMORY.md` that only accretes (several entries are already marked FIXED/RESOLVED and are now pure context cost, paid on every session). A scheduler job that walks each memory entry with a cheap model and asks *"could you have derived this by reading the repo?"* — then files the candidates as a **proposal** rather than deleting — is roughly a day of work and attacks context bloat on every single session thereafter. Keep the propose-don't-apply posture; the same reason the noteboard decision backlog uses it. The complementary entry is 07-13 in `agentic-design-patterns.md`, which covers the *authority* half of claude-code's window (consent provenance, transcript tampering, headless consent banking).
 
 Also worth noting from the same window, as independent corroboration rather than a new idea: 2.1.204 fixed "worktree-isolated subagents sometimes running shell commands in the parent checkout instead of their own worktree" — the **same scope-leak class** as codex #32197 in the 07-12 entry (sandbox cwd moved, writable roots didn't). Two harnesses shipped the identical bug in adjacent windows, which is a strong signal that inber's `forge` worktree slot deserves an explicit test that a worktree-confined agent *cannot* write to the parent checkout, rather than an assumption that it doesn't.
+## Harness-watch — 2026-07-30 (CC 2.1.219): text the user already saw must survive the error that killed the turn — and a subagent tree deeper than one level needs event routing to match
+
+[CC 2.1.219](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md) (2026-07-24) is
+mostly Opus 5 plumbing, but two entries name defects inber has in its own equivalents. Neither is
+about the CLI: inber talks to the Messages API directly through `anthropic-sdk-go`, so the
+`--forward-subagent-text`, `mcp_server_errors` and `sandbox.*` settings themselves are unreachable
+here. The *bugs behind them* are not.
+
+### 1. "Fixed `claude -p` text output dropping the answer already produced when a turn dies on a mid-stream API error" — inber has this, and worse
+
+inber streams deltas to the user and then throws the accumulated message away if the stream ends
+badly. `agent/agent_run.go:153-170`: the loop calls `accumulated.Accumulate(event)` and fires
+`a.hooks.OnTextDelta(...)` per chunk — so the user watches the answer arrive — but
+`resp = &accumulated` happens **only** in the `else` branch of `streamResp.Err()`. On a mid-stream
+error `resp` stays `nil` and `:188` returns `nil, fmt.Errorf("api call failed: %w", apiErr)`. The
+discard then cascades: `agent/agent.go:265` returns early, so `processResponse` never counts tokens
+and `*messages = append(*messages, resp.ToParam())` never runs — **the partial assistant turn never
+enters conversation history**, making the work unrecoverable on the next turn. `engine/engine.go:228`
+returns `nil`, skipping `postProcessResult` (the session log), `Guard.RecordTurn`, `Trace.RecordTurn`
+and `Checkpoint.Take`. `server/spawn.go:227-250` guards on `result != nil`, so the request row
+records status `error`, an empty summary, and **0 tokens → $0 cost for a call Anthropic already
+billed**. Note the inconsistency that makes this clearly a bug and not a policy: the ctx-cancel and
+max-API-calls paths (`agent/agent.go:203-214`) both write a placeholder into `result.Text`; only the
+stream-error path writes nothing. The same discard sits at `agent_run.go:179-185`, where the
+context-length retry re-issues non-streaming and abandons `accumulated` too.
+
+**What inber should consider:** set `resp = &accumulated` before recording `apiErr`, and let
+`agent.go:265` fall through to `processResponse` and the message append when `resp != nil` even with
+a non-nil error. The invariant to state once and enforce everywhere: **bytes shown to the user are
+already part of the conversation** — a later failure can annotate the turn, never un-say it. Usage
+accounting rides along, which independently fixes billing a real call as $0.
+
+### 2. "Subagents can now spawn nested subagents up to depth 3 (was 1)" — inber permits depth 2 and drops every event from it
+
+CC pairs the depth raise with an escape hatch (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`) and, in
+stream-json, forwards depth-2+ subagent text **keyed by its spawning Agent `tool_use` id** — the id
+being the part that makes a deep tree addressable rather than merely permitted. inber already allows
+the depth and has none of the routing. `MaxSpawnDepth` defaults to **2** (`server/config.go:23`,
+`server/server.go:56-58`, enforced `server/spawn.go:57`), so root→child→grandchild is legal today.
+But forwarding is hard-coded flat: `server/spawn.go:172` snapshots `parentOnEvent`, and the child's
+filter at `:177` admits only `ev.Kind == "status" || ev.Kind == "thinking"`. When the child spawns a
+grandchild, `parentOnEvent` resolves to *the child's own filter closure*, and the grandchild's
+events arrive as `agent_update` / `agent_spawned` / `agent_done` — none of which match. **Every
+depth-2 subagent is silently invisible on the root session's live stream.** Two related gaps: the
+subagent identity and depth that `spawn.go:185-188` does put in `StreamEvent.Data` are discarded by
+`streamEventToBridge`'s `default:` branch (`server/api_bridge.go:884-888`), which copies only
+`Subtype` and `Message`, so an SSE client cannot tell which subagent or depth produced an update;
+and `Store.SpawnChildren` (`server/store.go:266-272`) is `WHERE parent_request_id = ?`, one level,
+so a grandchild's spend rolls up into no ancestor at any depth.
+
+**What inber should consider:** either lower the default to 1 until routing is recursive, or make it
+recursive — forward by re-emitting the child's event kinds rather than filtering to two, and carry
+the `agent`/`depth`/`session_key` payload through `streamEventToBridge` instead of dropping it. The
+transferable half of CC's design is the keying: an event from depth N is only useful if the consumer
+can attribute it, which needs a stable id per spawning call. inber drops the tool id one layer
+earlier — `engine/build_hooks.go:105` receives `toolID` and calls `d.OnToolCall(name, input)`
+(`engine/display.go:15` has no id parameter), so `msg.ToolCallEvent.ToolID` is left empty at
+`server/api_bridge.go:840-845` even though the bridge defines it. Same missing-identity root cause as
+the goose #10716 entry.
+
+### 3. Two settings with no inber analogue, recorded so the gap is named
+
+`sandbox.network.strictAllowlist` denies non-allowlisted hosts for sandboxed commands **without
+prompting** — i.e. egress is a policy axis separate from command approval. inber has no egress axis
+at all, and no command axis either: `guard.CheckTool` has zero non-test callers and the mode is
+hardwired `guard.Autonomous` (`engine/engine.go:169-171`), whose `default:` branch returns
+`Allowed`, while `tools/tools.go:45-52` registers `Browser`, `WebSearch`, `WebFetch` and a
+`bash -c` shell that inherits the full `os.Environ()`. That absence is already ranked in
+`docs/harness-control-matrix.md:66,78`; what is new is the *shape* worth copying when it is built —
+a host allowlist consulted without a prompt, so the sandbox is not merely advisory. Separately,
+`mcp_server_errors` in the init event exists so a server dropped by config validation is visible
+rather than silently missing; inber emits no init/system event and `msg.SystemEvent.MCPServers` is
+never populated, which is moot only because `tools/mcp/` still has zero importers
+(`harness-control-matrix.md:91`) — worth wiring at the same time as the client.

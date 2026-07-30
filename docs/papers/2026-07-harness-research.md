@@ -804,3 +804,99 @@ value without it.
   observation is that **model non-determinism produced inconsistent security outcomes**,
   which is an argument for gating in the harness rather than in the prompt. Logged for the
   OWASP suite as a possible checklist for the harness-control-matrix.
+
+## The trajectory holds a *stale snapshot* of every file it read — sync a registry instead
+
+**CORVUS** ([2607.22711](https://arxiv.org/abs/2607.22711), 07-20) names a defect that every
+append-only harness shares, inber included: a file read and its observation are **welded together
+in chronological history**, so the transcript preserves the file as it was at read time. Once the
+agent edits that file — or a concurrent process does — the context contains a snapshot that
+contradicts disk, which both misleads the model and provokes a re-read, and each re-read appends
+*another* full copy of the file. CORVUS decouples the two: it keeps a synchronized registry of
+currently-relevant files and injects **only their current contents** at each reasoning cycle, so
+the trajectory is in sync with the codebase by construction rather than by the model's diligence.
+Measured across SWE-POLYBENCH_VERIFIED and SWE-BENCH PRO on four models: 9–50% fewer input tokens
+per task, 15–32% shorter final prompts, up to 37% fewer reasoning cycles, comparable pass rates.
+
+**What inber should consider:** inber already has the two halves needed and has not joined them.
+`CrossZoneDedup` (`engine/lifecycle.go`) exists precisely to notice that a file read in a frozen
+zone is now stale, and the pruner truncates old tool results — but the correction is a *note*, and
+the note is dead code (see the goose 07-30 entry in `comparisons/goose.md`). A registry rendered
+fresh each turn replaces the note with the fact. The placement constraint is the trap and it
+collides head-on with `cache-optimization.md`: a block whose bytes change every turn must sit
+**after the last `cache_control` breakpoint**, or the 9–50% token win is refunded at full uncached
+rate. That is the same rule as the 07-01 volatile-block entry, and the correct home for the
+registry is therefore alongside `VolatileContext`, not in the stable prefix.
+
+## Dropped context stops being lossy once it is *addressable* — cite ids, don't summarize
+
+**ARC** ([2607.25066](https://arxiv.org/abs/2607.25066), 07-27) separates archival storage from
+active presentation. Every tool observation goes to an **append-only, ID-addressable log**; when
+compaction fires, older observations in the live context are replaced by **compact citations —
+ids, not summaries** — and the agent dereferences an id to pull the exact original bytes back,
+with no tool re-execution and no similarity search guessing at intent. On Qwen3-8B/16k and
+Qwen3-32B/32k: 99.40% exact-answer accuracy on Needle-in-a-Haystack against 88.12% for the best
+baseline, 29.97% vs 28.25% on LongBench-v2 Hard, with lower serving time and HBM traffic.
+
+**What inber should consider:** this is a different claim from the compaction work already written
+up here — Self-GC is about the agent *governing* its context and the rate-distortion entry is about
+*which* tokens to keep; ARC's claim is that the keep/drop decision stops being lossy at all once
+the dropped bytes remain reachable. Given that inber's compaction is a hot-path stub
+(`docs/harness-control-matrix.md`), the cheap first version is well-defined: persist every tool
+result under a stable id **at emit time**, have the pruner replace the body with
+`[obs:<id>] <short digest>`, and add a `recall(id)` tool. Two inber-specific notes. It needs the
+message/observation identity inber currently does not mint (see the goose #10716 entry) — an id
+scheme is the prerequisite, not a detail. And id-substitution is a *deterministic, monotone*
+rewrite of history, which means a compaction pass built this way can be made prefix-stable in a way
+prose summarization structurally cannot.
+
+## A stateless gate cannot enforce a stateful policy — a proof, and why replaying transcripts can't validate one
+
+**What Can Be Enforced?** ([2607.22868](https://arxiv.org/abs/2607.22868), 07-24) is a formal
+account of the ceiling on pre-tool-call guardrails, in three parts. (1) Against fixed oracle
+predicates, a deterministic gate enforces exactly those safety policies whose good prefixes its
+**register model** recognizes — the gate's state model, not the cleverness of its predicates, is
+the hard limit on expressible policy (policy nontriviality is undecidable with two decrementable
+counters, PSPACE for a separable monotone fragment). (2) Under a fixed exogenous law,
+Neyman–Pearson gives the exact false-block/miss frontier and conformal calibration gives a
+finite-sample certificate that may degenerate to block-all. (3) Once blocking **changes what the
+agent proposes next**, static scores and ungated trajectories no longer identify the closed-loop
+frontier. Bounded representation attacks — renaming or rewriting a call to slip past a
+predicate — add a robustness margin, so calibration on benign traffic does not transfer.
+
+**What inber should consider:** result (1) is a precise statement of the ceiling on the
+permission-store and the PreToolUse prehook, and it is not a matter of degree — a **stateless
+per-call regex matcher has an empty register model**, so it provably cannot express any policy
+requiring history or counting. Every such policy inber actually wants is in that excluded set:
+rate limits, cumulative spend caps, "no destructive command after a failed test". The spend-ceiling
+guard is the existing proof by example — it had to be built as a *separate polling job* precisely
+because the gate has nowhere to keep a counter, and polling overshot a cap by $146. The fix is
+typed policy state (per-session counters and history) on the gate, not more patterns. Result (3)
+condemns the obvious validation method: **replaying logged sessions cannot validate a gate change**,
+because gating alters the proposal distribution — paired closed-loop reruns are required. And the
+representation-attack margin is the formal statement of the `^curl\b`-allow problem already on the
+record: an allow predicate keyed on surface text is defeated by a rename, which is the third
+independent arrival at "gate on the call, not on a projection of it".
+
+## Also in-window, logged not written up (07-30 sweep)
+
+- **CAPC** ([2607.15516](https://arxiv.org/abs/2607.15516), 07-17) — measures Anthropic's cache
+  and finds a **two-tier structure with a ~3,500-token threshold**, below which the hit rate
+  plateaus at ρ≈0.83, plus a tier-preserving bound on compression. Written up where it applies:
+  `docs/cache-optimization.md`, 07-30 entry.
+- **MemTX** ([2607.23929](https://arxiv.org/abs/2607.23929), 07-27) — transactional belief commit:
+  snapshot-isolated staged memory writes, a validate-and-commit pipeline, irreversible tool calls
+  gated on *in-flight* belief state, and typed cascading repair of derived records when a belief is
+  retracted; two invariants machine-checked over 5.5M enumerated protocol states. Strong mechanism
+  and it touches inber's memory-store and noteboard write paths, but it is the *fix* for the
+  problem already written up under "Self-state attacks" above, so it belongs as a follow-on there
+  rather than as a new finding.
+- **Rejected after date and mechanism check:** SWE-Pruner Pro
+  ([2607.18213](https://arxiv.org/abs/2607.18213)) and Multi-Head Latent Control
+  ([2607.14277](https://arxiv.org/abs/2607.14277)) both need model hidden states, which inber
+  cannot reach through the `claude` CLI. Living-Harness ([2607.26598](https://arxiv.org/abs/2607.26598)),
+  CHILL-Harness ([2607.25825](https://arxiv.org/abs/2607.25825)) and Co-Harness
+  ([2607.22688](https://arxiv.org/abs/2607.22688)) are self-evolving-harness papers that land under
+  the existing "measured against unmatched baselines" caveat. OrchBench
+  ([2607.25656](https://arxiv.org/abs/2607.25656)) and MemSecBench
+  ([2607.27080](https://arxiv.org/abs/2607.27080)) are benchmark-only.

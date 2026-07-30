@@ -461,3 +461,108 @@ The general rule: a tool's JSON Schema is authored once (often by a codegen that
 The general lesson: the summary a compaction step emits is a **data structure, not a paragraph.** Typing it into ordered sections lets you (a) control and prioritize what survives, (b) trim least-important sections under pressure instead of doing prompt surgery, and (c) render it through a swappable template. The forgiving-parse-with-verbatim-fallback discipline is what makes it safe to adopt: a malformed model response is never worse than the prose blob you have today.
 
 **What inber should consider:** inber's summarizer is exactly the opaque-blob shape goose just left. `conversation/summary_generation.go:generateSummary` prompts for a freeform bulleted summary against five loose focus areas ("main topics / key decisions / important info / project status / next steps") and joins the model's text into one string (`summarize.go:88`); there is no typed contract, no per-section importance ordering, and no way to trim or template what is retained. Adopt goose's shape: (1) prompt for a typed `StructuredSummary` (inber can reuse goose's nine sections nearly verbatim — they're generic agentic-session fields), parse it forgivingly, and **on any parse failure fall back to the current prose join** — that fallback is already inber's error path (`generateSummary` err → `mechanicalSummary`), so the discipline fits. (2) Render the parsed summary through a template so *what survives compaction* becomes tunable per role without touching Go. (3) One thing inber already gets right and should keep: `result.SummaryTokens = memory.EstimateTokens(summary)` estimates the *retained* summary text, not the API's raw output-token count — inber does **not** have goose's 2.3× baseline overstatement bug, so don't "fix" it toward the raw usage number. This complements, from the summary-structure side, the compaction rules already in `agentic-design-patterns.md` (07-13 budget projection, 07-13 drop-thinking-when-summarizing).
+
+## Harness-watch — 2026-07-30: freeze the whole turn-context, not just the clock — plus a *message* needs its own identity, and a delegate inherits *runtime* state rather than config
+
+### 1. A multi-step turn is N API calls sharing one prefix — freeze every volatile input at turn start
+
+[goose #10734](https://github.com/block/goose/pull/10734) is the direct follow-on to the 07-01
+entry above. `compose_moim` called `chrono::Local::now()` itself, and compaction info and
+`turns_taken` were recomputed per tool-loop iteration, so goose's `<turn_context>` block changed
+bytes between the 1st and Nth call *of the same turn* — and because it sits ahead of the growing
+tool-result tail, every intra-turn call missed the prefix cache. The fix captures `turn_start`,
+`turn_start_compaction_info` and `turn_start_turns_taken` once before the loop and threads them
+into every injection. The sharpened rule: it is not enough to keep volatile content out of the
+stable prefix; anything injected at a **fixed position** must be frozen at turn start, because a
+turn is not one request. Note goose had to freeze *three* fields — the clock was merely the
+obvious one.
+
+inber already holds this shape structurally, and has no timestamp in the prompt at all:
+`BuildSystemPrompt` runs exactly once per turn (`engine/turn_prepare.go:69`), and
+`agent/agent_run.go:119` clears the agent's `VolatileContext` after the first injection so the
+tool loop cannot re-inject. But checking that turned up **two real defects in the same code path**:
+
+- **`engine/lifecycle.go:111` is dead every turn.** `pruneIfNeeded()` appends the
+  cross-zone-superseded-files note with `e.Turn.VolatileContext += "\n" + note`, but it runs from
+  `prepareInput` at `engine/engine.go:224`, and `buildTurnContext` at `engine/engine.go:225` then
+  **assigns** `e.Turn.VolatileContext = "[Context]\n" + …` (`engine/turn_prompt.go:154`, or `= ""`
+  at :156). Whenever `e.MemStore != nil` — always, in production — the note is unconditionally
+  clobbered. The model is therefore never told that frozen-zone reads are stale, which is the exact
+  hazard `CrossZoneDedup` exists to report. Fix is one of: reorder, or make :154 append.
+- **The thinking-signature repair path double-injects.** `agent/agent_run.go:117` mutates
+  `(*messages)[lastIdx].Content` **in place** on `e.Messages`, so the first injection is already
+  persisted; `agent_run.go:119` then clears only the *Agent's* copy, never `e.Turn.VolatileContext`.
+  `engine/turn_execute.go:52` rebuilds the agent and re-runs, `engine/build.go:32` re-reads the
+  still-set engine field, and a second `[Context]` block lands in the same user message —
+  duplicated context plus a guaranteed cache miss on the retry. Clear both copies together.
+
+### 2. `oneOf`-of-`const` is a 9× token tax, and inber normalizes schemas in the wrong place
+
+[goose #10577](https://github.com/block/goose/pull/10577) extends the 07-20 entry above.
+`schemars` renders a documented Rust unit enum as `$defs: {X: {oneOf: [{const:"list"}, …]}}` plus a
+`$ref`, which costs ~9× the tokens of a flat `enum` *and* trips Moonshot's `walle` validator into
+rejecting `$ref → oneOf` as infinite recursion, 400-ing the turn. `collapse_const_unions` rewrites
+it to `{type:"string", enum:[…]}`, firing only when **every** member is a bare string const
+(nullable `anyOf:[{$ref},{null}]`, data-carrying variants and draft-04-or-earlier dialects are left
+alone). Measured: 12.5% schema shrink on `computercontroller`, 10–12% fewer input tokens per call,
+identical accuracy. It runs **once at tool registration**, provider-agnostic.
+
+**What inber should consider:** inber built the sibling of this fix and put it in the worse place.
+`agent/openai_conversion.go:56-78` (`normalizeSchemaForOpenAI`) widens `oneOf`→`anyOf` for the same
+`walle` failure, but runs from `engine/turn_openai.go:29` — **per API call, per tool, marshal +
+unmarshal + full recursive walk** — and only on the OpenAI path. Two moves: hoist normalization to
+registration time and cache the result per tool, as goose did; and add const-union collapsing to
+that normalizer, because inber's real exposure is not its own schemas (hand-written
+`Properties: map[string]any{}`, exactly one flat `"enum"` in the tree at `agent/chain.go:24`) but
+**MCP passthrough** — `tools/mcp/adapter.go:46` forwards third-party `InputSchema` verbatim, and any
+`schemars`-based MCP server hands inber precisely the `$ref → oneOf → const` shape. The widening
+inber has fixes the 400 but not the 9× bloat. Copy goose's guardrail verbatim: collapse only when
+every branch is a bare string const.
+
+### 3. A tool-call id is not a message identity
+
+[goose #10716](https://github.com/block/goose/pull/10716) gives every `Message` a `message_id` —
+provider-supplied where available, else generated — applied at a handful of chokepoints so
+streaming chunks, persisted history, ACP `ContentChunk.message_id`, tool requests and per-message
+usage all agree. The load-bearing bug is invisible from the title: history enrichment located a
+message by **`tool_call_id`, which is reused across turns**, so title and usage enrichment updated
+the wrong historical message. The rule: an id minted by a *subsystem* (a tool call, a content
+block) is not a valid identity for a *message*, and a provider-native id must be preserved rather
+than shadowed, so live events and replayed events collapse to the same key.
+
+**What inber should consider:** inber's wire format already has the field and inber never fills it.
+`ChatDelta` declares a `MessageID` field with a `json:"message_id,omitempty"` tag, commented
+"assistant message ID from CC" (`messages/chat.go:40` in the sibling `bus` repo)
+and there is not one non-test writer of it in the tree, so every delta published from
+`server/events.go` ships it empty — while the sibling harness layer treats it as load-bearing
+(`llm-bridge-server/internal/harness/manager.go` exists to "mint canonical bridge MessageIDs and
+reconcile them"). inber is the harness giving that reconciler nothing, which is the structural
+precondition for the `user_message` dual-emit render bug: a consumer with no stable per-message key
+is *forced* into adjacency and count heuristics. Concretely: preserve `resp.ID` from the Anthropic
+response — `agent/agent_run.go:196` has the `*anthropic.Message` in hand and drops its id today —
+set it once per assistant message rather than per delta, and stamp the same value on the persisted
+session-log record so the live stream and `session/resume.go` replay key identically. Then audit for
+goose's specific trap: inber threads tool ids widely and `sanitizeToolID` **rewrites** them, so a
+tool id is neither turn-unique nor stable across the Anthropic/OpenAI conversion and must never
+become a correlation key for a message.
+
+### 4. A delegate's provider is inherited runtime state, not a config lookup
+
+[goose #10754](https://github.com/block/goose/pull/10754) makes `summon` reuse the parent Agent's
+**installed provider instance** when a delegate resolves to the same provider, keeping registry
+construction only for genuinely different providers. Small diff, general rule: re-resolving a
+delegate's provider from config silently discards whatever the parent session actually converged
+on — a model switch, an escalation, an injected or test provider, provider-managed context.
+
+**What inber should consider:** inber has both halves of this defect. The parent's model *does*
+change at runtime — `engine/engine.go:268` `SetModel` (driven from `server/api_bridge.go:647`) and
+`engine/turn_execute.go:27` `e.Model = modelUsed`, which persistently mutates the engine's model as
+a side effect of per-turn selection. But spawn resolves the child from **static config**:
+`server/spawn.go:87-93` reads `GetAgentConfig(req.Agent)` and only overrides on an explicit
+`req.Model`, and `server/session_creation.go:48` uses `Model: ac.Model`. So a parent that escalated
+to a stronger model, or that the user switched mid-session, spawns children on the agent-store
+default — silently, with no log line. Second half: each engine builds a fresh `ModelClient`
+(`agent/clients.go:26`), so every spawn re-resolves credentials from auth-store and stands up
+another HTTP client and connection pool; given the autoworker leak history, N children = N clients
+is worth avoiding on its own. Mirror goose: pass the parent's live `e.Model` as the child's default
+with config as *fallback*, and hand a same-provider-same-model child the parent's existing client.
