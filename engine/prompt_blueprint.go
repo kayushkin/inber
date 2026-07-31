@@ -102,6 +102,7 @@ func BuildBlueprint(
 	systemBlocks []anthropic.TextBlockParam,
 	namedBlocks []sessionMod.NamedBlock,
 	messages []anthropic.MessageParam,
+	frozenIdx int,
 ) *PromptBlueprint {
 	bp := &PromptBlueprint{Turn: turn}
 
@@ -150,15 +151,21 @@ func BuildBlueprint(
 	}
 	bp.Sections = append(bp.Sections, BlueprintSection{Name: "system", Blocks: sysBlocks})
 
-	// Messages section
+	// Messages section. Ask the placement rule where the breakpoints go rather
+	// than restating it: this used to assume the second-to-last message and so
+	// reported a position the request had not used since the frozen zone landed.
+	historyBreakpoints := map[int]bool{}
+	for _, idx := range agent.HistoryCacheBreakpointIndices(len(messages), frozenIdx, len(messages)-1) {
+		historyBreakpoints[idx] = true
+	}
+
 	var msgBlocks []BlueprintBlock
 	for i, m := range messages {
 		content := messageContent(m)
 		h := shortHash(content)
 		tokens := estimateTokensStr(content)
 		cache := ""
-		// BP3 is on second-to-last message
-		if i == len(messages)-2 {
+		if historyBreakpoints[i] {
 			cache = "BP3"
 		}
 		role := string(m.Role)

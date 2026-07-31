@@ -43,7 +43,7 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 
 	// Generate prompt blueprint for cache analysis
 	if e.Cache.BlueprintEnabled {
-		bp := BuildBlueprint(e.Turn.Counter, e.agentTools, systemBlocks, blocks, e.Messages)
+		bp := BuildBlueprint(e.Turn.Counter, e.agentTools, systemBlocks, blocks, e.Messages, a.FrozenIdx)
 
 		// Try loading previous blueprint from workspace for cross-invocation diffs
 		if e.Cache.LastBlueprint == nil && e.workspace != nil {

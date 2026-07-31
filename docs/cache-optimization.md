@@ -21,6 +21,8 @@ Key constraints:
 ## Current State (measured)
 
 3 breakpoints: system stable/volatile boundary, last tool, second-to-last message.
+(All four are in use as of 2026-07-31 — the history section takes two. See the
+07-31 entry at the end.)
 
 Measured on 2 consecutive turns (Sonnet):
 ```
@@ -63,11 +65,15 @@ SYSTEM ── DYNAMIC GROUP (~100-300 tok) ── changes every turn
   [N+2] Session context injectors         no BP, billed at 1x input
 
 MESSAGES (~5000+ tok, growing) ── append-only
-  [0-N-2] conversation history
-  [N-1] second-to-last message ──────── ●BP3
-  [N] latest user message                 UNCACHED
+  [0-F-1] frozen zone ── never mutated again
+  [F-1] frozen boundary ─────────────── ●BP3
+  [F-N] staging zone ── this and the last few turns
+  [N] this turn's user message ──────── ●BP4   ← every tool call of the turn reads up to here
+  [N+1...] tool_use / tool_result appended by the loop   UNCACHED
 
-4th BP: reserved (future use, e.g., conversation history midpoint for long sessions)
+Both history breakpoints are live (2026-07-31). The frozen one is the long-lived
+entry; the turn anchor is what makes a multi-tool-call turn cost one write instead
+of one per round trip.
 ```
 
 Note: Conversation history and recent files are NOT grouped together.
@@ -219,7 +225,7 @@ Turn 3: 2594 read, 3060 created (stable pattern)
 
 opencode's [PR 26786](https://github.com/sst/opencode/pull/26786) (auto-placement) anchors its message-side breakpoint on the **latest user message**, not the second-to-last message. The named insight: a single user turn expands into multiple assistant↔tool API calls that all share the prefix up to that user message, so a user-anchored BP gets hit by every intra-turn round-trip. Inber's current BP3 ("second-to-last message" — see `engine/build_prompts.go`) misses that win for tool-loop turns.
 
-**Action:** retarget BP3 to the latest user message; measure intra-turn cache hit rate on a multi-tool-call turn before/after. Same change also makes the `auto`-style "always cache" default safe to flip (Anthropic's 5m cache write is 1.25×, read is 0.1× — single reuse beats no-cache).
+~~**Action:** retarget BP3 to the latest user message; measure intra-turn cache hit rate on a multi-tool-call turn before/after.~~ **Done — but not as a retarget. See "2026-07-31" below: the turn anchor is a *second* breakpoint, because retargeting the only one would have thrown the frozen boundary away.** Still open from this entry: the `auto`-style "always cache" default (Anthropic's 5m cache write is 1.25×, read is 0.1× — single reuse beats no-cache).
 
 Companion empirical result from [arXiv:2601.06007](https://arxiv.org/abs/2601.06007) ("Don't Break the Cache"): 41–80% API cost reduction and 13–31% TTFT improvement across providers when dynamic content is kept *out* of the cached prefix — already this doc's thesis, but now backed by 500+ session measurements. See `docs/papers/2026-05-harness-research.md` for the writeup.
 
@@ -231,9 +237,14 @@ hashes `tools → system → messages`, a per-turn block placed even at the **ta
 precedes the message breakpoints and re-creates the *message* cache every call. inber has this exact
 shape — `engine/turn_prompt.go` keeps volatile blocks (fleet status, recent files, injectors) at the
 tail of the `system` array while BP3 caches the latest user message downstream, so the conversation
-prefix is being re-created every turn. **Action:** move per-turn volatile blocks out of `system` and
-append them as the **last message** (after the final `cache_control`); verify `creation → 0` on the
-conversation prefix with the harness above. Full analysis + measurements: `comparisons/goose.md`
+prefix is being re-created every turn. ~~**Action:** move per-turn volatile blocks out of `system` and
+append them as the **last message** (after the final `cache_control`).~~ **Already done when this was
+written, and the entry did not check: `engine/turn_prompt.go:131-160` puts every volatile block —
+fleet status, volatile memories, injector output, the source ref — into `e.Turn.VolatileContext`
+instead of a system block, and `agent/agent_run.go:90-121` splices that into the last user message on
+the first call of the turn. The system array carries stable blocks only.** What the 07-30 entry below
+adds is that the placement is right and the *authority* is wrong: those bytes arrive labelled as if
+the user typed them. Full analysis + measurements: `comparisons/goose.md`
 (07-01 entry). Companion paper: TokenPilot ([arXiv:2606.17016](https://arxiv.org/abs/2606.17016),
 `papers/2026-06-harness-research.md`) — batch-turn eviction so shrinking context doesn't churn the prefix.
 
@@ -304,3 +315,59 @@ rather than a constant to hardcode — the paper's figure is Sonnet 4.6 and inbe
 several models. Corollary for any future compression of tool schemas or recent-files blocks: it
 must be query-agnostic (byte-identical across calls in a session), or it converts a cache hit into
 a full-price call.
+
+## 2026-07-31 — the turn anchor, and why it is a second breakpoint rather than a retarget
+
+The 05-11 entry above prescribed retargeting BP3 to the latest user message. Doing exactly that
+would have been a regression, because by the time anyone acted on it BP3 no longer sat on the
+second-to-last message: the frozen/staging design had moved it to the frozen boundary
+(`agent/agent.go`, `frozenIdx-1`), which is a *better* place to keep one long-lived entry and a
+*worse* place to start a tool loop from. Retargeting would have traded one for the other. Inber
+uses three of the four `cache_control` blocks a request may carry — tools, system, history — so the
+answer was to spend the fourth: **place two history breakpoints, the frozen boundary and this
+turn's opening user message.**
+
+**Why the anchor is where the money is.** A turn is not one API call. The model asks for a tool,
+inber runs it, appends the result and calls again, up to fifty times. Every one of those calls
+shares the prefix up to the user message that started the turn, because the loop only ever appends
+after it. With the breakpoint parked behind the staging zone, each call re-sends the whole staging
+zone *and* everything the earlier calls of the same turn appended, at full price. With an anchor on
+the turn's own input, the first call writes that prefix and every later call reads it.
+
+**Measured**, `agent/cache_prefix_measure_test.go`, an A/B over one transcript (10 frozen + 8
+staging messages, a 6-round-trip turn, ~1k-token tool results):
+
+| | full-price message tokens over the turn |
+|---|---|
+| frozen boundary only | 49,231 |
+| frozen boundary + turn anchor | 21,168 |
+
+and the first call of the turn drops to **zero** tokens outside the cached prefix. That is the
+count of tokens sent uncached; the saved ones also move from 1.0× to 0.1×, so the billed
+difference is larger than the ratio above.
+
+**Verified on the wire**, not just in tests: `inber-server` built from this tree, `ANTHROPIC_BASE_URL`
+pointed at a recording HTTP server that answers three tool calls per turn, seven turns through
+`POST /api/run`. Every request carried exactly two history breakpoints and **four** `cache_control`
+blocks in total, never five. The frozen boundary sat at message 13 for four turns and moved to 45
+when the staging zone flushed; the anchor advanced 14 → 22 → 30 → 38 → 46 → 54 → 62, once per turn,
+and did not move during a turn's four calls. That recipe — a fake provider on `ANTHROPIC_BASE_URL`,
+no API spend, the live server on :8200 untouched — is the cheapest end-to-end check for anything on
+the request path.
+
+**Two things worth not re-deriving.**
+
+- **Pruning is the only thing that shortens the conversation, and it drops from the head**
+  (`engine/build.go`), so both indices shift back by exactly the number dropped. Anything that
+  falls off the front stops being placed rather than being placed on whatever message inherited the
+  index. The frozen index was *not* shifted before this change, so after a hard drop the one
+  breakpoint inber had landed on an arbitrary message.
+- **The blueprint was reporting a position the request did not use.** `engine/prompt_blueprint.go`
+  decided `BP3` by re-stating the rule as `i == len(messages)-2`, which stopped being true the day
+  the frozen zone could move it — so the instrument this whole document reasons with had been
+  describing a prompt inber was not sending. It now asks
+  `agent.HistoryCacheBreakpointIndices`, the single place the rule lives.
+
+Still open from the 05-11 entry: flipping the `auto`-style "always cache" default. Still open from
+07-30: moving `VolatileContext` from the last *user* message to a mid-conversation *system* message,
+which is an authority fix rather than a cache one.

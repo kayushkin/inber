@@ -125,13 +125,13 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 	if a.BeforeRequest != nil && a.contextWindow > 0 {
 		pruned := a.BeforeRequest(ctx, *messages, a.contextWindow)
 		if len(pruned) < len(*messages) {
+			a.shiftBreakpointIndicesAfterHeadDrop(len(*messages) - len(pruned))
 			*messages = pruned
 			params.Messages = *messages
 		}
 	}
 
-	// Add cache breakpoint at frozen/staging boundary
-	addHistoryCacheBreakpoint(params.Messages, a.FrozenIdx)
+	placeHistoryCacheBreakpoints(params.Messages, a.FrozenIdx, a.turnAnchorIdx)
 
 	if a.hooks != nil && a.hooks.OnRequest != nil {
 		a.hooks.OnRequest(&params)
@@ -187,8 +187,12 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 		if a.BeforeRequest != nil && a.contextWindow > 0 && isContextLengthError(apiErr) {
 			pruned := a.BeforeRequest(ctx, *messages, a.contextWindow/2)
 			if len(pruned) < len(*messages) {
+				a.shiftBreakpointIndicesAfterHeadDrop(len(*messages) - len(pruned))
 				*messages = pruned
 				params.Messages = *messages
+				// The breakpoints were placed against the longer slice, and the
+				// messages carrying them may be the ones that just went away.
+				placeHistoryCacheBreakpoints(params.Messages, a.FrozenIdx, a.turnAnchorIdx)
 				resp, apiErr = a.provider.Complete(ctx, params)
 			}
 		}

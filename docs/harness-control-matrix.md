@@ -195,9 +195,23 @@ followed on its own, with `redact/`.)
 11. **Health Monitor — stall detection.** The reaper only evicts idle *bridge*
     sessions on a TTL. There is no heartbeat and no stall detection, so an unattended
     agent that hangs mid-turn hangs forever.
-12. **The two unactioned items in `docs/cache-optimization.md`.** Both are
-    self-assigned "Action:" lines in inber's own doc, both cheap, both directly reduce
-    token spend in the area where inber is otherwise best-in-class.
+12. ~~**The two unactioned items in `docs/cache-optimization.md`.**~~ **Done — but
+    only one of the two was still work.** The 07-01 item (move volatile blocks out of
+    `system`) had already shipped and the entry had never checked: they go into
+    `Turn.VolatileContext` and are spliced into the last user message. The 05-11 item
+    was real and was mis-prescribed: it said *retarget* the history breakpoint to the
+    latest user message, which by then would have thrown away the frozen boundary. It
+    shipped instead as a **second** history breakpoint on the turn's own user message,
+    spending the fourth and last `cache_control` block. A 6-round-trip turn over a
+    10-frozen/8-staging transcript went from 49,231 to 21,168 full-price message
+    tokens, and the first call of a turn now sends nothing outside the cached prefix.
+    Verified on the wire against a recording provider through the real `inber-server`.
+    Two defects fell out on the way: pruning shifted the conversation without moving
+    the index the breakpoint was placed by, and the cache blueprint re-stated the
+    placement rule instead of asking for it, so it had been reporting a breakpoint
+    position inber was not sending. Still open in that doc: the "always cache" default,
+    and moving `VolatileContext` to a mid-conversation system message for authority
+    rather than cache reasons.
 
 ## Honest summary
 

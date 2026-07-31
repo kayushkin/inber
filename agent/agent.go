@@ -103,27 +103,35 @@ type Agent struct {
 	VolatileContext string
 
 	// FrozenIdx is the message index where the frozen/staging boundary is.
-	// BP3 is placed here instead of second-to-last message.
+	// A cache breakpoint is placed here instead of the second-to-last message.
 	// Messages before FrozenIdx are frozen (cached), after are staging (uncached).
-	// 0 means no frozen zone → fall back to default BP3 placement.
+	// 0 means no frozen zone → fall back to default breakpoint placement.
 	FrozenIdx int
+
+	// turnAnchorIdx is the index of this turn's opening user message. Run sets
+	// it; the second cache breakpoint goes there so that every API call of a
+	// tool loop reads the conversation prefix instead of re-sending it.
+	// Negative means unknown, which places no anchor breakpoint.
+	turnAnchorIdx int
 }
 
 // New creates an agent with the given system prompt.
 func New(provider Provider, system string) *Agent {
 	return &Agent{
-		provider:  provider,
-		system:    system,
-		readCache: NewReadCache(),
+		provider:      provider,
+		system:        system,
+		readCache:     NewReadCache(),
+		turnAnchorIdx: -1,
 	}
 }
 
 // NewWithSystemBlocks creates an agent with pre-built system blocks.
 func NewWithSystemBlocks(provider Provider, blocks []anthropic.TextBlockParam) *Agent {
 	return &Agent{
-		provider:     provider,
-		systemBlocks: blocks,
-		readCache:    NewReadCache(),
+		provider:      provider,
+		systemBlocks:  blocks,
+		readCache:     NewReadCache(),
+		turnAnchorIdx: -1,
 	}
 }
 
@@ -225,7 +233,13 @@ const incompleteResponseNotice = "[response cut off: %v]"
 // The model parameter specifies which Claude model to use for this run.
 func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.MessageParam) (*TurnResult, error) {
 	result := &TurnResult{}
-	
+
+	// The last message is this turn's input. Everything the loop below adds —
+	// assistant replies, tool results, mid-run injections — lands after it, so
+	// it is the newest point in the conversation whose prefix stays byte-identical
+	// for the whole turn, and therefore where the turn's cache entry belongs.
+	a.turnAnchorIdx = len(*messages) - 1
+
 	// Prepare tools and mapping
 	tools := a.prepareTools()
 
@@ -351,17 +365,67 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 	}
 }
 
-// addHistoryCacheBreakpoint places a cache_control breakpoint at the frozen/staging
-// boundary. Messages before the boundary are frozen (cached), after are staging (uncached).
+// placeHistoryCacheBreakpoints marks the two points in the conversation worth
+// caching, and clears every other cache_control the messages carry.
 //
-// If frozenIdx > 0: BP3 goes on the last content block of message[frozenIdx-1].
-// If frozenIdx == 0: falls back to second-to-last message (legacy behavior).
+// frozenIdx is the frozen/staging boundary: nothing before it is ever mutated
+// again, so an entry written there keeps paying out over many turns. It is
+// placed on the last content block of message[frozenIdx-1].
 //
-// First clears any existing history breakpoints to avoid exceeding the 4-block limit.
-func addHistoryCacheBreakpoint(messages []anthropic.MessageParam, frozenIdx int) {
-	if len(messages) < 2 {
-		return
+// turnAnchorIdx is this turn's opening user message. It is the one that makes a
+// tool loop cheap. Anthropic hashes tools, then system, then messages, and
+// reads a cache entry whenever the request's prefix up to a breakpoint is
+// byte-identical; a multi-tool-call turn only ever appends after its own user
+// message, so every API call after the first reads that prefix instead of
+// re-sending the whole staging zone at full price. Without it the breakpoint
+// sits behind the staging zone and each round trip re-pays for everything the
+// previous ones added.
+//
+// A negative index places no breakpoint. When the caller knows neither index
+// the placement falls back to the second-to-last message, which is what this
+// did before it had an anchor to aim at.
+//
+// Two of the four cache_control blocks a request may carry are spent here; the
+// tools array and the system prefix hold the other two.
+// HistoryCacheBreakpointIndices reports which messages a request built with
+// these boundaries will carry a cache breakpoint on, in prefix order.
+//
+// It is the one place the placement rule lives. The cache blueprint reports
+// against it and placeHistoryCacheBreakpoints places by it, so a report of
+// where the breakpoints are and the request it describes cannot disagree — the
+// blueprint used to guess "second-to-last message", which stopped being true
+// the day a frozen zone could move it.
+//
+// The rule is intent: a message with no content block that can carry
+// cache_control is skipped when the request is actually built.
+func HistoryCacheBreakpointIndices(messageCount, frozenIdx, turnAnchorIdx int) []int {
+	if messageCount < 2 {
+		return nil
 	}
+	var targets []int
+	if frozenIdx > 0 && frozenIdx <= messageCount {
+		targets = append(targets, frozenIdx-1)
+	}
+	if turnAnchorIdx >= 0 {
+		targets = append(targets, turnAnchorIdx)
+	}
+	if len(targets) == 0 {
+		targets = append(targets, messageCount-2)
+	}
+
+	var indices []int
+	previous := -1
+	for _, idx := range targets {
+		if idx < 0 || idx >= messageCount || idx <= previous {
+			continue
+		}
+		indices = append(indices, idx)
+		previous = idx
+	}
+	return indices
+}
+
+func placeHistoryCacheBreakpoints(messages []anthropic.MessageParam, frozenIdx, turnAnchorIdx int) {
 	// Clear existing cache_control from all message content blocks.
 	// System blocks and tools manage their own breakpoints separately.
 	var zero anthropic.CacheControlEphemeralParam
@@ -377,27 +441,44 @@ func addHistoryCacheBreakpoint(messages []anthropic.MessageParam, frozenIdx int)
 			}
 		}
 	}
-
-	// Determine BP3 target index
-	targetIdx := len(messages) - 2 // default: second-to-last
-	if frozenIdx > 0 && frozenIdx <= len(messages) {
-		targetIdx = frozenIdx - 1 // last frozen message
+	for _, idx := range HistoryCacheBreakpointIndices(len(messages), frozenIdx, turnAnchorIdx) {
+		markLastContentBlock(&messages[idx])
 	}
-	if targetIdx < 0 || targetIdx >= len(messages) {
-		return
-	}
+}
 
-	msg := &messages[targetIdx]
+// shiftBreakpointIndicesAfterHeadDrop moves the two indices this turn's cache
+// breakpoints are placed by, after pruning shortened the conversation.
+//
+// Pruning is the only thing that shortens it, and it drops whole messages off
+// the head while keeping the tail (engine/build.go), so subtracting the count
+// is exact rather than an estimate. An index that falls off the front is gone:
+// the anchor goes negative and stops being placed, and the frozen boundary
+// collapses to zero, which is the "no frozen zone" value it started at.
+func (a *Agent) shiftBreakpointIndicesAfterHeadDrop(dropped int) {
+	a.turnAnchorIdx -= dropped
+	a.FrozenIdx -= dropped
+	if a.FrozenIdx < 0 {
+		a.FrozenIdx = 0
+	}
+}
+
+// markLastContentBlock puts a cache breakpoint on the message's final content
+// block and reports whether it found one to mark.
+func markLastContentBlock(msg *anthropic.MessageParam) bool {
 	if len(msg.Content) == 0 {
-		return
+		return false
 	}
 	last := &msg.Content[len(msg.Content)-1]
 	cc := anthropic.NewCacheControlEphemeralParam()
-	if last.OfText != nil {
+	switch {
+	case last.OfText != nil:
 		last.OfText.CacheControl = cc
-	} else if last.OfToolUse != nil {
+	case last.OfToolUse != nil:
 		last.OfToolUse.CacheControl = cc
-	} else if last.OfToolResult != nil {
+	case last.OfToolResult != nil:
 		last.OfToolResult.CacheControl = cc
+	default:
+		return false
 	}
+	return true
 }
