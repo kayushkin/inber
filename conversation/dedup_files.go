@@ -89,11 +89,17 @@ func toolUseFilePaths(block anthropic.ContentBlockParamUnion) ([]string, bool) {
 	return paths, true
 }
 
-// toolUseIsPartial reports whether a read call returned part of a file rather
-// than all of it. offset and limit only take effect when the call resolves to
-// exactly one path (tool-store `tools/fs.go`, ReadFile: a batch of two or more
-// reads each file whole), so a batch read is never partial.
-func toolUseIsPartial(block anthropic.ContentBlockParamUnion, paths []string) bool {
+// toolUseNamedLineRange reports whether a read call asked for a range of lines
+// rather than the file. offset and limit only take effect when the call
+// resolves to exactly one path (tool-store `tools/fs.go`, ReadFile: a batch of
+// two or more reads each file whole), so a batch read never names a range.
+//
+// This is a fact about the request, and the request is all it can be. A call
+// that named no range still may not have got the file: tool-store cuts a
+// whole-file read at 500 lines plus the last 50, and again at 100,000 bytes.
+// So "named a range" means the result is part of the file, while "named none"
+// means only that nobody asked for part of it.
+func toolUseNamedLineRange(block anthropic.ContentBlockParamUnion, paths []string) bool {
 	if block.OfToolUse == nil {
 		return false
 	}
@@ -141,12 +147,13 @@ func DeduplicateFileRefs(messages []anthropic.MessageParam) int {
 	// Pass 1: collect all file tool_use blocks with the paths they touch. One
 	// call can name several, so a ref holds a set, not a path.
 	type toolRef struct {
-		paths     []string
-		toolName  string
-		toolID    string
-		msgIdx    int
-		blockIdx  int
-		isPartial bool
+		paths          []string
+		toolName       string
+		toolID         string
+		msgIdx         int
+		blockIdx       int
+		namedLineRange bool
+		changesFile    bool
 	}
 
 	var refs []toolRef
@@ -159,13 +166,15 @@ func DeduplicateFileRefs(messages []anthropic.MessageParam) int {
 			if !ok {
 				continue
 			}
+			name := block.OfToolUse.Name
 			refs = append(refs, toolRef{
-				paths:     paths,
-				toolName:  block.OfToolUse.Name,
-				toolID:    block.OfToolUse.ID,
-				msgIdx:    i,
-				blockIdx:  j,
-				isPartial: toolUseIsPartial(block, paths),
+				paths:          paths,
+				toolName:       name,
+				toolID:         block.OfToolUse.ID,
+				msgIdx:         i,
+				blockIdx:       j,
+				namedLineRange: toolUseNamedLineRange(block, paths),
+				changesFile:    name != "read_file" && name != "read_files",
 			})
 		}
 	}
@@ -176,33 +185,54 @@ func DeduplicateFileRefs(messages []anthropic.MessageParam) int {
 
 	// Pass 2: find which paths have duplicates — mark older refs for stubbing.
 	// Rules:
-	//   - A full read supersedes any earlier read (full or partial) of the same path.
-	//   - Partial reads never supersede each other (they cover different ranges).
-	//   - Write/edit supersedes earlier reads of the same path.
-	//   - A call is only redundant once EVERY path it carries has been read
-	//     again in full. Stubbing a batch because one of its files came up
-	//     later would delete the only copy of the rest.
-	// Map: path → index of latest FULL ref in refs slice
-	latestFull := make(map[string]int)
+	//   - A read that named no range supersedes an earlier read that also
+	//     named none. Both were cut by the same two limits on the same file,
+	//     so the later one holds everything the earlier one did.
+	//   - A read never supersedes a read that named a line range. The later
+	//     call asked for the file, but tool-store may have handed back its
+	//     first 500 lines and its last 50 — and the range the earlier call
+	//     went and got is exactly what tends to sit in that hole. Stubbing it
+	//     would delete the only copy of those lines and point the model at a
+	//     result that does not hold them.
+	//   - Write/edit supersedes ANY earlier read, ranged or not: it changed
+	//     the file, so every earlier read of it is stale whatever it covered.
+	//   - Reads that named a range never supersede anything (they cover
+	//     different ranges).
+	//   - A call is only redundant once EVERY path it carries is superseded.
+	//     Stubbing a batch because one of its files came up later would delete
+	//     the only copy of the rest.
+	latestWholeFileRef := make(map[string]int) // path → latest ref that named no range
+	latestChangingRef := make(map[string]int)  // path → latest ref that wrote or edited
 	for i, r := range refs {
-		if r.isPartial {
+		if r.namedLineRange {
 			continue
 		}
 		for _, p := range r.paths {
-			latestFull[p] = i
+			latestWholeFileRef[p] = i
+			if r.changesFile {
+				latestChangingRef[p] = i
+			}
 		}
 	}
 
-	// Collect tool IDs to stub (older refs superseded by a later FULL read or write)
+	// Collect tool IDs to stub (older refs superseded per the rules above).
 	stubIDs := make(map[string]string) // tool_use ID → stub message
 	for i, r := range refs {
+		// A ranged read is only safe to drop once the file has been written,
+		// which makes it stale. Everything else is superseded by any later
+		// whole-file reference.
+		supersedes := latestWholeFileRef
+		if r.namedLineRange {
+			supersedes = latestChangingRef
+		}
+
 		supersededBy := make([]string, 0, len(r.paths))
 		covered := true
 		for _, p := range r.paths {
-			latestIdx, hasLatestFull := latestFull[p]
-			if !hasLatestFull || latestIdx <= i {
-				// Either only partial reads of this path exist, or this ref is
-				// itself the latest full one — nothing later replaces it.
+			latestIdx, hasLater := supersedes[p]
+			if !hasLater || latestIdx <= i {
+				// Nothing later replaces this path — either no qualifying ref
+				// exists, or this ref is itself the latest one.
 				covered = false
 				break
 			}
