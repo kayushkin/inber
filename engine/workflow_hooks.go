@@ -15,10 +15,11 @@ type WorkflowHooks struct {
 	projectType string // "go", "node", "rust", ""
 
 	// Config flags
-	autoCommit     bool
-	autoFormat     bool
-	smartTests     bool
-	verifyDeployed bool
+	autoCommit          bool
+	autoFormat          bool
+	smartTests          bool
+	verifyDeployed      bool
+	pushToDefaultBranch bool
 
 	// State
 	lastError    string // for deduplication
@@ -28,13 +29,14 @@ type WorkflowHooks struct {
 // NewWorkflowHooks creates workflow automation for a session.
 func NewWorkflowHooks(repoRoot, sessionID, agentName string, cfg AutoWorkflowConfig) *WorkflowHooks {
 	h := &WorkflowHooks{
-		repoRoot:       repoRoot,
-		sessionID:      sessionID,
-		agentName:      agentName,
-		autoCommit:     cfg.AutoCommit,
-		autoFormat:     cfg.AutoFormat,
-		smartTests:     cfg.SmartTests,
-		verifyDeployed: cfg.VerifyDeployed,
+		repoRoot:            repoRoot,
+		sessionID:           sessionID,
+		agentName:           agentName,
+		autoCommit:          cfg.AutoCommit,
+		autoFormat:          cfg.AutoFormat,
+		smartTests:          cfg.SmartTests,
+		verifyDeployed:      cfg.VerifyDeployed,
+		pushToDefaultBranch: cfg.PushToDefaultBranch,
 	}
 	h.detectProject()
 	return h
@@ -145,18 +147,25 @@ func plural(n int) string {
 
 // AutoWorkflowConfig controls which auto-workflows are enabled.
 type AutoWorkflowConfig struct {
-	AutoCommit     bool // Commit after every write
+	// AutoCommit is the session's authority to write git history on its own:
+	// the commit after each write, and the sweep-up commit at session close.
+	AutoCommit     bool
 	AutoFormat     bool // Run formatter on write
 	SmartTests     bool // Only run relevant tests
 	VerifyDeployed bool // Check push/deploy status at session end
+	// PushToDefaultBranch lets the end-of-session push publish to the branch
+	// origin treats as its default. Off unless asked for: the session ends
+	// with nobody watching, and a push to the shared branch cannot be undone.
+	PushToDefaultBranch bool
 }
 
 // DefaultAutoWorkflowConfig returns safe defaults.
 func DefaultAutoWorkflowConfig() AutoWorkflowConfig {
 	return AutoWorkflowConfig{
-		AutoCommit:     true,
-		AutoFormat:     true,
-		SmartTests:     false,
-		VerifyDeployed: false,
+		AutoCommit:          true,
+		AutoFormat:          true,
+		SmartTests:          false,
+		VerifyDeployed:      false,
+		PushToDefaultBranch: false,
 	}
 }
