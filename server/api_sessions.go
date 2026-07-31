@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/conversation"
 )
 
 // SessionWithRequests combines in-memory session info with recent request history.
@@ -202,13 +203,7 @@ func (g *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, k
 			} else if block.OfThinking != nil {
 				thinking += block.OfThinking.Thinking
 			} else if block.OfToolUse != nil {
-				inputStr := ""
-				if block.OfToolUse.Input != nil {
-					if raw, err := json.Marshal(block.OfToolUse.Input); err == nil {
-						inputStr = string(raw)
-					}
-				}
-				ti := toolInfo{Tool: block.OfToolUse.Name, Input: inputStr}
+				ti := toolInfo{Tool: block.OfToolUse.Name, Input: conversation.ToolInputText(block.OfToolUse.Input)}
 				tools = append(tools, ti)
 				toolUseMap[block.OfToolUse.ID] = ti
 			} else if block.OfToolResult != nil {

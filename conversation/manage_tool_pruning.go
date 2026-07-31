@@ -66,10 +66,11 @@ func truncateToolCall(block anthropic.ContentBlockParamUnion) anthropic.ContentB
 	}
 
 	toolUse := block.OfToolUse
-	inputStr := fmt.Sprintf("%v", toolUse.Input)
-	
-	// Create brief summary
-	summary := fmt.Sprintf("%s: %s", toolUse.Name, truncateToOneLine(inputStr, 60))
+
+	// Create brief summary. The input has to be rendered as JSON text: it is
+	// usually a json.RawMessage, and %v on those bytes prints decimal byte
+	// codes instead of the arguments.
+	summary := fmt.Sprintf("%s: %s", toolUse.Name, truncateToOneLine(ToolInputText(toolUse.Input), 60))
 	
 	// Return simplified version (keep structure but summarize input)
 	return anthropic.ContentBlockParamUnion{

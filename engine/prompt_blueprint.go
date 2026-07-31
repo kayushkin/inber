@@ -10,6 +10,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/conversation"
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
@@ -361,8 +362,11 @@ func messageContent(m anthropic.MessageParam) string {
 		if block.OfText != nil {
 			parts = append(parts, block.OfText.Text)
 		} else if block.OfToolUse != nil {
-			inputStr := fmt.Sprintf("%v", block.OfToolUse.Input)
-			parts = append(parts, block.OfToolUse.Name+":"+inputStr)
+			// Render as JSON text, not %v: the input is a json.RawMessage, and
+			// %v prints its decimal byte codes — roughly 3.7 characters per
+			// byte, which inflates this message's token estimate by the same
+			// factor.
+			parts = append(parts, block.OfToolUse.Name+":"+conversation.ToolInputText(block.OfToolUse.Input))
 		} else if block.OfToolResult != nil {
 			parts = append(parts, "result:"+block.OfToolResult.ToolUseID)
 			for _, c := range block.OfToolResult.Content {
