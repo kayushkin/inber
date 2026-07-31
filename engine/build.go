@@ -122,7 +122,7 @@ func (e *Engine) configureContextPruning(a *agent.Agent) {
 			dropTo := len(messages) - maxMessages
 			for dropTo < len(messages) {
 				msg := messages[dropTo]
-				if msg.Role == anthropic.MessageParamRoleUser && !hasToolResult(msg) {
+				if conversation.StartsUserTurn(msg) {
 					break
 				}
 				dropTo++
@@ -135,14 +135,4 @@ func (e *Engine) configureContextPruning(a *agent.Agent) {
 
 		return messages
 	})
-}
-
-// hasToolResult checks if a message contains any tool_result content blocks.
-func hasToolResult(msg anthropic.MessageParam) bool {
-	for _, block := range msg.Content {
-		if block.OfToolResult != nil {
-			return true
-		}
-	}
-	return false
 }
