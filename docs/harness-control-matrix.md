@@ -57,7 +57,7 @@ Tally: **0 COVERED · 27 PARTIAL · 12 ABSENT**.
 | Browser Capture | PARTIAL | `tools/tools.go:Browser()` → tool-store `browser.go` | all 8 levers. Worse: `browser.go:145` returns the screenshot as a base64 **text** block, never an image block — the model cannot see it |
 | Compare | ABSENT | — | all; zero hits for juror/vote/consensus/ensemble |
 | Context | PARTIAL | `engine/turn_prompt.go:BuildSystemPrompt`, `turn_context.go:contextBudget` | pluggable packing strategy (it's a hardcoded if-ladder). ~~per-model window map~~ **FIXED `c4ad0fa`** — `GetModelInfo` looked the model up by display *name*, which no Anthropic row matches, so every model took a hardcoded 200k. It now resolves by id through `Store.ResolveModel` and takes `Model.MaxTokens`, capped at what the client can request (no long-context beta — todo `52c9b341`) |
-| Cost | PARTIAL | `session/timeline_cost.go:CalcCostWithCache` | budget pre-check; per-project/task budgets; alert/halt thresholds. `MaxCost` is dead in 3 places (`guard.Config`, `EngineConfig:53`, `server.RunRequest:237`) and `Guard.RecordCost()` has zero callers. ~~Pricing is always $3/$15 flat~~ **fixed, `b8ccfd3`** — the store-less wrappers are deleted, so every caller passes the registry and the model that ran. Two sites this row had missed were on the same fault (`session/timeline_jsonl.go` via `/api/sessions/{key}/timeline`, and `engine/display_stats.go`), and two more were a correct cost that never reached its reader: `TokenUsage.Cost` was what `api_bridge.go:866` reports to llm-bridge as `TotalUSD` and nothing assigned it, so every bridge session billed $0.00; `deliverResult` recomputed flat instead of reading the result. What is left on this row is the budget half, not the pricing half |
+| Cost | PARTIAL | `session/timeline_cost.go:CalcCostWithCache`; `guard.CheckLimits` | per-project/task budgets; alert thresholds; a mid-turn cap (enforcement is at turn boundaries, so one turn can overshoot); a parent's cap does not roll down to the sub-agents it spawns (`Spawn` builds the child from a zero `RunRequest`); `registry.AgentLimits` has no per-agent cost cap. ~~`MaxCost` is dead in 3 places and `Guard.RecordCost()` has zero callers~~ **fixed, `1595419`** — the cap now travels `max_cost` → `EngineConfig` → `LimitConfig` → `guard.Config`, and the turn's price feeds `RecordCost`, so a session is refused with `guard: max cost exceeded` once it passes the cap it was given. ~~Pricing is always $3/$15 flat~~ **fixed, `b8ccfd3`** — the store-less wrappers are deleted, so every caller passes the registry and the model that ran. Two sites this row had missed were on the same fault (`session/timeline_jsonl.go` via `/api/sessions/{key}/timeline`, and `engine/display_stats.go`), and two more were a correct cost that never reached its reader: `TokenUsage.Cost` was what `api_bridge.go:866` reports to llm-bridge as `TotalUSD` and nothing assigned it, so every bridge session billed $0.00; `deliverResult` recomputed flat instead of reading the result. What is left on this row is the budget half, not the pricing half |
 | Evidence | ABSENT | — | all |
 | Fallback | PARTIAL | `engine/failover.go:selectModel/fallbackChain` | retry policy; warm standby; tier cap. The fast-fail timeout **is computed then discarded** — `turn_execute.go:18` drops the second return value and the ctx gets no deadline |
 | File Navigation | PARTIAL | tool-store `repo_map`/`recent_files` | `codeindex/` is a stub (above). No ownership graph, capability map, path cache, incremental reindex |
@@ -102,13 +102,18 @@ Tally: **0 COVERED · 27 PARTIAL · 12 ABSENT**.
    also load-bearing across three repos: because inber never emits `EventApproval`,
    llm-bridge-server's `ask`/`plan`/`block_all` permission modes are
    **unenforceable against inber sessions** (`BRIDGE_PARITY.md`, "Remaining" item 1).
-2. **Cost — a pre-dispatch budget check.** The pricing half is done
-   (`b8ccfd3`, todo `9317ef2b`): every dollar figure inber reported was
-   `tokens × $3/$15` regardless of model, and the callers now pass the registry
-   and the model that ran. What remains is that nothing checks a budget before
-   dispatching — `max_cost` is accepted over the API and silently ignored, so
-   the newly-accurate figure is still only ever reported after the money is
-   spent.
+2. ~~**Cost — a pre-dispatch budget check.**~~ **Done, `b8ccfd3` + `1595419`.**
+   Both halves are closed. Pricing (todo `9317ef2b`): every dollar figure inber
+   reported was `tokens × $3/$15` regardless of model, and the callers now pass
+   the registry and the model that ran. Budget (todo `df10744a`): `max_cost` was
+   accepted over the API and silently ignored — the cap was dropped at three
+   separate hops and `Guard.RecordCost` had no callers, so the guard's running
+   total sat at zero and its `MaxCost` comparison could never be true. Note
+   which way that failed: `guard.Config` documents `0 = unlimited`, so a cap
+   that never arrived was indistinguishable from a caller who wanted none. Both
+   defects had to be fixed together — a cap with no running total, or a total
+   with no cap, is still a limit that never fires. What is left here is scope,
+   not enforcement: the cap is checked between turns, one session at a time.
 3. **Privacy — any egress redaction at all.** Zero exists. `cat .env` goes straight
    into `params.Messages`. The cheapest high-severity fix on this list.
 4. ~~**Context — a real per-model window map.**~~ **Done, `c4ad0fa`.** There was no
