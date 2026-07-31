@@ -56,8 +56,8 @@ Tally: **0 COVERED · 27 PARTIAL · 12 ABSENT**.
 |---|---|---|---|
 | Browser Capture | PARTIAL | `tools/tools.go:Browser()` → tool-store `browser.go` | all 8 levers. Worse: `browser.go:145` returns the screenshot as a base64 **text** block, never an image block — the model cannot see it |
 | Compare | ABSENT | — | all; zero hits for juror/vote/consensus/ensemble |
-| Context | PARTIAL | `engine/turn_prompt.go:BuildSystemPrompt`, `turn_context.go:contextBudget` | **per-model window map** — `agent/models.go:17` hardcodes `ContextWindow: 200000` on *both* branches, so every model from Haiku to 1M is treated as 200k; pluggable packing strategy (it's a hardcoded if-ladder) |
-| Cost | PARTIAL | `session/timeline_cost.go:CalcCostWithCache` | budget pre-check; per-project/task budgets; alert/halt thresholds. `MaxCost` is dead in 3 places (`guard.Config`, `EngineConfig:53`, `server.RunRequest:237`) and `Guard.RecordCost()` has zero callers. **Pricing is always $3/$15 flat** — `CalcCostWithCache` passes `store=nil` and `engine_new.go:185` passes `model=""` |
+| Context | PARTIAL | `engine/turn_prompt.go:BuildSystemPrompt`, `turn_context.go:contextBudget` | pluggable packing strategy (it's a hardcoded if-ladder). ~~per-model window map~~ **FIXED `c4ad0fa`** — `GetModelInfo` looked the model up by display *name*, which no Anthropic row matches, so every model took a hardcoded 200k. It now resolves by id through `Store.ResolveModel` and takes `Model.MaxTokens`, capped at what the client can request (no long-context beta — todo `52c9b341`) |
+| Cost | PARTIAL | `session/timeline_cost.go:CalcCostWithCache` | budget pre-check; per-project/task budgets; alert/halt thresholds. `MaxCost` is dead in 3 places (`guard.Config`, `EngineConfig:53`, `server.RunRequest:237`) and `Guard.RecordCost()` has zero callers. **Pricing is always $3/$15 flat** — five call sites pass `store=nil` and four of them also pass `model=""` (`server/spawn.go:284`, `server/spawn_delivery.go:44`, `server/server.go:351,373`, `session/timeline_jsonl.go:128`). The registry lookup underneath them was fixed in `c4ad0fa`; these callers still ask it nothing. Filed as todo `9317ef2b` |
 | Evidence | ABSENT | — | all |
 | Fallback | PARTIAL | `engine/failover.go:selectModel/fallbackChain` | retry policy; warm standby; tier cap. The fast-fail timeout **is computed then discarded** — `turn_execute.go:18` drops the second return value and the ctx gets no deadline |
 | File Navigation | PARTIAL | tool-store `repo_map`/`recent_files` | `codeindex/` is a stub (above). No ownership graph, capability map, path cache, incremental reindex |
@@ -103,14 +103,18 @@ Tally: **0 COVERED · 27 PARTIAL · 12 ABSENT**.
    llm-bridge-server's `ask`/`plan`/`block_all` permission modes are
    **unenforceable against inber sessions** (`BRIDGE_PARITY.md`, "Remaining" item 1).
 2. **Cost — a pre-dispatch budget check, and fix the pricing bug.** Every dollar
-   figure inber reports is `tokens × $3/$15` regardless of model, because
-   `CalcCostWithCache` hardcodes `store=nil` and `engine_new.go:185` passes
-   `model=""`. `max_cost` is accepted over the API and silently ignored.
+   figure inber reports is `tokens × $3/$15` regardless of model, because five
+   call sites hand `GetModelInfo` a nil store and four of them an empty model id
+   (todo `9317ef2b`). The registry lookup itself is fixed (`c4ad0fa`); the
+   callers are not. `max_cost` is accepted over the API and silently ignored.
 3. **Privacy — any egress redaction at all.** Zero exists. `cat .env` goes straight
    into `params.Messages`. The cheapest high-severity fix on this list.
-4. **Context — a real per-model window map.** `ContextWindow: 200000` is hardcoded
-   for every model and drives the auto-prune threshold (`contextWindow/2`). Route a
-   Haiku or a 128k OpenAI model through inber and it will overflow.
+4. ~~**Context — a real per-model window map.**~~ **Done, `c4ad0fa`.** There was no
+   map to write: the model-store already records each window as `Model.MaxTokens`,
+   filled from each provider's own API by `ms sync`. What was missing was reading
+   it — the lookup keyed on the display name, matched nothing, and fell through to
+   a hardcoded 200,000 that drove the auto-prune threshold (`contextWindow/2`).
+   The five 128k OpenAI rows now arm the guard earlier than the hardcode did.
 5. **Memory — recall index, dedup on write, actual expiry.** The store is inber's
    deepest asset and it is a full table scan with an O(n²) sort over 256-bucket hash
    pseudo-embeddings, with no dedup and no hard delete. It degrades quadratically and
