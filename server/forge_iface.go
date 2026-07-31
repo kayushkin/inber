@@ -1,6 +1,11 @@
 package server
 
-import "github.com/kayushkin/forge"
+import (
+	"os"
+
+	"github.com/kayushkin/forge"
+	"github.com/kayushkin/inber/logger"
+)
 
 // WorkspaceManager defines the forge operations that the server depends on.
 // This interface abstracts workspace management operations, making the server
@@ -49,3 +54,42 @@ type WorkspaceManager interface {
 
 // Compile-time check: *forge.Forge must satisfy WorkspaceManager.
 var _ WorkspaceManager = (*forge.Forge)(nil)
+
+// openWorkspaceManager opens the forge database that backs ephemeral workspaces,
+// and returns nil when there is no usable one.
+//
+// The return type is the interface on purpose, and it is the whole point of this
+// function. A `*forge.Forge` variable that is nil still carries a type, so assigning
+// it into a WorkspaceManager field produces an interface that is NOT nil — every
+// `forgeDB != nil` guard in this package then passes and the very next call
+// dereferences a nil receiver. Returning the interface directly means the only value
+// a caller can store for "no forge" is an untyped nil, so those guards tell the truth.
+//
+// A missing or unopenable database is not an error: workspaces are optional, and the
+// server runs without them. The caller gets nil and every workspace tool then refuses
+// with "forge not available" instead of crashing the process.
+func openWorkspaceManager(forgeDatabasePath string) WorkspaceManager {
+	if _, err := os.Stat(forgeDatabasePath); err != nil {
+		return nil
+	}
+	openedForge, err := forge.Open(forgeDatabasePath)
+	if err != nil {
+		logger.WithComponent("server").Warn("forge unavailable", map[string]interface{}{
+			"error": err,
+			"path":  forgeDatabasePath,
+		})
+		return nil
+	}
+	if openedForge == nil {
+		// forge.Open reported success with no value; treat it as unavailable rather
+		// than boxing a typed nil back into the interface this function exists to keep honest.
+		logger.WithComponent("server").Warn("forge opened but returned no handle", map[string]interface{}{
+			"path": forgeDatabasePath,
+		})
+		return nil
+	}
+	logger.WithComponent("server").Info("forge DB opened", map[string]interface{}{
+		"path": forgeDatabasePath,
+	})
+	return openedForge
+}

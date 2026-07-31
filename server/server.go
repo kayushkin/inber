@@ -120,23 +120,10 @@ func New(cfg Config) (*Server, error) {
 
 	events := NewEventPublisher(cfg.NatsURL, cfg.BusToken)
 
-	// Open forge DB for workspace management.
-	var forgeDB *forge.Forge
+	// Open forge DB for workspace management. Declared as the interface, never as
+	// *forge.Forge — see openWorkspaceManager for why the distinction is load-bearing.
 	home, _ := os.UserHomeDir()
-	forgePath := filepath.Join(home, ".config", "forge", "forge.db")
-	if _, err := os.Stat(forgePath); err == nil {
-		if f, err := forge.Open(forgePath); err != nil {
-			logger.WithComponent("server").Warn("forge unavailable", map[string]interface{}{
-				"error": err,
-				"path":  forgePath,
-			})
-		} else {
-			forgeDB = f
-			logger.WithComponent("server").Info("forge DB opened", map[string]interface{}{
-				"path": forgePath,
-			})
-		}
-	}
+	forgeDB := openWorkspaceManager(filepath.Join(home, ".config", "forge", "forge.db"))
 
 	// Open agent-store for status queries.
 	var as *agentstore.Store
