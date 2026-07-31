@@ -82,7 +82,7 @@ followed on its own, with `redact/`.)
 | Interface | PARTIAL | `server/api.go`, `api_bridge.go` (SSE), `inber-cli`, `server/events.go` → NATS | panels/widgets plugin; layout presets; virtualization; render throttle. No operator UI in-repo |
 | Knowledge Retrieval | PARTIAL | tool-store `web_search`/`web_fetch`; `memory-store/search.go` | a real embedding model (it is a **256-bucket hash of term frequencies**, self-labeled a placeholder); any index at all (full table scan + **O(n²) selection sort**); rerank; top-k/chunk tuning; embedding cache; lineage |
 | Latency | PARTIAL | `engine/failover.go:timeoutFromHealth`; model-store `AvgResponseMs` | SLO config; availability probes; slow-route demotion; batch mode. Latency data is collected but **no lever consumes it** |
-| Memory | PARTIAL (deepest asset) | `memory/` → memory-store (Save/Search/BuildContext/Compact/DecayImportance) | recall index; **dedup on write** (fresh `uuid` per save → duplicates accumulate); conflict resolution; expiry (`ExpiresAt` exists, inber never sets it; rows are never hard-deleted); size caps; write batching; scheduled decay sweep; provenance depth |
+| Memory | PARTIAL (deepest asset) | `memory/` → memory-store (Save/Search/BuildContext/Compact/DecayImportance) | recall index; **dedup on write** (fresh `uuid` per save → duplicates accumulate); conflict resolution; **hard delete** (`ExpiresAt` filters at read time and nothing ever removes a row — 35,717 of 35,764 memories in the largest store on this box are expired and still scanned on every recall); size caps; write batching; scheduled decay sweep; provenance depth. ~~recall cost~~ closed by memory-store `85a6e0d` |
 | Model Router | PARTIAL | `engine/failover.go` + model-store `FailoverChain()` | route scoring weights; route learning; tier-down; per-route token ceiling (`MaxTokens: 16384` hardcoded at `agent_run.go:62`); cache-hit reuse; warm pool. Provider adapters are a hardcoded `switch` |
 | Network Protocol | PARTIAL | `bus/client.go`, `server/bus.go` (WS subscribe + HTTP publish, NATS-backed) | node-trust policy; capability advertisement; packet signing; transport adapters; handshake cache; discovery; remote-call budgeting. It is a chat relay, not a node protocol |
 | Orchestrator | PARTIAL | `server/queue.go:Queue` (lane semaphore + per-session mutex; main:4, subagent:8) | arbitration strategy — it is FIFO/blocking, there is no "why this next"; priority weights; preemption; attention slice; attention budget; idle reclaim; operator override |
@@ -155,10 +155,27 @@ followed on its own, with `redact/`.)
    it — the lookup keyed on the display name, matched nothing, and fell through to
    a hardcoded 200,000 that drove the auto-prune threshold (`contextWindow/2`).
    The five 128k OpenAI rows now arm the guard earlier than the hardcode did.
-5. **Memory — recall index, dedup on write, actual expiry.** The store is inber's
-   deepest asset and it is a full table scan with an O(n²) sort over 256-bucket hash
-   pseudo-embeddings, with no dedup and no hard delete. It degrades quadratically and
-   grows forever.
+5. **Memory — recall index, dedup on write, actual expiry.** Partly done,
+   memory-store `85a6e0d`. The row said this path degrades quadratically, and the
+   O(n²) sort was real — 761ms against 7ms on 35,764 scores — but it was not the
+   largest cost, and measuring first is what found the other two. `BuildContext`
+   runs on every turn and ranks on importance, tags and recency; it was selecting
+   and JSON-decoding the **embedding vector it never reads** (1.2s of 2.6s) and
+   asking for tags **one round trip per candidate** (0.7s), while `Search`, in the
+   same package, already batched that lookup. Batching it also fixed a live
+   silent failure in Search's version: it bound one parameter per candidate and
+   dropped the error, so past 32,766 candidates every result came back with an
+   empty tag list under an HTTP 200 — and BuildContext scores tag overlap, so
+   untagged memories rank as matching nothing. Interleaved A/B on a copy of the
+   live 35,764-memory store: BuildContext 2.6s → 0.66s, Search 3.4s → 2.0s, with
+   the returned set byte-identical.
+
+   **What is left is the bigger number and it is not a perf fix.** Expiry filters
+   at read time and nothing ever deletes: 35,717 of those 35,764 rows are expired
+   and still on disk, so every recall scans 35,764 rows to find 47. Hard-deleting
+   a user's memories is a policy call. Search's remaining 2.0s is the embedding
+   decode and the linear cosine pass — that is the recall index this item names,
+   and it is a real design task, not wiring. Dedup on write is untouched.
 6. **Tool Registry — wire the MCP client that already exists.** `tools/mcp/{client,adapter}.go`
    is complete, real, and imported by nothing. This one wiring unlocks the plugin
    capability lever across Tool Registry, Knowledge Retrieval, Browser Capture, and
