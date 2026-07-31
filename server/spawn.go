@@ -31,6 +31,29 @@ const (
 	eventKindAgentDone    = "agent_done"
 )
 
+// emitToParentStream puts one event on a parent session's stream, if that
+// parent has a stream at this moment.
+//
+// The moment is the whole point. Session.onEvent belongs to the parent's
+// *current* request — getOrCreateSession replaces it on every run, which is what
+// "updated per-turn" on the field means — while a spawn deliberately outlives
+// the turn that started it: the tool returns as soon as the work is queued, and
+// withoutCallerCancellation drops the caller's cancellation so a browser tab
+// closing cannot abort the child. Resolving the parent's writer once, at spawn
+// time, therefore aims a sub-agent's entire event stream at a writer that has
+// since been replaced — and on the HTTP path (api_run.go closes its sink over
+// the http.ResponseWriter and its Flusher) at one whose handler has returned,
+// which net/http says may not be used.
+//
+// A parent between turns has no writer and getOnEvent says so by returning nil.
+// Dropping is then the only honest outcome: there is nobody to deliver to, and
+// no queue that would hold the event until there is.
+func emitToParentStream(parent *Session, ev StreamEvent) {
+	if onEvent := parent.getOnEvent(); onEvent != nil {
+		onEvent(ev)
+	}
+}
+
 // newSubagentEventForwarder returns the event sink for a child session.
 //
 // A child's own progress (status, thinking) is wrapped in an agent_update
@@ -43,14 +66,23 @@ const (
 // agent_update / agent_spawned / agent_done — and MaxSpawnDepth defaults to 2,
 // so a grandchild is an ordinary case, not a corner one.
 //
+// resolveParentStream is called per event rather than once, for the reason
+// emitToParentStream gives: the parent's writer is per-turn and the child
+// outlives the turn. Pass the parent's getOnEvent method, not its result.
+//
 // The child's delta, tool_call and tool_result are not forwarded: a parent
 // stream shows what its sub-agents are doing, not every token they emit.
 // Whether that should change is the open half of noteboard todo c81c4b63.
-func newSubagentEventForwarder(parentOnEvent func(StreamEvent), agentName, childKey, parentKey string, depth int) func(StreamEvent) {
+func newSubagentEventForwarder(resolveParentStream func() func(StreamEvent), agentName, childKey, parentKey string, depth int) func(StreamEvent) {
+	emit := func(ev StreamEvent) {
+		if parentOnEvent := resolveParentStream(); parentOnEvent != nil {
+			parentOnEvent(ev)
+		}
+	}
 	return func(ev StreamEvent) {
 		switch ev.Kind {
 		case "status", "thinking":
-			parentOnEvent(StreamEvent{
+			emit(StreamEvent{
 				Kind: eventKindAgentUpdate,
 				Text: ev.Text,
 				Turn: ev.Turn,
@@ -62,7 +94,7 @@ func newSubagentEventForwarder(parentOnEvent func(StreamEvent), agentName, child
 				},
 			})
 		case eventKindAgentUpdate, eventKindAgentSpawned, eventKindAgentDone:
-			parentOnEvent(ev)
+			emit(ev)
 		}
 	}
 }
@@ -218,14 +250,13 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 		parentReqID = &pr.ID
 	}
 
-	// Snapshot parent's onEvent so we can bubble subagent events to the parent's stream.
-	parentOnEvent := parent.getOnEvent()
-
 	// Wire child hooks so the child's progress — and that of anything it spawns
-	// in turn — reaches the parent's stream.
-	if parentOnEvent != nil {
-		child.setOnEvent(newSubagentEventForwarder(parentOnEvent, req.Agent, childKey, req.ParentKey, child.SpawnDepth))
-	}
+	// in turn — reaches the parent's stream. The forwarder resolves that stream
+	// per event (see emitToParentStream), so it is wired unconditionally: whether
+	// the parent has a writer is a question about now, not about spawn time, and
+	// a child spawned during a silent moment must still be visible once the
+	// parent is being streamed again.
+	child.setOnEvent(newSubagentEventForwarder(parent.getOnEvent, req.Agent, childKey, req.ParentKey, child.SpawnDepth))
 
 	// Enqueue the work asynchronously.
 	go func() {
@@ -239,18 +270,16 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 			fmt.Sprintf("⏳ Sub-agent %s started working on: %s", req.Agent, truncate(req.Task, 100)))
 
 		// Fire agent_spawned on the parent's live stream.
-		if parentOnEvent != nil {
-			parentOnEvent(StreamEvent{
-				Kind: eventKindAgentSpawned,
-				Text: truncate(req.Task, 200),
-				Data: map[string]any{
-					"agent":       req.Agent,
-					"session_key": childKey,
-					"parent_key":  req.ParentKey,
-					"depth":       child.SpawnDepth,
-				},
-			})
-		}
+		emitToParentStream(parent, StreamEvent{
+			Kind: eventKindAgentSpawned,
+			Text: truncate(req.Task, 200),
+			Data: map[string]any{
+				"agent":       req.Agent,
+				"session_key": childKey,
+				"parent_key":  req.ParentKey,
+				"depth":       child.SpawnDepth,
+			},
+		})
 
 		// Publish to bus for dashboard.
 		g.events.SpawnStarted(childKey, req.Agent, req.ParentKey, truncate(req.Task, 200))
@@ -353,21 +382,22 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 			}
 			g.events.SpawnCompleted(spawnResult)
 
-			// Fire agent_done on the parent's live stream.
-			if parentOnEvent != nil {
-				parentOnEvent(StreamEvent{
-					Kind: eventKindAgentDone,
-					Text: truncate(summary, 300),
-					Data: map[string]any{
-						"agent":       req.Agent,
-						"session_key": childKey,
-						"parent_key":  req.ParentKey,
-						"depth":       child.SpawnDepth,
-						"status":      status,
-						"duration":    time.Since(start).String(),
-					},
-				})
-			}
+			// Fire agent_done on the parent's live stream. This one is the sharpest
+			// case for resolving the writer now: a child reaches it after however
+			// long its whole task took, by which point the turn that spawned it has
+			// almost always ended.
+			emitToParentStream(parent, StreamEvent{
+				Kind: eventKindAgentDone,
+				Text: truncate(summary, 300),
+				Data: map[string]any{
+					"agent":       req.Agent,
+					"session_key": childKey,
+					"parent_key":  req.ParentKey,
+					"depth":       child.SpawnDepth,
+					"status":      status,
+					"duration":    time.Since(start).String(),
+				},
+			})
 
 			g.deliverResult(req.ParentKey, spawnResult)
 

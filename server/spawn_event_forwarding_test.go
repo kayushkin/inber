@@ -9,6 +9,13 @@ func collectEvents() (func(StreamEvent), *[]StreamEvent) {
 	return func(ev StreamEvent) { got = append(got, ev) }, &got
 }
 
+// alwaysStream adapts a fixed sink to the resolver the forwarder takes. The
+// tests below are about *what* a forwarder forwards; where the parent's writer
+// is at the moment it forwards is spawn_event_writer_test.go's subject.
+func alwaysStream(onEvent func(StreamEvent)) func() func(StreamEvent) {
+	return func() func(StreamEvent) { return onEvent }
+}
+
 func provenance(t *testing.T, ev StreamEvent) map[string]any {
 	t.Helper()
 	data, ok := ev.Data.(map[string]any)
@@ -23,7 +30,7 @@ func provenance(t *testing.T, ev StreamEvent) map[string]any {
 // as an agent_update that says which session produced it.
 func TestForwarderWrapsChildProgressForTheParentStream(t *testing.T) {
 	parentStream, got := collectEvents()
-	child := newSubagentEventForwarder(parentStream, "brigid", "child-key", "parent-key", 1)
+	child := newSubagentEventForwarder(alwaysStream(parentStream), "brigid", "child-key", "parent-key", 1)
 
 	child(StreamEvent{Kind: "status", Text: "reading the repo", Turn: 3})
 	child(StreamEvent{Kind: "thinking", Text: "weighing two options", Turn: 4})
@@ -57,8 +64,8 @@ func TestForwarderWrapsChildProgressForTheParentStream(t *testing.T) {
 // ordinary sub-agent of a sub-agent.
 func TestForwarderPassesAGrandchildsProgressThrough(t *testing.T) {
 	topStream, got := collectEvents()
-	child := newSubagentEventForwarder(topStream, "brigid", "child-key", "top-key", 1)
-	grandchild := newSubagentEventForwarder(child, "lugh", "grandchild-key", "child-key", 2)
+	child := newSubagentEventForwarder(alwaysStream(topStream), "brigid", "child-key", "top-key", 1)
+	grandchild := newSubagentEventForwarder(alwaysStream(child), "lugh", "grandchild-key", "child-key", 2)
 
 	grandchild(StreamEvent{Kind: "status", Text: "running the tests", Turn: 7})
 
@@ -87,7 +94,7 @@ func TestForwarderPassesAGrandchildsProgressThrough(t *testing.T) {
 // events take.
 func TestForwarderPassesADescendantsSpawnAndDoneThrough(t *testing.T) {
 	topStream, got := collectEvents()
-	child := newSubagentEventForwarder(topStream, "brigid", "child-key", "top-key", 1)
+	child := newSubagentEventForwarder(alwaysStream(topStream), "brigid", "child-key", "top-key", 1)
 
 	spawned := StreamEvent{
 		Kind: eventKindAgentSpawned,
@@ -125,7 +132,7 @@ func TestForwarderPassesADescendantsSpawnAndDoneThrough(t *testing.T) {
 // are doing, not every token they emit.
 func TestForwarderKeepsTheChildsTokenStreamOffTheParentStream(t *testing.T) {
 	parentStream, got := collectEvents()
-	child := newSubagentEventForwarder(parentStream, "brigid", "child-key", "parent-key", 1)
+	child := newSubagentEventForwarder(alwaysStream(parentStream), "brigid", "child-key", "parent-key", 1)
 
 	child(StreamEvent{Kind: "delta", Text: "half a sentence"})
 	child(StreamEvent{Kind: "tool_call", Tool: "shell", Text: "ls"})
