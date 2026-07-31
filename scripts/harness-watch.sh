@@ -129,21 +129,27 @@ context, and a concrete "what inber should consider" bullet. No fluff.
 
    Skip it if an open todo already names that file:line.
 
-   Then, for each genuinely new one, at most ${MAX_FINDING_TODOS} per run
-   (document the rest as prose and say in your summary how many you held
-   back — a silent cap reads as "there was nothing else"):
+   Then POST each genuinely new one to http://localhost:8191/api/items, at
+   most ${MAX_FINDING_TODOS} per run. Document the rest as prose and say in your
+   summary how many you held back — a silent cap reads as "there was
+   nothing else".
 
-     curl -sfS -X POST http://localhost:8191/api/items \\
-       -H 'Content-Type: application/json' \\
-       -d '{"type":"todo","priority":1,
-            "tags":["inber","harness-watch-finding"],
-            "title":"inber: <the defect, in a few words>",
-            "body":"<file:line> — what is wrong, what it costs, and the
-                    upstream precedent that exposed it. If the fix needs a
-                    choice the owner should make, name the options and do
-                    NOT pick one."}'
+   Build the JSON with jq so the body survives quoting, rather than hand-writing
+   a -d string:
+
+     jq -nc --arg t "\$title" --arg b "\$body" \\
+       '{type:"todo",priority:1,tags:["inber","harness-watch-finding"],
+         title:\$t,body:\$b}' \\
+     | curl -sfS -X POST http://localhost:8191/api/items \\
+         -H 'Content-Type: application/json' -d @-
+
+   Title reads "inber: <the defect, in a few words>". Body gives file:line,
+   what is wrong, what it costs, and the upstream PR that exposed it.
 
    Say what a fix would have to decide, if anything; never decide it here.
+   Several of these are real choices about blast radius, not oversights, and
+   an unattended job picking one is how a design decision gets made by
+   accident.
 
 ---
 Upstream commits report:
