@@ -22,6 +22,51 @@ type SpawnRequest struct {
 
 const defaultSpawnTimeout = 5 * time.Minute
 
+// The event kinds a spawn puts on its parent's stream. They are envelopes: each
+// one already names the session it came from in its Data, so a forwarder that
+// meets one is looking at a deeper descendant's event, not its own child's.
+const (
+	eventKindAgentUpdate  = "agent_update"
+	eventKindAgentSpawned = "agent_spawned"
+	eventKindAgentDone    = "agent_done"
+)
+
+// newSubagentEventForwarder returns the event sink for a child session.
+//
+// A child's own progress (status, thinking) is wrapped in an agent_update
+// envelope naming the child, and handed to the parent's stream. An envelope
+// from a deeper descendant is passed through unchanged: it already carries its
+// own origin, and re-wrapping it would replace that origin with this child's.
+//
+// Passing envelopes through is what makes the forwarder compose. A grandchild's
+// sink is this same closure, so its events arrive here already labelled
+// agent_update / agent_spawned / agent_done — and MaxSpawnDepth defaults to 2,
+// so a grandchild is an ordinary case, not a corner one.
+//
+// The child's delta, tool_call and tool_result are not forwarded: a parent
+// stream shows what its sub-agents are doing, not every token they emit.
+// Whether that should change is the open half of noteboard todo c81c4b63.
+func newSubagentEventForwarder(parentOnEvent func(StreamEvent), agentName, childKey, parentKey string, depth int) func(StreamEvent) {
+	return func(ev StreamEvent) {
+		switch ev.Kind {
+		case "status", "thinking":
+			parentOnEvent(StreamEvent{
+				Kind: eventKindAgentUpdate,
+				Text: ev.Text,
+				Turn: ev.Turn,
+				Data: map[string]any{
+					"agent":       agentName,
+					"session_key": childKey,
+					"parent_key":  parentKey,
+					"depth":       depth,
+				},
+			})
+		case eventKindAgentUpdate, eventKindAgentSpawned, eventKindAgentDone:
+			parentOnEvent(ev)
+		}
+	}
+}
+
 // SpawnResponse is returned immediately when a sub-agent is accepted.
 type SpawnResponse struct {
 	Status   string `json:"status"`
@@ -171,23 +216,10 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 	// Snapshot parent's onEvent so we can bubble subagent events to the parent's stream.
 	parentOnEvent := parent.getOnEvent()
 
-	// Wire child hooks to forward status updates as agent_update events to parent stream.
+	// Wire child hooks so the child's progress — and that of anything it spawns
+	// in turn — reaches the parent's stream.
 	if parentOnEvent != nil {
-		child.setOnEvent(func(ev StreamEvent) {
-			if ev.Kind == "status" || ev.Kind == "thinking" {
-				parentOnEvent(StreamEvent{
-					Kind: "agent_update",
-					Text: ev.Text,
-					Turn: ev.Turn,
-					Data: map[string]any{
-						"agent":       req.Agent,
-						"session_key": childKey,
-						"parent_key":  req.ParentKey,
-						"depth":       child.SpawnDepth,
-					},
-				})
-			}
-		})
+		child.setOnEvent(newSubagentEventForwarder(parentOnEvent, req.Agent, childKey, req.ParentKey, child.SpawnDepth))
 	}
 
 	// Enqueue the work asynchronously.
@@ -204,7 +236,7 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 		// Fire agent_spawned on the parent's live stream.
 		if parentOnEvent != nil {
 			parentOnEvent(StreamEvent{
-				Kind: "agent_spawned",
+				Kind: eventKindAgentSpawned,
 				Text: truncate(req.Task, 200),
 				Data: map[string]any{
 					"agent":       req.Agent,
@@ -314,7 +346,7 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 			// Fire agent_done on the parent's live stream.
 			if parentOnEvent != nil {
 				parentOnEvent(StreamEvent{
-					Kind: "agent_done",
+					Kind: eventKindAgentDone,
 					Text: truncate(summary, 300),
 					Data: map[string]any{
 						"agent":       req.Agent,
