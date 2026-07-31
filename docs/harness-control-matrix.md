@@ -61,8 +61,9 @@ live. That is worth knowing before anyone plans on top of them.
 
 ## Coverage
 
-Tally: **0 COVERED · 29 PARTIAL · 10 ABSENT**. (Guardrails and Safety moved off
-ABSENT together — they were one hole and one wiring closed both.)
+Tally: **0 COVERED · 30 PARTIAL · 9 ABSENT**. (Guardrails and Safety moved off
+ABSENT together — they were one hole and one wiring closed both. Privacy
+followed on its own, with `redact/`.)
 
 | Boundary | Verdict | Owner | Missing levers |
 |---|---|---|---|
@@ -87,7 +88,7 @@ ABSENT together — they were one hole and one wiring closed both.)
 | Orchestrator | PARTIAL | `server/queue.go:Queue` (lane semaphore + per-session mutex; main:4, subagent:8) | arbitration strategy — it is FIFO/blocking, there is no "why this next"; priority weights; preemption; attention slice; attention budget; idle reclaim; operator override |
 | Payload | PARTIAL | `engine/prompt_blueprint.go` (per-block SHA-256 + cache-hit prediction), `turn_prompt.go:hashStrings` | configurable hash/sign scheme; signing; a request fingerprint stored for audit. The hashing exists but serves **cache prediction, not proof**, and is off by default (`INBER_BLUEPRINT=1`) |
 | Policy | ABSENT | — | all |
-| **Privacy** | **ABSENT** | — | **all.** Zero egress redaction. The only `redact` hits are Anthropic's own `redacted_thinking` (`conversation/repair.go:207`). `shell_commands` is `bash -c` with `os.Environ()`; `read_files` has no denylist |
+| **Privacy** | ~~**ABSENT**~~ **PARTIAL** | `redact/` (`redact.go`, `http.go`); installed in `agent/clients.go`, `agent/openai.go`, `server/api_oneshot.go`, `server/openclaw.go` | ~~**all.** Zero egress redaction~~ **egress redaction exists** — every provider request is scanned before it leaves the process, at the HTTP boundary rather than at each producer, because tool output is not the only way a secret reaches the socket (memory recall, the summarizer, a pasted prompt and a loaded context file all do). Two halves: the live credentials this process holds, and vendor shapes (`sk-ant-…`, `ghp_…`, `AKIA…`, PEM blocks, JWTs) for keys inber never held. The environment half is nearly empty here **by measurement** — inber-server runs `--api-key-from-auth-store` and its environ holds no provider credential, so the resolved key is registered at `newClientFromKey`. Four egress sites, not one: the SDK constructor, the hand-rolled OpenAI-compatible client, the one-shot handler's own `anthropic.NewClient`, and the OpenClaw proxy; two tests fail the build if a fifth appears unguarded. **What is left: `shell_commands` is still `bash -c` with the full `os.Environ()` and `read_files` still has no denylist** — both are fail-closed policy calls with a real cost to a working agent, and both are todo `51822d74`. Redaction rewrites and never refuses, which is why it could ship unattended |
 | Project Scope | PARTIAL | `AgentConfig.Projects`; `forge` workspaces; repo-store | objective schema; dependency connectors; handoff templates; drift signals; scan frequency |
 | **Prompt** | PARTIAL (strongest area) | `agent/agent.go:315 addHistoryCacheBreakpoint`, `engine/turn_prompt.go:183 buildSystemBlocks` (SHA-256 → byte-identical prefix reuse), `conversation/dedup_files.go` | template library (plugin); injection-order rules (hardcoded); template precompile. **The OpenAI path has zero caching.** Two dated, self-assigned actions in `docs/cache-optimization.md` (2026-05-11 BP3 retarget; 2026-07-01 volatile-blocks-to-tail) are unactioned |
 | Proof Authority | ABSENT | — | all |
@@ -133,8 +134,21 @@ ABSENT together — they were one hole and one wiring closed both.)
    defects had to be fixed together — a cap with no running total, or a total
    with no cap, is still a limit that never fires. What is left here is scope,
    not enforcement: the cap is checked between turns, one session at a time.
-3. **Privacy — any egress redaction at all.** Zero exists. `cat .env` goes straight
-   into `params.Messages`. The cheapest high-severity fix on this list.
+3. ~~**Privacy — any egress redaction at all.**~~ **Done, `redact/`.** It was the
+   cheapest high-severity fix on this list and it stayed cheap: one package and
+   four one-line installs. Two things were worth more than the patterns. First,
+   **placement** — the gate went at the HTTP boundary, not at the tools, because
+   tool output is only one of the ways a secret reaches the socket and a
+   per-producer gate has to be repeated at every producer added later. Second,
+   **measurement** — the obvious source of live secrets, `os.Environ()`, holds
+   none here: inber-server runs `--api-key-from-auth-store` and resolves its
+   provider key over HTTP, so an environment-only redactor would have known
+   about none of the credentials inber actually sends with, while logging that
+   it was armed. The key is now registered where it is resolved. The scan cost
+   was 56ms per request before literal prefilters and 0.8ms after (227KB
+   payload), which is the difference between a safety check and a tax. What is
+   left is the fail-closed half — a `read_files` denylist and the
+   `shell_commands` environment — which is a policy call, todo `51822d74`.
 4. ~~**Context — a real per-model window map.**~~ **Done, `c4ad0fa`.** There was no
    map to write: the model-store already records each window as `Model.MaxTokens`,
    filled from each provider's own API by `ms sync`. What was missing was reading
