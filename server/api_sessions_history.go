@@ -146,7 +146,7 @@ func (g *Server) handleSessionTimeline(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 
-	content, err := session.ReadTimelineFromJSONL(logsDir, sessionID)
+	content, err := session.ReadTimelineFromJSONL(logsDir, sessionID, g.modelStore)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return

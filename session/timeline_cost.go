@@ -5,14 +5,20 @@ import (
 	modelstore "github.com/kayushkin/model-store"
 )
 
-// CalcCost calculates cost from model and token counts (without cache adjustment).
-// Uses model-store if available, falls back to defaults.
-func CalcCost(model string, inTok, outTok int) float64 {
-	return CalcCostWithStore(model, inTok, outTok, nil)
-}
+// Both functions here take the model registry rather than defaulting it,
+// because there is no honest answer without one. agent.GetModelInfo can only
+// meet a nil store with the unknown-model flat rate of $3.00/$15.00 per million
+// tokens, so a convenience wrapper that supplied nil on the caller's behalf did
+// not compute a cheaper cost — it computed the wrong one, silently, for every
+// model. Two such wrappers existed and every live server caller reached for
+// one, which is why a Haiku sub-agent was billed at twelve times its registered
+// price and an Opus one at a fifth of its own. Passing the store is the whole
+// point of calling these; a caller that has no store to pass should say so out
+// loud by passing nil, not by picking an overload that hides it.
 
-// CalcCostWithStore calculates cost using model-store if provided.
-func CalcCostWithStore(model string, inTok, outTok int, store *modelstore.Store) float64 {
+// CalcCost calculates cost from the model that ran and its token counts,
+// without cache adjustment.
+func CalcCost(model string, inTok, outTok int, store *modelstore.Store) float64 {
 	info := agent.GetModelInfo(model, store)
 	return (float64(inTok)*info.InputCostPer1M + float64(outTok)*info.OutputCostPer1M) / 1_000_000
 }
@@ -20,11 +26,7 @@ func CalcCostWithStore(model string, inTok, outTok int, store *modelstore.Store)
 // CalcCostWithCache calculates cost factoring in cache pricing.
 // Cache reads cost 10% of normal input. Cache writes cost 125% of normal input.
 // "Fresh" input = inTok - cacheRead - cacheWrite (the uncached portion).
-func CalcCostWithCache(model string, inTok, outTok, cacheRead, cacheWrite int) float64 {
-	return CalcCostWithCacheAndStore(model, inTok, outTok, cacheRead, cacheWrite, nil)
-}
-
-func CalcCostWithCacheAndStore(model string, inTok, outTok, cacheRead, cacheWrite int, store *modelstore.Store) float64 {
+func CalcCostWithCache(model string, inTok, outTok, cacheRead, cacheWrite int, store *modelstore.Store) float64 {
 	info := agent.GetModelInfo(model, store)
 	freshInput := inTok - cacheRead - cacheWrite
 	if freshInput < 0 {

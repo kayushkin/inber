@@ -63,7 +63,7 @@ func TestReconstructTimelineFromJSONL(t *testing.T) {
 	}
 	f.Close()
 
-	events, startTime, err := ReconstructTimelineFromJSONL(logFile)
+	events, startTime, err := ReconstructTimelineFromJSONL(logFile, registryWithTwoDifferentlyPricedModels(t))
 	if err != nil {
 		t.Fatalf("ReconstructTimelineFromJSONL: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestReadTimelineFromJSONL(t *testing.T) {
 	f.Close()
 
 	// Read timeline
-	content, err := ReadTimelineFromJSONL(dir, "test-session-123")
+	content, err := ReadTimelineFromJSONL(dir, "test-session-123", registryWithTwoDifferentlyPricedModels(t))
 	if err != nil {
 		t.Fatalf("ReadTimelineFromJSONL: %v", err)
 	}
@@ -255,18 +255,11 @@ func TestFormatTerminalStats(t *testing.T) {
 	}
 }
 
-func TestCalcCost(t *testing.T) {
-	// Verify it returns reasonable default cost for unknown model (no longer 0)
-	cost := CalcCost("nonexistent-model", 1000, 1000)
-	if cost <= 0 {
-		t.Error("expected positive default cost for unknown model")
-	}
-	// Known or unknown models should return > 0
-	cost2 := CalcCost("claude-sonnet-4-20250514", 10000, 1000)
-	if cost2 <= 0 {
-		t.Error("expected positive cost for any model")
-	}
-}
+// The cost assertions that used to live here checked only that a known and an
+// unknown model each cost more than zero. Both did, throughout the whole period
+// every model on the box was billed at the same flat $3/$15 — which is what a
+// "> 0" assertion cannot see. They are replaced by timeline_cost_test.go, which
+// asserts the two prices differ.
 
 func TestSummarizeToolInput(t *testing.T) {
 	tests := []struct {

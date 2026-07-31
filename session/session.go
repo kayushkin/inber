@@ -260,7 +260,7 @@ func (s *Session) appendTimelineEntry(turn, inTokens, outTokens, toolCalls int) 
 	s.file.Sync()
 
 	// Reconstruct timeline events for this turn from the JSONL
-	events, startTime, err := ReconstructTimelineFromJSONL(s.file.Name())
+	events, startTime, err := ReconstructTimelineFromJSONL(s.file.Name(), s.modelStore)
 	if err != nil {
 		// Log error to stderr (won't crash session, but visible in terminal)
 		fmt.Fprintf(os.Stderr, "timeline generation failed (turn %d): %v\n", turn, err)

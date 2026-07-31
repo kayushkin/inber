@@ -45,7 +45,7 @@ func (e *Engine) postProcessResult(result *agent.TurnResult, input, sessionID st
 	e.Tokens.Input += result.InputTokens
 	e.Tokens.Output += result.OutputTokens
 	e.Tokens.Cost += sessionMod.CalcCostWithCache(e.Model, result.InputTokens, result.OutputTokens,
-		result.CacheReadTokens, result.CacheCreationTokens)
+		result.CacheReadTokens, result.CacheCreationTokens, e.modelStore)
 
 	return nil
 }

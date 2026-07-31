@@ -348,8 +348,8 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 			// request rather than writing an empty error row, and snapshot the
 			// messages the engine kept.
 			if result != nil {
-				cost := sessionMod.CalcCostWithCache("", result.InputTokens, result.OutputTokens,
-					result.CacheReadTokens, result.CacheCreationTokens)
+				cost := sessionMod.CalcCostWithCache(sess.Engine.Model, result.InputTokens, result.OutputTokens,
+					result.CacheReadTokens, result.CacheCreationTokens, g.modelStore)
 				g.store.CompleteRequest(reqID, "error", truncate(result.Text, 1000), err.Error(),
 					result.ToolCalls, result.InputTokens, result.OutputTokens,
 					result.CacheReadTokens, result.CacheCreationTokens, cost)
@@ -370,9 +370,15 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 			CacheWrite: result.CacheCreationTokens,
 		}
 
-		cost := sessionMod.CalcCostWithCache("", tokens.Input, tokens.Output, tokens.CacheRead, tokens.CacheWrite)
+		// TokenUsage.Cost is what api_bridge.go reports to llm-bridge as the
+		// turn's TotalUSD, and nothing ever assigned it, so every bridge
+		// session billed $0.00 however much it spent. The cost belongs on the
+		// tokens it prices; computing it into a local and leaving the field
+		// zero is what let the two disagree.
+		tokens.Cost = sessionMod.CalcCostWithCache(sess.Engine.Model, tokens.Input, tokens.Output,
+			tokens.CacheRead, tokens.CacheWrite, g.modelStore)
 		g.store.CompleteRequest(reqID, "completed", truncate(result.Text, 1000), "",
-			result.ToolCalls, tokens.Input, tokens.Output, tokens.CacheRead, tokens.CacheWrite, cost)
+			result.ToolCalls, tokens.Input, tokens.Output, tokens.CacheRead, tokens.CacheWrite, tokens.Cost)
 		g.store.TouchSession(sessionKey, len(sess.Engine.Messages))
 
 		// Persist messages.

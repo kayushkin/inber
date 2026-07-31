@@ -8,10 +8,17 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	modelstore "github.com/kayushkin/model-store"
 )
 
 // ReconstructTimelineFromJSONL reads a session.jsonl file and reconstructs the timeline.
-func ReconstructTimelineFromJSONL(logFilePath string) ([]TimelineEvent, time.Time, error) {
+//
+// The log records the model each turn ran on, so the store is what turns that
+// id into the prices it was billed at; with a nil store every turn in the
+// rebuilt timeline reads at the unknown-model flat rate whatever it actually
+// cost.
+func ReconstructTimelineFromJSONL(logFilePath string, store *modelstore.Store) ([]TimelineEvent, time.Time, error) {
 	file, err := os.Open(logFilePath)
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("open log file: %w", err)
@@ -125,7 +132,7 @@ func ReconstructTimelineFromJSONL(logFilePath string) ([]TimelineEvent, time.Tim
 					InputTokens:  entry.InputTokens,
 					OutputTokens: entry.OutputTokens,
 					ToolCalls:    toolCalls,
-					Cost:         CalcCost(entry.Model, entry.InputTokens, entry.OutputTokens),
+					Cost:         CalcCost(entry.Model, entry.InputTokens, entry.OutputTokens, store),
 					Model:        entry.Model,
 				})
 			}
@@ -144,14 +151,14 @@ func ReconstructTimelineFromJSONL(logFilePath string) ([]TimelineEvent, time.Tim
 }
 
 // ReadTimelineFromJSONL reads a session.jsonl file and generates a timeline markdown.
-func ReadTimelineFromJSONL(logsDir, sessionID string) (string, error) {
+func ReadTimelineFromJSONL(logsDir, sessionID string, store *modelstore.Store) (string, error) {
 	// Find the session.jsonl file
 	logFile := findSessionJSONL(logsDir, sessionID)
 	if logFile == "" {
 		return "", fmt.Errorf("session log not found: %s", sessionID)
 	}
 
-	events, startTime, err := ReconstructTimelineFromJSONL(logFile)
+	events, startTime, err := ReconstructTimelineFromJSONL(logFile, store)
 	if err != nil {
 		return "", fmt.Errorf("failed to reconstruct timeline from %s: %w", logFile, err)
 	}

@@ -10,7 +10,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/bus/messages"
 	"github.com/kayushkin/inber/memory"
-	sessionMod "github.com/kayushkin/inber/session"
 )
 
 // deliverProgress sends progress messages from child to parent session.
@@ -41,9 +40,6 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 	}
 	parent := val.(*Session)
 
-	cost := sessionMod.CalcCostWithCache("", result.Tokens.Input, result.Tokens.Output,
-		result.Tokens.CacheRead, result.Tokens.CacheWrite)
-
 	msg := fmt.Sprintf("[Sub-agent completed]\n"+
 		"Agent: %s (%s)\n"+
 		"Task: %s\n"+
@@ -55,7 +51,7 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 		result.Task,
 		result.Status,
 		result.Duration.Round(time.Second),
-		result.Tokens.Input, result.Tokens.Output, cost,
+		result.Tokens.Input, result.Tokens.Output, result.Tokens.Cost,
 		result.Summary,
 	)
 

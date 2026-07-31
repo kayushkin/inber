@@ -81,6 +81,11 @@ type SpawnResult struct {
 	Status   string        `json:"status"` // "success", "error", "timeout"
 	Summary  string        `json:"summary"`
 	Tokens   TokenUsage    `json:"tokens"`
+	// Model is what the child's engine actually ran on. It is carried so that
+	// Tokens.Cost can be checked against the prices it was worked out from —
+	// and so a reader never has to guess the model in order to reprice, which
+	// is how every reader ended up at the flat rate.
+	Model       string        `json:"model,omitempty"`
 	Duration    time.Duration `json:"duration"`
 	Error       string        `json:"error,omitempty"`
 	WorkspaceID string        `json:"workspace_id,omitempty"`
@@ -280,14 +285,18 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 				}
 			}
 
-			// Complete request in DB.
-			cost := sessionMod.CalcCostWithCache("", tokens.Input, tokens.Output, tokens.CacheRead, tokens.CacheWrite)
+			// Complete request in DB. The model is the one the child's engine
+			// last ran on, which executeAgent assigns after selection and
+			// failover, so it is what was actually billed rather than what was
+			// asked for.
+			tokens.Cost = sessionMod.CalcCostWithCache(child.Engine.Model, tokens.Input, tokens.Output,
+				tokens.CacheRead, tokens.CacheWrite, g.modelStore)
 			turns := 0
 			if result != nil {
 				turns = result.ToolCalls
 			}
 			g.store.CompleteRequest(reqID, status, truncate(summary, 1000), errMsg,
-				turns, tokens.Input, tokens.Output, tokens.CacheRead, tokens.CacheWrite, cost)
+				turns, tokens.Input, tokens.Output, tokens.CacheRead, tokens.CacheWrite, tokens.Cost)
 			g.store.TouchSession(childKey, len(child.Engine.Messages))
 
 			// Save spawn transcript to the agent's memory for continuity.
@@ -335,6 +344,7 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 				Status:      status,
 				Summary:     summary,
 				Tokens:      tokens,
+				Model:       child.Engine.Model,
 				Duration:    time.Since(start),
 				Error:       errMsg,
 				WorkspaceID: workspaceID,

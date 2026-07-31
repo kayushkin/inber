@@ -6,12 +6,18 @@ import (
 
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/session"
+	modelstore "github.com/kayushkin/model-store"
 )
 
 // DisplayStats prints token usage and cost using the shared CalcCost from session package.
 // Now also displays cumulative session stats if engine is provided.
-func DisplayStats(result *agent.TurnResult, model string) {
-	cost := session.CalcCost(model, result.InputTokens, result.OutputTokens)
+//
+// It takes the model registry for the same reason every other cost call site
+// does: without one the printed figure is the unknown-model flat rate rather
+// than what the turn cost. Nothing in this repo calls it today — the parameter
+// is here so that whatever calls it next cannot reintroduce the flat rate.
+func DisplayStats(result *agent.TurnResult, model string, store *modelstore.Store) {
+	cost := session.CalcCost(model, result.InputTokens, result.OutputTokens, store)
 	total := result.InputTokens + result.OutputTokens
 	
 	// Show prominent token summary
