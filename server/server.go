@@ -355,7 +355,7 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 					result.CacheReadTokens, result.CacheCreationTokens, cost)
 				if result.Text != "" {
 					g.store.TouchSession(sessionKey, len(sess.Engine.Messages))
-					g.persistMessages(sess)
+					g.persistSessionState(sess)
 				}
 			} else {
 				g.store.CompleteRequest(reqID, "error", "", err.Error(), 0, 0, 0, 0, 0, 0)
@@ -376,7 +376,7 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 		g.store.TouchSession(sessionKey, len(sess.Engine.Messages))
 
 		// Persist messages.
-		g.persistMessages(sess)
+		g.persistSessionState(sess)
 
 		if onEvent != nil {
 			onEvent(StreamEvent{

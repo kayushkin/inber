@@ -712,7 +712,7 @@ func (g *Server) handleBridgeCompact(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
-	g.persistMessages(s)
+	g.persistSessionState(s)
 
 	jsonResponse(w, map[string]any{
 		"status":           "compacted",

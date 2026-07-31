@@ -85,7 +85,7 @@ func NewEngineBenchmark(cfg EngineConfig) (*Engine, BenchmarkTiming, error) {
 
 	// Phase 4: Setup session management and workspace
 	phaseStart = time.Now()
-	session, sessionDB, workspace, messages, err := setupSession(repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach)
+	session, sessionDB, workspace, messages, turnCounter, err := setupSession(repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach)
 	if err != nil {
 		return nil, timing, fmt.Errorf("failed to setup session: %w", err)
 	}
@@ -94,8 +94,9 @@ func NewEngineBenchmark(cfg EngineConfig) (*Engine, BenchmarkTiming, error) {
 	e.workspace = workspace
 	// Restore rather than assign: this path never reaches
 	// initLimitsAndProfiling, so without it e.staged is built lazily at
-	// FrozenIdx 0 and the loaded transcript is treated as staging.
-	e.RestoreMessages(messages)
+	// FrozenIdx 0, the loaded transcript is treated as staging, and the turn
+	// count read back by setupSession is dropped on the floor.
+	e.RestoreSession(messages, turnCounter)
 	timing.SessionPrepTime = time.Since(phaseStart)
 
 	// Phase 5: Setup model store

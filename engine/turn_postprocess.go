@@ -34,9 +34,9 @@ func (e *Engine) postProcessResult(result *agent.TurnResult, input, sessionID st
 	// 3. STASH LARGE ASSISTANT RESPONSES (for next turn)
 	e.stashAssistantResponse(sessionID, result)
 
-	// Save messages snapshot for session resume
+	// Save the messages snapshot and turn count for session resume
 	e.emitStatus("Saving session...")
-	e.saveMessages()
+	e.saveResumableState()
 
 	// Checkpoint if needed (every 20 turns)
 	e.checkpointIfNeeded()

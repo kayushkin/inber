@@ -44,13 +44,13 @@ func toolResultTexts(messages []anthropic.MessageParam) []string {
 	return out
 }
 
-func TestRestoreMessages_FreezesRestoredHistory(t *testing.T) {
+func TestRestoreSession_FreezesRestoredHistory(t *testing.T) {
 	messages := restoredTranscript(12)
 	e := &Engine{}
-	e.RestoreMessages(messages)
+	e.RestoreSession(messages, 0)
 
 	if e.staged == nil {
-		t.Fatal("RestoreMessages left e.staged nil")
+		t.Fatal("RestoreSession left e.staged nil")
 	}
 	want := conversation.FreezePoint(messages)
 	if e.staged.FrozenIdx != want {
@@ -67,12 +67,12 @@ func TestRestoreMessages_FreezesRestoredHistory(t *testing.T) {
 // The defect this method exists to prevent: the first turn after a resume ran
 // dedup and age-based tool-result pruning over the ENTIRE restored transcript,
 // dropping results without the memory write a real prune performs.
-func TestRestoreMessages_FirstResumedTurnDoesNotPruneHistory(t *testing.T) {
+func TestRestoreSession_FirstResumedTurnDoesNotPruneHistory(t *testing.T) {
 	messages := restoredTranscript(12)
 	before := toolResultTexts(messages)
 
 	e := &Engine{}
-	e.RestoreMessages(messages)
+	e.RestoreSession(messages, 0)
 	e.pruneIfNeeded()
 
 	after := toolResultTexts(e.Messages)
@@ -117,15 +117,15 @@ func TestPruneIfNeeded_AtFrozenIdxZeroRewritesRestoredHistory(t *testing.T) {
 // A resumed session interrupted mid-turn ends on a user message. That message
 // is not final — the next turn merges its input into it — so it must stay in
 // staging or the frozen zone gets mutated underneath the cache breakpoint.
-func TestRestoreMessages_HoldsBackTrailingUserMessage(t *testing.T) {
+func TestRestoreSession_HoldsBackTrailingUserMessage(t *testing.T) {
 	messages := append(restoredTranscript(4),
 		anthropic.NewUserMessage(anthropic.NewTextBlock("interrupted before the reply")))
 
 	e := &Engine{}
-	e.RestoreMessages(messages)
+	e.RestoreSession(messages, 0)
 
 	if e.staged == nil {
-		t.Fatal("RestoreMessages left e.staged nil")
+		t.Fatal("RestoreSession left e.staged nil")
 	}
 	if e.staged.FrozenIdx != len(messages)-1 {
 		t.Fatalf("FrozenIdx = %d, want %d — the trailing user message must stay staged",
@@ -133,9 +133,9 @@ func TestRestoreMessages_HoldsBackTrailingUserMessage(t *testing.T) {
 	}
 }
 
-func TestRestoreMessages_EmptyTranscript(t *testing.T) {
+func TestRestoreSession_EmptyTranscript(t *testing.T) {
 	e := &Engine{}
-	e.RestoreMessages(nil)
+	e.RestoreSession(nil, 0)
 	if e.staged == nil || e.staged.FrozenIdx != 0 {
 		t.Fatalf("empty restore should leave FrozenIdx 0, got %+v", e.staged)
 	}

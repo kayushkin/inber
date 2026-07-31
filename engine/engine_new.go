@@ -124,12 +124,16 @@ func setupMemoryStore(repoRoot, identityText, agentName string) (memory.MemorySt
 	return ms, nil
 }
 
-// setupSession initializes session management and workspace.
-func setupSession(repoRoot, agentName, commandName string, newSession, detach bool) (*sessionMod.Session, *sessionMod.DB, *sessionMod.Workspace, []anthropic.MessageParam, error) {
+// setupSession initializes session management and workspace, and loads the
+// resumable state: the persisted transcript and the turn count that produced it.
+// The two are loaded in the same branch on purpose — a turn count restored
+// without its transcript describes messages that are not there.
+func setupSession(repoRoot, agentName, commandName string, newSession, detach bool) (*sessionMod.Session, *sessionMod.DB, *sessionMod.Workspace, []anthropic.MessageParam, int, error) {
 	var session *sessionMod.Session
 	var sessionDB *sessionMod.DB
 	var workspace *sessionMod.Workspace
 	var messages []anthropic.MessageParam
+	var turnCounter int
 
 	// Session continuity: resume by default, --new to start fresh, --detach for one-off
 	ws := sessionMod.NewWorkspace(repoRoot, agentName)
@@ -153,7 +157,12 @@ func setupSession(repoRoot, agentName, commandName string, newSession, detach bo
 							repairCount, len(msgs), len(repaired))
 					}
 				}
-				Log.Info("resuming session (%d messages)", len(messages))
+				counter, err := sessionMod.LoadTurnCounter(ws.Dir)
+				if err != nil {
+					Log.Warn("turn counter unreadable, resuming as if from turn 0: %v", err)
+				}
+				turnCounter = counter
+				Log.Info("resuming session (%d messages, turn %d)", len(messages), turnCounter)
 			}
 		} else {
 			ws.ClearMessages()
@@ -189,7 +198,7 @@ func setupSession(repoRoot, agentName, commandName string, newSession, detach bo
 		session = &sessionMod.Session{}
 	}
 
-	return session, sessionDB, workspace, messages, nil
+	return session, sessionDB, workspace, messages, turnCounter, nil
 }
 
 // setupModelStore initializes or uses the provided model store.
@@ -431,14 +440,18 @@ func (e *Engine) initMemory(cfg EngineConfig) error {
 
 // initSession sets up JSONL logging, workspace, and message persistence.
 func (e *Engine) initSession(cfg EngineConfig) error {
-	session, sessionDB, workspace, messages, err := setupSession(e.repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach)
+	session, sessionDB, workspace, messages, turnCounter, err := setupSession(e.repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach)
 	if err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
 	e.Session = session
 	e.SessionDB = sessionDB
 	e.workspace = workspace
+	// Held, not installed: e.staged does not exist yet, and installing a
+	// restored transcript means freezing it. initLimitsAndProfiling builds
+	// e.staged and then hands both to RestoreSession.
 	e.Messages = messages
+	e.restoredTurnCounter = turnCounter
 	return nil
 }
 
@@ -555,8 +568,9 @@ func (e *Engine) initLimitsAndProfiling(cfg EngineConfig) {
 	pruneCfg := e.pruneConfig()
 	e.staged = conversation.NewStagedConversation(pruneCfg.ManageInterval)
 	// initSession runs earlier in NewEngine and may already have loaded a
-	// workspace transcript onto e.Messages. That transcript is restored
-	// history, so freeze it — see Engine.RestoreMessages for why leaving it in
-	// the staging zone re-prunes and re-pays for the whole thing.
-	e.staged.Flush(conversation.FreezePoint(e.Messages))
+	// workspace transcript and its turn count. Now that e.staged exists, install
+	// them the same way every other resume site does — see
+	// Engine.RestoreSession for why a bare assignment re-prunes the transcript
+	// and restarts the turn clock.
+	e.RestoreSession(e.Messages, e.restoredTurnCounter)
 }

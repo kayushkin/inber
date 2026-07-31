@@ -175,7 +175,9 @@ func (g *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, k
 		copy(msgs, s.Engine.Messages)
 		s.mu.Unlock()
 	} else {
-		msgs = g.loadPersistedMessages(key)
+		// History rendering wants the transcript only; the turn count that
+		// comes with it has no reader here.
+		msgs, _ = g.loadPersistedSession(key)
 	}
 
 	if len(msgs) == 0 {

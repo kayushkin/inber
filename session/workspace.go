@@ -142,9 +142,13 @@ func (w *Workspace) SaveMessages(data []byte) error {
 	return os.WriteFile(filepath.Join(w.Dir, "messages.json"), data, 0644)
 }
 
-// ClearMessages removes messages.json from the workspace.
+// ClearMessages removes messages.json from the workspace, and the turn count
+// that was recorded against it. The count is only meaningful as a description
+// of that transcript, so leaving it behind would tell the next session it is
+// fifty turns into a conversation with no messages in it.
 func (w *Workspace) ClearMessages() {
 	os.Remove(filepath.Join(w.Dir, "messages.json"))
+	ClearTurnCounter(w.Dir)
 }
 
 // Exists returns true if the workspace directory exists.

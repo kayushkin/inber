@@ -16,25 +16,36 @@ import (
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
-// RestoreMessages installs a transcript this engine did not produce — a resumed
-// session's persisted history, or a fork of a live parent's context — and marks
-// it frozen.
+// RestoreSession installs a transcript this engine did not produce — a resumed
+// session's persisted history, or a fork of a live parent's context — together
+// with the turn count that produced it, and marks the transcript frozen.
 //
-// Freezing is the whole point of the call, and it is why assigning to
-// e.Messages directly is wrong. A restored transcript is history: it is replayed
-// verbatim at the head of the next request and this process will not rewrite it.
-// Left in the staging zone it claims the opposite — that every message in it is
-// recent and free to mutate — and the first turn after the restore then runs
-// DeduplicateFileRefs and age-based tool-result pruning across the entire
-// transcript, dropping results without the memory write a real prune performs.
-// It also leaves FrozenIdx at 0, which sends the BP3 cache breakpoint down its
-// legacy fallback, so a prefix that was already paid for is paid for again.
+// Freezing is why assigning to e.Messages directly is wrong. A restored
+// transcript is history: it is replayed verbatim at the head of the next request
+// and this process will not rewrite it. Left in the staging zone it claims the
+// opposite — that every message in it is recent and free to mutate — and the
+// first turn after the restore then runs DeduplicateFileRefs and age-based
+// tool-result pruning across the entire transcript, dropping results without the
+// memory write a real prune performs. It also leaves FrozenIdx at 0, which sends
+// the BP3 cache breakpoint down its legacy fallback, so a prefix that was
+// already paid for is paid for again.
+//
+// The turn count travels with the transcript for the same reason the freeze
+// does: a fresh engine starts at 0, and every reader of e.Turn.Counter then
+// treats a long resumed session as a brand new one. contextBudget hands it the
+// 4,000-token first-turn memory budget instead of the 6,000 or 8,000 a
+// conversation of that age earns, and cannot reach its Counter > 15 branch for
+// another fifteen turns. ShouldCheckpoint gates on turn%Interval, so a session
+// resumed more often than the interval never checkpoints at all. Unlike
+// FrozenIdx the count is not derivable from the messages, so it is persisted —
+// see PersistedTurnCounter.
 //
 // An oversized restored transcript is still pruned: the flush path (and its
 // emergency threshold) runs over the whole conversation regardless of the
 // frozen boundary.
-func (e *Engine) RestoreMessages(messages []anthropic.MessageParam) {
+func (e *Engine) RestoreSession(messages []anthropic.MessageParam, turnCounter int) {
 	e.Messages = messages
+	e.Turn.Counter = turnCounter
 	if e.staged == nil {
 		e.staged = conversation.NewStagedConversation(e.pruneConfig().ManageInterval)
 	}
@@ -201,14 +212,22 @@ func (e *Engine) checkpointIfNeeded() {
 	}
 }
 
-// saveMessages writes the current messages to the workspace and session log dir.
-func (e *Engine) saveMessages() {
+// saveResumableState writes the current messages to the workspace and session
+// log dir, and the turn count to the workspace beside them.
+//
+// Only the workspace copy is resumable, which is why only it gets the turn
+// count: the session log dir is a new directory per invocation, so nothing ever
+// reads its transcript back into an engine.
+func (e *Engine) saveResumableState() {
 	data, err := json.Marshal(e.Messages)
 	if err != nil {
 		return
 	}
 	if e.workspace != nil {
 		e.workspace.SaveMessages(data)
+		if err := sessionMod.SaveTurnCounter(e.workspace.Dir, e.Turn.Counter); err != nil {
+			Log.Warn("turn counter not persisted, next resume will start from turn 0: %v", err)
+		}
 	}
 	if e.Session != nil {
 		sessDir := filepath.Dir(e.Session.FilePath())

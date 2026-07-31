@@ -330,7 +330,7 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 			g.deliverResult(req.ParentKey, spawnResult)
 
 			// Persist child's messages.
-			g.persistMessages(child)
+			g.persistSessionState(child)
 
 			return err
 		})

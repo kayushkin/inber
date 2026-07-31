@@ -81,29 +81,30 @@ type Engine struct {
 	IdentityOverride string              // system prompt for raw/override modes
 
 	// --- Internal state ---
-	repoRoot           string
-	agentTools         []agent.Tool
-	display            *DisplayHooks
-	displayMu          sync.Mutex
-	workspace          *sessionMod.Workspace
-	thinkingBud        int64
-	stashCfg           conversation.StashConfig
-	extractCfg         conversation.ExtractionConfig
-	staged             *conversation.StagedConversation
-	toolInputsCache    map[string]string
-	contextInjectors   []ContextInjector
-	workflowHooks      *WorkflowHooks
-	forgeHook          *forge.Hook
-	forgeDB            *forge.Forge
-	modelStore         *modelstore.Store
-	ownsModelStore     bool
-	authStore          *aiauth.Store
-	modelClient        *agent.ModelClient
-	agentRegistry      *registry.Registry
-	modelExplicitlySet bool
-	noHooks            bool
-	injections         <-chan string
-	memoryProfiler     *MemoryProfiler
+	repoRoot            string
+	agentTools          []agent.Tool
+	display             *DisplayHooks
+	displayMu           sync.Mutex
+	workspace           *sessionMod.Workspace
+	thinkingBud         int64
+	stashCfg            conversation.StashConfig
+	extractCfg          conversation.ExtractionConfig
+	staged              *conversation.StagedConversation
+	restoredTurnCounter int // turn count read back by initSession, installed by initLimitsAndProfiling
+	toolInputsCache     map[string]string
+	contextInjectors    []ContextInjector
+	workflowHooks       *WorkflowHooks
+	forgeHook           *forge.Hook
+	forgeDB             *forge.Forge
+	modelStore          *modelstore.Store
+	ownsModelStore      bool
+	authStore           *aiauth.Store
+	modelClient         *agent.ModelClient
+	agentRegistry       *registry.Registry
+	modelExplicitlySet  bool
+	noHooks             bool
+	injections          <-chan string
+	memoryProfiler      *MemoryProfiler
 }
 
 // ---------------------------------------------------------------------------

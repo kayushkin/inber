@@ -12,6 +12,7 @@ import (
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/conversation"
 	"github.com/kayushkin/inber/engine"
+	sessionMod "github.com/kayushkin/inber/session"
 )
 
 // getOrCreateSession retrieves an existing session or creates a new one.
@@ -92,8 +93,8 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, req RunReq
 	// Display hooks are set dynamically per-request via setOnEvent/updateHooks.
 	// Don't set them at creation time — they'd become stale.
 
-	// Try to load existing messages from persistence.
-	msgs := g.loadPersistedMessages(key)
+	// Try to load existing messages and their turn count from persistence.
+	msgs, turnCounter := g.loadPersistedSession(key)
 	if len(msgs) > 0 {
 		// Repair interrupted sessions.
 		msgs = conversation.RepairEmptyContent(msgs)
@@ -101,7 +102,7 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, req RunReq
 		msgs = conversation.RepairAlternation(msgs)
 		msgs = conversation.RepairThinkingSignatures(msgs)
 		msgs = agent.SanitizeMessageToolIDs(msgs)
-		log.Printf("[server] resumed session %s (%d messages)", key, len(msgs))
+		log.Printf("[server] resumed session %s (%d messages, turn %d)", key, len(msgs), turnCounter)
 	}
 
 	eng, err := engine.NewEngine(cfg)
@@ -111,9 +112,10 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, req RunReq
 
 	// If we loaded persisted messages, restore them onto the engine. Restoring
 	// (rather than assigning) freezes them, so the first resumed turn does not
-	// re-prune and re-pay for the whole transcript.
+	// re-prune and re-pay for the whole transcript, and carries the turn count
+	// over so a long-running session is not budgeted as a brand new one.
 	if len(msgs) > 0 {
-		eng.RestoreMessages(msgs)
+		eng.RestoreSession(msgs, turnCounter)
 	}
 
 	return &Session{
@@ -127,17 +129,23 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, req RunReq
 	}, nil
 }
 
-// loadPersistedMessages loads messages from the server data dir.
-func (g *Server) loadPersistedMessages(key string) []anthropic.MessageParam {
-	path := filepath.Join(g.config.DataDir, "sessions", key, "messages.json")
-	data, err := os.ReadFile(path)
+// loadPersistedSession loads a session's messages and the turn count recorded
+// against them from the server data dir. They are loaded together because a
+// turn count without its transcript describes messages that are not there.
+func (g *Server) loadPersistedSession(key string) ([]anthropic.MessageParam, int) {
+	dir := filepath.Join(g.config.DataDir, "sessions", key)
+	data, err := os.ReadFile(filepath.Join(dir, "messages.json"))
 	if err != nil {
-		return nil
+		return nil, 0
 	}
 	var msgs []anthropic.MessageParam
 	if err := json.Unmarshal(data, &msgs); err != nil {
 		log.Printf("[server] failed to load messages for %s: %v", key, err)
-		return nil
+		return nil, 0
 	}
-	return msgs
+	turnCounter, err := sessionMod.LoadTurnCounter(dir)
+	if err != nil {
+		log.Printf("[server] turn counter unreadable for %s, resuming as if from turn 0: %v", key, err)
+	}
+	return msgs, turnCounter
 }

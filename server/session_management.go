@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	sessionMod "github.com/kayushkin/inber/session"
 )
 
 // SessionInfo is a summary of a session for listing.
@@ -71,7 +73,7 @@ func (g *Server) InterruptSession(key string) error {
 	}
 
 	s.interrupt()
-	g.persistMessages(s)
+	g.persistSessionState(s)
 	return nil
 }
 
@@ -122,10 +124,12 @@ func (g *Server) Inject(sessionKey, message string) error {
 // Session persistence
 // ---------------------------------------------------------------------------
 
-// persistMessages saves session messages to disk.
-func (g *Server) persistMessages(s *Session) {
+// persistSessionState saves a session's messages and turn count to disk — both
+// halves of what loadPersistedSession reads back on resume.
+func (g *Server) persistSessionState(s *Session) {
 	s.mu.Lock()
 	msgs := s.Engine.Messages
+	turnCounter := s.Engine.Turn.Counter
 	s.mu.Unlock()
 
 	dir := filepath.Join(g.config.DataDir, "sessions", s.Key)
@@ -137,4 +141,8 @@ func (g *Server) persistMessages(s *Session) {
 		return
 	}
 	os.WriteFile(filepath.Join(dir, "messages.json"), data, 0644)
+
+	if err := sessionMod.SaveTurnCounter(dir, turnCounter); err != nil {
+		log.Printf("[server] turn counter not persisted for %s, next resume will start from turn 0: %v", s.Key, err)
+	}
 }
