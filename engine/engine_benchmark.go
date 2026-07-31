@@ -92,7 +92,10 @@ func NewEngineBenchmark(cfg EngineConfig) (*Engine, BenchmarkTiming, error) {
 	e.Session = session
 	e.SessionDB = sessionDB
 	e.workspace = workspace
-	e.Messages = messages
+	// Restore rather than assign: this path never reaches
+	// initLimitsAndProfiling, so without it e.staged is built lazily at
+	// FrozenIdx 0 and the loaded transcript is treated as staging.
+	e.RestoreMessages(messages)
 	timing.SessionPrepTime = time.Since(phaseStart)
 
 	// Phase 5: Setup model store

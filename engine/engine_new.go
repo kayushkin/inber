@@ -554,4 +554,9 @@ func (e *Engine) initLimitsAndProfiling(cfg EngineConfig) {
 
 	pruneCfg := e.pruneConfig()
 	e.staged = conversation.NewStagedConversation(pruneCfg.ManageInterval)
+	// initSession runs earlier in NewEngine and may already have loaded a
+	// workspace transcript onto e.Messages. That transcript is restored
+	// history, so freeze it — see Engine.RestoreMessages for why leaving it in
+	// the staging zone re-prunes and re-pays for the whole thing.
+	e.staged.Flush(conversation.FreezePoint(e.Messages))
 }

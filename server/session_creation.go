@@ -109,9 +109,11 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, req RunReq
 		return nil, fmt.Errorf("create engine for %s: %w", agentName, err)
 	}
 
-	// If we loaded persisted messages, set them on the engine.
+	// If we loaded persisted messages, restore them onto the engine. Restoring
+	// (rather than assigning) freezes them, so the first resumed turn does not
+	// re-prune and re-pay for the whole transcript.
 	if len(msgs) > 0 {
-		eng.Messages = msgs
+		eng.RestoreMessages(msgs)
 	}
 
 	return &Session{

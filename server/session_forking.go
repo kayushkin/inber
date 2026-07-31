@@ -28,8 +28,10 @@ func (g *Server) forkSession(parent *Session, childKey, agentName string, ac Age
 		return nil, err
 	}
 
-	// Replace the empty messages with parent's history.
-	child.Engine.Messages = parentMessages
+	// Replace the empty messages with parent's history. Restoring freezes that
+	// history, so the child's BP3 breakpoint lands on the same boundary the
+	// parent already cached instead of re-staging the inherited transcript.
+	child.Engine.RestoreMessages(parentMessages)
 	child.SpawnDepth = parent.SpawnDepth + 1
 	child.ParentKey = parent.Key
 

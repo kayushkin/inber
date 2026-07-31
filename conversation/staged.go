@@ -43,6 +43,20 @@ func (sc *StagedConversation) Tick() {
 	sc.TurnsSinceFlush++
 }
 
+// FreezePoint returns the index up to which a transcript may be frozen.
+//
+// Everything is frozen except a trailing user message. The next turn appends
+// its input by merging into a trailing user message rather than adding a
+// second one — breaking alternation would be rejected by the API — so that
+// message is not yet final and freezing it would mutate the frozen zone.
+func FreezePoint(messages []anthropic.MessageParam) int {
+	n := len(messages)
+	if n > 0 && messages[n-1].Role == anthropic.MessageParamRoleUser {
+		return n - 1
+	}
+	return n
+}
+
 // StagingSlice returns only the staging zone messages for mutation.
 // The returned slice shares the underlying array — mutations affect the original.
 func (sc *StagedConversation) StagingSlice(messages []anthropic.MessageParam) []anthropic.MessageParam {

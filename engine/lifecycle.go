@@ -16,6 +16,31 @@ import (
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
+// RestoreMessages installs a transcript this engine did not produce — a resumed
+// session's persisted history, or a fork of a live parent's context — and marks
+// it frozen.
+//
+// Freezing is the whole point of the call, and it is why assigning to
+// e.Messages directly is wrong. A restored transcript is history: it is replayed
+// verbatim at the head of the next request and this process will not rewrite it.
+// Left in the staging zone it claims the opposite — that every message in it is
+// recent and free to mutate — and the first turn after the restore then runs
+// DeduplicateFileRefs and age-based tool-result pruning across the entire
+// transcript, dropping results without the memory write a real prune performs.
+// It also leaves FrozenIdx at 0, which sends the BP3 cache breakpoint down its
+// legacy fallback, so a prefix that was already paid for is paid for again.
+//
+// An oversized restored transcript is still pruned: the flush path (and its
+// emergency threshold) runs over the whole conversation regardless of the
+// frozen boundary.
+func (e *Engine) RestoreMessages(messages []anthropic.MessageParam) {
+	e.Messages = messages
+	if e.staged == nil {
+		e.staged = conversation.NewStagedConversation(e.pruneConfig().ManageInterval)
+	}
+	e.staged.Flush(conversation.FreezePoint(messages))
+}
+
 // summarizeIfNeeded checks if the conversation is long enough to warrant summarization.
 func (e *Engine) summarizeIfNeeded() {
 	role := conversation.RoleDefault
@@ -140,12 +165,8 @@ func (e *Engine) pruneIfNeeded() {
 		}
 
 		e.Messages = pruned
-		// Freeze everything: advance FrozenIdx to cover all current messages
-		// (minus the last one which is the new user input, still staging)
-		freezePoint := len(e.Messages)
-		if freezePoint > 1 {
-			freezePoint = freezePoint - 1 // keep latest user message in staging
-		}
+		// Freeze everything except the new user input, which is still staging.
+		freezePoint := conversation.FreezePoint(e.Messages)
 		e.staged.Flush(freezePoint)
 
 		Log.Info("flush: froze %d messages (pruned %d, %d tokens freed, %d memories saved, %d files deduped)",
