@@ -76,7 +76,11 @@ type TurnState struct {
 	ConsecutiveErrors int
 	LastHadError      bool
 	VolatileContext   string
-	LastManageTurn    int
+	// PendingVolatileNotes holds notes queued during context preparation, which
+	// runs before the prompt build that assigns VolatileContext. See
+	// volatile_context.go.
+	PendingVolatileNotes []string
+	LastManageTurn       int
 }
 
 // CacheState holds prompt caching state across turns.

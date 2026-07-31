@@ -124,7 +124,9 @@ func (e *Engine) pruneIfNeeded() {
 		staging := e.Messages[e.staged.FrozenIdx:]
 		superseded := conversation.CrossZoneDedup(frozen, staging)
 		if len(superseded) > 0 {
-			// Add note to volatile context so model knows frozen reads are stale
+			// Queue a note so the model knows its frozen-zone reads are stale.
+			// It cannot be written onto e.Turn.VolatileContext here: the prompt
+			// build that runs next assigns that field wholesale.
 			note := "[Note: these files were re-read since last context snapshot — ignore earlier versions: "
 			for i, p := range superseded {
 				if i > 0 {
@@ -133,7 +135,7 @@ func (e *Engine) pruneIfNeeded() {
 				note += p
 			}
 			note += "]"
-			e.Turn.VolatileContext += "\n" + note
+			e.queueVolatileNote(note)
 		}
 	}
 

@@ -28,8 +28,10 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 
 	// OAuth identity injection removed (2026-04-04): using API key auth now.
 	
-	// Pass volatile context for injection into last user message
-	a.VolatileContext = e.Turn.VolatileContext
+	// Hand over the volatile context for injection into the last user message.
+	// Taking it leaves the engine with nothing to hand a rebuilt agent, which is
+	// what stops the thinking-signature retry injecting a second copy.
+	a.VolatileContext = e.takeVolatileContext()
 
 	// Pass frozen/staging boundary for BP3 placement
 	if e.staged != nil {

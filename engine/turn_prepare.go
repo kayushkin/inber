@@ -63,10 +63,19 @@ func (e *Engine) prepareInput(input, sessionID string) string {
 	return processedInput
 }
 
-// buildTurnContext assembles system prompt blocks for the turn.
+// buildTurnContext assembles system prompt blocks for the turn, and owns the
+// lifetime of the turn's volatile context.
 func (e *Engine) buildTurnContext(processedInput string) []sessionMod.NamedBlock {
 	e.emitStatus("Building system prompt...")
+	// The volatile context is per-turn: derive it fresh rather than inherit the
+	// last turn's copy. BuildSystemPrompt assigns the field only when a memory
+	// store is set, so without this a raw session accumulates every note it has
+	// ever been given.
+	e.Turn.VolatileContext = ""
 	systemBlocks := e.BuildSystemPrompt(processedInput)
+	// BuildSystemPrompt assigns e.Turn.VolatileContext, so the notes queued
+	// during preparation are folded in after it, never before.
+	e.applyPendingVolatileNotes()
 	e.Cache.LastNamedBlocks = systemBlocks
 	return systemBlocks
 }
