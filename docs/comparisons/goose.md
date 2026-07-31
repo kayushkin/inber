@@ -566,3 +566,25 @@ default — silently, with no log line. Second half: each engine builds a fresh 
 another HTTP client and connection pool; given the autoworker leak history, N children = N clients
 is worth avoiding on its own. Mirror goose: pass the parent's live `e.Model` as the child's default
 with config as *fallback*, and hand a same-provider-same-model child the parent's existing client.
+
+## Harness-watch — 2026-07-31: stream shell output on a best-effort side channel that provably cannot change the tool result
+
+[#10808](https://github.com/block/goose/pull/10808) makes shell output visible while the command is
+still running. `collect_tagged_lines` gained a `tokio::select!` over the merged stdout/stderr stream
+plus a 150 ms flush interval, feeding a `ShellOutputBatcher` — 16 KB batches, a 256 KB live cap, the
+first line emitted immediately so the user sees something at once, and exactly one terminal
+`truncated: true` notification when the cap is hit. Chunks go out as a `goose/developer_shell_output`
+custom notification on a **best-effort `try_send`** emitter, with the reason stated in the code: do
+not let a slow notification consumer delay tool execution. The invariant is named by the regression
+test — `full_live_notification_channel_does_not_change_final_output` — so a saturated or absent
+display channel leaves the bytes entering the transcript **byte-identical**.
+
+**What inber should consider:** `engine/display.go:12-18` has `OnToolCall`, `OnToolResult`,
+`OnStatus` and `OnTextDelta` — a delta channel for *model text* but no mid-tool progress event — and
+`tool-store/tools/shell.go:57` uses `cmd.CombinedOutput()`, which buffers to exit, so a ten-minute
+build shows nothing until it finishes. Adding `OnToolProgress` is cheap; the two rules worth copying
+verbatim are the best-effort send (a blocked UI consumer must never stall the tool) and a test
+asserting the final tool result is unchanged, because the moment streaming and the transcript share
+a buffer, display back-pressure starts silently editing what the model sees. This is the display
+half of the shell/cancel contract written up in `cline.md` (07-31 §1), where the more urgent finding
+is that inber's interrupt endpoint cannot actually stop a running command.

@@ -182,3 +182,129 @@ the retry path. (c) **A long-blocked delegate should treat a mid-run credential 
 recoverable** — refresh and retry once before bubbling a failure the parent must hand back
 to a human. All three failure modes only appear once delegates run *long and parallel*,
 which is exactly inber's target regime.
+
+## Harness-watch — 2026-07-31: cancelling a turn must reach the *process group*, resume must restore the state *derived from* the transcript, and compaction should be a projection whose fingerprint ignores transport identity
+
+### 1. The shell/cancel contract — and inber's interrupt is wired to a context nothing observes
+
+Cline [PR 12696](https://github.com/cline/cline/pull/12696) found that `applyAbort` was exactly
+`process.continue()`: cancellation only *detached Cline's listeners* and the spawned process kept
+running. The fix adds `VscodeTerminalManager.sendInterrupt()`, which writes `\x03` (ETX, no newline)
+so the pty line discipline delivers **SIGINT to the foreground process group**, then detaches — and
+wraps the interrupt in try/catch, because cancellation must still succeed if the interrupt throws.
+[PR 12712](https://github.com/cline/cline/pull/12712) adds the other half: a
+`FOREGROUND_COMMAND_AUTO_PROCEED_MS = 300_000` timeout that turns the user's `detach()` into
+`requestDetach(reason: "user" | "timeout")`, and on timeout **returns a tool result to the model** —
+a sentence saying it auto-proceeded, the path of a log file still accumulating output, and the
+partial output so far. Goose [#10808](https://github.com/block/goose/pull/10808) completes the
+picture on the display side: `collect_tagged_lines` gained a `tokio::select!` with a 150 ms flush
+feeding a `ShellOutputBatcher` (16 KB batches, 256 KB live cap, first line emitted immediately, one
+terminal `truncated: true` notification), pushed as a `goose/developer_shell_output` notification on
+a **best-effort `try_send`** emitter ("do not let a slow notification consumer delay tool
+execution"). The regression test names the invariant:
+`full_live_notification_channel_does_not_change_final_output` — **streaming is a side channel; the
+tool result the model sees is byte-identical**.
+
+**What inber should consider:** inber is a strictly worse position than cline's *pre-fix* state,
+because it does not even detach. `engine/engine.go:228` calls `e.executeAgent(context.Background(), systemBlocks)`
+and `RunTurn` (`engine/engine.go:201`) takes no `context.Context` at all — meanwhile
+`server/session.go:116` does `ctx, s.cancel = context.WithCancel(ctx)` and `Session.interrupt()`
+(`:169-173`) calls `s.cancel()`. That derived context is stored and then **dropped**:
+`s.Engine.RunTurn(input)` at `server/session.go:139` never receives it. So `agent/agent.go:202`'s
+`ctx.Err()` check and the shell tool's `exec.CommandContext(ctx, …)` both observe a context that is
+never cancelled, and **the interrupt endpoint cannot stop a running turn or a running command**.
+Threading the caller's `ctx` through `RunTurn` is the single highest-value line here; without it the
+rest is unreachable. Then: `tool-store/tools/shell.go:51` runs `exec.CommandContext(ctx, "bash", "-c", c)`
+with no `SysProcAttr{Setpgid: true}` anywhere in either tree, so Go's default cancel kills only the
+direct child and orphans grandchildren — set the pgid and a `cmd.Cancel` that sends SIGINT to
+`-pgid` then SIGKILL after a grace period, and copy cline's discipline that a failed interrupt must
+not fail the cancellation. Set `cmd.WaitDelay` (go.mod is `go 1.25.0`): `shell.go:57` uses
+`CombinedOutput()`, which waits on the copy goroutines, so a grandchild holding the pipe's write end
+makes `Wait` block **indefinitely even after the kill**. Add cline's auto-proceed — a per-command
+wall-clock cap that returns partial output plus a log path plus "still running" to the model rather
+than erroring or blocking forever, which today is what `npm run dev` or `tail -f` does. And if
+streaming is added (`engine/display.go:12-18` has `OnTextDelta` for model text but no mid-tool
+progress event, so a ten-minute build shows nothing until it exits), take goose's two invariants
+verbatim: best-effort send, and a regression test asserting the final tool result is unchanged.
+
+### 2. Resume restores the transcript but not the state *derived from* the transcript
+
+Cline [PR 12713](https://github.com/cline/cline/pull/12713) is two mechanically distinct bugs with
+one theme. `local-runtime-host.ts:526` used `startInput.sessionMetadata ?? resumedArtifacts?.manifest.metadata`,
+so supplying *any* fresh metadata silently discarded **all** resumed manifest metadata; it became a
+per-key spread merge `{...resumed, ...startInput}`. And the checkpoint run counter was computed over
+the **webview** message list, which omits hidden mode-switch and resume prompts; it now recomputes
+over the **persisted SDK** list, counting every root user message except those tagged
+`metadata.kind === "recovery_notice"`. [PR 12769](https://github.com/cline/cline/pull/12769) is the
+mirror image — those same synthetic prompts must be *hidden* on rehydrate while still counting.
+
+**What inber should consider:** `engine/engine_new.go:142` restores `e.Messages` from
+`ws.LoadMessages()` and restores nothing derived from them. **`e.Turn.Counter` stays 0** (only write
+is `e.Turn.Counter++` at `engine/engine.go:202`), so `engine/turn_context.go:23`'s
+`if e.Turn.Counter == 0 { return 0, 4000 }` gives a resumed 200-message session the 4,000-token
+*first turn* memory budget, and the `Counter > 15` → 8,000 branch at `:34` is unreachable for the
+next fifteen turns. Worse, `engine/engine_new.go:571` reconstructs `e.staged` with **`FrozenIdx = 0`**
+regardless of how much history was just restored, so on the first post-resume turn
+`engine/lifecycle.go:91` treats the **entire restored history as the mutable staging zone** and
+prunes it in place, `:97`'s `FrozenIdx > 0` guard skips `CrossZoneDedup` entirely, and
+`saveMessages()` (`lifecycle.go:182`, via `turn_postprocess.go:39`) writes the rewritten array back
+over `messages.json`. Persist and restore `Turn.Counter` and `staged.FrozenIdx` alongside the
+transcript — the mechanism already exists, `engine/build.go:44-48` persists and reloads the prompt
+blueprint across invocations — and adopt cline's merge shape (resumed as base, fresh input overriding
+per key, never wholesale; `engine_new.go:571` is the `??`-equivalent today). Set
+`FrozenIdx = len(restoredMessages)` on resume so the restored prefix is not rewritten and re-saved.
+Separately, pick **one** turn clock for checkpoints: `engine/lifecycle.go:166` gates on
+`e.Turn.Counter` (once per `RunTurn`) but `session/checkpoint.go:61` stamps the checkpoint with
+`s.turn`, which `session/session_logging.go:109-114` increments **per API request**, so a five-tool
+turn advances one by 5 and the other by 1 and the stamped turn is not the turn that triggered the
+save. While there: `checkpointPath()` (`session/checkpoint.go:116`) is a fixed `checkpoint.json` and
+`pruneOldCheckpoints` (`:122-128`) is a no-op returning nil, so every save overwrites the previous
+one and `MaxCheckpoints: 5` is inert — implement it or drop it from the config. Finally, add cline's
+`metadata.kind` marker: inber injects synthetic user-role content at `agent/agent.go:228`
+(`[New message from user while you were working]`), `agent/agent.go:250` (`[BUDGET LIMIT REACHED]`)
+and `conversation/summarize.go:104-109` (the summary message plus a canned assistant ack), and after
+a round-trip through `messages.json` all three are indistinguishable from real user turns.
+
+### 3. Compaction as a projectable sidecar over an intact source — and never fingerprint transport identity
+
+Cline [PR 12747](https://github.com/cline/cline/pull/12747) fixed three separable rules.
+**(a) Never hash transport identity into a validity fingerprint:** `session-compaction.ts:75-99`
+dropped `id` and `ts` from `sourceMessageHashInput`, leaving role + content + durable metadata, and
+bumped the seed `-source-v1` → `-v2`. The stated cause is that the codec regenerates ids and
+timestamps on every storage round-trip — consolidated parallel tool results are "re-split with
+freshly minted ids on resume" — so projection failed for semantically identical prefixes, the
+sidecar was silently rejected *every turn*, and a full re-summarization (an extra LLM call) ran on
+every turn past the trigger. **(b) Validate persisted derived state against the exact source it was
+computed over:** `saveState` gained a `sourceMessages` parameter rather than falling back to
+`session.agent.getMessages()`, because mid-turn the conversation store "can legally differ from the
+runtime's working transcript, so validating against the store would spuriously reject the write."
+**(c) A stale-write guard must not be able to wedge:** the count-based staleness check now applies
+only when the stored state *still projects*, otherwise it falls back to comparing `updated_at` —
+previously an invalidated sidecar permanently blocked its own replacement.
+
+**What inber should consider:** inber cannot have cline's bug because it has no sidecar — compaction
+is **destructive and irreversible in the durable snapshot**. `engine/lifecycle.go:59` does
+`e.Messages = summarized`, and `saveMessages()` then overwrites both the workspace and session-dir
+`messages.json` with the post-summary array, while `session/resume.go:181-189` **prefers
+`messages.json`** and only falls back to the append-only `session.jsonl` — so the raw transcript
+exists on disk and is never the resume source. The only other copy is a *lazy* memory row
+(`conversation/summarize.go:56-65`, `IsLazy: true`) reachable only if the model calls `memory_expand`.
+This interlocks with the already-documented silent fallback: `conversation/summarize.go:86` replaces
+a failed LLM summary with `mechanicalSummary` (`conversation/summary_generation.go:73-126` — a
+word-frequency list of words longer than six characters), and that word list then **permanently
+replaces** the transcript. Keep `messages.json` as the source and store the compaction as a
+projectable derivation (boundary index + summary + a fingerprint of the source prefix) applied at
+request-build time; `conversation/staged.go`'s `FrozenIdx` is already the right shape for the
+boundary half. If that is adopted, rule (a) is load-bearing for inber specifically:
+`session/resume.go:17` **rewrites** tool IDs via `sanitizeToolID` and `:88-98`/`:123-133` **re-group**
+tool_calls and tool_results into single messages on the JSONL path, so a fingerprint over ids or
+block grouping would fail projection on literally every resume — the same failure cline shipped, and
+the compaction-side instance of the existing "a tool id must never become a correlation key for a
+message" rule. Fingerprint role + text content + durable metadata only, and version the seed. Rule
+(c) generalizes past compaction: any "don't clobber newer state" guard needs a validity precondition
+or an invalidated record deadlocks its own replacement. Independently, found while verifying:
+`conversation/message_utils.go:13-30` `findTurnBoundary` counts *every user-role message* as a turn,
+but in the Anthropic format tool-result batches are user-role messages — so `KeepRecentTurns: 8` can
+mean eight tool-result round-trips **inside one user turn**, and the split point can land past the
+user's actual request. `stripOrphanedToolResults` keeps the payload legal; the retention semantics
+are not what the config name says. Fix the count or rename the knob.

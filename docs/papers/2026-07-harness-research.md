@@ -900,3 +900,170 @@ independent arrival at "gate on the call, not on a projection of it".
   the existing "measured against unmatched baselines" caveat. OrchBench
   ([2607.25656](https://arxiv.org/abs/2607.25656)) and MemSecBench
   ([2607.27080](https://arxiv.org/abs/2607.27080)) are benchmark-only.
+
+## A prose skill is *described* to the runtime but never *encoded* in it — so 44% of its own mandated steps don't happen
+
+**SIGIL** ([2607.27309](https://arxiv.org/abs/2607.27309), 07-29) attacks the gap between a skill as
+an authored artifact and a skill as executed behavior. A SKILL.md is a prose procedure loaded into
+context and run by a tool-calling loop, so the model re-derives the control flow on every run and can
+silently skip mandated verification steps. SIGIL compiles the prose into an executable harness via
+**AG-IR**, a typed agentic intermediate representation that partitions each step into *model-owned
+cognition* (what genuinely needs a model) and *code-owned mechanism* (sequencing, verification,
+artifact checks); the compiled harness runs the procedure as program structure while still calling
+the model for the cognitive steps, and the prose authoring surface is unchanged. Across 30 skills and
+two model generations, a prose agent performs only **56%** of the steps its own skill mandates
+*while still producing artifacts that pass output checks* — the failure is invisible to output-level
+QA. Compiled harnesses reach **86%**, complete the full procedure **2.3×** as often, and use
+**0.58×** the tokens. The guarantee is model-independent: the harness holds at 86% across both model
+generations while prose swings 56% → 68%.
+
+**What inber should consider:** inber occupies both ends of this axis and has nothing in between.
+`engine/workflow_hooks.go` (161 lines: auto-commit, auto-format, smart-tests, verify-deployed, with
+`detectProject()` picking commands) is a *hand-written harness* — procedure as program structure,
+exactly SIGIL's target form. Everything else procedural is prose, and `grep -rniE "skill" --include=*.go`
+over the tree returns **zero hits**, so skill-store (:8301) hands SKILL.md prose to harnesses and
+inber's runtime encodes none of it. The 56% figure is directly testable against inber's own standing
+procedures — auto-ship (commit + push + run consumer `./deploy.sh`), "fix deploy.sh, don't work
+around it", "check skill-store before non-trivial tasks" — all of which live as prose with no runtime
+encoding, and the "disarm a landmine, don't document it" feedback note is an already-observed
+instance of the paper's failure mode: mandated step skipped, output still looked fine. The cheapest
+adoptable piece needs no compiler at all — **log per-run which mandated steps actually executed**.
+That measurement is the paper's whole contribution and costs about a day. The stronger version
+composes with the OO-Agents entry: AG-IR's model-owned/code-owned split is the same seam as
+schema-vs-handler, one level up. Pairs with a sharp negative result in the same window,
+**Do Context Files Help Coding Agents?** ([2607.27250](https://arxiv.org/abs/2607.27250), 07-28):
+288 runs over Claude Code and Codex on 17 tasks found AGENTS.md/CLAUDE.md strategy does **not** move
+correctness (bounded at ≤10–15pp by equivalence testing) because the failures are implementation
+skill, not missing repo knowledge. Two independent measurements of the same thing — prose in context
+does not reliably become behavior.
+
+## Taint tracking is unusable because it's permanent — branch the context instead of poisoning it
+
+**APPA** ([2607.24625](https://arxiv.org/abs/2607.24625), 07-27) is the missing half of the ActPlane
+recommendation already on file (07-13: "carry taint/provenance labels on prehook decisions"), which
+said what to carry but not how to avoid the utility collapse that keeps anyone from shipping dynamic
+information-flow control. Classic IFC permanently taints the agent's context the moment it reads
+unvetted data. APPA fixes the usability bottleneck two ways. **Prospective acquisition
+enforcement**: *before* the fetch happens, the engine evaluates the label descent and missing
+prerequisites and emits an actionable remedy plan (`Authorize`/`Accept`) instead of a post-hoc block.
+**Engine-managed context branching**: to inspect unvetted data without polluting the primary context,
+a **label-seeded child trajectory** is spawned, absorbs the label descent locally, and a trusted
+sanitizer returns a *bounded derivative* to the parent, whose label is unchanged. A two-monoid model
+over security labels plus shared event logs gives formal proofs of parent-label preservation and
+merge confinement. On a multi-turn tool-chaining benchmark across four models, exfiltration attack
+success drops from **31–50% to 0–7%**, and on three of four models branching recovers a substantial
+share of the utility plain taint tracking forfeits.
+
+**What inber should consider:** inber has **no provenance notion at all** —
+`grep -rniE "taint|provenance|untrusted" --include=*.go` returns zero hits, so web fetches, ingested
+skill-store repos and MCP tool output land in the same context at the same trust level as the user's
+own prompt. The branching primitive, though, is already built: `agent/registry/spawn_tool.go` spawns
+a named subagent and returns its output to the parent, which is structurally a child trajectory
+returning a bounded derivative. The change is to make an *untrusted read* route through it **by
+construction** — read the hostile file in a labeled child, return a sanitized summary — rather than
+reading it into the parent's context directly. Prospective (pre-acquisition) enforcement is also the
+right shape for inber's gate, which today adjudicates the *call* and not the *acquisition*; per the
+"What Can Be Enforced?" result already filed above, a stateless per-call matcher cannot express a
+flow policy at all, and a label descent is exactly the typed policy state that proof says the gate is
+missing. This also directly mitigates the Compaction-Eviction Attack recorded earlier
+([2606.22528](https://arxiv.org/abs/2606.22528)): if hostile file content never enters the parent
+context, it cannot bias the parent's summarizer.
+
+## Repository context as a *served, commit-versioned* system — and inber's index is a wired-in no-op
+
+**CodeNib** ([2607.25431](https://arxiv.org/abs/2607.25431), 07-28, UCSD) starts from the observation
+that coding agents rediscover the same repository facts repeatedly because indexes, language servers
+and task-local read histories are three disconnected things with no shared validity model. CodeNib
+builds **lexical, dense and structural views per repository commit**, maps every output to
+repository-relative source ranges, **maintains selected views incrementally across edits**, and serves
+ranked search, symbol navigation and bounded context through one runtime with **explicit,
+operation-specific validity boundaries** — which view is still trustworthy after which kind of edit.
+Over 100 snapshots, incremental graph and vector updates are **8.7×** and **25.4×** faster at the
+median than independent rebuilds at matching outputs; on the static-navigation subset matching live
+language-server locations (63% of 1,000 requests) the median live/static latency ratio is **4.7×**;
+and across five models, selected-context policies preserve localization with **50–87% fewer
+trajectory tokens than paired grep/read**.
+
+**What inber should consider:** that 50–87% baseline is literally inber's current design — the tool
+surface is `read_file`/`read_files`, `edit_file(s)`, `write_file(s)`, `shell_commands`
+(`engine/build_tools.go`), so the agent greps and reads and there is no served context path.
+`codeindex/codeindex.go` is worse than a stub, it is a **wired-in no-op**: `codeindex.Open` is called
+at `engine/engine.go:179`, the `*codeindex.Index` is a live field on the `Engine` struct
+(`engine.go:79`) and `Close` runs at `engine.go:328`, but `Search`, `RepoMap` and `Refresh` are
+**never called anywhere** and every method is a `// TODO: implement` returning nil. The stub's own
+doc comment encodes the assumption CodeNib measures as wrong — *"refreshed incrementally when files
+change (detected via mtime)"* — because mtime tells you a file changed but not which derived view is
+now invalid, whereas keying views to **commit** with per-operation validity makes staleness decidable.
+inber's three disconnected pieces are precisely the paper's three: `codeindex` (dead index),
+`agent/read_cache.go` (session-local path→turn cache that stubs re-reads) and
+`conversation/dedup_files.go` (path-keyed supersession in the transcript), none of which share a
+validity model — and `dedup_files.go:12-19`'s rule that partial reads never supersede each other
+means N offset/limit reads of one file all survive at full size. This composes with CORVUS above:
+CORVUS says inject *current* file contents each cycle, CodeNib says how to keep the index behind that
+injection valid across edits cheaply. Same cache-placement constraint applies — a commit-keyed served
+block whose bytes change must sit after the last `cache_control` breakpoint
+(`engine/turn_prompt.go:56,70`). Adjacent and worth a look if a fourth is wanted: **VITAL-RAG**
+([2607.26937](https://arxiv.org/abs/2607.26937), 07-29) groups evidence by canonical *code object*
+rather than by path, admitting a companion fragment only when it adds semantics, under per-object and
+global token budgets — RepoBench Recall@4K 39.59% → 63.67% with evidence tokens down 35.63%. It lands
+on the same `conversation/dedup_files.go` weakness from the other direction.
+
+## Canonicalize the command before you judge it — a static-first shell verifier, and the answer to the representation-attack margin
+
+**CARE** ([2607.21642](https://arxiv.org/abs/2607.21642), 07-21) is a shell-command verifier built
+static-first: canonicalize the command, gather deterministic evidence over syntax, semantics, path
+context and provenance risk patterns, and **escalate only the underdetermined cases** to an LLM
+judge. It reports **85.64% F1 at 0.91% FPR in 2.32 ms**, with a static-only profile at 84.99% F1 and
+**0.34 ms**, and 37.33% realised harm on RedCode-gen. It sits just inside the previously-swept band
+and was not in the earlier rejected list, so it is logged here rather than skipped.
+
+**What inber should consider:** this is the practical instrument for the open
+`PERMISSION-STORE GATE OPEN` issue, and the canonicalization step is the direct answer to the
+**representation-attack margin** in "What Can Be Enforced?" above. That proof says an allow predicate
+keyed on surface text is defeated by a rename; CARE's response is to not judge surface text at all —
+normalize first, then evaluate deterministic evidence, which is the third independent arrival at
+"gate on the call, not on a projection of it" (with goose's "gates must see executable bytes" being
+the second). The user-level `^curl\b` allow at priority 200 is exactly the predicate class CARE
+replaces. Two caveats worth stating before anyone builds on it: the 0.34 ms static profile makes this
+cheap enough to run on *every* command rather than as an escalation, which matters because inber's
+gate has no state to amortize a decision into; and CARE is still a per-call verifier, so it inherits
+the register-model ceiling — it improves the *predicate*, it does not give the gate the history or
+counters that rate limits and cumulative spend caps require. **This remains the user's pending
+decision; recorded as the upstream mechanism to consider, not applied.**
+
+## Also in-window, logged not written up (07-31 sweep)
+
+- **Role-Stratified Conformal Risk Control for Tool Calls** ([2607.24343](https://arxiv.org/abs/2607.24343),
+  07-27) — calibrates risk per *semantic role* within an action instead of over the whole action;
+  formally right about inber's whole-command-regex gate, but the abstract reports only the
+  price-of-coarseness relation and "most consistent compliance", no headline deltas.
+- **HALO** ([2607.27636](https://arxiv.org/abs/2607.27636), 07-30) — per-component admission with
+  declared prerequisites and a recheck of each exact action immediately before dispatch; 248/248
+  components retained vs 0/248 for whole-response gating. Real mechanism, but evaluated on
+  conformance suites and PX4/Gazebo drone sessions with no coding-agent numbers.
+  **EBTE** ([2607.25364](https://arxiv.org/abs/2607.25364), 07-28) is the same cluster,
+  conformance-only, and overlaps the authority thread already covered.
+- **Filesystem-Based Memory** ([2607.26637](https://arxiv.org/abs/2607.26637)) — a study rather than
+  a mechanism, but one line belongs in the memory docs: *changing the tool set alone reshapes the
+  memory store as strongly as swapping the model*.
+- **Is Progressive Disclosure All You Need** ([2607.17598](https://arxiv.org/abs/2607.17598), 07-20)
+  — clean negative: a *second* routing level never helps; one level is enough.
+- **Rejected, memory-transaction thread already occupied:** ChronoMem
+  ([2607.27773](https://arxiv.org/abs/2607.27773)) and MemTxn ([2607.27834](https://arxiv.org/abs/2607.27834))
+  are both the same fix as MemTX 2607.23929, already logged as a follow-on to the self-state-attack entry.
+- **Rejected, needs model internals or training:** Speculate While You Reason
+  ([2607.25816](https://arxiv.org/abs/2607.25816)), SemPIC ([2607.28069](https://arxiv.org/abs/2607.28069)),
+  HiKV ([2607.22389](https://arxiv.org/abs/2607.22389)), Error Certificates for KV-Cache Eviction
+  ([2607.21475](https://arxiv.org/abs/2607.21475)), LOCKS ([2607.24555](https://arxiv.org/abs/2607.24555))
+  — all serving/KV-layer, unreachable behind the `claude` CLI.
+- **Rejected under the self-evolving-harness caveat:** DREvo ([2607.26722](https://arxiv.org/abs/2607.26722)),
+  SKIMIX ([2607.27994](https://arxiv.org/abs/2607.27994)), Agent Harness Distillation
+  ([2607.28147](https://arxiv.org/abs/2607.28147)), RSIBench-Data ([2607.25886](https://arxiv.org/abs/2607.25886)).
+- **Rejected, benchmark or survey only:** ORCA-bench, SWE-NFI, AgentS4D, WorkBuddy Bench,
+  HANDBOOK.md, Keep It InMind, MemTools, E-Bench, WorkSurface-Bench, ContainmentBench, and
+  Ground Truth First ([2607.21962](https://arxiv.org/abs/2607.21962) — whose memory-architecture
+  *tenure crossover* at 96%→72% vs 90% is a real finding, but the paper is an evaluation instrument).
+- **Notably absent this window:** no new *prompt-caching / prefix-cache-aware prompt assembly* paper
+  at the harness level — every cache result was serving-side KV work inber cannot reach, repeating
+  the 07-13 observation. Nothing on **session resumption** either, which is where this week's cline
+  findings landed instead.

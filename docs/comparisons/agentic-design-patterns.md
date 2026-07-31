@@ -2003,3 +2003,127 @@ changes" without naming a single path. Render all roots and mark the primary. Th
 already exists and is nearly empty: `e.Turn.VolatileContext` is the structural twin of codex's
 user-role `<environment_context>` fragment — same role, same once-per-turn placement, same
 post-cache-boundary position — and it currently carries only fleet status and injectors.
+
+## Harness-watch — 2026-07-31: a tool registry needs *two* registration policies (host strict, external first-wins), an in-flight delegation is its own retention class, and a call nested inside another call's arguments still needs a typed record
+
+### 1. Dedup is a registration policy, not a render-time filter — and host tools are reserved before the model-visible list is built
+
+codex [#36127](https://github.com/openai/codex/pull/36127) rewrote `ToolRegistry` from a `HashMap`
+to an insertion-ordered `IndexMap` with three entry points that differ only in collision policy:
+`register_trusted` (occupied ⇒ hard error, *"tool {name} already registered"*), `prepend_trusted`
+(same strictness, `shift_insert(0, …)` so host runtimes iterate first), and `register_external`
+(occupied ⇒ `warn!("skipping duplicate external tool")` and return `false` — **first registration
+wins, so no MCP, extension or dynamic tool can displace an incumbent**). Overriding a host tool is
+legal only through an explicit `remove()`, which `finalize_tool_router` uses to *reserve* names: it
+deletes any client-supplied `tool_search` definition and re-registers the host implementation at
+position 0. The old `HashSet<ToolName> seen_tool_names` dedup inside
+`build_model_visible_specs_and_registry` was deleted outright — dedup moved from "filter when
+rendering" to "policy at registration". [#36129](https://github.com/openai/codex/pull/36129) adds
+the corollary for *derived* namespaces: code-mode normalizes each tool name, so two distinct raw
+names can collapse onto one identifier; codex keeps a first-wins `BTreeMap<normalized, ToolName>`,
+warns on the loser, and gates the model-facing augmentation on `winner == tool_name` so the shadowed
+tool keeps its plain spec instead of being advertised under a name that will dispatch elsewhere.
+
+**What inber should consider:** inber has the same surface with the policy inverted, and a live
+collision today. `engine/engine_new.go:498-511` ("Merge server-injected tools (replace same-named)")
+linearly scans `e.agentTools` and **unconditionally overwrites any host tool an externally-supplied
+`cfg.ExtraTools` entry happens to name**; there is no trusted/external distinction anywhere.
+That path is in production — `server/agent_tools.go:7-33` feeds `ExtraTools` via
+`server/session_creation.go:52`, and `server/spawn_tools.go:76` declares `Name: "spawn_agent"`, the
+*same name* as `agent/registry/spawn_tool.go:90`, which `engine/build_tools.go:89-93` registers
+whenever an agent config lists `spawn_agent`. Two implementations of one tool, and which survives is
+decided by the order of two loops. codex's `register_trusted` would have aborted at startup. Worse,
+inber has name-load-bearing control flow with no protection: `agent/agent_run.go:33` skips
+`then`-chain injection iff `t.Name != "end_turn"`, and `engine/build_tools.go:52,114,125` swap in
+`ShellInDir` iff the name is `shell`/`shell_commands` — so an `ExtraTools` entry named `end_turn`
+replaces the turn-termination tool while the special-case still keys off the name. Every registry is
+documented last-write-wins (`tools/interface.go:42-46`, `agent/registry/tools.go:56-58`), nothing
+dedups the final slice (`engine/build_tools.go:20-41` appends with no seen-set;
+`agent/agent_run.go:29-49` pushes *every* element into `toolParams` while `toolMap[t.Name]` keeps
+only the last, so a duplicated config name puts two definitions on the wire and dispatches to the
+second), and `tools/mcp/adapter.go:74-89` concatenates every client's tools with no name check while
+iterating a Go **map** — nondeterministic order, latent only because that package has zero
+importers. Adopt the split: host/core registers strictly (duplicate = startup error), server-injected
+and MCP register first-wins-with-warning, and a genuine override is an explicit `remove()` +
+re-register so it is declared rather than emergent. Reserve `end_turn`, `shell_commands` and
+`spawn_agent` before the model-visible list is built. Take #36129's corollary *before* adding any
+name mapping: inber has no tool-name normalization yet, but it already has the same shape one level
+down — `sanitizeToolID` (`agent/openai_utils.go:10-25`, copy-pasted into `session/resume.go:17-23`)
+is a **lossy many-to-one map** applied to tool-use IDs with no collision check on either side, so two
+colliding IDs in one turn produce duplicate `tool_use` IDs and mispaired `tool_result`s.
+
+### 2. An in-flight delegation is its own retention class — keep the task, drop the completion, bound both by tokens
+
+codex [#36128](https://github.com/openai/codex/pull/36128) stopped letting inter-agent traffic fall
+through the generic message arm of remote compaction. `is_retained_for_remote_compaction_v2` now
+retains a `ResponseItem::AgentMessage` iff it is **not a completion** (detected by the literal
+`"Message Type: FINAL_ANSWER\n"` prefix) **and** its `estimate_item_token_count` is within the new
+`MAX_RETAINED_AGENT_MESSAGE_TOKENS = 10_000`. Three supporting edits make the accounting honest:
+`message_text_token_count` stopped returning `0` for non-`Message` items (agent messages had been
+counted as free), the encrypted-output estimator learned to walk `AgentMessageInputContent::EncryptedContent`,
+and the truncation helper's non-`Message` fallback flipped from `Some(item)` to `None`. Separately,
+`agent/control/spawn.rs:696` strips **all** `AgentMessage` items when forking a child — delegation
+chatter is parent-scoped and is not inherited. The rule underneath: *what you delegated* is small,
+high-value and must survive a context reset; *what came back* is redundant once summarized; and both
+need a token bound so one huge child message cannot eat the retained budget.
+
+**What inber should consider:** inber's pruning is uniform and age-based, and it destroys exactly the
+delegation record. `conversation/manage_tool_pruning.go:63-82` replaces a `tool_use` block's entire
+`Input` with a **60-character** `_summary` string, for every tool alike, once `age > cfg.ToolCallKeepFull`
+— and `ToolCallKeepFull` is **5** in all four role configs (`conversation/manage_config.go:51,77,103,129`),
+fired from `conversation/manage.go:129-137,148-155`. The matching result is dropped outright at
+`age >= cfg.ToolResultDrop` (8 turns for the orchestrator). Meanwhile inber's `spawn_agent` is
+explicitly **fire-and-forget** (`agent/registry/spawn_tool.go:71-73`: *"Purely declarative… Always
+async — returns immediately"*), so the `spawn_agent` tool-use input is **the only in-context record
+of an outstanding delegation** — no completion ever arrives in-band to re-establish it. Six turns
+after delegating, an inber orchestrator's memory of the task it handed off is a 60-character prefix;
+nine turns after, the ack reads `[result dropped - too old]`. Give `manage.go`'s loop a retention
+*class* rather than age alone and make delegation its first member: exempt `spawn_agent` (and any
+future `steer_agent`/`merge_workspace`) inputs from `truncateToolCall`, bounded by **tokens** — 10k
+is codex's shape — not by a fixed 60 bytes. The asymmetry is currently backwards: inber ages out the
+cheap irreplaceable record on the same clock as a 5,000-line shell dump. Two incidental defects in
+the same function: `truncateToOneLine` (`conversation/manage_text_utils.go:20`) cuts with `text[:maxLen]`,
+a **byte** slice, so a multibyte task description puts invalid UTF-8 in the prompt (the rune-boundary
+rule from the 07-29 entry, now with a live inber instance), and `fmt.Sprintf("%v", toolUse.Input)` on
+a map has nondeterministic key order, so the same call summarizes differently across runs. The fork
+half has no inber equivalent yet, but it is the rule to adopt if `server/session_forking.go` ever
+hands a child the parent's messages.
+
+### 3. A tool call nested inside another tool's arguments needs a typed attempted-call record — including the ones that were blocked, malformed, or never ran
+
+codex [#36181](https://github.com/openai/codex/pull/36181) added `core/src/tools/executed_tool_calls.rs`,
+which records every tool call the model *attempted* — including **blocked and failed** ones, and
+including calls issued from inside a code-mode cell that never appear as first-class tool-call items.
+`attach_pending_to_prompt` walks the outgoing prompt in reverse, matches `FunctionCallOutput` /
+`CustomToolCallOutput` / `ToolSearchOutput` by `call_id`, and appends the recorded
+`ExecutedToolCall { name, arguments }` list to that output item. Three details are the transferable
+part. **Retry stability:** a `retry_cache` keyed on `(std::mem::discriminant(item), call_id)` lives
+outside the loop, so a resampled request re-attaches *identical* metadata instead of double-appending
+or losing it — idempotence by construction. **Bounded three ways, with the overflow named:** 256
+pending calls, 8 KiB of arguments per call, 32 KiB per output; on overflow it emits
+`ExecutedToolCall::truncated(name, original_bytes, max_bytes)`, so the **name always survives** and
+the cap is reported, and even at the hard limit it records a zero-byte truncated entry rather than
+dropping the call. **Honest scope:** the doc comment concedes that cancellation, compaction and
+yielded cells can leave pending calls unreported, and the whole thing is opt-in behind a feature flag.
+
+**What inber should consider:** inber has exactly this shape and keeps no record at all — the `then`
+chain. `agent/chain.go:57-74` injects a `then: {tool, input}` field into every tool schema except
+`end_turn`, so the model requests a follow-up tool *inside another tool's arguments*, and
+`executeWithChain` (`:117-172`) runs it. `extractChain` (`:84-113`) **deletes** `then` before
+dispatch and, if the field fails to unmarshal or `ct.Tool == ""`, returns `(cleanInput, nil)` — the
+requested follow-up **silently never runs**, with no error and nothing in the tool result telling the
+model its chain was dropped. An unknown chained tool appends `"\n\n--- then(X) error: unknown tool ---"`
+to the text and returns **`isError=false`** (`:148-151`) — a failed call the turn does not record as
+an error. On success `:166-172` concatenates `primaryOutput + "\n\n--- then(X) ---\n" + chainOutput`,
+so the chained tool's identity and outcome exist only as a delimiter in free text — the same
+delimiter a tool's own output could contain — and one `tool_use` block in the transcript stands for
+two executions. The asymmetry is visible in inber's own code: hooks *do* fire for the chained call
+with a synthetic `blockID+"-chain"` (`:153-155,162-164`), so the trace/UI layer gets a structured
+record of the nested execution and the model gets a string. Attach a typed `{name, arguments, status}`
+record to the tool result the chain rode in on, produced locally and never parsed back out of text;
+make the silent-drop path at `chain.go:108-110` a *recorded* outcome (`chain_dropped: malformed`),
+since a follow-up the model asked for and never got is precisely the case that must not be invisible;
+make `:148-151` return `isError=true`; bound the recorded arguments and emit a named truncation
+rather than dropping. The 07-29 entry already covers typed truncation records in general — what is
+new here is the contract for **nested calls that have no tool-call item of their own**, plus the
+retry-cache idempotence, neither of which applies to the sites that entry named.
