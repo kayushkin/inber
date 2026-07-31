@@ -155,22 +155,7 @@ func NewEngineBenchmark(cfg EngineConfig) (*Engine, BenchmarkTiming, error) {
 	// Phase 9: Build and configure tools
 	phaseStart = time.Now()
 	if !cfg.NoTools {
-		e.agentTools = e.buildTools()
-
-		// Append gateway-injected tools (replace same-named tools)
-		for _, extra := range cfg.ExtraTools {
-			replaced := false
-			for i, t := range e.agentTools {
-				if t.Name == extra.Name {
-					e.agentTools[i] = extra
-					replaced = true
-					break
-				}
-			}
-			if !replaced {
-				e.agentTools = append(e.agentTools, extra)
-			}
-		}
+		e.agentTools = mergeExtraTools(e.buildTools(), cfg.ExtraTools)
 		
 		// Load tool registry into memory
 		if err := loadToolsIntoMemory(e.MemStore, e.agentTools); err != nil {
