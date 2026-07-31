@@ -134,6 +134,17 @@ followed on its own, with `redact/`.)
    defects had to be fixed together — a cap with no running total, or a total
    with no cap, is still a limit that never fires. What is left here is scope,
    not enforcement: the cap is checked between turns, one session at a time.
+   **A third limit had the same shape and was fixed the same way, `0f9d3de`:**
+   `MaxDuration` was declared on `guard.Config`, listed in the package doc as one
+   of the four hard stops, and enforced nowhere — `CheckLimits` carried a TODO
+   where the comparison belonged, and the start time that TODO named was never
+   written by anything. It was worse off than `MaxCost`, which at least reached
+   the API before being dropped: `MaxDuration` had no hops to be dropped at,
+   because nothing outside `guard` had ever declared it. It now arrives as
+   `max_duration` on `RunRequest` and travels the route every other limit takes,
+   with its elapsed total persisted beside the dollar total so a rebuild does not
+   hand the deadline back. Same scope caveat as the cost cap: checked between
+   turns, so it refuses the next one rather than stopping work in flight.
 3. ~~**Privacy — any egress redaction at all.**~~ **Done, `redact/`.** It was the
    cheapest high-severity fix on this list and it stayed cheap: one package and
    four one-line installs. Two things were worth more than the patterns. First,
