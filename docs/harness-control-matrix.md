@@ -43,6 +43,15 @@ on the hot path and that silently do nothing.**
 - `codeindex/` — `Open()` returns an empty struct; `Search`/`RepoMap` are TODO and
   never called.
 
+A fifth belongs on that list, found while closing the Git Control row: **`engine/`'s
+auto-workflow hook is dead too, and unlike the four above it used to work.**
+`WorkflowHooks.OnToolResult` returns on its first line unless the tool is named
+`write_file` or `edit_file`, and inber registers `write_files` and `edit_files`.
+Auto-format, build-and-test-on-write and the per-file auto-commit have all been
+unreachable since the rename — see the Verify row and todo `af237d64`. What kept
+running was the *un*guarded half: the close-time `git add -A` + push, which is the
+Git Control row.
+
 They appear in neither `ARCHITECTURE.md` nor `BACKLOG.md` (which has 88 `[x]` and
 zero `[ ]` — it is a refactor log, not a product backlog). They are doc comments
 describing systems that were never built, wired into `RunTurn` so they read as
@@ -61,7 +70,7 @@ Tally: **0 COVERED · 27 PARTIAL · 12 ABSENT**.
 | Evidence | ABSENT | — | all |
 | Fallback | PARTIAL | `engine/failover.go:selectModel/fallbackChain` | retry policy; warm standby; tier cap. The fast-fail timeout **is computed then discarded** — `turn_execute.go:18` drops the second return value and the ctx gets no deadline |
 | File Navigation | PARTIAL | tool-store `repo_map`/`recent_files` | `codeindex/` is a stub (above). No ownership graph, capability map, path cache, incremental reindex |
-| Git Control | PARTIAL | `engine/workflow_git.go`; `forge` via `server/forge_iface.go` | branch leases; risk scoring; **main-write gate** — `finishSessionGit` auto-`git push`es the current branch, including main, at session close; CI gating; conflict prediction |
+| Git Control | PARTIAL | `engine/workflow_git.go`; `forge` via `server/forge_iface.go` | branch leases; risk scoring; CI gating; conflict prediction. ~~**main-write gate** — `finishSessionGit` auto-`git push`es the current branch, including main, at session close~~ **fixed, `5e0db0e`** — it had fired 48 times on this repo's own main and 64 times across five repos here. The gate asks origin which branch it calls default (`ls-remote --symref`, not the local `refs/remotes/origin/HEAD`, which 57 of 78 repos on this host do not have) and refuses it, and refuses unknown too, unless `AutoWorkflowConfig.PushToDefaultBranch` is set. Two more holes on the same line: `finishSessionGit` ignored `autoCommit`, so turning auto-commit off left the bigger commit armed, and the `git add -A` error was discarded. **What is left here is that the push only ever reaches a branch that already tracks one** — the unpushed-commit count is `rev-list @{u}..`, which fails outright on a branch created during the session, so the branch this path pushed in practice was the shared one |
 | Goal | ABSENT | — | all. Spawn `Task` is a free-form string; no objective schema |
 | **Guardrails** | **ABSENT** | `guard/guard.go` (stub) | **everything.** No tool gate of any kind on a harness whose `shell_commands` is `bash -c` with the full `os.Environ()` |
 | Health Monitor | PARTIAL | `server/session_reaper.go`; `session/db_sessions.go:DetectInterrupted` (PID liveness) | heartbeat; stall detection; anomaly window; auto-recovery; alert routing; probe backoff |
@@ -92,7 +101,7 @@ Tally: **0 COVERED · 27 PARTIAL · 12 ABSENT**.
 | Tools | PARTIAL | per-agent allowlist; `engine/build_hooks.go:buildLimitCheck` | parallel safe calls (`agent_run.go:224` is a strictly sequential loop); tool-result cache (`read_cache.go` is a *re-read suppressor*, not a result cache); a real tool-call ceiling — `maxAPICalls=50` caps round-trips, not tool calls, so one response carrying 30 `tool_use` blocks runs all 30 |
 | Trace | PARTIAL | `session/timeline*.go`, `db_turns.go`, `jsonl.go`, `logstack.go` — *not* `trace/` | `trace/` is dead (above). Missing: payload hash; evidence; trace schema config; sampling; retention; async write |
 | Trust | ABSENT | — | all. model-store "health" is liveness, not trust |
-| Verify | PARTIAL (thin) | `engine/workflow_build.go:buildAndTest{Go,Node,Rust}` — injects test failures back into the conversation | verification checks (hardcoded per-language); evidence schema; sampling; risk tiering. No provider/route/response verification at all |
+| Verify | **ABSENT in practice** | `engine/workflow_build.go:buildAndTest{Go,Node,Rust}` — written to inject test failures back into the conversation, but unreachable | **`WorkflowHooks.OnToolResult` returns immediately unless the tool is named `write_file` or `edit_file`, and the tools inber registers are `write_files` and `edit_files`** (`tools/tools.go:74-75` → tool-store `tools/fs.go:158,210`). Nothing has matched since the rename, so auto-format, build-and-test-on-write, and the per-file auto-commit are all dead, and `h.changedFiles` is always empty — which is why `FinishSession` never reports a file count and why the last `Create X`/`Update X` commit in this repo is dated 2026-03-02 against 48 `auto: session work` sweeps after it. Re-arming it is a live behaviour change (a full build and test after every write, on every session), so it is filed rather than fixed: todo `af237d64`. Beyond that: verification checks (hardcoded per-language); evidence schema; sampling; risk tiering. No provider/route/response verification at all |
 
 ## Ranked build list
 
