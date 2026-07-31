@@ -45,16 +45,46 @@ type ToolInfo struct {
 	InputSchema anthropic.ToolInputSchemaParam `json:"inputSchema"`
 }
 
-// Client manages communication with an MCP tool server
+// defaultResponseTimeout bounds a single call when its context carries no
+// deadline of its own.
+const defaultResponseTimeout = 30 * time.Second
+
+// jsonrpcMessage is a line read from the server before we know what it is. A
+// reply to one of our requests carries an id and no method; a request or
+// notification the server sent us carries a method.
+type jsonrpcMessage struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      string          `json:"id"`
+	Method  string          `json:"method"`
+	Result  json.RawMessage `json:"result"`
+	Error   *MCPError       `json:"error"`
+}
+
+// Client manages communication with an MCP tool server.
+//
+// One goroutine owns the server's output: it reads every line and hands each
+// reply to the call that is waiting for that request id. A call therefore never
+// reads the stream itself, so it cannot consume a reply belonging to another
+// call in flight, and its deadline bounds the whole wait rather than one read
+// off a stream that may never produce another line.
 type Client struct {
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	stdout    io.ReadCloser
-	stderr    io.ReadCloser
-	scanner   *bufio.Scanner
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+	stderr io.ReadCloser
+
 	mu        sync.Mutex
 	requestID int
-	tools     map[string]ToolInfo
+	// waiters holds one channel per request that has been sent and not yet
+	// answered, keyed by request id. A waiter is registered before the request
+	// is written, so no reply can arrive with nowhere to go.
+	waiters map[string]chan *MCPResponse
+	tools   map[string]ToolInfo
+	readErr error
+
+	// readerDone closes when the reading goroutine stops, which is the only
+	// thing that can free a waiter the server never answers.
+	readerDone chan struct{}
 }
 
 // NewClient creates a new MCP client that spawns the given command
@@ -90,14 +120,8 @@ func NewClient(command []string) (*Client, error) {
 		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
 
-	client := &Client{
-		cmd:     cmd,
-		stdin:   stdin,
-		stdout:  stdout,
-		stderr:  stderr,
-		scanner: bufio.NewScanner(stdout),
-		tools:   make(map[string]ToolInfo),
-	}
+	client := newClientOverStreams(stdin, stdout, stderr)
+	client.cmd = cmd
 
 	// Initialize the MCP connection
 	if err := client.initialize(); err != nil {
@@ -106,6 +130,96 @@ func NewClient(command []string) (*Client, error) {
 	}
 
 	return client, nil
+}
+
+// newClientOverStreams wires a client to an already-open pair of streams and
+// starts the goroutine that reads the server's replies. It exists so the
+// transport can be exercised without spawning a process.
+func newClientOverStreams(stdin io.WriteCloser, stdout io.ReadCloser, stderr io.ReadCloser) *Client {
+	client := &Client{
+		stdin:      stdin,
+		stdout:     stdout,
+		stderr:     stderr,
+		waiters:    make(map[string]chan *MCPResponse),
+		tools:      make(map[string]ToolInfo),
+		readerDone: make(chan struct{}),
+	}
+	go client.readResponses()
+	return client
+}
+
+// readResponses reads the server's output for the life of the client and
+// delivers each reply to the call waiting for it. It returns only when the
+// output ends, which frees every call still waiting.
+func (c *Client) readResponses() {
+	scanner := bufio.NewScanner(c.stdout)
+	for scanner.Scan() {
+		c.deliver(scanner.Bytes())
+	}
+
+	err := scanner.Err()
+	if err == nil {
+		err = io.EOF
+	}
+
+	c.mu.Lock()
+	c.readErr = err
+	c.mu.Unlock()
+	close(c.readerDone)
+}
+
+// deliver routes one line of server output to the call that asked for it.
+func (c *Client) deliver(line []byte) {
+	var message jsonrpcMessage
+	if err := json.Unmarshal(line, &message); err != nil {
+		// Not JSON: some servers log to stdout alongside the protocol.
+		return
+	}
+	if message.Method != "" {
+		// A request or notification of the server's own. We advertise no
+		// capabilities that would prompt one and do not answer them.
+		return
+	}
+	if message.ID == "" {
+		return
+	}
+
+	c.mu.Lock()
+	waiter, waiting := c.waiters[message.ID]
+	if waiting {
+		delete(c.waiters, message.ID)
+	}
+	c.mu.Unlock()
+
+	if !waiting {
+		// The only reply that can arrive with no waiter is one for a call that
+		// already gave up and reported its own timeout. Request ids are never
+		// reused, so nothing else will ever claim it.
+		return
+	}
+
+	waiter <- &MCPResponse{
+		JSONRPC: message.JSONRPC,
+		ID:      message.ID,
+		Result:  message.Result,
+		Error:   message.Error,
+	}
+}
+
+// abandonWaiter drops a request's waiter, so a reply that arrives after the
+// call has given up is discarded rather than left in the map forever.
+func (c *Client) abandonWaiter(id string) {
+	c.mu.Lock()
+	delete(c.waiters, id)
+	c.mu.Unlock()
+}
+
+// readError reports why the server's output ended. Only meaningful once
+// readerDone is closed.
+func (c *Client) readError() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.readErr
 }
 
 // initialize performs the MCP handshake and discovers available tools
@@ -157,9 +271,13 @@ func (c *Client) initialize() error {
 
 // call sends a JSON-RPC request and waits for a response
 func (c *Client) call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+	// Register the waiter before the request goes out, so a reply that comes
+	// back immediately still has somewhere to land.
+	waiter := make(chan *MCPResponse, 1)
 	c.mu.Lock()
 	c.requestID++
 	id := fmt.Sprintf("%d", c.requestID)
+	c.waiters[id] = waiter
 	c.mu.Unlock()
 
 	request := MCPRequest{
@@ -171,11 +289,12 @@ func (c *Client) call(ctx context.Context, method string, params interface{}) (j
 
 	// Send request
 	if err := c.sendRequest(request); err != nil {
+		c.abandonWaiter(id)
 		return nil, fmt.Errorf("failed to send MCP request: %w", err)
 	}
 
 	// Wait for response
-	response, err := c.waitForResponse(ctx, id)
+	response, err := c.waitForResponse(ctx, id, waiter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to wait for MCP response: %w", err)
 	}
@@ -217,42 +336,37 @@ func (c *Client) sendRequest(request MCPRequest) error {
 	return nil
 }
 
-// waitForResponse reads from stdout until it finds a response with the given ID
-func (c *Client) waitForResponse(ctx context.Context, id string) (*MCPResponse, error) {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		deadline = time.Now().Add(30 * time.Second) // Default timeout
+// waitForResponse waits for the reading goroutine to hand over the reply to the
+// given request. The wait ends on the reply, on the caller's context, on the
+// deadline, or when the server's output ends — never on another call's traffic.
+func (c *Client) waitForResponse(ctx context.Context, id string, waiter <-chan *MCPResponse) (*MCPResponse, error) {
+	// One clock, so there is never a question of which bound ended the wait: the
+	// caller's deadline if it brought one, ours otherwise.
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultResponseTimeout)
+		defer cancel()
 	}
 
-	for time.Now().Before(deadline) {
+	select {
+	case response := <-waiter:
+		return response, nil
+
+	case <-ctx.Done():
+		c.abandonWaiter(id)
+		return nil, fmt.Errorf("gave up waiting for response to request %s: %w", id, ctx.Err())
+
+	case <-c.readerDone:
+		// The reply may have been delivered in the instant before the output
+		// ended; prefer it over the end-of-output error.
 		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		case response := <-waiter:
+			return response, nil
 		default:
 		}
-
-		if !c.scanner.Scan() {
-			if err := c.scanner.Err(); err != nil {
-				return nil, fmt.Errorf("failed to read response: %w", err)
-			}
-			return nil, fmt.Errorf("unexpected end of output")
-		}
-
-		line := c.scanner.Bytes()
-		var response MCPResponse
-		if err := json.Unmarshal(line, &response); err != nil {
-			// Skip non-JSON lines (might be stderr output)
-			continue
-		}
-
-		if response.ID == id {
-			return &response, nil
-		}
-		// This response is for a different request, ignore it for now
-		// (in a full implementation we'd buffer these)
+		c.abandonWaiter(id)
+		return nil, fmt.Errorf("MCP server output ended while waiting for response to request %s: %w", id, c.readError())
 	}
-
-	return nil, fmt.Errorf("timeout waiting for response")
 }
 
 // CallTool executes a tool with the given name and input
@@ -325,6 +439,12 @@ func (c *Client) Close() error {
 	}
 	if c.stderr != nil {
 		errs = append(errs, c.stderr.Close())
+	}
+
+	// Closing the output ends the reading goroutine, which releases every call
+	// still waiting for a reply. Wait for it so no goroutine outlives Close.
+	if c.readerDone != nil {
+		<-c.readerDone
 	}
 
 	if c.cmd != nil {
