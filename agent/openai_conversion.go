@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/internal/toolid"
 )
 
 // ConvertAnthropicToolsToOpenAI converts Anthropic tool definitions to OpenAI function format.
@@ -218,7 +219,7 @@ func ConvertOpenAIResponseToAnthropic(resp *OpenAIResponse) *anthropic.Message {
 	for _, tc := range msg.ToolCalls {
 		content = append(content, anthropic.ContentBlockUnion{
 			Type:  "tool_use",
-			ID:    sanitizeToolID(tc.ID),
+			ID:    toolid.Sanitize(tc.ID),
 			Name:  tc.Function.Name,
 			Input: json.RawMessage(tc.Function.Arguments),
 		})
@@ -263,14 +264,14 @@ func SanitizeMessageToolIDs(messages []anthropic.MessageParam) []anthropic.Messa
 		for j := range messages[i].Content {
 			block := &messages[i].Content[j]
 			if block.OfToolUse != nil {
-				clean := sanitizeToolID(block.OfToolUse.ID)
+				clean := toolid.Sanitize(block.OfToolUse.ID)
 				if clean != block.OfToolUse.ID {
 					block.OfToolUse.ID = clean
 					dirty = true
 				}
 			}
 			if block.OfToolResult != nil {
-				clean := sanitizeToolID(block.OfToolResult.ToolUseID)
+				clean := toolid.Sanitize(block.OfToolResult.ToolUseID)
 				if clean != block.OfToolResult.ToolUseID {
 					block.OfToolResult.ToolUseID = clean
 					dirty = true

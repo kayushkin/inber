@@ -10,26 +10,8 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/internal/toolid"
 )
-
-// sanitizeToolID ensures a tool ID matches Anthropic's pattern ^[a-zA-Z0-9_-]+$
-// OpenAI/GLM may generate IDs with dots, colons, or other characters.
-func sanitizeToolID(id string) string {
-	var b strings.Builder
-	b.Grow(len(id))
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-			b.WriteRune(r)
-		} else {
-			b.WriteRune('_')
-		}
-	}
-	result := b.String()
-	if result == "" {
-		return "tool_" + fmt.Sprintf("%d", len(id))
-	}
-	return result
-}
 
 // LoadMessages reads a session JSONL and reconstructs the conversation as MessageParams.
 // Correctly groups tool_use blocks into assistant messages and tool_result blocks into user messages.
@@ -89,7 +71,7 @@ func LoadMessages(logFile string) ([]anthropic.MessageParam, error) {
 				tc := entries[i]
 				blocks = append(blocks, anthropic.ContentBlockParamUnion{
 					OfToolUse: &anthropic.ToolUseBlockParam{
-						ID:    sanitizeToolID(tc.ToolID),
+						ID:    toolid.Sanitize(tc.ToolID),
 						Name:  tc.ToolName,
 						Input: json.RawMessage(tc.ToolInput),
 					},
@@ -108,7 +90,7 @@ func LoadMessages(logFile string) ([]anthropic.MessageParam, error) {
 				tc := entries[i]
 				blocks = append(blocks, anthropic.ContentBlockParamUnion{
 					OfToolUse: &anthropic.ToolUseBlockParam{
-						ID:    sanitizeToolID(tc.ToolID),
+						ID:    toolid.Sanitize(tc.ToolID),
 						Name:  tc.ToolName,
 						Input: json.RawMessage(tc.ToolInput),
 					},
@@ -126,7 +108,7 @@ func LoadMessages(logFile string) ([]anthropic.MessageParam, error) {
 			for i < len(entries) && entries[i].Role == "tool_result" {
 				tr := entries[i]
 				blocks = append(blocks, anthropic.NewToolResultBlock(
-					sanitizeToolID(tr.ToolID), tr.Content, tr.IsError,
+					toolid.Sanitize(tr.ToolID), tr.Content, tr.IsError,
 				))
 				i++
 			}
