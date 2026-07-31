@@ -28,13 +28,15 @@ an audit checklist, which is what this doc does.
 ## Headline finding
 
 **Four of inber's packages that the taxonomy would score as distinctive assets —
-`guard`, `trace`, `checkpoint`, `codeindex` — are TODO stubs that the engine calls
-on the hot path and that silently do nothing.**
+`guard`, `trace`, `checkpoint`, `codeindex` — were TODO stubs that the engine
+calls on the hot path and that silently do nothing. Three still are; `guard` has
+since been wired.**
 
-- `guard/guard.go` — `CheckTool()` has zero callers. `Mode` is hardcoded to
-  `Autonomous`; `ApprovalFunc` is never set; `RecordToolCall`/`IsRepeating` are
-  dead. Only `CheckLimits` (turns/tokens) is live. `guard/classification_test.go:42`
-  says so in prose: *"The classifiers are unreachable today — CheckTool has no caller."*
+- `guard/guard.go` — **no longer on this list.** `CheckTool()` had zero callers
+  and `Mode` was hardcoded to `Autonomous`; it is now called at every tool
+  dispatch site and the mode arrives from the request. `ApprovalFunc` is still
+  never set, so `Assist` refuses what it cannot ask about, and
+  `RecordToolCall`/`IsRepeating` are still dead. See the Guardrails row.
 - `trace/` — `engine.go:176` calls `NewRecorder("", …)`, which returns `nil`.
   `RecordTurn`/`WriteSummary` are no-ops. The real tracing lives in `session/timeline*.go`.
 - `checkpoint/` — `Take()` is called **every turn** and does nothing. `session/checkpoint.go`
@@ -59,7 +61,8 @@ live. That is worth knowing before anyone plans on top of them.
 
 ## Coverage
 
-Tally: **0 COVERED · 27 PARTIAL · 12 ABSENT**.
+Tally: **0 COVERED · 29 PARTIAL · 10 ABSENT**. (Guardrails and Safety moved off
+ABSENT together — they were one hole and one wiring closed both.)
 
 | Boundary | Verdict | Owner | Missing levers |
 |---|---|---|---|
@@ -72,7 +75,7 @@ Tally: **0 COVERED · 27 PARTIAL · 12 ABSENT**.
 | File Navigation | PARTIAL | tool-store `repo_map`/`recent_files` | `codeindex/` is a stub (above). No ownership graph, capability map, path cache, incremental reindex |
 | Git Control | PARTIAL | `engine/workflow_git.go`; `forge` via `server/forge_iface.go` | branch leases; risk scoring; CI gating; conflict prediction. ~~**main-write gate** — `finishSessionGit` auto-`git push`es the current branch, including main, at session close~~ **fixed, `5e0db0e`** — it had fired 48 times on this repo's own main and 64 times across five repos here. The gate asks origin which branch it calls default (`ls-remote --symref`, not the local `refs/remotes/origin/HEAD`, which 57 of 78 repos on this host do not have) and refuses it, and refuses unknown too, unless `AutoWorkflowConfig.PushToDefaultBranch` is set. Two more holes on the same line: `finishSessionGit` ignored `autoCommit`, so turning auto-commit off left the bigger commit armed, and the `git add -A` error was discarded. **What is left here is that the push only ever reaches a branch that already tracks one** — the unpushed-commit count is `rev-list @{u}..`, which fails outright on a branch created during the session, so the branch this path pushed in practice was the shared one |
 | Goal | ABSENT | — | all. Spawn `Task` is a free-form string; no objective schema |
-| **Guardrails** | **ABSENT** | `guard/guard.go` (stub) | **everything.** No tool gate of any kind on a harness whose `shell_commands` is `bash -c` with the full `os.Environ()` |
+| **Guardrails** | PARTIAL | `guard/guard.go`; `engine/build_hooks.go:buildToolRefusal` | ~~**everything.** No tool gate of any kind~~ **the gate is wired, `TODO`** — `CheckTool` had no caller and the engine hardcoded `Autonomous`, while `RunRequest` had advertised `mode: observe, assist, autonomous` all along and nothing read it, so a caller who asked to observe got a session that could run `bash -c` with the full `os.Environ()`. The mode now travels `mode` → `EngineConfig` → `guard.Config` and is asked about every tool call at all three dispatch sites — the primary call, the `"then"` chain (gating one and not the other leaves the chain as a way round), and the OpenAI loop, which dispatches tools itself. An unreadable mode fails session creation instead of defaulting to the mode that allows everything, and the mode is persisted beside the caps so a rebuilt session is not silently reopened. **What is left: `Assist` has no approver to ask** — nothing sets `ApprovalFunc` and inber emits no `EventApproval`, so a held call is refused rather than queued, and llm-bridge's `ask` mode is still unenforceable. Also unclosed: a subagent is built from a zero `RunRequest` and so runs unmoded whatever its parent is (todo `9e31d359`); `Observe` denies `spawn_agent`, `Assist` does not. Still no per-tool policy, dry-run or sandbox |
 | Health Monitor | PARTIAL | `server/session_reaper.go`; `session/db_sessions.go:DetectInterrupted` (PID liveness) | heartbeat; stall detection; anomaly window; auto-recovery; alert routing; probe backoff |
 | Identity | PARTIAL | `agent/clients.go:NewModelClient` → model-store `ResolveModel` | version allowlist (`Model.Enabled` is never checked); identity-record schema. **`resp.Model` is never read or persisted** — you cannot audit what actually served a request, and failover can swap it silently |
 | Interface | PARTIAL | `server/api.go`, `api_bridge.go` (SSE), `inber-cli`, `server/events.go` → NATS | panels/widgets plugin; layout presets; virtualization; render throttle. No operator UI in-repo |
@@ -93,7 +96,7 @@ Tally: **0 COVERED · 27 PARTIAL · 12 ABSENT**.
 | Response | PARTIAL | `agent.Run` streaming; `api_bridge.go` SSE; `session/jsonl.go`, `timeline_jsonl.go`, `logstack.go` | artifact schema; post-process hooks; delta-only storage; compression |
 | Review Queue | ABSENT | — | all |
 | Route | PARTIAL | `server/queue.go` lanes | route table; dispatch hooks; warm route; per-route token cap |
-| **Safety** | **ABSENT** | `guard/guard.go` (same stub) | all. `isDangerous`/`isReadOnly` exist and are unreachable |
+| **Safety** | PARTIAL | `guard/guard.go` (same gate) | ~~all. `isDangerous`/`isReadOnly` exist and are unreachable~~ **both classifiers are now reached**, by the same wiring as Guardrails. Missing still: risk tiering, per-tool policy, anything that inspects a call's *arguments* — the classification is by tool name only, so `shell_commands` is refused or allowed whole and there is no way to permit `git status` while refusing `rm -rf` |
 | Select | ABSENT | — | all. Model is a static `AgentConfig.Model`; there is no selection step, no capability catalog, no tier default |
 | Session Manager | PARTIAL (strong) | `session/*`, `server/session_creation.go`, `session_forking.go`, `session_reaper.go`; fork/resume/compact/interrupt/stop; `forge` worktrees | idle-**suspend** (the reaper *closes*, never suspends/resumes); snapshot retention (`pruneOldCheckpoints` = `return nil`); state compaction; lifecycle hooks; recovery scripts; resume prefetch. `checkpoint/` is a stub (above) |
 | Sub-agent Dispatch | PARTIAL (strong) | `server/spawn.go`, `spawn_tools.go`, `ForkAndSpawn`, `agent/registry/`, agent-store agent types, `steer_agent` | result-schema enforcement (task and result are free-form strings); planning strategy; pipeline-vs-barrier stages; per-stage worker tier; agent-count ceiling beyond the lane cap |
@@ -105,12 +108,19 @@ Tally: **0 COVERED · 27 PARTIAL · 12 ABSENT**.
 
 ## Ranked build list
 
-1. **Guardrails / Safety — wire `guard.CheckTool()` into the tool loop and emit
-   `EventApproval`.** One fix closes three boundaries. Today there is no tool gate
-   of any kind on a harness that runs `bash -c` with the full environment. It is
-   also load-bearing across three repos: because inber never emits `EventApproval`,
-   llm-bridge-server's `ask`/`plan`/`block_all` permission modes are
-   **unenforceable against inber sessions** (`BRIDGE_PARITY.md`, "Remaining" item 1).
+1. **Guardrails / Safety — ~~wire `guard.CheckTool()` into the tool loop~~ and
+   emit `EventApproval`.** The wiring half is done. `CheckTool` is called at
+   every tool dispatch site, and the mode that selects its behaviour now arrives
+   from the API field that had advertised it since before any of this was
+   audited: `RunRequest.Mode` was documented as `observe, assist, autonomous`
+   and read by nothing, so asking to observe changed nothing at all. The gate
+   fires under `Observe` today. **What remains is the approval half, and it is
+   the cross-repo one:** `Assist` classifies a dangerous call correctly and then
+   has nowhere to ask, because nothing sets `ApprovalFunc` and inber emits no
+   `EventApproval` — so llm-bridge-server's `ask`/`plan`/`block_all` permission
+   modes stay **unenforceable against inber sessions** (`BRIDGE_PARITY.md`,
+   "Remaining" item 1). Refusing a held call is the honest placeholder, not the
+   answer.
 2. ~~**Cost — a pre-dispatch budget check.**~~ **Done, `b8ccfd3` + `1595419`.**
    Both halves are closed. Pricing (todo `9317ef2b`): every dollar figure inber
    reported was `tokens × $3/$15` regardless of model, and the callers now pass
@@ -169,7 +179,8 @@ gate).
 
 The seven packages one would expect to be its distinctive assets split cleanly in
 two: `memory` and `bus` are real (if unindexed and un-hardened), `registry` is
-real-but-thin, and `guard`, `trace`, `checkpoint`, and `codeindex` are scaffolding.
-The single highest-value change is #1: inber currently has no tool authority
-boundary at all, and that hole propagates outward into llm-bridge's permission
-modes.
+real-but-thin, `guard` is now half-real — its limits and its tool gate are live,
+its approval routing is not — and `trace`, `checkpoint`, and `codeindex` are
+still scaffolding. #1 is half done: inber has a tool authority boundary now, and
+what still propagates outward into llm-bridge's permission modes is the missing
+approval event, not the missing gate.
