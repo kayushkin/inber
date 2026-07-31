@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -139,9 +140,15 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 	return &params
 }
 
-// executeAPICall handles streaming vs non-streaming API calls with retry logic
+// executeAPICall handles streaming vs non-streaming API calls with retry logic.
+//
+// A streaming call can fail after the model has already written text, and the
+// hooks have already shown that text to the user. When that happens the
+// partially accumulated message comes back alongside the error, so the caller
+// can keep what the user saw instead of discarding it.
 func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNewParams, messages *[]anthropic.MessageParam) (*anthropic.Message, error) {
 	var resp *anthropic.Message
+	var partial *anthropic.Message
 	var apiErr error
 
 	if a.hooks != nil && a.hooks.OnTextDelta != nil {
@@ -165,6 +172,7 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 			}
 			if err := streamResp.Err(); err != nil {
 				apiErr = err
+				partial = &accumulated
 			} else {
 				resp = &accumulated
 			}
@@ -185,11 +193,28 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 			}
 		}
 		if apiErr != nil {
-			return nil, fmt.Errorf("api call failed: %w", apiErr)
+			return partial, fmt.Errorf("api call failed: %w", apiErr)
 		}
 	}
 
 	return resp, nil
+}
+
+// deliveredText returns the text a response managed to deliver before it
+// failed. Only text blocks are read: a tool_use block cut off mid-arguments was
+// never dispatched, and carrying one into the conversation would leave a
+// tool_use with no matching tool_result, which makes the next request invalid.
+func deliveredText(resp *anthropic.Message) string {
+	if resp == nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, block := range resp.Content {
+		if block.Type == "text" {
+			text.WriteString(block.Text)
+		}
+	}
+	return text.String()
 }
 
 // processResponse handles thinking blocks and text extraction, updates result stats

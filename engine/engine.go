@@ -227,7 +227,15 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	// 4. Execute agent
 	result, err := e.executeAgent(context.Background(), systemBlocks) // turn_execute.go
 	if err != nil {
-		return nil, err
+		// A turn killed mid-stream can still carry text the user watched
+		// arrive. Persist it before propagating the error, or the session log,
+		// the messages snapshot and the next turn's context all lose it.
+		if result != nil && result.Text != "" {
+			if perr := e.postProcessResult(result, input, sessionID); perr != nil { // turn_postprocess.go
+				Log.Warn("post-processing failed after turn error: %v", perr)
+			}
+		}
+		return result, err
 	}
 
 	// 5. Post-process

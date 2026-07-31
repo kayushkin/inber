@@ -141,7 +141,10 @@ func (s *Session) turn(ctx context.Context, input string) (*agent.TurnResult, er
 		s.mu.Lock()
 		s.Status = Error
 		s.mu.Unlock()
-		return nil, err
+		// Hand the result back even though the turn failed: it carries whatever
+		// text the user already saw, which the caller records against the
+		// request.
+		return result, err
 	}
 	return result, nil
 }

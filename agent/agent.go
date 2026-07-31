@@ -182,7 +182,16 @@ type TurnResult struct {
 	// Cache tokens (Anthropic prompt caching)
 	CacheCreationTokens int // tokens written to cache (first request)
 	CacheReadTokens     int // tokens read from cache (subsequent requests)
+	// Incomplete is set when the turn ended on an error after the model had
+	// already written text. Text then holds what the user watched arrive, not
+	// a finished answer. Callers must still treat the turn as failed.
+	Incomplete bool
 }
+
+// incompleteResponseNotice marks a stored assistant message as cut off, so a
+// later turn can tell a short answer from an interrupted one. It is a separate
+// content block: the text the user saw is never rewritten.
+const incompleteResponseNotice = "[response cut off: %v]"
 
 // Run sends a conversation to Claude and loops until it gets a final text
 // response (no more tool calls). It mutates the messages slice in place,
@@ -264,6 +273,18 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 		// Execute API call with retry logic
 		resp, err := a.executeAPICall(ctx, params, messages)
 		if err != nil {
+			// The call may have failed after the model wrote text the user has
+			// already read. Keep it: append it to the conversation and put it on
+			// the result, so every layer above can persist it before it handles
+			// the error.
+			if text := deliveredText(resp); text != "" {
+				*messages = append(*messages, anthropic.NewAssistantMessage(
+					anthropic.NewTextBlock(text),
+					anthropic.NewTextBlock(fmt.Sprintf(incompleteResponseNotice, err)),
+				))
+				result.Text += text
+				result.Incomplete = true
+			}
 			return result, err
 		}
 

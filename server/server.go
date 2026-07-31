@@ -343,7 +343,23 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 		start := time.Now()
 		result, err := sess.turn(ctx, input)
 		if err != nil {
-			g.store.CompleteRequest(reqID, "error", "", err.Error(), 0, 0, 0, 0, 0, 0)
+			// The turn failed, but it may have produced text the user already
+			// read and tokens that were already billed. Record both against the
+			// request rather than writing an empty error row, and snapshot the
+			// messages the engine kept.
+			if result != nil {
+				cost := sessionMod.CalcCostWithCache("", result.InputTokens, result.OutputTokens,
+					result.CacheReadTokens, result.CacheCreationTokens)
+				g.store.CompleteRequest(reqID, "error", truncate(result.Text, 1000), err.Error(),
+					result.ToolCalls, result.InputTokens, result.OutputTokens,
+					result.CacheReadTokens, result.CacheCreationTokens, cost)
+				if result.Text != "" {
+					g.store.TouchSession(sessionKey, len(sess.Engine.Messages))
+					g.persistMessages(sess)
+				}
+			} else {
+				g.store.CompleteRequest(reqID, "error", "", err.Error(), 0, 0, 0, 0, 0, 0)
+			}
 			return err
 		}
 
