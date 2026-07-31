@@ -47,6 +47,7 @@ import (
 	"github.com/kayushkin/inber/guard"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
+	"github.com/kayushkin/inber/tools"
 	"github.com/kayushkin/inber/trace"
 	modelstore "github.com/kayushkin/model-store"
 )
@@ -346,11 +347,23 @@ func (e *Engine) EnabledToolNames() []string {
 	return names
 }
 
-// setToolSet installs the tools a session was built with and derives the wire
-// set from them. Both engine constructors go through it so neither can install
-// tools without also honouring an already-disabled name.
-func (e *Engine) setToolSet(tools []agent.Tool) {
-	e.allTools = tools
+// setToolSet installs the tools a session was built with, resolves their
+// filesystem paths against the session's root, and derives the wire set from
+// them. Both engine constructors go through it so neither can install tools
+// without also honouring an already-disabled name.
+//
+// The rooting belongs here and not in buildTools because buildTools is not the
+// only source of tools: the server injects its own through EngineConfig.
+// ExtraTools, and an injected tool replaces a built-in one of the same name. A
+// root applied before that merge would be dropped by an injected write_files
+// without a word.
+//
+// Rooting used to happen at three points inside buildTools and only to shell,
+// which is how the file tools came to resolve a relative path against the
+// inber-server process's working directory while shell commands in the same
+// session ran inside the agent's forge worktree.
+func (e *Engine) setToolSet(toolSet []agent.Tool) {
+	e.allTools = tools.ScopeToRoot(toolSet, e.repoRoot)
 	e.applyDisabledTools()
 }
 

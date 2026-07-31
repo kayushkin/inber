@@ -4,9 +4,6 @@
 package tools
 
 import (
-	"context"
-	"encoding/json"
-
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 	toolstoretools "github.com/kayushkin/tool-store/tools"
@@ -51,25 +48,6 @@ func init() {
 // File system tools
 func ShellCommands() agent.Tool { return wrap(toolstoretools.Shell()) }
 
-// ShellInDir returns a shell tool that defaults to the given directory.
-func ShellInDir(dir string) agent.Tool {
-	t := toolstoretools.Shell()
-	origRun := t.Run
-	t.Run = func(ctx context.Context, raw string) (string, error) {
-		// Inject default workdir if not specified.
-		var parsed map[string]interface{}
-		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
-			if _, ok := parsed["workdir"]; !ok || parsed["workdir"] == "" {
-				parsed["workdir"] = dir
-				if newRaw, err := json.Marshal(parsed); err == nil {
-					raw = string(newRaw)
-				}
-			}
-		}
-		return origRun(ctx, raw)
-	}
-	return wrap(t)
-}
 func ReadFiles() agent.Tool  { return wrap(toolstoretools.ReadFile()) }
 func WriteFiles() agent.Tool { return wrap(toolstoretools.WriteFile()) }
 func EditFiles() agent.Tool  { return wrap(toolstoretools.EditFile()) }

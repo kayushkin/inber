@@ -9,6 +9,10 @@ import (
 )
 
 // buildTools resolves tools from agent config or defaults.
+//
+// It does not give them the session's root directory: setToolSet does, on the
+// whole installed set, because the server can inject tools that never pass
+// through here and can replace a built-in one by name.
 func (e *Engine) buildTools() []agent.Tool {
 	if e.AgentConfig != nil && len(e.AgentConfig.Tools) > 0 {
 		return e.buildConfiguredTools()
@@ -43,17 +47,7 @@ func (e *Engine) buildConfiguredTools() []agent.Tool {
 // buildDefaultTools returns all available tools with workspace adaptations.
 func (e *Engine) buildDefaultTools() []agent.Tool {
 	result := tools.All()
-	
-	// Replace shell with workspace-scoped version
-	if e.repoRoot != "" {
-		for i, t := range result {
-			if t.Name == "shell" || t.Name == "shell_commands" {
-				result[i] = tools.ShellInDir(e.repoRoot)
-				break
-			}
-		}
-	}
-	
+
 	// Add memory tools
 	if e.MemStore != nil {
 		result = append(result, memory.AllMemoryTools(e.MemStore)...)
@@ -107,25 +101,16 @@ func (e *Engine) buildSpecialTool(toolName string) *agent.Tool {
 
 // findStandardTool looks for a tool in the default registry.
 func (e *Engine) findStandardTool(toolName string) *agent.Tool {
-	// First check the default registry for registered tools
+	// First check the default registry for registered tools. The root is
+	// applied to the whole set in buildTools, not here.
 	if tool := tools.GetTool(toolName); tool != nil {
 		agentTool := tools.ToAgentTool(tool)
-		// Use workspace-scoped shell when repoRoot is set
-		if (agentTool.Name == "shell" || agentTool.Name == "shell_commands") && e.repoRoot != "" {
-			tool := tools.ShellInDir(e.repoRoot)
-			return &tool
-		}
 		return &agentTool
 	}
-	
+
 	// Fallback to legacy All() for backward compatibility
 	for _, t := range tools.All() {
 		if t.Name == toolName {
-			// Use workspace-scoped shell when repoRoot is set
-			if (t.Name == "shell" || t.Name == "shell_commands") && e.repoRoot != "" {
-				tool := tools.ShellInDir(e.repoRoot)
-				return &tool
-			}
 			return &t
 		}
 	}
