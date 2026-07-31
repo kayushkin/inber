@@ -198,7 +198,13 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 //  4. Execute  — select model, call API, loop on tool calls
 //  5. Process  — extract memories, stash response, track tokens/cost
 //  6. Record   — update guard counters, write trace, take checkpoint
-func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
+//
+// ctx bounds the execute phase: cancelling it stops the API call and the
+// running tool, and Agent.Run refuses to start another round-trip. It is the
+// only way to stop a turn that is already in flight, so a caller that holds a
+// cancel function (a session interrupt, a sub-agent spawn timeout) must pass
+// its own context here rather than a fresh root.
+func (e *Engine) RunTurn(ctx context.Context, input string) (*agent.TurnResult, error) {
 	e.Turn.Counter++
 	e.Turn.StartTime = time.Now()
 	fmt.Fprintf(os.Stderr, "\n%s━━━ Turn %d ━━━%s\n", cyan+bold, e.Turn.Counter, reset)
@@ -225,7 +231,7 @@ func (e *Engine) RunTurn(input string) (*agent.TurnResult, error) {
 	systemBlocks := e.buildTurnContext(processedInput) // turn_prompt.go
 
 	// 4. Execute agent
-	result, err := e.executeAgent(context.Background(), systemBlocks) // turn_execute.go
+	result, err := e.executeAgent(ctx, systemBlocks) // turn_execute.go
 	if err != nil {
 		// A turn killed mid-stream can still carry text the user watched
 		// arrive. Persist it before propagating the error, or the session log,

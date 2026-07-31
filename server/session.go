@@ -106,14 +106,36 @@ func (s *Session) updateHooks() {
 	}
 }
 
+// turnContext derives the context a turn actually runs under from the context
+// of whoever asked for the turn.
+//
+// It keeps the caller's deadline and drops the caller's cancellation. The
+// deadline is load-bearing: a sub-agent spawn bounds its child with
+// context.WithTimeout, and that bound only stops anything if it survives into
+// the turn. The cancellation is deliberately dropped, because the caller is
+// almost always an HTTP request — a browser tab closing mid-turn, or a proxy
+// hitting its read timeout, must not abort work the session would otherwise
+// finish and keep. A turn in flight is stopped by interrupt and stop, and by
+// nothing else.
+func turnContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	turnCtx := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(turnCtx, deadline)
+	}
+	return context.WithCancel(turnCtx)
+}
+
 // turn executes one turn on this session's engine.
 // Drains any pending messages (from sub-agents that completed while idle)
 // by prepending them to the input.
 // onActive/onIdle are called on status transitions (for event publishing).
 func (s *Session) turn(ctx context.Context, input string) (*agent.TurnResult, error) {
+	turnCtx, cancel := turnContext(ctx)
+	defer cancel()
+
 	s.mu.Lock()
 	s.Status = Running
-	ctx, s.cancel = context.WithCancel(ctx)
+	s.cancel = cancel
 	// Update engine's display hooks to point to current request's onEvent.
 	s.updateHooks()
 	// Drain pending messages and prepend to input.
@@ -136,7 +158,7 @@ func (s *Session) turn(ctx context.Context, input string) (*agent.TurnResult, er
 		s.mu.Unlock()
 	}()
 
-	result, err := s.Engine.RunTurn(input)
+	result, err := s.Engine.RunTurn(turnCtx, input)
 	if err != nil {
 		s.mu.Lock()
 		s.Status = Error
