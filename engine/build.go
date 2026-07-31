@@ -136,6 +136,14 @@ func (e *Engine) configureContextPruning(a *agent.Agent) {
 			if dropTo < len(messages) && dropTo > 0 {
 				Log.Warn("hard-dropping %d old messages (%d → %d)", dropTo, len(messages), len(messages)-dropTo)
 				messages = messages[dropTo:]
+				// The agent shifts its own copy of the boundary (see
+				// shiftBreakpointIndicesAfterHeadDrop), but that copy is rebuilt from
+				// this one at the top of every turn, and pruneIfNeeded reads this one
+				// to decide which messages are frozen. Both have to move with the slice
+				// or the next turn stages the frozen zone.
+				if e.staged != nil {
+					e.staged.ShiftAfterHeadDrop(dropTo)
+				}
 			}
 		}
 

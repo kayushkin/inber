@@ -43,6 +43,25 @@ func (sc *StagedConversation) Tick() {
 	sc.TurnsSinceFlush++
 }
 
+// ShiftAfterHeadDrop moves the frozen boundary to follow messages dropped off the
+// head of the conversation.
+//
+// FrozenIdx is an index into the message slice and nothing else in this type is,
+// so anything that shortens the slice from the front moves every message the
+// boundary was placed against. Left unshifted the boundary points `dropped`
+// positions too far in, and the "staging zone" it then names starts inside the
+// frozen zone — which ManageStaging is free to dedup and prune, the one thing the
+// frozen zone exists to prevent.
+//
+// A boundary that falls off the front collapses to zero, the "nothing is frozen
+// yet" value it starts at.
+func (sc *StagedConversation) ShiftAfterHeadDrop(dropped int) {
+	sc.FrozenIdx -= dropped
+	if sc.FrozenIdx < 0 {
+		sc.FrozenIdx = 0
+	}
+}
+
 // FreezePoint returns the index up to which a transcript may be frozen.
 //
 // Everything is frozen except a trailing user message. The next turn appends

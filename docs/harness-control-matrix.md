@@ -209,7 +209,12 @@ followed on its own, with `redact/`.)
     Two defects fell out on the way: pruning shifted the conversation without moving
     the index the breakpoint was placed by, and the cache blueprint re-stated the
     placement rule instead of asking for it, so it had been reporting a breakpoint
-    position inber was not sending. Still open in that doc: the "always cache" default,
+    position inber was not sending. The engine kept a **second** copy of that boundary
+    (`staged.FrozenIdx`) which the same drop also invalidated, and that one drives
+    `ManageStaging` and `CrossZoneDedup` rather than a breakpoint — so a drop made
+    inber dedup and prune its own frozen zone. Closed too; a third copy of the problem
+    is open, because summarization replaces the whole frozen prefix and leaves the
+    boundary pointing into content that no longer exists. Still open in that doc: the "always cache" default,
     and moving `VolatileContext` to a mid-conversation system message for authority
     rather than cache reasons.
 
