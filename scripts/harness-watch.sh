@@ -20,6 +20,12 @@ REPO_DIR="${REPO_DIR:-$HOME/repos/inber}"
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-7}"
 SINCE="$(date -u -d "${LOOKBACK_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)"
 
+# How many todos one run may file for defects it finds in inber itself.
+# A cap, not a target: the job runs nightly, and an uncapped filer is how
+# the noteboard queue drowned in machine-written cards once already. Held-back
+# findings still get documented in the docs, and the run must say it held them.
+MAX_FINDING_TODOS="${MAX_FINDING_TODOS:-3}"
+
 # Curated upstream harnesses we track. Each entry maps a comparison doc
 # under docs/comparisons/ to its canonical GitHub repo. Update both sides
 # when adding a new harness.
@@ -66,7 +72,7 @@ COMMITS_FILE="$(mktemp)"
 PROMPT="$(cat <<EOF
 You are running as a scheduled harness-watch job inside the inber repo.
 
-Two tasks:
+Three tasks: two scans, then file what the scans found about inber itself.
 
 1. Review the upstream harness commits below from the last ${LOOKBACK_DAYS} days.
    For each harness, decide whether anything noteworthy landed (new tool
@@ -99,6 +105,45 @@ of what you checked and exit.
 
 Keep edits tight: link to the upstream commit / paper, one paragraph of
 context, and a concrete "what inber should consider" bullet. No fluff.
+
+3. File a todo for every LIVE INBER DEFECT you found along the way.
+
+   Comparing inber against upstream regularly turns up a bug in inber's own
+   code, not just an idea worth importing. A prose paragraph is read by
+   nobody and fixed by nobody, so a finding that stops at the doc is a
+   finding thrown away. If a bullet you just wrote names a defect in
+   inber's own code AND you can point at the file and line that carries
+   it, it is work, and it belongs in the queue as well as in the doc.
+
+   Only file one when all three hold:
+     - it is a defect in THIS repo, not an upstream idea to consider;
+     - you verified it by reading the code, not by trusting an older doc
+       paragraph (prose here has been wrong before — two claims in
+       agentic-design-patterns.md overstated what the code actually did);
+     - you can cite file:line.
+
+   Dedupe before writing — the queue is the thing you are trying to help,
+   so do not repeat yourself:
+
+     curl -sfS "http://localhost:8191/api/search?q=<the+file+path>&type=todo"
+
+   Skip it if an open todo already names that file:line.
+
+   Then, for each genuinely new one, at most ${MAX_FINDING_TODOS} per run
+   (document the rest as prose and say in your summary how many you held
+   back — a silent cap reads as "there was nothing else"):
+
+     curl -sfS -X POST http://localhost:8191/api/items \\
+       -H 'Content-Type: application/json' \\
+       -d '{"type":"todo","priority":1,
+            "tags":["inber","harness-watch-finding"],
+            "title":"inber: <the defect, in a few words>",
+            "body":"<file:line> — what is wrong, what it costs, and the
+                    upstream precedent that exposed it. If the fix needs a
+                    choice the owner should make, name the options and do
+                    NOT pick one."}'
+
+   Say what a fix would have to decide, if anything; never decide it here.
 
 ---
 Upstream commits report:
