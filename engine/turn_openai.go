@@ -25,9 +25,26 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 		toolMap[t.Name] = t
 	}
 	
-	// Convert tools to OpenAI format
-	openAITools := agent.ConvertAnthropicToolsToOpenAI(e.agentTools)
-	
+	// Convert tools to OpenAI format, carrying the same "then" chain and
+	// done/note/split sideband fields the Anthropic path advertises. Without
+	// them a session served by this provider silently has fewer things a model
+	// can write into a call than the same session served by the other one.
+	openAITools := agent.ConvertAnthropicToolsToOpenAI(agent.AddChainAndSidebandFields(e.agentTools))
+
+	// The same hooks the Anthropic path reports through: session logging, the
+	// display (resolved per call so a gateway can swap it), tool-input caching,
+	// truncation, and the workflow/forge post-hooks. This loop used to reach
+	// for e.display and e.Session itself and reproduced only some of that.
+	hooks := e.buildHooks()
+
+	// Sideband callbacks are the agent's task list and scratchpad; without a
+	// repo there is nothing to apply them to, and processSideband says so to
+	// the model rather than dropping the field. Same condition as configureAgent.
+	var sidebandCallbacks *agent.SidebandCallbacks
+	if e.repoRoot != "" {
+		sidebandCallbacks = e.buildSidebandCallbacks()
+	}
+
 	// Build system message from blocks
 	var systemParts []string
 	for _, block := range systemBlocks {
@@ -69,23 +86,15 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 		result.InputTokens += int(anthropicResp.Usage.InputTokens)
 		result.OutputTokens += int(anthropicResp.Usage.OutputTokens)
 		
-		if e.Session != nil {
-			stopReason := string(anthropicResp.StopReason)
-			toolCalls := 0
-			for _, block := range anthropicResp.Content {
-				if block.Type == "tool_use" {
-					toolCalls++
-				}
-			}
-			e.Session.EndTurn(
-				int(anthropicResp.Usage.InputTokens),
-				int(anthropicResp.Usage.OutputTokens),
-				toolCalls,
-				stopReason,
-				"",
-			)
+		// Ends the turn in the session, logs the response, and clears the
+		// consecutive-error count when a response arrives clean. This loop used
+		// to call EndTurn by hand and do neither of the other two, so an
+		// OpenAI-served session logged no responses and its error count only
+		// ever went up.
+		if hooks.OnResponse != nil {
+			hooks.OnResponse(anthropicResp)
 		}
-		
+
 		e.Messages = append(e.Messages, anthropicResp.ToParam())
 		
 		if anthropicResp.StopReason == anthropic.StopReasonEndTurn || 
@@ -109,89 +118,42 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 				}
 				
 				result.ToolCalls++
-				
-				if e.display != nil && e.display.OnToolCall != nil {
-					e.display.OnToolCall(block.Name, string(block.Input))
+
+				if hooks.OnToolCall != nil {
+					hooks.OnToolCall(block.ID, block.Name, block.Input)
 				}
-				if e.Session != nil {
-					e.Session.LogToolCall(block.ID, block.Name, block.Input)
+
+				// One call to the same dispatcher the Anthropic path uses. It
+				// runs the primary call, the "then" chain the block may carry,
+				// and the done/note/split sideband fields, and it asks the gate
+				// about the chained call as well as the primary one — none of
+				// which this loop did while it dispatched tools itself.
+				output, isError := agent.ExecuteToolCallWithChainAndSideband(
+					ctx, toolMap, block.Name, string(block.Input),
+					hooks, block.ID, sidebandCallbacks, refusal,
+				)
+
+				// The dispatcher reports a result it produced itself; the ones
+				// it returns as errors — refused, unknown tool, the tool failed
+				// — it hands back for the caller to report, so say so here or
+				// they reach neither the display nor the session log.
+				if isError && hooks.OnToolResult != nil {
+					hooks.OnToolResult(block.ID, block.Name, output, true)
 				}
-				if e.toolInputsCache != nil {
-					e.toolInputsCache[block.ID] = string(block.Input)
-				}
-				
-				tool, ok := toolMap[block.Name]
-				if !ok {
-					errMsg := fmt.Sprintf("error: unknown tool %q", block.Name)
-					if e.display != nil && e.display.OnToolResult != nil {
-						e.display.OnToolResult(block.Name, errMsg, true)
-					}
-					if e.Session != nil {
-						e.Session.LogToolResult(block.ID, block.Name, errMsg, true)
-					}
-					toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, errMsg, true))
-					continue
-				}
-				
-				// The same gate as the Anthropic path. This loop dispatches
-				// tools itself instead of going through agent.executeTools, so
-				// a gate wired only there would leave every OpenAI-served
-				// session ungated.
-				if refusal != nil {
-					if reason := refusal(block.Name, string(block.Input)); reason != "" {
-						refused := agent.RefuseToolCall(block.Name, reason)
-						if e.display != nil && e.display.OnToolResult != nil {
-							e.display.OnToolResult(block.Name, refused, true)
-						}
-						if e.Session != nil {
-							e.Session.LogToolResult(block.ID, block.Name, refused, true)
-						}
-						toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, refused, true))
-						continue
+
+				finalOutput := output
+				if hooks.ModifyToolResult != nil {
+					if modified := hooks.ModifyToolResult(block.ID, block.Name, output, isError); modified != "" {
+						finalOutput = modified
 					}
 				}
 
-				output, err := tool.Run(ctx, string(block.Input))
-				if err != nil {
-					errMsg := fmt.Sprintf("error: %s", err)
-					if e.display != nil && e.display.OnToolResult != nil {
-						e.display.OnToolResult(block.Name, errMsg, true)
-					}
-					if e.Session != nil {
-						e.Session.LogToolResult(block.ID, block.Name, errMsg, true)
-					}
-					e.Turn.ConsecutiveErrors++
-					e.Turn.LastHadError = true
-					toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, errMsg, true))
-					continue
-				}
-				
-				if e.display != nil && e.display.OnToolResult != nil {
-					e.display.OnToolResult(block.Name, output, false)
-				}
-				if e.Session != nil {
-					e.Session.LogToolResult(block.ID, block.Name, output, false)
-				}
-				
-				finalOutput := output
-				if e.Session != nil {
-					truncated := e.Session.TruncateToolResult(block.Name, output, false)
-					if truncated != "" {
-						finalOutput = truncated
-					}
-				}
-				
-				toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, finalOutput, false))
-				
-				if e.workflowHooks != nil {
-					toolInput := e.toolInputsCache[block.ID]
-					if injection := e.workflowHooks.OnToolResult(block.Name, toolInput, output, false); injection != "" {
+				toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, finalOutput, isError))
+
+				if hooks.PostToolResult != nil {
+					if injection := hooks.PostToolResult(block.ID, block.Name, output, isError); injection != "" {
 						postInjections = append(postInjections, injection)
 					}
-				}
-				
-				if e.toolInputsCache != nil {
-					delete(e.toolInputsCache, block.ID)
 				}
 			}
 			

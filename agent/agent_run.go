@@ -18,37 +18,32 @@ type toolInfo struct {
 func (a *Agent) prepareTools() *toolInfo {
 	var toolParams []anthropic.ToolUnionParam
 	toolMap := make(map[string]Tool)
-	
-	// Build tool name enum for the "then" chain field.
-	toolNames := make([]string, 0, len(a.tools))
-	for _, t := range a.tools {
-		toolNames = append(toolNames, t.Name)
-	}
-	thenSchema := buildThenSchema(toolNames)
-	sbSchema := sidebandSchema()
 
-	for i, t := range a.tools {
-		// Inject sideband fields (done, note, split) and "then" chain into every tool's schema.
-		schema := t.InputSchema
-		schema = injectFields(schema, sbSchema)
-		if t.Name != "end_turn" {
-			schema = injectChainField(schema, thenSchema)
-		}
+	// Sideband fields (done, note, split) and the "then" chain go into every
+	// tool's schema. Both are added by AddChainAndSidebandFields, which every
+	// path that builds a request has to use, or one provider advertises the
+	// fields and another does not.
+	prepared := AddChainAndSidebandFields(a.tools)
+
+	for i, t := range prepared {
 		tool := &anthropic.ToolParam{
 			Name:        t.Name,
 			Description: anthropic.String(t.Description),
-			InputSchema: schema,
+			InputSchema: t.InputSchema,
 		}
 		// Add cache control to the last tool definition
-		if i == len(a.tools)-1 {
+		if i == len(prepared)-1 {
 			tool.CacheControl = anthropic.NewCacheControlEphemeralParam()
 		}
 		toolParams = append(toolParams, anthropic.ToolUnionParam{
 			OfTool: tool,
 		})
-		toolMap[t.Name] = t
+		// The map holds the tool as registered, not the copy carrying the
+		// injected schema: what runs is the caller's tool, and the injected
+		// fields are stripped from the input before it ever sees them.
+		toolMap[t.Name] = a.tools[i]
 	}
-	
+
 	return &toolInfo{
 		params:  toolParams,
 		toolMap: toolMap,

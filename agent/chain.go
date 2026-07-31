@@ -73,6 +73,39 @@ func injectChainField(schema anthropic.ToolInputSchemaParam, thenSchema map[stri
 	}
 }
 
+// AddChainAndSidebandFields returns copies of tools whose input schemas carry
+// the two things a model may write into a call beyond the tool's own arguments:
+// the done/note/split sideband fields, and the "then" chain naming a follow-up
+// call. The originals are not modified, and each copy keeps its Run.
+//
+// It is exported because advertising these fields and honouring them have to be
+// the same decision. A caller that builds its own request — the OpenAI-served
+// turn does — otherwise sends the plain schemas while the dispatch side is
+// ready for the fields, or the reverse, and the model finds out by writing one
+// and getting nothing back.
+//
+// end_turn takes the sideband fields but not the chain: there is nothing to
+// follow the end of a turn.
+func AddChainAndSidebandFields(tools []Tool) []Tool {
+	toolNames := make([]string, 0, len(tools))
+	for _, t := range tools {
+		toolNames = append(toolNames, t.Name)
+	}
+	thenSchema := buildThenSchema(toolNames)
+	sbSchema := sidebandSchema()
+
+	prepared := make([]Tool, len(tools))
+	for i, t := range tools {
+		prepared[i] = t
+		schema := injectFields(t.InputSchema, sbSchema)
+		if t.Name != "end_turn" {
+			schema = injectChainField(schema, thenSchema)
+		}
+		prepared[i].InputSchema = schema
+	}
+	return prepared
+}
+
 // chainedTool represents a parsed "then" field from tool input.
 type chainedTool struct {
 	Tool  string          `json:"tool"`
@@ -205,6 +238,24 @@ func RefuseToolCall(tool, reason string) string {
 // the two read as the same kind of thing in the transcript.
 func chainNote(tool, body string) string {
 	return fmt.Sprintf("\n\n--- then(%s) %s ---", tool, body)
+}
+
+// ExecuteToolCallWithChainAndSideband runs everything one tool_use block asked
+// for: the primary call, the "then" chain it may carry, and the done/note/split
+// sideband fields. It returns the text the model gets back and whether the
+// primary call failed.
+//
+// It exists for a caller that runs its own request loop instead of this
+// package's — the OpenAI-served turn does — so that path dispatches through the
+// same code rather than a copy of it. A copy is the defect this file already
+// documents one layer down: two parsers of the same field drift, and the one
+// that drifts drops the model's instruction without a word.
+//
+// There is no read-cache stub here. The cache belongs to the Agent, and a
+// caller that has none simply runs the primary tool.
+func ExecuteToolCallWithChainAndSideband(ctx context.Context, toolMap map[string]Tool, name string, rawInput string, hooks *Hooks, blockID string, sbCallbacks *SidebandCallbacks, refusal func(tool, input string) string) (output string, isError bool) {
+	outcome, isError := executeWithChain(ctx, toolMap, name, rawInput, hooks, blockID, sbCallbacks, nil, refusal)
+	return outcome.combined, isError
 }
 
 // executeWithChain runs a tool and any chained follow-up, combining results.
