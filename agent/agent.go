@@ -79,6 +79,19 @@ type Agent struct {
 	// summarize its progress, then return.
 	LimitCheck func(result *TurnResult) (exceeded bool, reason string)
 
+	// ToolRefusal is asked about every tool call before it runs, and returns
+	// the reason to refuse it or "" to let it through. A refused call is not
+	// executed at all: the refusal goes back to the model as an error
+	// tool_result, so the model is told what happened and the turn continues.
+	//
+	// Every dispatch site consults it, including the chained call in a
+	// tool_use block's "then" field. A gate on the primary call alone would be
+	// no gate: the model can put any tool in the chain.
+	//
+	// Nil means no gate, which is what an agent built without one has always
+	// had.
+	ToolRefusal func(tool, input string) string
+
 	// InjectCheck is called before each API call (after the first) to check
 	// for mid-run messages from the user. Returns any pending messages to inject
 	// into the conversation before the next API call.
@@ -165,6 +178,12 @@ func (a *Agent) SetBeforeRequest(fn func(ctx context.Context, messages []anthrop
 // asking the model to summarize progress, then returns.
 func (a *Agent) SetLimitCheck(fn func(result *TurnResult) (bool, string)) {
 	a.LimitCheck = fn
+}
+
+// SetToolRefusal sets the gate consulted before every tool call. See the
+// ToolRefusal field.
+func (a *Agent) SetToolRefusal(fn func(tool, input string) string) {
+	a.ToolRefusal = fn
 }
 
 // AddTool registers a tool the agent can call.

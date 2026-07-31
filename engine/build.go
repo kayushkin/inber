@@ -92,6 +92,12 @@ func (e *Engine) configureAgent(a *agent.Agent) {
 		a.InjectCheck = e.buildInjectCheck()
 	}
 
+	// Wire up the tool gate. Unlike the limit checks below it is wired
+	// unconditionally: whether any tool is refused is the guard's answer to
+	// give, and deciding here that a session needs no gate would put that
+	// answer in two places.
+	a.SetToolRefusal(e.buildToolRefusal())
+
 	// Wire up turn/token/time limit checks
 	if e.Limits.MaxTurns > 0 || e.Limits.MaxInputTokens > 0 || e.Limits.MaxResponseTime > 0 {
 		a.SetLimitCheck(e.buildLimitCheck())

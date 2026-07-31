@@ -49,6 +49,7 @@ type EngineConfig struct {
 	AutoWorkflow  AutoWorkflowConfig
 
 	// Safety limits
+	Mode           string  // execution mode: observe, assist, autonomous ("" = autonomous)
 	MaxTurns       int     // max API round-trips per RunTurn (0 = unlimited)
 	MaxInputTokens int     // max cumulative input tokens (0 = unlimited)
 	MaxCost        float64 // max cumulative dollar cost (0 = unlimited)

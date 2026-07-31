@@ -33,16 +33,28 @@ package guard
 type Mode int
 
 const (
+	// Unset is the mode nobody named, and it is the zero value on purpose: a
+	// Config built without a mode belongs to a caller who said nothing about
+	// trust, and a caller who says nothing gets what every session on this
+	// server got before modes were settable — full access. Making Observe the
+	// zero value would read a silent config as the strictest mode and refuse
+	// every write in the process.
+	Unset Mode = iota
 	// Observe allows only read-only tools. No file writes, no shell execution.
-	Observe Mode = iota
+	Observe
 	// Assist allows reads and writes, but dangerous operations route for approval.
 	Assist
 	// Autonomous allows all tools without confirmation. Current default.
 	Autonomous
 )
 
+// String names the mode. Unset has no name — it is the absence of one — and
+// renders as the empty string so that a recorded mode can be told apart from a
+// mode nobody set, the same way a zero cap is told apart from a cap of zero.
 func (m Mode) String() string {
 	switch m {
+	case Unset:
+		return ""
 	case Observe:
 		return "observe"
 	case Assist:
@@ -105,11 +117,14 @@ func New(cfg Config) *Guard {
 }
 
 // CheckTool returns whether a tool call is allowed under the current mode.
+//
+// Observe answers Allowed for the read-only tools and Denied for everything
+// else, so a tool this package has never classified is refused rather than
+// waved through. Assist routes the dangerous tools through ApprovalFunc and
+// answers NeedsApproval when there is no approver to ask. Autonomous — and
+// Unset, the mode nobody named — allow everything, which is what every session
+// here did before this check had a caller.
 func (g *Guard) CheckTool(tool, input string) ToolVerdict {
-	// TODO: implement mode-based tool classification
-	// Observe: only read_file, search, memory_load, list_files, etc.
-	// Assist: all tools, but shell/write/delete route through ApprovalFunc
-	// Autonomous: everything allowed
 	switch g.cfg.Mode {
 	case Observe:
 		if isReadOnly(tool) {
@@ -127,6 +142,13 @@ func (g *Guard) CheckTool(tool, input string) ToolVerdict {
 	default:
 		return Allowed
 	}
+}
+
+// Mode reports the trust level this guard is enforcing. Whoever refuses a tool
+// call has to say under which mode it was refused, and the mode is otherwise
+// unreadable from outside the package.
+func (g *Guard) Mode() Mode {
+	return g.cfg.Mode
 }
 
 // RecordToolCall tracks a tool invocation for repetition detection.

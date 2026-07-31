@@ -292,7 +292,7 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 		}
 
 		// Execute tool with optional chain ("then" field).
-		outcome, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks, cachedPrimaryOutput)
+		outcome, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks, cachedPrimaryOutput, a.ToolRefusal)
 		output := outcome.combined
 		if isError {
 			finalOutput := output

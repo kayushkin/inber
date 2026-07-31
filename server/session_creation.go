@@ -44,12 +44,14 @@ func (g *Server) getOrCreateSession(ctx context.Context, key, agentName string, 
 // applyRequestOverrides copies the per-request overrides a caller sent with a
 // RunRequest onto the engine config the session will be built from.
 //
-// Every field the API advertises has to be copied here, and one was not:
+// Every field the API advertises has to be copied here, and two were not.
 // max_cost was declared on RunRequest, documented as a safety limit, and never
 // read by any code in this package, so a caller who asked for a spending cap
-// got a session with no cap at all and no error saying so. This lives in its
-// own function, apart from engine construction, so that the copying can be
-// tested field by field.
+// got a session with no cap at all and no error saying so. mode was the same
+// omission with a sharper edge: it is documented as "observe, assist,
+// autonomous", and a caller who asked to observe got a fully autonomous session
+// that could run shell commands. This lives in its own function, apart from
+// engine construction, so that the copying can be tested field by field.
 func applyRequestOverrides(cfg *engine.EngineConfig, req RunRequest) {
 	if req.Model != "" {
 		cfg.Model = req.Model
@@ -72,6 +74,9 @@ func applyRequestOverrides(cfg *engine.EngineConfig, req RunRequest) {
 	}
 	if req.Detach {
 		cfg.Detach = true
+	}
+	if req.Mode != "" {
+		cfg.Mode = req.Mode
 	}
 	if req.MaxTurns != 0 {
 		cfg.MaxTurns = req.MaxTurns
@@ -190,11 +195,13 @@ func (g *Server) restoreGuardState(key string, sessionGuard *guard.Guard) {
 		return
 	}
 
-	sessionGuard.RestoreState(guard.ResumeState(recorded, sessionGuard.State()))
+	if err := sessionGuard.RestoreState(guard.ResumeState(recorded, sessionGuard.State())); err != nil {
+		log.Printf("[server] %s: %v", key, err)
+	}
 
 	restored := sessionGuard.State()
-	log.Printf("[server] restored safety limits for %s (max turns %d, max input tokens %d, max cost $%.2f; already spent %d turns, %d input tokens, $%.4f)",
-		key, restored.MaxTurns, restored.MaxInputTokens, restored.MaxCost,
+	log.Printf("[server] restored safety limits for %s (mode %q, max turns %d, max input tokens %d, max cost $%.2f; already spent %d turns, %d input tokens, $%.4f)",
+		key, restored.Mode, restored.MaxTurns, restored.MaxInputTokens, restored.MaxCost,
 		restored.Turns, restored.InputTokens, restored.Cost)
 }
 

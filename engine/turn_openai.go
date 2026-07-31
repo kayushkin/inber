@@ -101,7 +101,8 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 		if anthropicResp.StopReason == anthropic.StopReasonToolUse {
 			var toolResults []anthropic.ContentBlockParamUnion
 			var postInjections []string
-			
+			refusal := e.buildToolRefusal()
+
 			for _, block := range anthropicResp.Content {
 				if block.Type != "tool_use" {
 					continue
@@ -132,6 +133,24 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 					continue
 				}
 				
+				// The same gate as the Anthropic path. This loop dispatches
+				// tools itself instead of going through agent.executeTools, so
+				// a gate wired only there would leave every OpenAI-served
+				// session ungated.
+				if refusal != nil {
+					if reason := refusal(block.Name, string(block.Input)); reason != "" {
+						refused := agent.RefuseToolCall(block.Name, reason)
+						if e.display != nil && e.display.OnToolResult != nil {
+							e.display.OnToolResult(block.Name, refused, true)
+						}
+						if e.Session != nil {
+							e.Session.LogToolResult(block.ID, block.Name, refused, true)
+						}
+						toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, refused, true))
+						continue
+					}
+				}
+
 				output, err := tool.Run(ctx, string(block.Input))
 				if err != nil {
 					errMsg := fmt.Sprintf("error: %s", err)

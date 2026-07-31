@@ -171,7 +171,15 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	e.initLimitsAndProfiling(cfg)
 
 	// 8. Guard — execution modes, cost limits, repetition detection
-	e.Guard = guard.New(e.Limits.GuardConfig(guard.Autonomous)) // TODO: mode configurable via EngineConfig
+	//
+	// An unreadable mode fails session creation rather than falling back to a
+	// default. The mode names how much this session is trusted with, and the
+	// only default available is the one that trusts it with everything.
+	mode, err := guard.ParseMode(cfg.Mode)
+	if err != nil {
+		return nil, fmt.Errorf("execution mode: %w", err)
+	}
+	e.Guard = guard.New(e.Limits.GuardConfig(mode))
 
 	// 9. Trace — structured execution logging (nil = disabled)
 	e.Trace = trace.NewRecorder("", "", e.AgentName) // TODO: enable via config

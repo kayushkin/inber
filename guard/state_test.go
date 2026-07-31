@@ -127,22 +127,81 @@ func TestResumeStateOnAnEmptyRecordChangesNothing(t *testing.T) {
 	}
 }
 
-// TestRestoreStateLeavesTheWiringAlone. Mode, the repetition threshold and the
-// approval hook describe how the guard was built for this run, not how far the
-// session has got, so a restore must not touch them — restoring an Observe-mode
-// record onto an Autonomous rebuild would silently change what tools are legal.
+// TestRestoreStateLeavesTheWiringAlone. The repetition threshold and the
+// approval hook describe how the guard was built for this run rather than how
+// far the session has got, so a restore must not touch them.
+//
+// This test used to make the same claim about the mode, and a record that named
+// no mode is still held to it: the mode a rebuild was configured with survives.
+// What changed is the case the old claim got backwards. It reasoned that
+// restoring a recorded Observe onto an Autonomous rebuild "would silently
+// change what tools are legal" — but a rebuild is Autonomous because nobody
+// said otherwise, not because anybody asked, so leaving the record out is what
+// silently changes what tools are legal, in the direction that opens the
+// session up. See TestARecordedModeSurvivesARebuildThatNamesNone.
 func TestRestoreStateLeavesTheWiringAlone(t *testing.T) {
 	g := New(Config{Mode: Observe, RepetitionThreshold: 9})
 
-	g.RestoreState(State{MaxCost: 5.00, Cost: 1.00})
+	if err := g.RestoreState(State{MaxCost: 5.00, Cost: 1.00}); err != nil {
+		t.Fatalf("RestoreState: %v", err)
+	}
 
 	if g.CheckTool("shell_commands", "") != Denied {
-		t.Error("mode changed: Observe no longer denies a write tool after a restore")
+		t.Error("mode changed: a record that named no mode dropped the guard out of Observe")
 	}
 	for i := 0; i < 8; i++ {
 		g.RecordToolCall("ripgrep", "same", "")
 	}
 	if g.IsRepeating() {
 		t.Error("repetition threshold changed: 8 identical calls tripped a threshold of 9")
+	}
+}
+
+// TestARecordedModeSurvivesARebuildThatNamesNone is the whole reason the mode
+// is persisted. handleBridgeResume rebuilds a session with a zero RunRequest,
+// so a session created to observe is rebuilt with no mode named at all, and the
+// mode nobody names is the one that allows `bash -c`.
+func TestARecordedModeSurvivesARebuildThatNamesNone(t *testing.T) {
+	recorded := State{Mode: Observe.String(), MaxCost: 5.00, Cost: 1.00}
+
+	rebuilt := New(Config{}) // a resume names nothing: Unset, which allows everything
+	if err := rebuilt.RestoreState(ResumeState(recorded, rebuilt.State())); err != nil {
+		t.Fatalf("RestoreState: %v", err)
+	}
+
+	if verdict := rebuilt.CheckTool("shell_commands", "{}"); verdict != Denied {
+		t.Errorf("a resumed observe session answers %v to shell_commands, want Denied — the session came back able to run the shell it was created not to run", verdict)
+	}
+}
+
+// TestARebuildThatNamesAModeOutranksTheRecord is the complement. The record is
+// what was said last time; a mode named on this rebuild is somebody asking now,
+// and asking now wins — otherwise a session could never be let out of Observe.
+func TestARebuildThatNamesAModeOutranksTheRecord(t *testing.T) {
+	recorded := State{Mode: Observe.String()}
+
+	rebuilt := New(Config{Mode: Autonomous})
+	if err := rebuilt.RestoreState(ResumeState(recorded, rebuilt.State())); err != nil {
+		t.Fatalf("RestoreState: %v", err)
+	}
+
+	if verdict := rebuilt.CheckTool("shell_commands", "{}"); verdict != Allowed {
+		t.Errorf("a rebuild that asked for autonomous answers %v to shell_commands, want Allowed", verdict)
+	}
+}
+
+// TestAnUnreadableRecordedModeRestoresObserve pins the corrupt-record case. The
+// record says a mode was in force and cannot say which, so the restore reports
+// the problem and holds the session to the mode that can grant nothing extra.
+func TestAnUnreadableRecordedModeRestoresObserve(t *testing.T) {
+	g := New(Config{Mode: Autonomous})
+
+	err := g.RestoreState(State{Mode: "read-only"})
+
+	if err == nil {
+		t.Fatal("RestoreState accepted an unreadable mode silently")
+	}
+	if verdict := g.CheckTool("shell_commands", "{}"); verdict != Denied {
+		t.Errorf("after an unreadable mode the guard answers %v to shell_commands, want Denied", verdict)
 	}
 }

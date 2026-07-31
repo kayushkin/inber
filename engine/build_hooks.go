@@ -6,6 +6,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/guard"
 )
 
 // buildInjectCheck creates a closure that drains the injection channel.
@@ -70,6 +71,34 @@ func (e *Engine) buildLimitCheck() func(result *agent.TurnResult) (bool, string)
 		}
 
 		return false, ""
+	}
+}
+
+// buildToolRefusal renders the guard's verdict on a tool call as the reason to
+// refuse the call, or "" to let it run. Nil means this session has no guard and
+// therefore no gate.
+//
+// This is the only caller of guard.CheckTool. Before it existed, the modes were
+// unreachable: the engine built every session Autonomous, nothing asked the
+// guard about a tool, and a caller who asked for observe over the API got a
+// session that could run `bash -c` with the full environment.
+//
+// NeedsApproval is refused rather than queued. Approval needs somewhere to ask,
+// and there is nowhere yet — no session here sets ApprovalFunc and inber emits
+// no approval event for llm-bridge to answer. Refusing says so to the model,
+// which is a true answer; running the tool would be a false one.
+func (e *Engine) buildToolRefusal() func(tool, input string) string {
+	if e.Guard == nil {
+		return nil
+	}
+	return func(tool, input string) string {
+		switch e.Guard.CheckTool(tool, input) {
+		case guard.Denied:
+			return fmt.Sprintf("%s mode allows read-only tools only", e.Guard.Mode())
+		case guard.NeedsApproval:
+			return fmt.Sprintf("%s mode holds this tool for approval, and this session has no approver to ask", e.Guard.Mode())
+		}
+		return ""
 	}
 }
 

@@ -138,8 +138,19 @@ type toolCallOutcome struct {
 	chainFailed bool
 }
 
+// RefuseToolCall is the one wording for a tool call the guard would not allow,
+// shared by every dispatch site so that a refusal reads the same wherever the
+// model runs into one.
+func RefuseToolCall(tool, reason string) string {
+	return fmt.Sprintf("refused: %s was not run — %s", tool, reason)
+}
+
 // executeWithChain runs a tool and any chained follow-up, combining results.
 // Also processes sideband fields (done, note, split) if callbacks are set.
+//
+// refusal, when set, is asked about the primary call and the chained call
+// alike. Both are calls the model asked for, and gating only the first would
+// leave "then" as a way around the gate.
 //
 // cachedPrimaryOutput, when non-nil, stands in for running the primary tool:
 // the read cache has already established that the file is in context and
@@ -148,12 +159,23 @@ type toolCallOutcome struct {
 // tool_use block and are separate instructions from the model, so they still
 // run — skipping them discarded half of what the model asked for while telling
 // it nothing.
-func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string, rawInput string, hooks *Hooks, blockID string, sbCallbacks *SidebandCallbacks, cachedPrimaryOutput *string) (outcome toolCallOutcome, isError bool) {
+func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string, rawInput string, hooks *Hooks, blockID string, sbCallbacks *SidebandCallbacks, cachedPrimaryOutput *string, refusal func(tool, input string) string) (outcome toolCallOutcome, isError bool) {
 	// Extract sideband fields first, then chain.
 	cleanInput, sb := extractSideband(rawInput)
 	sbSummary := processSideband(ctx, sb, sbCallbacks)
 	cleanInput, chain := extractChain(cleanInput)
 	outcome.primaryInput = cleanInput
+
+	// Ask the gate before anything else this block asks for happens. A refused
+	// call is refused whether or not the read cache could have answered it: the
+	// cached stub is still that tool's output, and the sideband fields are
+	// instructions that arrived attached to a call that is not going to run.
+	if refusal != nil {
+		if reason := refusal(name, cleanInput); reason != "" {
+			outcome.combined = RefuseToolCall(name, reason)
+			return outcome, true
+		}
+	}
 
 	// Run primary tool, unless the read cache already answered for it.
 	if cachedPrimaryOutput != nil {
@@ -193,6 +215,13 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 	if !ok {
 		outcome.combined = primaryReport + fmt.Sprintf("\n\n--- then(%s) error: unknown tool ---", chain.Tool)
 		return outcome, false
+	}
+
+	if refusal != nil {
+		if reason := refusal(chain.Tool, string(chain.Input)); reason != "" {
+			outcome.combined = primaryReport + fmt.Sprintf("\n\n--- then(%s) %s ---", chain.Tool, RefuseToolCall(chain.Tool, reason))
+			return outcome, false
+		}
 	}
 
 	if hooks != nil && hooks.OnToolCall != nil {
