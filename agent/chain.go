@@ -80,36 +80,66 @@ type chainedTool struct {
 }
 
 // extractChain parses and removes the "then" field from raw tool input JSON.
-// Returns the cleaned input (without "then") and the chained tool if present.
-func extractChain(rawInput string) (cleanInput string, chain *chainedTool) {
+// Returns the cleaned input (without "then"), the chained tool if one parsed,
+// and the raw bytes of the field.
+//
+// dropped is the reason the field was taken out of the input and cannot be run,
+// empty when there was no chain or when it parsed. It is a return value rather
+// than a silent nil because "then" is a call the model asked for: the field is
+// deleted from the input either way, so a chain that cannot run has to say so
+// or it disappears without a word — which is what used to happen, and what the
+// only "then" chain on this host ran into.
+func extractChain(rawInput string) (cleanInput string, chain *chainedTool, thenRaw []byte, dropped string) {
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(rawInput), &parsed); err != nil {
-		return rawInput, nil
+		return rawInput, nil, nil, ""
 	}
 
-	thenRaw, hasThen := parsed[chainField]
+	thenValue, hasThen := parsed[chainField]
 	if !hasThen {
-		return rawInput, nil
+		return rawInput, nil, nil, ""
 	}
 	delete(parsed, chainField)
 
-	// Re-marshal clean input
+	thenBytes, err := json.Marshal(thenValue)
+	if err != nil {
+		thenBytes = nil
+	}
+
+	// Re-marshal clean input. Failing here leaves "then" in the input the
+	// primary tool receives, so the field is neither removed nor run.
 	cleanBytes, err := json.Marshal(parsed)
 	if err != nil {
-		return rawInput, nil
+		return rawInput, nil, thenBytes, "its tool input could not be rewritten without it"
+	}
+	cleanInput = string(cleanBytes)
+
+	if thenBytes == nil {
+		return cleanInput, nil, nil, "it could not be read back out of the tool input"
 	}
 
-	// Parse the chain
-	thenBytes, err := json.Marshal(thenRaw)
-	if err != nil {
-		return string(cleanBytes), nil
+	// A model that writes the object as text means the same thing by it. The
+	// one "then" chain in 95 sessions of transcripts on this host arrived this
+	// way — a JSON string wrapping {"tool":…,"input":…} — and was thrown away.
+	// Decoding it changes nothing about what runs: the payload is the model's,
+	// only its quoting was.
+	if text, isText := thenValue.(string); isText {
+		var ct chainedTool
+		if err := json.Unmarshal([]byte(text), &ct); err != nil || ct.Tool == "" {
+			return cleanInput, nil, thenBytes, "it arrived as text that does not read as {tool, input}"
+		}
+		return cleanInput, &ct, thenBytes, ""
 	}
+
 	var ct chainedTool
-	if err := json.Unmarshal(thenBytes, &ct); err != nil || ct.Tool == "" {
-		return string(cleanBytes), nil
+	if err := json.Unmarshal(thenBytes, &ct); err != nil {
+		return cleanInput, nil, thenBytes, "it is not an object with a tool and an input"
+	}
+	if ct.Tool == "" {
+		return cleanInput, nil, thenBytes, "it names no tool"
 	}
 
-	return string(cleanBytes), &ct
+	return cleanInput, &ct, thenBytes, ""
 }
 
 // toolCallOutcome is everything one tool_use block produced. A block can carry
@@ -136,6 +166,30 @@ type toolCallOutcome struct {
 	chainOutput string
 	// chainFailed reports that the chained tool returned an error.
 	chainFailed bool
+	// chainNotRunTool and chainNotRunReason describe a chain the block carried
+	// and that never ran — malformed, naming a tool that does not exist,
+	// refused, or attached to a primary call that itself did not run. They are
+	// the record of a call the model asked for and did not get, which is the
+	// one outcome that must not be inferable only from the absence of a
+	// marker. chainNotRunTool is the chain field's own name when the chain was
+	// too malformed to name a tool.
+	chainNotRunTool   string
+	chainNotRunReason string
+	// chainNotRunRefused marks the guard as the reason, so the refusal reaches
+	// the model in the same wording it has everywhere else.
+	chainNotRunRefused bool
+}
+
+// chainNotRunNote is what a chain that did not run says on the tool result it
+// rode in on.
+func (o toolCallOutcome) chainNotRunNote() string {
+	if o.chainNotRunReason == "" {
+		return ""
+	}
+	if o.chainNotRunRefused {
+		return chainNote(o.chainNotRunTool, RefuseToolCall(o.chainNotRunTool, o.chainNotRunReason))
+	}
+	return chainNote(o.chainNotRunTool, "not run: "+o.chainNotRunReason)
 }
 
 // RefuseToolCall is the one wording for a tool call the guard would not allow,
@@ -143,6 +197,14 @@ type toolCallOutcome struct {
 // model runs into one.
 func RefuseToolCall(tool, reason string) string {
 	return fmt.Sprintf("refused: %s was not run — %s", tool, reason)
+}
+
+// chainNote is the one shape for what a "then" chain reports back on the tool
+// result it rode in on. The chain that ran writes its marker and its output
+// below it; every chain that did not run writes its reason here instead, so
+// the two read as the same kind of thing in the transcript.
+func chainNote(tool, body string) string {
+	return fmt.Sprintf("\n\n--- then(%s) %s ---", tool, body)
 }
 
 // executeWithChain runs a tool and any chained follow-up, combining results.
@@ -163,8 +225,49 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 	// Extract sideband fields first, then chain.
 	cleanInput, sb := extractSideband(rawInput)
 	sbSummary := processSideband(ctx, sb, sbCallbacks)
-	cleanInput, chain := extractChain(cleanInput)
+	cleanInput, chain, thenRaw, dropped := extractChain(cleanInput)
 	outcome.primaryInput = cleanInput
+
+	// Every way out of this function goes past here, including the ones that
+	// return before the chain is reached, so what the block asked for besides
+	// its primary call is reported on the tool result the model reads — once,
+	// in one wording, whether or not that primary call ran.
+	//
+	// The sideband summary is part of that. Its callbacks have already fired by
+	// this line: a task really was completed, a note really was saved, and
+	// reporting it only on the paths where the primary tool succeeded meant a
+	// refused or failed call swallowed the record of work that did happen.
+	defer func() {
+		if sbSummary != "" {
+			outcome.combined = sbSummary + "\n" + outcome.combined
+		}
+		note := outcome.chainNotRunNote()
+		if note == "" {
+			return
+		}
+		outcome.combined += note
+		if hooks != nil && hooks.OnToolResult != nil {
+			hooks.OnToolResult(blockID+"-chain", outcome.chainNotRunTool, strings.TrimSpace(note), true)
+		}
+	}()
+
+	if dropped != "" {
+		outcome.chainNotRunTool = chainField
+		outcome.chainNotRunReason = dropped
+		if hooks != nil && hooks.OnToolCall != nil {
+			hooks.OnToolCall(blockID+"-chain", chainField, thenRaw)
+		}
+	}
+
+	// A chain that parsed still does not run unless the primary call does. The
+	// three returns below all leave it unrun, so each one records that first.
+	notRunWithPrimary := func(reason string) {
+		if chain == nil {
+			return
+		}
+		outcome.chainNotRunTool = chain.Tool
+		outcome.chainNotRunReason = reason
+	}
 
 	// Ask the gate before anything else this block asks for happens. A refused
 	// call is refused whether or not the read cache could have answered it: the
@@ -173,6 +276,7 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 	if refusal != nil {
 		if reason := refusal(name, cleanInput); reason != "" {
 			outcome.combined = RefuseToolCall(name, reason)
+			notRunWithPrimary(fmt.Sprintf("the call it was attached to was refused — %s", reason))
 			return outcome, true
 		}
 	}
@@ -184,11 +288,13 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 		tool, ok := toolMap[name]
 		if !ok {
 			outcome.combined = fmt.Sprintf("error: unknown tool %q", name)
+			notRunWithPrimary(fmt.Sprintf("the call it was attached to names no tool %q", name))
 			return outcome, true
 		}
 		primaryOutput, err := tool.Run(ctx, cleanInput)
 		if err != nil {
 			outcome.combined = fmt.Sprintf("error: %s", err)
+			notRunWithPrimary(fmt.Sprintf("the call it was attached to failed — %s", err))
 			return outcome, true
 		}
 		outcome.primaryOutput = primaryOutput
@@ -198,11 +304,8 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 		hooks.OnToolResult(blockID, name, outcome.primaryOutput, false)
 	}
 
-	// Prepend sideband summary if any
+	// The sideband summary is prepended for every path out of here, above.
 	primaryReport := outcome.primaryOutput
-	if sbSummary != "" {
-		primaryReport = sbSummary + "\n" + primaryReport
-	}
 
 	// No chain — return primary result
 	if chain == nil {
@@ -213,13 +316,18 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 	// Execute chained tool
 	chainTool, ok := toolMap[chain.Tool]
 	if !ok {
-		outcome.combined = primaryReport + fmt.Sprintf("\n\n--- then(%s) error: unknown tool ---", chain.Tool)
+		outcome.combined = primaryReport
+		outcome.chainNotRunTool = chain.Tool
+		outcome.chainNotRunReason = "no tool of that name"
 		return outcome, false
 	}
 
 	if refusal != nil {
 		if reason := refusal(chain.Tool, string(chain.Input)); reason != "" {
-			outcome.combined = primaryReport + fmt.Sprintf("\n\n--- then(%s) %s ---", chain.Tool, RefuseToolCall(chain.Tool, reason))
+			outcome.combined = primaryReport
+			outcome.chainNotRunTool = chain.Tool
+			outcome.chainNotRunReason = reason
+			outcome.chainNotRunRefused = true
 			return outcome, false
 		}
 	}

@@ -32,9 +32,16 @@ type SidebandCallbacks struct {
 
 // sidebandData parsed from tool input.
 type sidebandData struct {
-	Done  []int         `json:"done,omitempty"`
-	Note  *noteData     `json:"note,omitempty"`
-	Split *splitData    `json:"split,omitempty"`
+	Done  []int      `json:"done,omitempty"`
+	Note  *noteData  `json:"note,omitempty"`
+	Split *splitData `json:"split,omitempty"`
+	// Ignored names each sideband field that was taken out of the tool input
+	// and could not be used, with the reason. A sideband field is an
+	// instruction from the model that is deleted from the input whatever
+	// happens to it, so one that cannot be carried out has to be reported —
+	// otherwise the model asks for a task to be completed and learns nothing
+	// at all, which reads to it exactly like success.
+	Ignored []string `json:"-"`
 }
 
 type noteData struct {
@@ -85,20 +92,40 @@ func extractSideband(rawInput string) (cleanInput string, sb *sidebandData) {
 	var hasSideband bool
 	var data sidebandData
 
+	ignore := func(field, reason string) {
+		data.Ignored = append(data.Ignored, fmt.Sprintf("%s ignored: %s", field, reason))
+	}
+
 	if doneRaw, ok := parsed[sbDone]; ok {
 		hasSideband = true
 		delete(parsed, sbDone)
-		if doneBytes, err := json.Marshal(doneRaw); err == nil {
-			_ = json.Unmarshal(doneBytes, &data.Done)
+		doneBytes, err := json.Marshal(doneRaw)
+		switch {
+		case err != nil:
+			ignore(sbDone, "it could not be read back out of the tool input")
+		default:
+			if err := json.Unmarshal(doneBytes, &data.Done); err != nil {
+				ignore(sbDone, "it is not a list of task indices")
+			} else if len(data.Done) == 0 {
+				ignore(sbDone, "it names no task")
+			}
 		}
 	}
 
 	if noteRaw, ok := parsed[sbNote]; ok {
 		hasSideband = true
 		delete(parsed, sbNote)
-		if noteBytes, err := json.Marshal(noteRaw); err == nil {
+		noteBytes, err := json.Marshal(noteRaw)
+		switch {
+		case err != nil:
+			ignore(sbNote, "it could not be read back out of the tool input")
+		default:
 			var nd noteData
-			if json.Unmarshal(noteBytes, &nd) == nil && nd.Key != "" {
+			if err := json.Unmarshal(noteBytes, &nd); err != nil {
+				ignore(sbNote, "it is not an object with a key and a value")
+			} else if nd.Key == "" {
+				ignore(sbNote, "it has no key to save under")
+			} else {
 				data.Note = &nd
 			}
 		}
@@ -107,9 +134,17 @@ func extractSideband(rawInput string) (cleanInput string, sb *sidebandData) {
 	if splitRaw, ok := parsed[sbSplit]; ok {
 		hasSideband = true
 		delete(parsed, sbSplit)
-		if splitBytes, err := json.Marshal(splitRaw); err == nil {
+		splitBytes, err := json.Marshal(splitRaw)
+		switch {
+		case err != nil:
+			ignore(sbSplit, "it could not be read back out of the tool input")
+		default:
 			var sd splitData
-			if json.Unmarshal(splitBytes, &sd) == nil && len(sd.Into) > 0 {
+			if err := json.Unmarshal(splitBytes, &sd); err != nil {
+				ignore(sbSplit, "it is not an object with an index and subtasks")
+			} else if len(sd.Into) == 0 {
+				ignore(sbSplit, "it names no subtasks to split into")
+			} else {
 				data.Split = &sd
 			}
 		}
@@ -127,34 +162,63 @@ func extractSideband(rawInput string) (cleanInput string, sb *sidebandData) {
 }
 
 // processSideband executes sideband callbacks and returns a summary string.
+//
+// It reports what it could not do as well as what it did. The sideband schema
+// is injected into every tool of every agent (agent_run.go), so a model can
+// always write "done" — including to an agent that has no task list behind it,
+// where nothing is listening and the field is deleted from the input anyway.
+// Saying so is the difference between a task the model knows was not completed
+// and one it believes was.
 func processSideband(ctx context.Context, sb *sidebandData, cb *SidebandCallbacks) string {
-	if sb == nil || cb == nil {
+	if sb == nil {
 		return ""
 	}
 
 	var parts []string
+	for _, ignored := range sb.Ignored {
+		parts = append(parts, fmt.Sprintf("[%s]", ignored))
+	}
 
-	if len(sb.Done) > 0 && cb.CompleteTasks != nil {
-		if err := cb.CompleteTasks(ctx, sb.Done); err != nil {
-			parts = append(parts, fmt.Sprintf("[task error: %s]", err))
-		} else {
-			parts = append(parts, fmt.Sprintf("[✓ completed %d task(s)]", len(sb.Done)))
+	unhandled := func(field string) {
+		parts = append(parts, fmt.Sprintf("[%s ignored: this agent has nothing to apply it to]", field))
+	}
+
+	if len(sb.Done) > 0 {
+		switch {
+		case cb == nil || cb.CompleteTasks == nil:
+			unhandled(sbDone)
+		default:
+			if err := cb.CompleteTasks(ctx, sb.Done); err != nil {
+				parts = append(parts, fmt.Sprintf("[task error: %s]", err))
+			} else {
+				parts = append(parts, fmt.Sprintf("[✓ completed %d task(s)]", len(sb.Done)))
+			}
 		}
 	}
 
-	if sb.Note != nil && cb.SaveNote != nil {
-		if err := cb.SaveNote(sb.Note.Key, sb.Note.Value); err != nil {
-			parts = append(parts, fmt.Sprintf("[note error: %s]", err))
-		} else {
-			parts = append(parts, fmt.Sprintf("[📝 noted: %s]", sb.Note.Key))
+	if sb.Note != nil {
+		switch {
+		case cb == nil || cb.SaveNote == nil:
+			unhandled(sbNote)
+		default:
+			if err := cb.SaveNote(sb.Note.Key, sb.Note.Value); err != nil {
+				parts = append(parts, fmt.Sprintf("[note error: %s]", err))
+			} else {
+				parts = append(parts, fmt.Sprintf("[📝 noted: %s]", sb.Note.Key))
+			}
 		}
 	}
 
-	if sb.Split != nil && cb.SplitTask != nil {
-		if err := cb.SplitTask(sb.Split.Index, sb.Split.Into); err != nil {
-			parts = append(parts, fmt.Sprintf("[split error: %s]", err))
-		} else {
-			parts = append(parts, fmt.Sprintf("[📋 split into %d subtasks]", len(sb.Split.Into)))
+	if sb.Split != nil {
+		switch {
+		case cb == nil || cb.SplitTask == nil:
+			unhandled(sbSplit)
+		default:
+			if err := cb.SplitTask(sb.Split.Index, sb.Split.Into); err != nil {
+				parts = append(parts, fmt.Sprintf("[split error: %s]", err))
+			} else {
+				parts = append(parts, fmt.Sprintf("[📋 split into %d subtasks]", len(sb.Split.Into)))
+			}
 		}
 	}
 
