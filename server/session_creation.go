@@ -13,6 +13,7 @@ import (
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/conversation"
 	"github.com/kayushkin/inber/engine"
+	"github.com/kayushkin/inber/guard"
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
@@ -140,6 +141,8 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 		eng.RestoreSession(msgs, turnCounter)
 	}
 
+	g.restoreGuardState(key, eng.Guard)
+
 	return &Session{
 		Key:        key,
 		AgentName:  agentName,
@@ -149,6 +152,50 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 		LastActive: time.Now(),
 		injections: injections,
 	}, nil
+}
+
+// restoreGuardState puts the safety limits recorded against a session key, and
+// the totals counted against them, back onto the guard that a rebuild of that
+// session has just constructed.
+//
+// Every limit this server has — max_turns, max_input_tokens, max_cost — arrives
+// on the RunRequest that starts a session and is copied onto the engine by
+// applyRequestOverrides. A session is not always started by such a request:
+// handleBridgeResume rebuilds one from its persisted messages when a session
+// is asked for and is no longer in memory, and it has no request to pass, so it
+// passes a zero one. Every cap the session had was a field of that request, so
+// before this the rebuilt session had none at all — and a zero cap reads as
+// unlimited, so a session capped at $5 came back with no cap, no log line and
+// no error.
+//
+// The totals matter as much as the caps, and are restored in the same call:
+// putting a $5 cap back on a guard that has forgotten the $4.80 already spent
+// under it hands the budget back whole, and a session rebuilt often enough
+// would never reach any cap at all.
+func (g *Server) restoreGuardState(key string, sessionGuard *guard.Guard) {
+	if sessionGuard == nil {
+		return
+	}
+	dir := filepath.Join(g.config.DataDir, "sessions", key)
+	recorded, err := sessionMod.LoadGuardState(dir)
+	if err != nil {
+		log.Printf("[server] safety limits unreadable for %s, running under whatever this rebuild configured: %v", key, err)
+		return
+	}
+	// Nothing was recorded — a session being created rather than rebuilt, or one
+	// last persisted before this sidecar existed. ResumeState would return the
+	// configured state unchanged, so say nothing rather than log a restore that
+	// restored nothing.
+	if recorded == (guard.State{}) {
+		return
+	}
+
+	sessionGuard.RestoreState(guard.ResumeState(recorded, sessionGuard.State()))
+
+	restored := sessionGuard.State()
+	log.Printf("[server] restored safety limits for %s (max turns %d, max input tokens %d, max cost $%.2f; already spent %d turns, %d input tokens, $%.4f)",
+		key, restored.MaxTurns, restored.MaxInputTokens, restored.MaxCost,
+		restored.Turns, restored.InputTokens, restored.Cost)
 }
 
 // loadPersistedSession loads a session's messages and the turn count recorded

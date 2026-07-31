@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kayushkin/inber/guard"
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
@@ -124,12 +125,18 @@ func (g *Server) Inject(sessionKey, message string) error {
 // Session persistence
 // ---------------------------------------------------------------------------
 
-// persistSessionState saves a session's messages and turn count to disk — both
-// halves of what loadPersistedSession reads back on resume.
+// persistSessionState saves a session's messages, turn count and safety limits
+// to disk — everything createSession reads back when it rebuilds the session
+// under that key.
 func (g *Server) persistSessionState(s *Session) {
 	s.mu.Lock()
 	msgs := s.Engine.Messages
 	turnCounter := s.Engine.Turn.Counter
+	var guardState guard.State
+	haveGuardState := s.Engine.Guard != nil
+	if haveGuardState {
+		guardState = s.Engine.Guard.State()
+	}
 	s.mu.Unlock()
 
 	dir := filepath.Join(g.config.DataDir, "sessions", s.Key)
@@ -144,5 +151,11 @@ func (g *Server) persistSessionState(s *Session) {
 
 	if err := sessionMod.SaveTurnCounter(dir, turnCounter); err != nil {
 		log.Printf("[server] turn counter not persisted for %s, next resume will start from turn 0: %v", s.Key, err)
+	}
+
+	if haveGuardState {
+		if err := sessionMod.SaveGuardState(dir, guardState); err != nil {
+			log.Printf("[server] safety limits not persisted for %s, next resume will rebuild it uncapped and unspent: %v", s.Key, err)
+		}
 	}
 }
