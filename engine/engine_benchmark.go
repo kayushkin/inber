@@ -160,7 +160,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 	// Phase 9: Build and configure tools
 	phaseStart = time.Now()
 	if !cfg.NoTools {
-		e.agentTools = mergeExtraTools(e.buildTools(), cfg.ExtraTools)
+		e.setToolSet(mergeExtraTools(e.buildTools(), cfg.ExtraTools))
 		
 		// Load tool registry into memory
 		if err := loadToolsIntoMemory(e.MemStore, e.agentTools); err != nil {

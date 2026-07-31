@@ -616,6 +616,21 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 // POST /sessions/{id}/config — update model, effort, tools, budget
 // ---------------------------------------------------------------------------
 
+// ConfigRequest is the body of POST /sessions/{id}/config. Every field is
+// optional and an omitted one leaves that setting alone.
+//
+// DisabledTools is a slice rather than a bool-per-tool for one reason worth
+// stating: it is the whole set, so sending it with no entries is how a caller
+// re-enables everything. That makes the nil/empty distinction load-bearing —
+// absent means "do not touch the tool set", `[]` means "disable nothing" — and
+// it is why the handler tests this field for nil rather than for length.
+type ConfigRequest struct {
+	Model         string   `json:"model,omitempty"`
+	Effort        string   `json:"effort,omitempty"` // "high", "medium", "low" or raw token count
+	DisabledTools []string `json:"disabled_tools,omitempty"`
+	MaxBudget     int      `json:"max_budget,omitempty"` // max input tokens
+}
+
 func (g *Server) handleBridgeConfig(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -629,12 +644,7 @@ func (g *Server) handleBridgeConfig(w http.ResponseWriter, r *http.Request, id s
 	}
 	s := val.(*Session)
 
-	var req struct {
-		Model         string   `json:"model,omitempty"`
-		Effort        string   `json:"effort,omitempty"` // "high", "medium", "low" or raw token count
-		DisabledTools []string `json:"disabled_tools,omitempty"`
-		MaxBudget     int      `json:"max_budget,omitempty"` // max input tokens
-	}
+	var req ConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -665,7 +675,9 @@ func (g *Server) handleBridgeConfig(w http.ResponseWriter, r *http.Request, id s
 		s.Engine.SetThinkingBudget(budget)
 	}
 
-	if len(req.DisabledTools) > 0 {
+	// nil, not length: an explicit empty list is the request that re-enables
+	// every tool, and a length test discards it as if the field were absent.
+	if req.DisabledTools != nil {
 		s.Engine.SetDisabledTools(req.DisabledTools)
 	}
 

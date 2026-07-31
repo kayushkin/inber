@@ -81,7 +81,14 @@ type Engine struct {
 	IdentityOverride string              // system prompt for raw/override modes
 
 	// --- Internal state ---
-	repoRoot            string
+	repoRoot string
+	// allTools is every tool the session was built with. agentTools is that set
+	// minus disabledToolNames, and is what a turn puts on the wire. Keeping both
+	// is what makes disabling reversible: filtering agentTools in place threw the
+	// full set away, so each call subtracted from the previous answer and no
+	// request could turn a tool back on.
+	allTools            []agent.Tool
+	disabledToolNames   map[string]bool
 	agentTools          []agent.Tool
 	display             *DisplayHooks
 	displayMu           sync.Mutex
@@ -310,16 +317,61 @@ func (e *Engine) ThinkingBudget() int64 {
 	return e.thinkingBud
 }
 
-// SetDisabledTools updates the set of tools that should be excluded from subsequent turns.
+// SetDisabledTools replaces the set of tool names excluded from subsequent
+// turns. The names given are the whole answer, not an addition to it: a name
+// that was disabled and is not named here is enabled again, and an empty or nil
+// set restores every tool the session was built with.
+//
+// An unknown name is not an error. The set is a filter over the tools this
+// session holds, not a registry, so a caller may name a tool this agent never
+// had without emptying the wire.
 func (e *Engine) SetDisabledTools(names []string) {
 	disabled := make(map[string]bool, len(names))
 	for _, n := range names {
 		disabled[n] = true
 	}
-	var filtered []agent.Tool
-	// Re-filter from the full tool set.
-	for _, t := range e.agentTools {
-		if !disabled[t.Name] {
+	e.disabledToolNames = disabled
+	e.applyDisabledTools()
+}
+
+// EnabledToolNames returns the names of the tools a turn would put on the wire,
+// in the order the model sees them. SetDisabledTools had no exported reader, so
+// a caller that changed a session's tool set had no way to find out what it had
+// actually done.
+func (e *Engine) EnabledToolNames() []string {
+	names := make([]string, len(e.agentTools))
+	for i, t := range e.agentTools {
+		names[i] = t.Name
+	}
+	return names
+}
+
+// setToolSet installs the tools a session was built with and derives the wire
+// set from them. Both engine constructors go through it so neither can install
+// tools without also honouring an already-disabled name.
+func (e *Engine) setToolSet(tools []agent.Tool) {
+	e.allTools = tools
+	e.applyDisabledTools()
+}
+
+// applyDisabledTools derives agentTools from allTools. It preserves the order
+// of the surviving tools: agent/agent_run.go anchors the cache_control
+// breakpoint on the last tool definition, so reordering them would move the
+// breakpoint and throw away the cached prefix on every config call.
+func (e *Engine) applyDisabledTools() {
+	if e.allTools == nil {
+		// An engine handed only its wire set — the test helpers in this package,
+		// and anything that assigns agentTools directly. What it was given is the
+		// full set it has.
+		e.allTools = e.agentTools
+	}
+	if len(e.disabledToolNames) == 0 {
+		e.agentTools = e.allTools
+		return
+	}
+	filtered := make([]agent.Tool, 0, len(e.allTools))
+	for _, t := range e.allTools {
+		if !e.disabledToolNames[t.Name] {
 			filtered = append(filtered, t)
 		}
 	}

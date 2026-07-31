@@ -556,7 +556,7 @@ func (e *Engine) initWorkflow(cfg EngineConfig) {
 
 // initTools builds and configures the tool set.
 func (e *Engine) initTools(cfg EngineConfig) {
-	e.agentTools = mergeExtraTools(e.buildTools(), cfg.ExtraTools)
+	e.setToolSet(mergeExtraTools(e.buildTools(), cfg.ExtraTools))
 
 	// Register context injectors for tools that provide always-visible context
 	e.registerToolContextInjectors()
