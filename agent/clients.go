@@ -70,6 +70,15 @@ func newClientFromKey(apiKey string, model *modelstore.Model) (*ModelClient, err
 		Model:    model,
 	}
 
+	// Teach the egress gate the credential this client is about to send with.
+	// It is the one secret inber is certain to hold and the one a session can
+	// most easily read back — it is resolved from auth-store or aiauth's own
+	// config on disk, both readable by read_files — and on this host it is
+	// nowhere in the environment, so the redactor cannot learn it any other
+	// way. The key travels in a header, never in the body, so redacting the
+	// body cannot break authentication.
+	registerProviderCredentialWithEgressRedactor(model.Provider, apiKey)
+
 	switch model.Provider {
 	case "anthropic":
 		client, err := newAnthropicClient(apiKey)
@@ -93,11 +102,18 @@ func newClientFromKey(apiKey string, model *modelstore.Model) (*ModelClient, err
 }
 
 // newAnthropicClient creates an Anthropic client from an API key or OAuth token.
+//
+// Both forms carry EgressRedactionRequestOption. It is passed at construction
+// rather than at each call because a client is what a caller is handed: the
+// summarizer, the conversation extractor and the turn loop all send through a
+// client they were given, and a gate installed per call site would have to be
+// remembered at every one of them.
 func newAnthropicClient(key string) (*anthropic.Client, error) {
 	log.Printf("[auth] creating Anthropic client: key_prefix=%s", key[:min(20, len(key))])
 
 	if strings.HasPrefix(key, "sk-ant-oat01-") {
 		c := anthropic.NewClient(
+			EgressRedactionRequestOption(),
 			option.WithAuthToken(key),
 			option.WithHeaderDel("X-Api-Key"),
 			option.WithHeader("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-2024-07-31"),
@@ -108,6 +124,7 @@ func newAnthropicClient(key string) (*anthropic.Client, error) {
 	}
 
 	c := anthropic.NewClient(
+		EgressRedactionRequestOption(),
 		option.WithAPIKey(key),
 		option.WithHeader("anthropic-beta", "prompt-caching-2024-07-31"),
 	)

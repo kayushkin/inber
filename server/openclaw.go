@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kayushkin/bus/messages"
+	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/bus"
 )
 
@@ -26,13 +27,13 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 		return
 	}
 
-	agent := msg.Agent
-	if agent == "" {
-		agent = "main"
+	agentName := msg.Agent
+	if agentName == "" {
+		agentName = "main"
 	}
 	sessionID := "main"
 
-	log.Printf("[openclaw] bus → %s: %s", agent, truncate(msg.Text, 80))
+	log.Printf("[openclaw] bus → %s: %s", agentName, truncate(msg.Text, 80))
 
 	content := msg.Text
 	if msg.Author != "" {
@@ -59,10 +60,18 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	if g.config.OpenClawToken != "" {
 		req.Header.Set("Authorization", "Bearer "+g.config.OpenClawToken)
 	}
-	req.Header.Set("x-openclaw-agent-id", agent)
-	req.Header.Set("x-openclaw-session-key", fmt.Sprintf("agent:%s:main", agent))
+	req.Header.Set("x-openclaw-agent-id", agentName)
+	req.Header.Set("x-openclaw-session-key", fmt.Sprintf("agent:%s:main", agentName))
 
-	client := &http.Client{Timeout: 5 * time.Minute}
+	// The OpenClaw gateway is an OpenAI-compatible chat endpoint like any
+	// other, so what is forwarded to it passes the same egress gate. The
+	// local variable that used to be called `agent` was renamed to agentName
+	// because it holds a name, and because it shadowed the package this gate
+	// lives in.
+	client := &http.Client{
+		Timeout:   5 * time.Minute,
+		Transport: agent.EgressRedactionTransport(nil),
+	}
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
@@ -105,7 +114,7 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 			delta := chunk.Choices[0].Delta.Content
 			if delta != "" {
 				fullText.WriteString(delta)
-				d := messages.NewChatDelta(agent, "openclaw", sessionID, "text")
+				d := messages.NewChatDelta(agentName, "openclaw", sessionID, "text")
 				d.Text = delta
 				g.bus.PublishDelta(d)
 			}
@@ -115,16 +124,16 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	duration := time.Since(start)
 
 	if usage.PromptTokens == 0 && usage.CompletionTokens == 0 {
-		if u, ok := readOpenClawUsage(agent); ok {
+		if u, ok := readOpenClawUsage(agentName); ok {
 			usage = u
 		}
 	}
 
 	log.Printf("[openclaw] → %s: %s (%.1fs, %d in, %d out)",
-		agent, truncate(fullText.String(), 80), duration.Seconds(), usage.PromptTokens, usage.CompletionTokens)
+		agentName, truncate(fullText.String(), 80), duration.Seconds(), usage.PromptTokens, usage.CompletionTokens)
 
 	// Publish done on chat.stream
-	done := messages.NewDoneDelta(agent, "openclaw", sessionID, &messages.TurnStats{
+	done := messages.NewDoneDelta(agentName, "openclaw", sessionID, &messages.TurnStats{
 		InputTokens:  usage.PromptTokens,
 		OutputTokens: usage.CompletionTokens,
 		DurationMs:   int(duration.Milliseconds()),
@@ -134,7 +143,7 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 	// Publish completed message on chat.outbound
 	if fullText.Len() > 0 {
 		g.bus.PublishOutbound(messages.ChatOutbound{
-			Agent:        agent,
+			Agent:        agentName,
 			Orchestrator: "openclaw",
 			SessionID:    sessionID,
 			Text:         fullText.String(),

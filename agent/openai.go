@@ -19,13 +19,20 @@ type OpenAIClient struct {
 }
 
 // NewOpenAIClient creates an OpenAI-compatible client.
+//
+// The transport carries the same egress redaction as the Anthropic client.
+// This path is easy to forget — it is a hand-rolled client rather than an SDK,
+// and it serves openai, google, openrouter, ollama and the catch-all for every
+// provider inber does not name — so the gate is installed on the transport,
+// where every request through this client must pass whatever the call site.
 func NewOpenAIClient(baseURL, apiKey, model string) *OpenAIClient {
 	return &OpenAIClient{
 		BaseURL: baseURL,
 		APIKey:  apiKey,
 		Model:   model,
 		client: &http.Client{
-			Timeout: 120 * time.Second, // Prevent infinite hangs
+			Timeout:   120 * time.Second, // Prevent infinite hangs
+			Transport: EgressRedactionTransport(nil),
 		},
 	}
 }

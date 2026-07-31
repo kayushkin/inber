@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/logger"
 )
 
@@ -72,7 +73,11 @@ func (g *Server) handleOneShot(w http.ResponseWriter, r *http.Request) {
 		maxTokens = 4096
 	}
 
-	client := anthropic.NewClient()
+	// This handler builds its own client instead of taking one from the
+	// engine, so it has to install the egress gate itself. It is the one
+	// anthropic.NewClient call outside agent.newAnthropicClient, and the one
+	// that would silently post an unredacted prompt if this were dropped.
+	client := anthropic.NewClient(agent.EgressRedactionRequestOption())
 
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(model),
