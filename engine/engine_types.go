@@ -5,6 +5,7 @@ import (
 
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/conversation"
+	"github.com/kayushkin/inber/guard"
 	sessionMod "github.com/kayushkin/inber/session"
 	modelstore "github.com/kayushkin/model-store"
 )
@@ -96,6 +97,26 @@ type LimitConfig struct {
 	MaxTurns        int
 	MaxInputTokens  int
 	MaxResponseTime int
+	MaxCost         float64 // dollars — 0 = unlimited
+}
+
+// GuardConfig renders the engine's limits as the guard's configuration.
+//
+// The guard enforces the limits; this is the one place that says which of the
+// engine's limits it is given. It used to be written inline at the guard's
+// construction and listed MaxTurns and MaxInputTokens only, so MaxCost reached
+// the guard as its zero value — and guard.Config documents 0 as unlimited, so
+// the omission read as "no cap wanted" rather than as a missing field.
+//
+// MaxResponseTime is deliberately absent: it bounds a single turn's wall clock
+// and is checked by the build hooks in build_hooks.go, not by the guard.
+func (l LimitConfig) GuardConfig(mode guard.Mode) guard.Config {
+	return guard.Config{
+		Mode:           mode,
+		MaxTurns:       l.MaxTurns,
+		MaxInputTokens: l.MaxInputTokens,
+		MaxCost:        l.MaxCost,
+	}
 }
 
 // TokenTotals holds session-level token usage.

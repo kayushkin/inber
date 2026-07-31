@@ -151,6 +151,14 @@ func (g *Guard) RecordCost(dollars float64) {
 	g.cost += dollars
 }
 
+// CostSoFar returns the cumulative cost recorded for this session, in dollars.
+// This is the figure CheckLimits compares against MaxCost, and the only way to
+// read it from outside the package: a running total nothing can see is a total
+// nothing can check.
+func (g *Guard) CostSoFar() float64 {
+	return g.cost
+}
+
 // CheckLimits returns whether any limit has been exceeded and why.
 func (g *Guard) CheckLimits() (exceeded bool, reason string) {
 	if g.cfg.MaxTurns > 0 && g.turns >= g.cfg.MaxTurns {

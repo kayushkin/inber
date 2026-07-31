@@ -171,11 +171,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	e.initLimitsAndProfiling(cfg)
 
 	// 8. Guard — execution modes, cost limits, repetition detection
-	e.Guard = guard.New(guard.Config{
-		Mode:           guard.Autonomous, // TODO: configurable via EngineConfig
-		MaxTurns:       e.Limits.MaxTurns,
-		MaxInputTokens: e.Limits.MaxInputTokens,
-	})
+	e.Guard = guard.New(e.Limits.GuardConfig(guard.Autonomous)) // TODO: mode configurable via EngineConfig
 
 	// 9. Trace — structured execution logging (nil = disabled)
 	e.Trace = trace.NewRecorder("", "", e.AgentName) // TODO: enable via config

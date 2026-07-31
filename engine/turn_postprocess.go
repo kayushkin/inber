@@ -41,11 +41,36 @@ func (e *Engine) postProcessResult(result *agent.TurnResult, input, sessionID st
 	// Checkpoint if needed (every 20 turns)
 	e.checkpointIfNeeded()
 
-	// Track cumulative session tokens
-	e.Tokens.Input += result.InputTokens
-	e.Tokens.Output += result.OutputTokens
-	e.Tokens.Cost += sessionMod.CalcCostWithCache(e.Model, result.InputTokens, result.OutputTokens,
-		result.CacheReadTokens, result.CacheCreationTokens, e.modelStore)
+	e.recordTurnUsage(result)
 
 	return nil
+}
+
+// recordTurnUsage adds one turn's tokens and cost to every running total that
+// tracks them: the session's, which is what gets reported, and the guard's,
+// which is what enforces MaxCost.
+//
+// Both totals are the same money, so the turn is priced once and the single
+// figure is added to both. Pricing it again at the guard would let the number a
+// cap is enforced against drift from the number the session reports for the
+// same turn.
+//
+// Guard.RecordCost had no caller at all before this, so the guard's cost total
+// sat at zero for the life of every session and its MaxCost comparison could
+// never be true however much a session spent.
+//
+// This runs here rather than beside Guard.RecordTurn in RunTurn's record step
+// because a turn that fails part-way through still reaches this function, and a
+// failed turn still cost money. Charging only the turns that finished would let
+// a session that keeps erroring run past its cap without limit.
+func (e *Engine) recordTurnUsage(result *agent.TurnResult) {
+	e.Tokens.Input += result.InputTokens
+	e.Tokens.Output += result.OutputTokens
+
+	turnCost := sessionMod.CalcCostWithCache(e.Model, result.InputTokens, result.OutputTokens,
+		result.CacheReadTokens, result.CacheCreationTokens, e.modelStore)
+	e.Tokens.Cost += turnCost
+	if e.Guard != nil {
+		e.Guard.RecordCost(turnCost)
+	}
 }

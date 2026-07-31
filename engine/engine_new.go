@@ -356,37 +356,55 @@ func loadToolsIntoMemory(memStore memory.MemoryStore, tools []agent.Tool) error 
 	return memStore.LoadToolRegistry(toolMetas)
 }
 
-// setupLimits initializes turn/token limits from config and agent config.
-func setupLimits(cfg EngineConfig, agentConfig *registry.AgentConfig) (maxTurns, maxInputTokens, maxResponseTime int) {
-	maxTurns = cfg.MaxTurns
-	maxInputTokens = cfg.MaxInputTokens
-	
-	if agentConfig != nil && agentConfig.Limits != nil {
-		if maxTurns == 0 {
-			maxTurns = agentConfig.Limits.MaxTurns
-		}
-		if maxInputTokens == 0 {
-			maxInputTokens = agentConfig.Limits.MaxInputTokens
-		}
-		if maxResponseTime == 0 {
-			maxResponseTime = agentConfig.Limits.MaxResponseTime
-		}
-	}
-	
-	if cfg.Detach {
-		if maxTurns == 0 {
-			maxTurns = 25
-		}
-		if maxInputTokens == 0 {
-			maxInputTokens = 500000
-		}
-	}
-	
-	if maxTurns > 0 || maxInputTokens > 0 || maxResponseTime > 0 {
-		Log.Info("limits: maxTurns=%d, maxInputTokens=%d, maxResponseTime=%ds", maxTurns, maxInputTokens, maxResponseTime)
+// setupLimits initializes turn/token/cost limits from config and agent config.
+//
+// It returns the whole LimitConfig rather than a list of numbers because the
+// caller's job is to install every limit the engine has. The earlier signature
+// returned three ints, and MaxCost — declared beside MaxTurns and
+// MaxInputTokens on EngineConfig, and accepted as `max_cost` over the HTTP API
+// — was simply left out of the list, so nothing ever read it. Returning the
+// struct means a limit added to LimitConfig arrives at the guard by default
+// instead of only if someone remembers to widen a tuple.
+func setupLimits(cfg EngineConfig, agentConfig *registry.AgentConfig) LimitConfig {
+	limits := LimitConfig{
+		MaxTurns:       cfg.MaxTurns,
+		MaxInputTokens: cfg.MaxInputTokens,
+		MaxCost:        cfg.MaxCost,
 	}
 
-	return maxTurns, maxInputTokens, maxResponseTime
+	// registry.AgentLimits has no per-agent cost cap, so MaxCost has no
+	// agent-config fallback to read. Adding one is a change to the stored agent
+	// config schema, which this wiring deliberately does not make.
+	if agentConfig != nil && agentConfig.Limits != nil {
+		if limits.MaxTurns == 0 {
+			limits.MaxTurns = agentConfig.Limits.MaxTurns
+		}
+		if limits.MaxInputTokens == 0 {
+			limits.MaxInputTokens = agentConfig.Limits.MaxInputTokens
+		}
+		if limits.MaxResponseTime == 0 {
+			limits.MaxResponseTime = agentConfig.Limits.MaxResponseTime
+		}
+	}
+
+	if cfg.Detach {
+		if limits.MaxTurns == 0 {
+			limits.MaxTurns = 25
+		}
+		if limits.MaxInputTokens == 0 {
+			limits.MaxInputTokens = 500000
+		}
+		// No default cost cap for detached sessions: MaxTurns and
+		// MaxInputTokens already bound them, and a dollar figure invented here
+		// would be a spend policy nobody asked for.
+	}
+
+	if limits.MaxTurns > 0 || limits.MaxInputTokens > 0 || limits.MaxResponseTime > 0 || limits.MaxCost > 0 {
+		Log.Info("limits: maxTurns=%d, maxInputTokens=%d, maxResponseTime=%ds, maxCost=$%.2f",
+			limits.MaxTurns, limits.MaxInputTokens, limits.MaxResponseTime, limits.MaxCost)
+	}
+
+	return limits
 }
 
 // setupMemoryProfiling initializes memory profiling if enabled.
@@ -568,7 +586,7 @@ func (e *Engine) registerToolContextInjectors() {
 
 // initLimitsAndProfiling sets up safety limits, memory profiling, cache config, and staged conversation.
 func (e *Engine) initLimitsAndProfiling(cfg EngineConfig) {
-	e.Limits.MaxTurns, e.Limits.MaxInputTokens, e.Limits.MaxResponseTime = setupLimits(cfg, e.AgentConfig)
+	e.Limits = setupLimits(cfg, e.AgentConfig)
 
 	if mp, err := setupMemoryProfiling(cfg.MemoryProfiling, cfg.MemoryLogPath); err == nil {
 		e.memoryProfiler = mp

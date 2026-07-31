@@ -189,7 +189,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 	}
 
 	// Setup limits
-	e.Limits.MaxTurns, e.Limits.MaxInputTokens, e.Limits.MaxResponseTime = setupLimits(cfg, e.AgentConfig)
+	e.Limits = setupLimits(cfg, e.AgentConfig)
 
 	// Setup memory profiling
 	memoryProfiler, err := setupMemoryProfiling(cfg.MemoryProfiling, cfg.MemoryLogPath)
