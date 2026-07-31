@@ -236,7 +236,10 @@ func (e *Engine) RunTurn(ctx context.Context, input string) (*agent.TurnResult, 
 
 	// 2-3. Prepare input and build context
 	processedInput := e.prepareInput(ctx, input, sessionID) // turn_prepare.go
-	systemBlocks := e.buildTurnContext(processedInput) // turn_prompt.go
+	systemBlocks, err := e.buildTurnContext(processedInput) // turn_prompt.go
+	if err != nil {
+		return nil, err
+	}
 
 	// 4. Execute agent
 	result, err := e.executeAgent(ctx, systemBlocks) // turn_execute.go

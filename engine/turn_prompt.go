@@ -71,7 +71,12 @@ type cachedPrefix struct {
 //  4. Fleet status — changes every turn
 //  5. Recent files — changes every turn
 //  6. Context injectors — changes every turn
-func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
+//
+// A memory lookup that fails is returned as an error rather than as an empty
+// prompt. The agent's identity, its instructions and its tool memories all live
+// in that lookup, so a turn built without them is not a degraded turn — it is a
+// different agent answering. buildTurnContext decides what to do about it.
+func (e *Engine) BuildSystemPrompt(userMessage string) ([]sessionMod.NamedBlock, error) {
 	if e.MemStore != nil {
 		messageTags := memory.AutoTag(userMessage, "user")
 		minImportance, tokenBudget := e.contextBudget(userMessage)
@@ -89,8 +94,7 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 
 		memories, tokensUsed, err := e.MemStore.BuildContext(req)
 		if err != nil {
-			Log.Warn("failed to build context from memory: %v", err)
-			return nil
+			return nil, fmt.Errorf("build context from memory: %w", err)
 		}
 
 		Log.Info("context: %d memories, %d tokens (min_importance=%.1f, budget=%d)", len(memories), tokensUsed, minImportance, tokenBudget)
@@ -159,11 +163,11 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 		if e.workspace != nil {
 			e.workspace.WriteSystem(blocks)
 		}
-		return blocks
+		return blocks, nil
 	}
 
 	if e.IdentityOverride == "" {
-		return nil
+		return nil, nil
 	}
 
 	blocks := []sessionMod.NamedBlock{
@@ -173,7 +177,7 @@ func (e *Engine) BuildSystemPrompt(userMessage string) []sessionMod.NamedBlock {
 	if e.workspace != nil {
 		e.workspace.WriteSystem(blocks)
 	}
-	return blocks
+	return blocks, nil
 }
 
 // buildSystemBlocks converts named blocks to anthropic system blocks with cache control.

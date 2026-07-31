@@ -73,17 +73,36 @@ func (e *Engine) prepareInput(ctx context.Context, input, sessionID string) stri
 
 // buildTurnContext assembles system prompt blocks for the turn, and owns the
 // lifetime of the turn's volatile context.
-func (e *Engine) buildTurnContext(processedInput string) []sessionMod.NamedBlock {
+//
+// When the memory store cannot answer, the turn falls back to the blocks the
+// last turn was built from. That is the whole point of reusing them rather than
+// assembling a replacement: the prefix stays byte-identical, so the degraded
+// turn still hits the prompt cache instead of paying for the input twice. Its
+// tag-matched memories are one message stale, which is a far smaller loss than
+// the identity and instructions that come with them. The turn's volatile
+// context is not reused — it describes this turn's fleet and files, and last
+// turn's copy would be wrong rather than merely old.
+//
+// With no previous turn to fall back on there is nothing to degrade to, so the
+// error is returned and the turn does not run.
+func (e *Engine) buildTurnContext(processedInput string) ([]sessionMod.NamedBlock, error) {
 	e.emitStatus("Building system prompt...")
 	// The volatile context is per-turn: derive it fresh rather than inherit the
 	// last turn's copy. BuildSystemPrompt assigns the field only when a memory
 	// store is set, so without this a raw session accumulates every note it has
 	// ever been given.
 	e.Turn.VolatileContext = ""
-	systemBlocks := e.BuildSystemPrompt(processedInput)
+	systemBlocks, err := e.BuildSystemPrompt(processedInput)
+	if err != nil {
+		if len(e.Cache.LastNamedBlocks) == 0 {
+			return nil, err
+		}
+		Log.Warn("%v — reusing the system prompt from the previous turn", err)
+		systemBlocks = e.Cache.LastNamedBlocks
+	}
 	// BuildSystemPrompt assigns e.Turn.VolatileContext, so the notes queued
 	// during preparation are folded in after it, never before.
 	e.applyPendingVolatileNotes()
 	e.Cache.LastNamedBlocks = systemBlocks
-	return systemBlocks
+	return systemBlocks, nil
 }
