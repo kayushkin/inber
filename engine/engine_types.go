@@ -53,6 +53,7 @@ type EngineConfig struct {
 	MaxTurns       int     // max API round-trips per RunTurn (0 = unlimited)
 	MaxInputTokens int     // max cumulative input tokens (0 = unlimited)
 	MaxCost        float64 // max cumulative dollar cost (0 = unlimited)
+	MaxDuration    int     // max seconds the session may go on running (0 = unlimited)
 
 	// Diagnostics
 	MemoryProfiling bool
@@ -99,6 +100,7 @@ type LimitConfig struct {
 	MaxInputTokens  int
 	MaxResponseTime int
 	MaxCost         float64 // dollars — 0 = unlimited
+	MaxDuration     int     // seconds — 0 = unlimited
 }
 
 // GuardConfig renders the engine's limits as the guard's configuration.
@@ -111,12 +113,17 @@ type LimitConfig struct {
 //
 // MaxResponseTime is deliberately absent: it bounds a single turn's wall clock
 // and is checked by the build hooks in build_hooks.go, not by the guard.
+// MaxDuration is the other wall clock and does belong here — it bounds the
+// session rather than the turn, and the guard is the only thing that outlives a
+// turn to measure it. Both are seconds, which is exactly why they are easy to
+// confuse; the names are the only thing keeping them apart.
 func (l LimitConfig) GuardConfig(mode guard.Mode) guard.Config {
 	return guard.Config{
 		Mode:           mode,
 		MaxTurns:       l.MaxTurns,
 		MaxInputTokens: l.MaxInputTokens,
 		MaxCost:        l.MaxCost,
+		MaxDuration:    l.MaxDuration,
 	}
 }
 

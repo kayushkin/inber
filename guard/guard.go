@@ -12,7 +12,7 @@
 //	MaxTurns        — API round-trip cap
 //	MaxInputTokens  — cumulative input token cap
 //	MaxCost         — cumulative dollar cost cap
-//	MaxDuration     — wall-clock time cap
+//	MaxDuration     — wall-clock cap on how long the session may go on running
 //
 // Detectors watch for stuck or harmful agent behavior:
 //
@@ -28,6 +28,8 @@
 //	g.RecordCost(0.02)
 //	if exceeded, reason := g.CheckLimits(); exceeded { ... }
 package guard
+
+import "time"
 
 // Mode controls the trust level for a session.
 type Mode int
@@ -100,7 +102,13 @@ type Guard struct {
 	turns     int
 	inputToks int
 	cost      float64
-	startTime int64 // unix seconds
+
+	// The wall clock MaxDuration is measured against. It is two fields because
+	// a session outlives the process that runs it: startedAt is when this guard
+	// began running, and secondsBeforeThisRun is what earlier runs of the same
+	// session already counted. See ElapsedSeconds.
+	startedAt            time.Time
+	secondsBeforeThisRun int
 
 	// Repetition detection
 	lastTool    string
@@ -109,11 +117,15 @@ type Guard struct {
 }
 
 // New creates a Guard with the given config.
+//
+// The clock MaxDuration is measured against starts here. Nothing else starts
+// it: the guard is built once per session, and a cap that only began counting
+// at the first turn would hand back whatever the session spent getting there.
 func New(cfg Config) *Guard {
 	if cfg.RepetitionThreshold == 0 {
 		cfg.RepetitionThreshold = 3
 	}
-	return &Guard{cfg: cfg}
+	return &Guard{cfg: cfg, startedAt: time.Now()}
 }
 
 // CheckTool returns whether a tool call is allowed under the current mode.
@@ -181,7 +193,25 @@ func (g *Guard) CostSoFar() float64 {
 	return g.cost
 }
 
+// ElapsedSeconds returns the wall-clock seconds counted against MaxDuration:
+// how long this guard has been running, plus what earlier runs of the same
+// session recorded before it was rebuilt.
+//
+// The two are added rather than one replacing the other for the reason the
+// dollar total is restored at all — a cap whose clock restarts every time the
+// session is rebuilt is a cap per rebuild, not per session. Time the session
+// spent not loaded is not counted, because nothing was running to count it.
+func (g *Guard) ElapsedSeconds() int {
+	return g.secondsBeforeThisRun + int(time.Since(g.startedAt).Seconds())
+}
+
 // CheckLimits returns whether any limit has been exceeded and why.
+//
+// Every cap here is checked between turns, so a limit is reached by refusing to
+// start the next one rather than by stopping work already in flight. That is
+// what MaxDuration means too: it bounds how long a session may go on running,
+// not how long a single turn may take. MaxResponseTime is the per-turn bound
+// and lives in the engine's build hooks.
 func (g *Guard) CheckLimits() (exceeded bool, reason string) {
 	if g.cfg.MaxTurns > 0 && g.turns >= g.cfg.MaxTurns {
 		return true, "max turns exceeded"
@@ -192,7 +222,9 @@ func (g *Guard) CheckLimits() (exceeded bool, reason string) {
 	if g.cfg.MaxCost > 0 && g.cost >= g.cfg.MaxCost {
 		return true, "max cost exceeded"
 	}
-	// TODO: check MaxDuration against startTime
+	if g.cfg.MaxDuration > 0 && g.ElapsedSeconds() >= g.cfg.MaxDuration {
+		return true, "max duration exceeded"
+	}
 	return false, ""
 }
 

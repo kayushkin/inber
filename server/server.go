@@ -222,6 +222,7 @@ type RunRequest struct {
 	MaxTurns       int     `json:"max_turns,omitempty"`        // safety limit: max API round-trips
 	MaxInputTokens int     `json:"max_input_tokens,omitempty"` // safety limit: max cumulative input tokens
 	MaxCost        float64 `json:"max_cost,omitempty"`         // safety limit: max dollar cost
+	MaxDuration    int     `json:"max_duration,omitempty"`     // safety limit: max seconds the session may go on running
 	Mode           string  `json:"mode,omitempty"`             // execution mode: observe, assist, autonomous
 }
 

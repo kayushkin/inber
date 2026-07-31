@@ -1,6 +1,9 @@
 package guard
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // State is everything about a guard that has to outlive the process it ran in:
 // the caps it is enforcing and the totals it has counted against them.
@@ -25,10 +28,12 @@ type State struct {
 	MaxTurns       int     `json:"max_turns"`
 	MaxInputTokens int     `json:"max_input_tokens"`
 	MaxCost        float64 `json:"max_cost"`
+	MaxDuration    int     `json:"max_duration"`
 
-	Turns       int     `json:"turns"`
-	InputTokens int     `json:"input_tokens"`
-	Cost        float64 `json:"cost"`
+	Turns          int     `json:"turns"`
+	InputTokens    int     `json:"input_tokens"`
+	Cost           float64 `json:"cost"`
+	ElapsedSeconds int     `json:"elapsed_seconds"`
 }
 
 // State reports the caps this guard enforces and what has been recorded against
@@ -46,9 +51,11 @@ func (g *Guard) State() State {
 		MaxTurns:       g.cfg.MaxTurns,
 		MaxInputTokens: g.cfg.MaxInputTokens,
 		MaxCost:        g.cfg.MaxCost,
+		MaxDuration:    g.cfg.MaxDuration,
 		Turns:          g.turns,
 		InputTokens:    g.inputToks,
 		Cost:           g.cost,
+		ElapsedSeconds: g.ElapsedSeconds(),
 	}
 }
 
@@ -74,9 +81,15 @@ func (g *Guard) RestoreState(s State) error {
 	g.cfg.MaxTurns = s.MaxTurns
 	g.cfg.MaxInputTokens = s.MaxInputTokens
 	g.cfg.MaxCost = s.MaxCost
+	g.cfg.MaxDuration = s.MaxDuration
 	g.turns = s.Turns
 	g.inputToks = s.InputTokens
 	g.cost = s.Cost
+	// The elapsed total is put back the way the others are — overwritten, not
+	// added to — so this rebuild's own clock restarts from here and the record
+	// supplies everything before it.
+	g.secondsBeforeThisRun = s.ElapsedSeconds
+	g.startedAt = time.Now()
 	if err != nil {
 		return fmt.Errorf("recorded execution mode unreadable, session restored in observe mode: %w", err)
 	}
@@ -112,9 +125,11 @@ func ResumeState(recorded, configured State) State {
 		MaxTurns:       recorded.MaxTurns,
 		MaxInputTokens: recorded.MaxInputTokens,
 		MaxCost:        recorded.MaxCost,
+		MaxDuration:    recorded.MaxDuration,
 		Turns:          recorded.Turns,
 		InputTokens:    recorded.InputTokens,
 		Cost:           recorded.Cost,
+		ElapsedSeconds: recorded.ElapsedSeconds,
 	}
 	if configured.Mode != "" {
 		resumed.Mode = configured.Mode
@@ -127,6 +142,9 @@ func ResumeState(recorded, configured State) State {
 	}
 	if configured.MaxCost != 0 {
 		resumed.MaxCost = configured.MaxCost
+	}
+	if configured.MaxDuration != 0 {
+		resumed.MaxDuration = configured.MaxDuration
 	}
 	return resumed
 }

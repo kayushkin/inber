@@ -87,6 +87,9 @@ func applyRequestOverrides(cfg *engine.EngineConfig, req RunRequest) {
 	if req.MaxCost != 0 {
 		cfg.MaxCost = req.MaxCost
 	}
+	if req.MaxDuration != 0 {
+		cfg.MaxDuration = req.MaxDuration
+	}
 }
 
 // createSession creates a new session with a fresh engine.
@@ -163,7 +166,8 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 // the totals counted against them, back onto the guard that a rebuild of that
 // session has just constructed.
 //
-// Every limit this server has — max_turns, max_input_tokens, max_cost — arrives
+// Every limit this server has — max_turns, max_input_tokens, max_cost,
+// max_duration — arrives
 // on the RunRequest that starts a session and is copied onto the engine by
 // applyRequestOverrides. A session is not always started by such a request:
 // handleBridgeResume rebuilds one from its persisted messages when a session
@@ -200,9 +204,9 @@ func (g *Server) restoreGuardState(key string, sessionGuard *guard.Guard) {
 	}
 
 	restored := sessionGuard.State()
-	log.Printf("[server] restored safety limits for %s (mode %q, max turns %d, max input tokens %d, max cost $%.2f; already spent %d turns, %d input tokens, $%.4f)",
-		key, restored.Mode, restored.MaxTurns, restored.MaxInputTokens, restored.MaxCost,
-		restored.Turns, restored.InputTokens, restored.Cost)
+	log.Printf("[server] restored safety limits for %s (mode %q, max turns %d, max input tokens %d, max cost $%.2f, max duration %ds; already spent %d turns, %d input tokens, $%.4f, %ds)",
+		key, restored.Mode, restored.MaxTurns, restored.MaxInputTokens, restored.MaxCost, restored.MaxDuration,
+		restored.Turns, restored.InputTokens, restored.Cost, restored.ElapsedSeconds)
 }
 
 // loadPersistedSession loads a session's messages and the turn count recorded

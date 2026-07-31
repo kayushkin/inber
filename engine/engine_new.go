@@ -370,11 +370,13 @@ func setupLimits(cfg EngineConfig, agentConfig *registry.AgentConfig) LimitConfi
 		MaxTurns:       cfg.MaxTurns,
 		MaxInputTokens: cfg.MaxInputTokens,
 		MaxCost:        cfg.MaxCost,
+		MaxDuration:    cfg.MaxDuration,
 	}
 
-	// registry.AgentLimits has no per-agent cost cap, so MaxCost has no
-	// agent-config fallback to read. Adding one is a change to the stored agent
-	// config schema, which this wiring deliberately does not make.
+	// registry.AgentLimits has no per-agent cost cap and no per-agent session
+	// duration, so MaxCost and MaxDuration have no agent-config fallback to
+	// read. Adding one is a change to the stored agent config schema, which this
+	// wiring deliberately does not make.
 	if agentConfig != nil && agentConfig.Limits != nil {
 		if limits.MaxTurns == 0 {
 			limits.MaxTurns = agentConfig.Limits.MaxTurns
@@ -399,9 +401,9 @@ func setupLimits(cfg EngineConfig, agentConfig *registry.AgentConfig) LimitConfi
 		// would be a spend policy nobody asked for.
 	}
 
-	if limits.MaxTurns > 0 || limits.MaxInputTokens > 0 || limits.MaxResponseTime > 0 || limits.MaxCost > 0 {
-		Log.Info("limits: maxTurns=%d, maxInputTokens=%d, maxResponseTime=%ds, maxCost=$%.2f",
-			limits.MaxTurns, limits.MaxInputTokens, limits.MaxResponseTime, limits.MaxCost)
+	if limits.MaxTurns > 0 || limits.MaxInputTokens > 0 || limits.MaxResponseTime > 0 || limits.MaxCost > 0 || limits.MaxDuration > 0 {
+		Log.Info("limits: maxTurns=%d, maxInputTokens=%d, maxResponseTime=%ds, maxCost=$%.2f, maxDuration=%ds",
+			limits.MaxTurns, limits.MaxInputTokens, limits.MaxResponseTime, limits.MaxCost, limits.MaxDuration)
 	}
 
 	return limits
