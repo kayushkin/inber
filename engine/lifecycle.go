@@ -55,7 +55,14 @@ func (e *Engine) RestoreSession(messages []anthropic.MessageParam, turnCounter i
 // summarizeIfNeeded checks if the conversation is long enough to warrant summarization.
 // A summarization that fails returns the error with the conversation untouched — the
 // caller decides whether a compaction it did not get is worth interrupting for.
-func (e *Engine) summarizeIfNeeded() error {
+//
+// ctx bounds the summarization API call. Each caller passes the context that
+// actually owns the work: a turn passes the turn's context, so an interrupt
+// stops summarizing, and the explicit compact endpoint passes its request's
+// context, so a client that hangs up stops paying for a summary nobody will
+// read. There is no single policy to pick here because the two callers are not
+// the same piece of work.
+func (e *Engine) summarizeIfNeeded(ctx context.Context) error {
 	role := conversation.RoleDefault
 	if e.AgentConfig != nil && e.AgentConfig.Role != "" {
 		role = conversation.AgentRole(strings.ToLower(e.AgentConfig.Role))
@@ -79,7 +86,7 @@ func (e *Engine) summarizeIfNeeded() error {
 	}
 
 	summarized, result, err := conversation.SummarizeConversation(
-		context.Background(),
+		ctx,
 		e.Client,
 		e.Messages,
 		e.MemStore,
@@ -118,7 +125,10 @@ func (e *Engine) pruneConfig() conversation.PruneConfig {
 //   - Emergency: full management if tokens > 2x budget
 //
 // Layout: [tools BP1] [system BP2] [frozen msgs BP3] [staging - uncached] [new input]
-func (e *Engine) pruneIfNeeded() {
+//
+// ctx bounds the emergency flush, which is the one branch that leaves this
+// function's own memory. See summarizeIfNeeded for why the caller supplies it.
+func (e *Engine) pruneIfNeeded(ctx context.Context) {
 	cfg := e.pruneConfig()
 
 	if e.staged == nil {
@@ -168,7 +178,7 @@ func (e *Engine) pruneIfNeeded() {
 		}
 
 		pruned, result, err := conversation.PruneConversation(
-			context.Background(),
+			ctx,
 			e.Messages,
 			e.MemStore,
 			sessionID,

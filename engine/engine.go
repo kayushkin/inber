@@ -204,11 +204,14 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 //  5. Process  — extract memories, stash response, track tokens/cost
 //  6. Record   — update guard counters, write trace, take checkpoint
 //
-// ctx bounds the execute phase: cancelling it stops the API call and the
-// running tool, and Agent.Run refuses to start another round-trip. It is the
-// only way to stop a turn that is already in flight, so a caller that holds a
-// cancel function (a session interrupt, a sub-agent spawn timeout) must pass
-// its own context here rather than a fresh root.
+// ctx bounds every step of the turn that can leave the process. Cancelling it
+// stops the execute phase's API call and running tool, and Agent.Run refuses to
+// start another round-trip; it also stops the prepare phase, whose summarizer
+// is an API call in its own right and used to run to completion on a turn the
+// user had already abandoned. It is the only way to stop a turn that is already
+// in flight, so a caller that holds a cancel function (a session interrupt, a
+// sub-agent spawn timeout) must pass its own context here rather than a fresh
+// root.
 func (e *Engine) RunTurn(ctx context.Context, input string) (*agent.TurnResult, error) {
 	e.Turn.Counter++
 	e.Turn.StartTime = time.Now()
@@ -232,7 +235,7 @@ func (e *Engine) RunTurn(ctx context.Context, input string) (*agent.TurnResult, 
 	}
 
 	// 2-3. Prepare input and build context
-	processedInput := e.prepareInput(input, sessionID) // turn_prepare.go
+	processedInput := e.prepareInput(ctx, input, sessionID) // turn_prepare.go
 	systemBlocks := e.buildTurnContext(processedInput) // turn_prompt.go
 
 	// 4. Execute agent
@@ -318,15 +321,20 @@ func (e *Engine) SetDisabledTools(names []string) {
 
 // CompactContext triggers conversation summarization/pruning, optionally
 // incorporating a user-provided summary. Returns the number of messages removed.
-func (e *Engine) CompactContext(summary string) (int, error) {
+//
+// ctx belongs to whoever asked for the compaction. This is an explicit request,
+// not a step inside a turn, so it is not bound by a turn interrupt and never
+// was: the caller that reaches it is an HTTP handler, and the context that
+// stops it is that request's own.
+func (e *Engine) CompactContext(ctx context.Context, summary string) (int, error) {
 	before := len(e.Messages)
 
 	// Run summarization first.
-	summarizeErr := e.summarizeIfNeeded()
+	summarizeErr := e.summarizeIfNeeded(ctx)
 
 	// Then run prune. Prune is independent of the summarizer and makes no API call,
 	// so it still runs and still counts even when the summary could not be produced.
-	e.pruneIfNeeded()
+	e.pruneIfNeeded(ctx)
 
 	removed := before - len(e.Messages)
 

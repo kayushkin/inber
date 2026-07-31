@@ -104,13 +104,13 @@ func (e *Engine) configureAgent(a *agent.Agent) {
 
 // configureContextPruning sets up automatic context pruning when approaching token limits.
 func (e *Engine) configureContextPruning(a *agent.Agent) {
-	a.SetBeforeRequest(func(messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam {
+	a.SetBeforeRequest(func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam {
 		cfg := e.pruneConfig()
 		cfg.TokenBudget = contextWindow / 2
 
 		if conversation.ShouldPrune(messages, cfg) {
 			Log.Warn("context approaching limit (%d messages), pruning", len(messages))
-			pruned, result, err := conversation.PruneConversation(context.Background(), messages, e.MemStore, "", cfg)
+			pruned, result, err := conversation.PruneConversation(ctx, messages, e.MemStore, "", cfg)
 			if err == nil {
 				Log.Info("pruned: %d tokens freed", result.TokensFreed)
 				messages = pruned

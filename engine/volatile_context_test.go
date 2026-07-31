@@ -80,7 +80,7 @@ func TestCrossZoneNoteSurvivesSystemPromptBuild(t *testing.T) {
 	e := engineWithSupersededRead("/a.go")
 	e.MemStore = emptyMemoryStore{}
 
-	e.pruneIfNeeded()
+	e.pruneIfNeeded(context.Background())
 	e.buildTurnContext("read it again")
 
 	if !strings.Contains(e.Turn.VolatileContext, "/a.go") {
@@ -100,7 +100,7 @@ func TestNoCrossZoneNoteWhenNothingIsSuperseded(t *testing.T) {
 	e.staged.FrozenIdx = 0 // everything is staging; there is no frozen read to supersede
 	e.MemStore = emptyMemoryStore{}
 
-	e.pruneIfNeeded()
+	e.pruneIfNeeded(context.Background())
 	e.buildTurnContext("read it again")
 
 	if strings.Contains(e.Turn.VolatileContext, "re-read since last context snapshot") {
@@ -116,7 +116,7 @@ func TestCrossZoneNoteIsNotRepeatedOnALaterTurn(t *testing.T) {
 
 	for turn := 1; turn <= 2; turn++ {
 		e.Turn.Counter = turn
-		e.pruneIfNeeded()
+		e.pruneIfNeeded(context.Background())
 		e.buildTurnContext("read it again")
 	}
 

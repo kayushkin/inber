@@ -66,7 +66,12 @@ type Agent struct {
 	// BeforeRequest is called before each API call with a mutable reference to
 	// the messages slice. Use it to prune/compact if the conversation is too large.
 	// Return the (possibly pruned) messages. Called after OnRequest hook.
-	BeforeRequest func(messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam
+	//
+	// It takes the turn's context because pruning is not free work done between
+	// API calls: it can summarize, which is itself an API call. Handing the
+	// callback a root context would leave a cancelled turn paying for one more
+	// model round-trip before it stopped.
+	BeforeRequest func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam
 
 	// LimitCheck is called before each API call (after the first) to check
 	// whether turn/token limits have been exceeded. If it returns (true, reason),
@@ -148,8 +153,10 @@ func (a *Agent) SetOAuth(isOAuth bool) {
 }
 
 // SetBeforeRequest sets a callback invoked before each API call to allow
-// pruning messages if they're approaching the context window limit.
-func (a *Agent) SetBeforeRequest(fn func(messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam) {
+// pruning messages if they're approaching the context window limit. The
+// callback receives the context of the API call it is guarding, so cancelling
+// that call also stops the pruning done on its behalf.
+func (a *Agent) SetBeforeRequest(fn func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam) {
 	a.BeforeRequest = fn
 }
 

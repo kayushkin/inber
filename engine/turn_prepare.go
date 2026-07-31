@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/conversation"
 	"github.com/kayushkin/inber/memory"
@@ -9,7 +11,11 @@ import (
 
 // prepareInput handles user message stashing, alternation repair, and context management.
 // Returns the processed input (post-stash).
-func (e *Engine) prepareInput(input, sessionID string) string {
+//
+// ctx is the turn's context. Preparation is not free local work: summarization
+// makes its own API call, so a turn interrupted here has to stop like a turn
+// interrupted anywhere else.
+func (e *Engine) prepareInput(ctx context.Context, input, sessionID string) string {
 	e.emitStatus("Preparing conversation...")
 	processedInput := input
 
@@ -57,10 +63,10 @@ func (e *Engine) prepareInput(input, sessionID string) string {
 	// 1b. Summarize if conversation is very long (compress old turns into summary).
 	// Best effort: a failed summarization has already logged and left the conversation
 	// whole, and losing a compaction is not a reason to fail the user's turn.
-	_ = e.summarizeIfNeeded()
+	_ = e.summarizeIfNeeded(ctx)
 	// 1c. Prune remaining conversation (truncate tool results, old messages)
 	e.emitStatus("Pruning context...")
-	e.pruneIfNeeded()
+	e.pruneIfNeeded(ctx)
 
 	return processedInput
 }

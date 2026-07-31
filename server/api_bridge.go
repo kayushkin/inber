@@ -703,7 +703,7 @@ func (g *Server) handleBridgeCompact(w http.ResponseWriter, r *http.Request, id 
 
 	s.mu.Lock()
 	before := len(s.Engine.Messages)
-	removed, err := s.Engine.CompactContext(req.Summary)
+	removed, err := s.Engine.CompactContext(r.Context(), req.Summary)
 	after := len(s.Engine.Messages)
 	s.mu.Unlock()
 

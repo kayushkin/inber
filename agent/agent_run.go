@@ -123,7 +123,7 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 
 	// Guard against context overflow: let caller prune if needed
 	if a.BeforeRequest != nil && a.contextWindow > 0 {
-		pruned := a.BeforeRequest(*messages, a.contextWindow)
+		pruned := a.BeforeRequest(ctx, *messages, a.contextWindow)
 		if len(pruned) < len(*messages) {
 			*messages = pruned
 			params.Messages = *messages
@@ -185,7 +185,7 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 	if apiErr != nil {
 		// If we hit a context length error, try pruning and retry once
 		if a.BeforeRequest != nil && a.contextWindow > 0 && isContextLengthError(apiErr) {
-			pruned := a.BeforeRequest(*messages, a.contextWindow/2)
+			pruned := a.BeforeRequest(ctx, *messages, a.contextWindow/2)
 			if len(pruned) < len(*messages) {
 				*messages = pruned
 				params.Messages = *messages

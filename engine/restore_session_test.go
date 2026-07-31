@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -73,7 +74,7 @@ func TestRestoreSession_FirstResumedTurnDoesNotPruneHistory(t *testing.T) {
 
 	e := &Engine{}
 	e.RestoreSession(messages, 0)
-	e.pruneIfNeeded()
+	e.pruneIfNeeded(context.Background())
 
 	after := toolResultTexts(e.Messages)
 	if len(before) != len(after) {
@@ -96,7 +97,7 @@ func TestPruneIfNeeded_AtFrozenIdxZeroRewritesRestoredHistory(t *testing.T) {
 
 	e := &Engine{}
 	e.Messages = messages // the old restore path
-	e.pruneIfNeeded()
+	e.pruneIfNeeded(context.Background())
 
 	after := toolResultTexts(e.Messages)
 	same := len(before) == len(after)
