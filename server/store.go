@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kayushkin/inber/internal/sqlitewal"
 	_ "modernc.org/sqlite"
 )
 
@@ -18,10 +19,7 @@ type Store struct {
 // NewStore opens or creates the server database.
 func NewStore(dbPath string) (*Store, error) {
 	os.MkdirAll(filepath.Dir(dbPath), 0755)
-	// modernc.org/sqlite only understands _pragma=NAME(VALUE); it silently ignores
-	// DSN keys it does not recognise, so a mattn-style ?_journal_mode=WAL&_busy_timeout=5000
-	// applies neither pragma and reports no error.
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", sqlitewal.ConnectionDSN(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("open server db: %w", err)
 	}
@@ -30,6 +28,13 @@ func NewStore(dbPath string) (*Store, error) {
 	// connection serialises them. Safe here: this package uses no transactions, so
 	// nothing can hold the connection while waiting for another.
 	db.SetMaxOpenConns(1)
+
+	// See sqlitewal for why this is a statement with its own retry rather than a
+	// DSN pragma: the conversion is the one lock busy_timeout will not wait for.
+	if err := sqlitewal.SwitchToWAL(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open server db: %w", err)
+	}
 
 	if err := migrateGatewayDB(db); err != nil {
 		db.Close()

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/kayushkin/inber/internal/sqlitewal"
 	_ "modernc.org/sqlite"
 )
 
@@ -17,10 +18,7 @@ func OpenDB(repoRoot string) (*SQLiteStore, error) {
 	}
 
 	dbPath := filepath.Join(dir, "sessions.db")
-	// modernc.org/sqlite only understands _pragma=NAME(VALUE); it silently ignores
-	// DSN keys it does not recognise, so a mattn-style ?_journal=wal&_timeout=5000
-	// applies neither pragma and reports no error.
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", sqlitewal.ConnectionDSN(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("open sessions db: %w", err)
 	}
@@ -28,6 +26,14 @@ func OpenDB(repoRoot string) (*SQLiteStore, error) {
 	// writers; a single connection serialises them. Safe here: this package uses no
 	// transactions, so nothing can hold the connection while waiting for another.
 	db.SetMaxOpenConns(1)
+
+	// This database lives under the repo being worked on, so every session open
+	// on that repo races to convert the same fresh file. Waiting is the point:
+	// see sqlitewal for why busy_timeout cannot cover this one statement.
+	if err := sqlitewal.SwitchToWAL(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open sessions db: %w", err)
+	}
 
 	if err := migrate(db); err != nil {
 		db.Close()

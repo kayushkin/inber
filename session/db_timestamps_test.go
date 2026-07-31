@@ -17,11 +17,15 @@ func openTestDB(t *testing.T) *SQLiteStore {
 	return d
 }
 
-// TestOpenDBAppliesPragmas pins that the DSN actually applies WAL and busy_timeout.
+// TestOpenDBAppliesPragmas pins that WAL and busy_timeout really are on. They
+// arrive by different routes — busy_timeout as a DSN pragma, WAL as a statement
+// sqlitewal.SwitchToWAL runs once — and each route fails quietly in its own way.
 // modernc.org/sqlite silently ignores DSN keys it does not recognise, so a
 // mattn-style ?_journal=wal&_timeout=5000 opens cleanly and applies neither —
 // which is how this database ran in journal_mode=delete with no busy timeout.
-// Asserting on the pragmas (not on the DSN string) is what makes that unfakeable.
+// A lost WAL conversion is quieter still: it can report the mode the file stayed
+// on rather than an error. Asserting on the pragmas (not on the DSN string, and
+// not on the absence of an error) is what makes that unfakeable.
 func TestOpenDBAppliesPragmas(t *testing.T) {
 	d := openTestDB(t)
 
