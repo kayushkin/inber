@@ -262,26 +262,25 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 		}
 
 		// Check read cache — block redundant reads of files already in context.
+		// A hit answers for the read itself and for nothing else: the same
+		// tool_use block may carry sideband fields and a "then" chain, which are
+		// separate instructions and still have to run, so the stub is handed to
+		// the executor rather than short-circuiting the whole block.
+		var cachedPrimaryOutput *string
 		if a.readCache != nil {
 			rawInput := string(block.Input)
 			// Full re-read of a cached file? Return stub.
 			if path, isFull := isFullRead(block.Name, rawInput); isFull {
 				if stub, cached := a.readCache.Check(path); cached {
-					if a.hooks != nil && a.hooks.OnToolResult != nil {
-						a.hooks.OnToolResult(block.ID, block.Name, stub, false)
-					}
-					toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, stub, false))
-					continue
+					cachedPrimaryOutput = &stub
 				}
 			}
 			// Partial re-read of a cached file? Also return stub.
-			if path, partial := isPartialRead(block.Name, rawInput); partial {
-				if stub, cached := a.readCache.Check(path); cached {
-					if a.hooks != nil && a.hooks.OnToolResult != nil {
-						a.hooks.OnToolResult(block.ID, block.Name, stub, false)
+			if cachedPrimaryOutput == nil {
+				if path, partial := isPartialRead(block.Name, rawInput); partial {
+					if stub, cached := a.readCache.Check(path); cached {
+						cachedPrimaryOutput = &stub
 					}
-					toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, stub, false))
-					continue
 				}
 			}
 			// Write/edit invalidates the cache for that file.
@@ -293,7 +292,8 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 		}
 
 		// Execute tool with optional chain ("then" field).
-		output, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks)
+		outcome, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks, cachedPrimaryOutput)
+		output := outcome.combined
 		if isError {
 			finalOutput := output
 			if a.hooks != nil && a.hooks.ModifyToolResult != nil {
@@ -305,11 +305,28 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 			continue
 		}
 
-		// Record full reads in the cache.
+		// Record full reads in the cache. Each call is recorded from its own
+		// output: reading the combined text would credit the primary read with
+		// the line count printed by whatever the chain read afterwards.
 		if a.readCache != nil {
-			if path, isFull := isFullRead(block.Name, string(block.Input)); isFull {
-				if lines := extractCompleteFileLines(output); lines > 0 {
+			if path, isFull := isFullRead(block.Name, outcome.primaryInput); isFull {
+				if lines := extractCompleteFileLines(outcome.primaryOutput); lines > 0 {
 					a.readCache.RecordFullRead(path, result.ToolCalls, lines)
+				}
+			}
+			// The chained call is a real tool call and needs the same
+			// bookkeeping. Without it a chained write leaves a stale entry
+			// behind and a later read is answered from it.
+			if outcome.chainTool != "" {
+				for _, p := range isFileWrite(outcome.chainTool, outcome.chainInput) {
+					a.readCache.Invalidate(p)
+				}
+				if !outcome.chainFailed {
+					if path, isFull := isFullRead(outcome.chainTool, outcome.chainInput); isFull {
+						if lines := extractCompleteFileLines(outcome.chainOutput); lines > 0 {
+							a.readCache.RecordFullRead(path, result.ToolCalls, lines)
+						}
+					}
 				}
 			}
 		}

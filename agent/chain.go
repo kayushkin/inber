@@ -112,42 +112,87 @@ func extractChain(rawInput string) (cleanInput string, chain *chainedTool) {
 	return string(cleanBytes), &ct
 }
 
+// toolCallOutcome is everything one tool_use block produced. A block can carry
+// two real tool calls — the primary one and the one named in its "then" chain —
+// so the two are reported apart and not only as the combined text the model
+// gets back. The read cache needs them apart: a chained read's line count is
+// not the primary read's, and a chained write invalidates a cached file just as
+// a primary one does.
+type toolCallOutcome struct {
+	// combined is what goes back to the model: the sideband summary, the
+	// primary tool's output, and the chained tool's output under its marker.
+	combined string
+	// primaryInput is the primary tool's own arguments, with the sideband and
+	// chain fields removed.
+	primaryInput string
+	// primaryOutput is the primary tool's own output, with nothing prepended or
+	// appended.
+	primaryOutput string
+	// chainTool names the tool the chain actually ran. It is empty when the
+	// block carried no chain, or named a tool that does not exist.
+	chainTool string
+	// chainInput and chainOutput are that chained call's arguments and result.
+	chainInput  string
+	chainOutput string
+	// chainFailed reports that the chained tool returned an error.
+	chainFailed bool
+}
+
 // executeWithChain runs a tool and any chained follow-up, combining results.
 // Also processes sideband fields (done, note, split) if callbacks are set.
-func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string, rawInput string, hooks *Hooks, blockID string, sbCallbacks *SidebandCallbacks) (output string, isError bool) {
+//
+// cachedPrimaryOutput, when non-nil, stands in for running the primary tool:
+// the read cache has already established that the file is in context and
+// answers with a stub instead. It replaces the primary tool's output and
+// nothing else. The sideband fields and the chained call arrived on the same
+// tool_use block and are separate instructions from the model, so they still
+// run — skipping them discarded half of what the model asked for while telling
+// it nothing.
+func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string, rawInput string, hooks *Hooks, blockID string, sbCallbacks *SidebandCallbacks, cachedPrimaryOutput *string) (outcome toolCallOutcome, isError bool) {
 	// Extract sideband fields first, then chain.
 	cleanInput, sb := extractSideband(rawInput)
 	sbSummary := processSideband(sb, sbCallbacks)
 	cleanInput, chain := extractChain(cleanInput)
+	outcome.primaryInput = cleanInput
 
-	// Run primary tool
-	tool, ok := toolMap[name]
-	if !ok {
-		return fmt.Sprintf("error: unknown tool %q", name), true
-	}
-	primaryOutput, err := tool.Run(ctx, cleanInput)
-	if err != nil {
-		return fmt.Sprintf("error: %s", err), true
+	// Run primary tool, unless the read cache already answered for it.
+	if cachedPrimaryOutput != nil {
+		outcome.primaryOutput = *cachedPrimaryOutput
+	} else {
+		tool, ok := toolMap[name]
+		if !ok {
+			outcome.combined = fmt.Sprintf("error: unknown tool %q", name)
+			return outcome, true
+		}
+		primaryOutput, err := tool.Run(ctx, cleanInput)
+		if err != nil {
+			outcome.combined = fmt.Sprintf("error: %s", err)
+			return outcome, true
+		}
+		outcome.primaryOutput = primaryOutput
 	}
 
 	if hooks != nil && hooks.OnToolResult != nil {
-		hooks.OnToolResult(blockID, name, primaryOutput, false)
+		hooks.OnToolResult(blockID, name, outcome.primaryOutput, false)
 	}
 
 	// Prepend sideband summary if any
+	primaryReport := outcome.primaryOutput
 	if sbSummary != "" {
-		primaryOutput = sbSummary + "\n" + primaryOutput
+		primaryReport = sbSummary + "\n" + primaryReport
 	}
 
 	// No chain — return primary result
 	if chain == nil {
-		return primaryOutput, false
+		outcome.combined = primaryReport
+		return outcome, false
 	}
 
 	// Execute chained tool
 	chainTool, ok := toolMap[chain.Tool]
 	if !ok {
-		return primaryOutput + fmt.Sprintf("\n\n--- then(%s) error: unknown tool ---", chain.Tool), false
+		outcome.combined = primaryReport + fmt.Sprintf("\n\n--- then(%s) error: unknown tool ---", chain.Tool)
+		return outcome, false
 	}
 
 	if hooks != nil && hooks.OnToolCall != nil {
@@ -163,11 +208,17 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 		hooks.OnToolResult(blockID+"-chain", chain.Tool, chainOutput, chainErr != nil)
 	}
 
+	outcome.chainTool = chain.Tool
+	outcome.chainInput = string(chain.Input)
+	outcome.chainOutput = chainOutput
+	outcome.chainFailed = chainErr != nil
+
 	// Combine results
 	var combined strings.Builder
-	combined.WriteString(primaryOutput)
+	combined.WriteString(primaryReport)
 	combined.WriteString(fmt.Sprintf("\n\n--- then(%s) ---\n", chain.Tool))
 	combined.WriteString(chainOutput)
+	outcome.combined = combined.String()
 
-	return combined.String(), false
+	return outcome, false
 }
