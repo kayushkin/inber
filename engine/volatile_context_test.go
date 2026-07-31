@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -35,11 +36,13 @@ func (emptyMemoryStore) Compact(time.Duration, int) ([]memorystore.CompactionRes
 func (emptyMemoryStore) BuildContext(memorystore.BuildContextRequest) ([]memorystore.Memory, int, error) {
 	return nil, 0, nil
 }
-func (emptyMemoryStore) PrepareSession(memorystore.PrepareSessionConfig) error { return nil }
-func (emptyMemoryStore) LoadToolRegistry([]memorystore.ToolMetadata) error     { return nil }
-func (emptyMemoryStore) UpdateToolUsageSummary(string, string, int64) error    { return nil }
-func (emptyMemoryStore) TrackMemoryUsage(string, string, int, string) error    { return nil }
-func (emptyMemoryStore) Close() error                                          { return nil }
+func (emptyMemoryStore) PrepareSession(context.Context, memorystore.PrepareSessionConfig) error {
+	return nil
+}
+func (emptyMemoryStore) LoadToolRegistry([]memorystore.ToolMetadata) error  { return nil }
+func (emptyMemoryStore) UpdateToolUsageSummary(string, string, int64) error { return nil }
+func (emptyMemoryStore) TrackMemoryUsage(string, string, int, string) error { return nil }
+func (emptyMemoryStore) Close() error                                       { return nil }
 
 // fileReadMessages builds the smallest conversation CrossZoneDedup reports on:
 // an assistant message in the frozen zone that read a file, and an assistant

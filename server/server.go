@@ -332,7 +332,7 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 
 	// Enqueue the work (serialized by session, capped by lane).
 	err := g.queue.Enqueue(ctx, "main", sessionKey, func(ctx context.Context) error {
-		sess, err := g.getOrCreateSession(sessionKey, agentName, ac, req, onEvent)
+		sess, err := g.getOrCreateSession(ctx, sessionKey, agentName, ac, req, onEvent)
 		if err != nil {
 			return fmt.Errorf("session %s: %w", sessionKey, err)
 		}

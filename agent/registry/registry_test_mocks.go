@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func (m *mockMemoryStore) BuildContext(req memory.BuildContextRequest) ([]memory
 	return nil, 0, nil
 }
 
-func (m *mockMemoryStore) PrepareSession(cfg memory.PrepareSessionConfig) error {
+func (m *mockMemoryStore) PrepareSession(ctx context.Context, cfg memory.PrepareSessionConfig) error {
 	return nil
 }
 

@@ -17,7 +17,7 @@ import (
 // the session would otherwise finish and keep.
 func TestTurnContextDropsCallerCancellation(t *testing.T) {
 	caller, cancelCaller := context.WithCancel(context.Background())
-	turnCtx, cancelTurn := turnContext(caller)
+	turnCtx, cancelTurn := withoutCallerCancellation(caller)
 	defer cancelTurn()
 
 	cancelCaller()
@@ -38,7 +38,7 @@ func TestTurnContextKeepsCallerDeadline(t *testing.T) {
 	caller, cancelCaller := context.WithDeadline(context.Background(), want)
 	defer cancelCaller()
 
-	turnCtx, cancelTurn := turnContext(caller)
+	turnCtx, cancelTurn := withoutCallerCancellation(caller)
 	defer cancelTurn()
 
 	got, ok := turnCtx.Deadline()
@@ -53,7 +53,7 @@ func TestTurnContextKeepsCallerDeadline(t *testing.T) {
 // TestInterruptCancelsTheTurnContext checks the verb the session exposes for
 // stopping a turn reaches the context the turn runs under.
 func TestInterruptCancelsTheTurnContext(t *testing.T) {
-	turnCtx, cancel := turnContext(context.Background())
+	turnCtx, cancel := withoutCallerCancellation(context.Background())
 	defer cancel()
 
 	s := &Session{Key: "test"}
@@ -80,7 +80,7 @@ func TestInterruptCancelsTheTurnContext(t *testing.T) {
 
 // TestStopCancelsTheTurnContext is the same check for the terminal verb.
 func TestStopCancelsTheTurnContext(t *testing.T) {
-	turnCtx, cancel := turnContext(context.Background())
+	turnCtx, cancel := withoutCallerCancellation(context.Background())
 	defer cancel()
 
 	s := &Session{Key: "test"}

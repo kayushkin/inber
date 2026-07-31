@@ -106,18 +106,23 @@ func (s *Session) updateHooks() {
 	}
 }
 
-// turnContext derives the context a turn actually runs under from the context
-// of whoever asked for the turn.
+// withoutCallerCancellation derives the context session work actually runs
+// under from the context of whoever asked for that work.
 //
 // It keeps the caller's deadline and drops the caller's cancellation. The
 // deadline is load-bearing: a sub-agent spawn bounds its child with
 // context.WithTimeout, and that bound only stops anything if it survives into
-// the turn. The cancellation is deliberately dropped, because the caller is
-// almost always an HTTP request — a browser tab closing mid-turn, or a proxy
-// hitting its read timeout, must not abort work the session would otherwise
-// finish and keep. A turn in flight is stopped by interrupt and stop, and by
-// nothing else.
-func turnContext(ctx context.Context) (context.Context, context.CancelFunc) {
+// the work. The cancellation is deliberately dropped, because the caller is
+// almost always an HTTP request — a browser tab closing, or a proxy hitting its
+// read timeout, must not abort work the session would otherwise finish and
+// keep. A turn in flight is stopped by interrupt and stop, and by nothing else.
+//
+// Both things a session does under a caller's context use this rule: running a
+// turn, and being built in the first place. Building a session reads the
+// workspace — the memory store's preparation scans it for recently modified
+// files — and a request that has gone away is not a reason to abandon a session
+// the next request will ask for anyway.
+func withoutCallerCancellation(ctx context.Context) (context.Context, context.CancelFunc) {
 	turnCtx := context.WithoutCancel(ctx)
 	if deadline, ok := ctx.Deadline(); ok {
 		return context.WithDeadline(turnCtx, deadline)
@@ -130,7 +135,7 @@ func turnContext(ctx context.Context) (context.Context, context.CancelFunc) {
 // by prepending them to the input.
 // onActive/onIdle are called on status transitions (for event publishing).
 func (s *Session) turn(ctx context.Context, input string) (*agent.TurnResult, error) {
-	turnCtx, cancel := turnContext(ctx)
+	turnCtx, cancel := withoutCallerCancellation(ctx)
 	defer cancel()
 
 	s.mu.Lock()

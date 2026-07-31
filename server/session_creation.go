@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -16,14 +17,14 @@ import (
 )
 
 // getOrCreateSession retrieves an existing session or creates a new one.
-func (g *Server) getOrCreateSession(key, agentName string, ac AgentConfig, req RunRequest, onEvent func(StreamEvent)) (*Session, error) {
+func (g *Server) getOrCreateSession(ctx context.Context, key, agentName string, ac AgentConfig, req RunRequest, onEvent func(StreamEvent)) (*Session, error) {
 	if val, ok := g.sessions.Load(key); ok {
 		sess := val.(*Session)
 		sess.setOnEvent(onEvent)
 		return sess, nil
 	}
 
-	sess, err := g.createSession(key, agentName, ac, req, onEvent)
+	sess, err := g.createSession(ctx, key, agentName, ac, req, onEvent)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +41,7 @@ func (g *Server) getOrCreateSession(key, agentName string, ac AgentConfig, req R
 }
 
 // createSession creates a new session with a fresh engine.
-func (g *Server) createSession(key, agentName string, ac AgentConfig, req RunRequest, onEvent func(StreamEvent)) (*Session, error) {
+func (g *Server) createSession(ctx context.Context, key, agentName string, ac AgentConfig, req RunRequest, onEvent func(StreamEvent)) (*Session, error) {
 	injections := make(chan string, 10)
 
 	cfg := engine.EngineConfig{
@@ -105,7 +106,13 @@ func (g *Server) createSession(key, agentName string, ac AgentConfig, req RunReq
 		log.Printf("[server] resumed session %s (%d messages, turn %d)", key, len(msgs), turnCounter)
 	}
 
-	eng, err := engine.NewEngine(cfg)
+	// Building the session reads the workspace, so it follows the same rule as
+	// a turn: the caller's deadline binds it, the caller's cancellation does
+	// not. The session outlives the request that asked for it.
+	setupCtx, endSetup := withoutCallerCancellation(ctx)
+	defer endSetup()
+
+	eng, err := engine.NewEngine(setupCtx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create engine for %s: %w", agentName, err)
 	}

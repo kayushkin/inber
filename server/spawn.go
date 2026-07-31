@@ -124,9 +124,9 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 	var err error
 
 	if req.Fork {
-		child, err = g.forkSession(parent, childKey, req.Agent, ac, nil)
+		child, err = g.forkSession(ctx, parent, childKey, req.Agent, ac, nil)
 	} else {
-		child, err = g.createSession(childKey, req.Agent, ac, RunRequest{}, nil)
+		child, err = g.createSession(ctx, childKey, req.Agent, ac, RunRequest{}, nil)
 		if err == nil {
 			child.SpawnDepth = parent.SpawnDepth + 1
 			child.ParentKey = req.ParentKey

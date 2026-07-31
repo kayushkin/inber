@@ -532,7 +532,7 @@ func (g *Server) handleBridgeResume(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 
-	sess, err := g.createSession(id, agentName, ac, RunRequest{}, nil)
+	sess, err := g.createSession(r.Context(), id, agentName, ac, RunRequest{}, nil)
 	if err != nil {
 		jsonError(w, fmt.Sprintf("resume failed: %v", err), http.StatusInternalServerError)
 		return
@@ -580,7 +580,7 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 	agentName := parent.AgentName
 	ac, _ := g.GetAgentConfig(agentName)
 
-	child, err := g.forkSession(parent, childKey, agentName, ac, nil)
+	child, err := g.forkSession(r.Context(), parent, childKey, agentName, ac, nil)
 	if err != nil {
 		jsonError(w, fmt.Sprintf("fork failed: %v", err), http.StatusInternalServerError)
 		return

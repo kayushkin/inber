@@ -113,7 +113,11 @@ type Engine struct {
 
 // NewEngine creates a fully initialized Engine. Each step delegates to a
 // helper in engine_new.go — look there for implementation details.
-func NewEngine(cfg EngineConfig) (*Engine, error) {
+//
+// ctx bounds the setup work that reaches outside this process. Today that is
+// the memory store's session preparation, which scans the workspace for
+// recently modified files and can walk the entire tree to do it.
+func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	repoRoot, err := setupRepoRoot(cfg.RepoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("repo root: %w", err)
@@ -141,7 +145,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	}
 
 	// 2. Memory — SQLite-backed semantic store (skipped in raw mode)
-	if err := e.initMemory(cfg); err != nil {
+	if err := e.initMemory(ctx, cfg); err != nil {
 		return nil, err
 	}
 

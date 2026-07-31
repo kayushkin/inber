@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -25,7 +26,7 @@ type BenchmarkTiming struct {
 
 // NewEngineBenchmark creates an Engine with detailed phase timing instrumentation.
 // This is a specialized version of NewEngine that measures each initialization step.
-func NewEngineBenchmark(cfg EngineConfig) (*Engine, BenchmarkTiming, error) {
+func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, BenchmarkTiming, error) {
 	var timing BenchmarkTiming
 	startTime := time.Now()
 	
@@ -73,7 +74,7 @@ func NewEngineBenchmark(cfg EngineConfig) (*Engine, BenchmarkTiming, error) {
 	// Phase 3: Setup memory store and context
 	phaseStart = time.Now()
 	if cfg.SystemOverride == "" && !cfg.Raw {
-		memStore, err := setupMemoryStore(repoRoot, identityText, e.AgentName)
+		memStore, err := setupMemoryStore(ctx, repoRoot, identityText, e.AgentName)
 		if err != nil {
 			return nil, timing, err
 		}

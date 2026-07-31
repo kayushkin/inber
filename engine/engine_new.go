@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -92,7 +93,11 @@ func loadAgentConfig(agentName string, commandName string, modelExplicitlySet bo
 }
 
 // setupMemoryStore initializes the memory store and prepares the session.
-func setupMemoryStore(repoRoot, identityText, agentName string) (memory.MemoryStore, error) {
+//
+// ctx bounds preparation, which scans the workspace for recently modified
+// files: git first, and a walk of the whole tree when there is no git history
+// to read.
+func setupMemoryStore(ctx context.Context, repoRoot, identityText, agentName string) (memory.MemoryStore, error) {
 	Log.Infof("loading context (repoRoot=%s)...", repoRoot)
 
 	ms, err := memory.OpenOrCreate(repoRoot)
@@ -113,7 +118,18 @@ func setupMemoryStore(repoRoot, identityText, agentName string) (memory.MemorySt
 		RecentFilesTTL: 10 * time.Minute,
 	}
 	
-	if err := ms.PrepareSession(prepCfg); err != nil {
+	if err := ms.PrepareSession(ctx, prepCfg); err != nil {
+		// A session that could not be prepared still runs, with less in memory
+		// than it should have — that is why this is a warning.
+		//
+		// A caller who withdrew is a different event, and continuing to build
+		// an engine for it would report a working session to nobody. Ask the
+		// context rather than the error: preparation's own scan deadline
+		// arrives here looking exactly like a cancellation.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			ms.Close()
+			return nil, ctxErr
+		}
 		Log.Warn("failed to prepare session: %v", err)
 	}
 
@@ -413,7 +429,7 @@ func (e *Engine) initAgent(cfg EngineConfig) error {
 }
 
 // initMemory opens the semantic memory store and prepares the session context.
-func (e *Engine) initMemory(cfg EngineConfig) error {
+func (e *Engine) initMemory(ctx context.Context, cfg EngineConfig) error {
 	identityText := e.IdentityOverride
 
 	if cfg.SystemOverride != "" {
@@ -429,7 +445,7 @@ func (e *Engine) initMemory(cfg EngineConfig) error {
 	}
 
 	// Normal mode: open memory store, clear identity override (memory provides it)
-	memStore, err := setupMemoryStore(e.repoRoot, identityText, e.AgentName)
+	memStore, err := setupMemoryStore(ctx, e.repoRoot, identityText, e.AgentName)
 	if err != nil {
 		return err
 	}

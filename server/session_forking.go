@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -9,7 +10,7 @@ import (
 )
 
 // forkSession creates a child session with a deep copy of the parent's messages.
-func (g *Server) forkSession(parent *Session, childKey, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
+func (g *Server) forkSession(ctx context.Context, parent *Session, childKey, agentName string, ac AgentConfig, onEvent func(StreamEvent)) (*Session, error) {
 	// Deep copy parent's messages, and read its turn count under the same lock
 	// so the pair describes one moment in the parent's life.
 	parent.mu.Lock()
@@ -25,7 +26,7 @@ func (g *Server) forkSession(parent *Session, childKey, agentName string, ac Age
 		return nil, fmt.Errorf("unmarshal messages: %w", err)
 	}
 
-	child, err := g.createSession(childKey, agentName, ac, RunRequest{}, onEvent)
+	child, err := g.createSession(ctx, childKey, agentName, ac, RunRequest{}, onEvent)
 	if err != nil {
 		return nil, err
 	}

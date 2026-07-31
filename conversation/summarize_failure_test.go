@@ -47,11 +47,13 @@ func (r *recordingStore) Compact(time.Duration, int) ([]memorystore.CompactionRe
 func (r *recordingStore) BuildContext(memorystore.BuildContextRequest) ([]memorystore.Memory, int, error) {
 	return nil, 0, nil
 }
-func (r *recordingStore) PrepareSession(memorystore.PrepareSessionConfig) error { return nil }
-func (r *recordingStore) LoadToolRegistry([]memorystore.ToolMetadata) error     { return nil }
-func (r *recordingStore) UpdateToolUsageSummary(string, string, int64) error    { return nil }
-func (r *recordingStore) TrackMemoryUsage(string, string, int, string) error    { return nil }
-func (r *recordingStore) Close() error                                          { return nil }
+func (r *recordingStore) PrepareSession(context.Context, memorystore.PrepareSessionConfig) error {
+	return nil
+}
+func (r *recordingStore) LoadToolRegistry([]memorystore.ToolMetadata) error  { return nil }
+func (r *recordingStore) UpdateToolUsageSummary(string, string, int64) error { return nil }
+func (r *recordingStore) TrackMemoryUsage(string, string, int, string) error { return nil }
+func (r *recordingStore) Close() error                                       { return nil }
 
 // A summary the model never produced must not be substituted for the turns it was
 // supposed to replace. This is the whole defect: before the fix the call returned
