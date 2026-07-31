@@ -15,15 +15,11 @@ import (
 func (e *Engine) executeAgent(ctx context.Context, systemBlocks []sessionMod.NamedBlock) (*agent.TurnResult, error) {
 	e.emitStatus("Selecting model...")
 	// Select model based on health data (failover if primary is down)
-	modelUsed, _ := e.selectModel()
+	selected, _ := e.selectModel()
 
-	// Ensure we have the right client for the selected model
-	if e.modelClient == nil || (e.modelClient.Model != nil && e.modelClient.Model.ID != modelUsed) {
-		mc, mcErr := agent.NewModelClient(modelUsed, e.modelStore, e.authStore)
-		if mcErr == nil {
-			e.modelClient = mc
-		}
-	}
+	// Install the client for it, and take back the model actually in force —
+	// which differs from `selected` when no client could be built for it.
+	modelUsed := e.resolveModelClient(selected)
 	e.Model = modelUsed
 
 	var result *agent.TurnResult
