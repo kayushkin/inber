@@ -151,7 +151,7 @@ type toolCallOutcome struct {
 func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string, rawInput string, hooks *Hooks, blockID string, sbCallbacks *SidebandCallbacks, cachedPrimaryOutput *string) (outcome toolCallOutcome, isError bool) {
 	// Extract sideband fields first, then chain.
 	cleanInput, sb := extractSideband(rawInput)
-	sbSummary := processSideband(sb, sbCallbacks)
+	sbSummary := processSideband(ctx, sb, sbCallbacks)
 	cleanInput, chain := extractChain(cleanInput)
 	outcome.primaryInput = cleanInput
 

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 
 	toolstoretools "github.com/kayushkin/tool-store/tools"
@@ -13,7 +14,7 @@ func (e *Engine) buildSidebandCallbacks() *agent.SidebandCallbacks {
 	agentName := e.AgentName
 
 	return &agent.SidebandCallbacks{
-		CompleteTasks: func(indices []int) error {
+		CompleteTasks: func(ctx context.Context, indices []int) error {
 			plan := loadTaskPlan(repoRoot)
 			if plan == nil {
 				return fmt.Errorf("no task plan found")
@@ -42,8 +43,11 @@ func (e *Engine) buildSidebandCallbacks() *agent.SidebandCallbacks {
 
 			// If all tasks done, auto-build.
 			if len(plan.Tasks) == 0 {
-				result := toolstoretools.RunBuildCheck(repoRoot)
-				if !result.Success {
+				result := toolstoretools.RunBuildCheck(ctx, repoRoot)
+				// A stopped build has not judged the code, so it must not
+				// leave a "Fix build error" task behind describing a build
+				// that never finished.
+				if !result.Success && !result.Stopped {
 					_ = toolstoretools.AddBuildErrorTask(repoRoot, result.Output)
 				}
 			}

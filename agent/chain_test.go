@@ -117,7 +117,7 @@ func TestCachedReadStillProcessesSideband(t *testing.T) {
 	var completed []int
 	var noteKey, noteValue string
 	a.sidebandCallbacks = &SidebandCallbacks{
-		CompleteTasks: func(indices []int) error { completed = append(completed, indices...); return nil },
+		CompleteTasks: func(_ context.Context, indices []int) error { completed = append(completed, indices...); return nil },
 		SaveNote:      func(key, value string) error { noteKey, noteValue = key, value; return nil },
 	}
 

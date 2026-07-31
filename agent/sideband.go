@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -18,8 +19,11 @@ const (
 
 // SidebandCallbacks are called when sideband fields are present.
 type SidebandCallbacks struct {
-	// CompleteTasks marks task indices as done and removes them.
-	CompleteTasks func(indices []int) error
+	// CompleteTasks marks task indices as done and removes them. Completing
+	// the last task fires the project's build command, which is the one
+	// sideband callback that runs a subprocess, so it takes the turn's context
+	// and an interrupt reaches the build.
+	CompleteTasks func(ctx context.Context, indices []int) error
 	// SaveNote upserts a scratchpad note.
 	SaveNote func(key, value string) error
 	// SplitTask replaces a task at index with subtasks.
@@ -123,7 +127,7 @@ func extractSideband(rawInput string) (cleanInput string, sb *sidebandData) {
 }
 
 // processSideband executes sideband callbacks and returns a summary string.
-func processSideband(sb *sidebandData, cb *SidebandCallbacks) string {
+func processSideband(ctx context.Context, sb *sidebandData, cb *SidebandCallbacks) string {
 	if sb == nil || cb == nil {
 		return ""
 	}
@@ -131,7 +135,7 @@ func processSideband(sb *sidebandData, cb *SidebandCallbacks) string {
 	var parts []string
 
 	if len(sb.Done) > 0 && cb.CompleteTasks != nil {
-		if err := cb.CompleteTasks(sb.Done); err != nil {
+		if err := cb.CompleteTasks(ctx, sb.Done); err != nil {
 			parts = append(parts, fmt.Sprintf("[task error: %s]", err))
 		} else {
 			parts = append(parts, fmt.Sprintf("[✓ completed %d task(s)]", len(sb.Done)))
