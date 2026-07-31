@@ -51,10 +51,26 @@ func SummarizeConversation(
 	oldText := messagesToText(oldMessages)
 	oldTokens := memory.EstimateTokens(oldText)
 
-	// Save full old conversation to memory before summarizing
+	// Generate summary via LLM. This is the one step that can fail, and it runs
+	// before anything is written or dropped: the summary is what the older turns
+	// are exchanged for, so without it there is nothing to exchange them for and
+	// the caller keeps the transcript it handed in.
+	summaryModel := cfg.Model
+	if summaryModel == "" {
+		summaryModel = model
+	}
+
+	summary, err := generateSummary(ctx, client, oldText, summaryModel, cfg.MaxSummaryTokens)
+	if err != nil {
+		return messages, result, fmt.Errorf("summarizing %d earlier turns: %w", result.SummarizedTurns, err)
+	}
+
+	// Save the full old conversation to memory. This runs only after the summary
+	// exists, because the row claims a compaction happened: writing it on the
+	// failure path would file a copy of the whole transcript on every retry.
 	if cfg.SaveToMemory && memStore != nil {
 		memID := fmt.Sprintf("conversation-summary:%s:%s", sessionID, uuid.New().String()[:8])
-		err := memStore.Save(memory.Memory{
+		if err := memStore.Save(memory.Memory{
 			ID:         memID,
 			Content:    oldText,
 			Summary:    fmt.Sprintf("Full conversation history (%d turns, ~%d tokens) from session %s", result.SummarizedTurns, oldTokens, sessionID),
@@ -62,8 +78,7 @@ func SummarizeConversation(
 			Importance: 0.4,
 			Source:     "summarization",
 			IsLazy:     true, // Don't auto-load, but available via memory_expand
-		})
-		if err != nil {
+		}); err != nil {
 			// Log but don't fail
 			fmt.Printf("warning: failed to save conversation to memory: %v\n", err)
 		} else {
@@ -72,26 +87,8 @@ func SummarizeConversation(
 		}
 	}
 
-	// Generate summary via LLM
-	summaryModel := cfg.Model
-	if summaryModel == "" {
-		summaryModel = model
-	}
-
-	summary, err := generateSummary(ctx, client, oldText, summaryModel, cfg.MaxSummaryTokens)
-	if err != nil {
-		// Fallback: mechanical summary (no LLM call). Record the degradation —
-		// a caller that cannot tell an LLM summary from a word-frequency list
-		// will report a successful compaction that silently lost the reasoning.
-		summary = mechanicalSummary(oldMessages)
-		result.SummaryDegraded = true
-		result.SummaryError = err.Error()
-		fmt.Printf("warning: LLM summarization failed, using mechanical fallback: %v\n", err)
-	}
-
 	result.Summarized = true
 	result.SummaryTokens = memory.EstimateTokens(summary)
-	result.KeptMessages = len(recentMessages) + 2 // +2 for summary user+assistant pair
 
 	// Build new message list: summary + recent messages
 	// The summary goes as a user message with assistant acknowledgment
@@ -119,6 +116,10 @@ func SummarizeConversation(
 
 	// Fix any alternation issues
 	newMessages = fixAlternation(newMessages)
+
+	// Count what is actually being returned. Stripping and alternation-fixing both
+	// drop messages, so a count taken before them reports messages that no longer exist.
+	result.KeptMessages = len(newMessages)
 
 	return newMessages, result, nil
 }

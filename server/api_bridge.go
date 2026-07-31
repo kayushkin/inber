@@ -707,12 +707,14 @@ func (g *Server) handleBridgeCompact(w http.ResponseWriter, r *http.Request, id 
 	after := len(s.Engine.Messages)
 	s.mu.Unlock()
 
+	// Persist before reporting the error: a compaction can fail at the summary and
+	// still have pruned, and the durable copy has to match what the engine now holds.
+	g.persistSessionState(s)
+
 	if err != nil {
 		jsonError(w, fmt.Sprintf("compact failed: %v", err), http.StatusInternalServerError)
 		return
 	}
-
-	g.persistSessionState(s)
 
 	jsonResponse(w, map[string]any{
 		"status":           "compacted",

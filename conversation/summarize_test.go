@@ -78,17 +78,6 @@ func TestMessagesToText(t *testing.T) {
 	}
 }
 
-func TestMechanicalSummary(t *testing.T) {
-	msgs := makeMessages(20)
-	summary := mechanicalSummary(msgs)
-	if summary == "" {
-		t.Error("expected non-empty mechanical summary")
-	}
-	if !contains(summary, "10 conversation turns") {
-		t.Errorf("expected turn count in summary, got: %s", summary)
-	}
-}
-
 func TestFixAlternation(t *testing.T) {
 	// Two user messages in a row
 	msgs := []anthropic.MessageParam{

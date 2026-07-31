@@ -53,7 +53,9 @@ func (e *Engine) RestoreSession(messages []anthropic.MessageParam, turnCounter i
 }
 
 // summarizeIfNeeded checks if the conversation is long enough to warrant summarization.
-func (e *Engine) summarizeIfNeeded() {
+// A summarization that fails returns the error with the conversation untouched — the
+// caller decides whether a compaction it did not get is worth interrupting for.
+func (e *Engine) summarizeIfNeeded() error {
 	role := conversation.RoleDefault
 	if e.AgentConfig != nil && e.AgentConfig.Role != "" {
 		role = conversation.AgentRole(strings.ToLower(e.AgentConfig.Role))
@@ -61,7 +63,7 @@ func (e *Engine) summarizeIfNeeded() {
 	cfg := conversation.DefaultSummarizeConfig(role)
 
 	if !conversation.ShouldSummarize(e.Messages, cfg) {
-		return
+		return nil
 	}
 
 	e.emitStatus("Summarizing context...")
@@ -87,8 +89,8 @@ func (e *Engine) summarizeIfNeeded() {
 	)
 
 	if err != nil {
-		Log.Warn("summarization failed: %v", err)
-		return
+		Log.Warn("summarization failed, conversation left uncompacted: %v", err)
+		return err
 	}
 
 	if result.Summarized {
@@ -99,6 +101,7 @@ func (e *Engine) summarizeIfNeeded() {
 			e.Session.LogSummarize(result.SummarizedTurns, result.SummaryTokens, result.KeptMessages, result.MemoryID)
 		}
 	}
+	return nil
 }
 
 // pruneConfig returns the appropriate PruneConfig for this engine's agent role.

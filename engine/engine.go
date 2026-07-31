@@ -318,12 +318,19 @@ func (e *Engine) CompactContext(summary string) (int, error) {
 	before := len(e.Messages)
 
 	// Run summarization first.
-	e.summarizeIfNeeded()
+	summarizeErr := e.summarizeIfNeeded()
 
-	// Then run prune.
+	// Then run prune. Prune is independent of the summarizer and makes no API call,
+	// so it still runs and still counts even when the summary could not be produced.
 	e.pruneIfNeeded()
 
 	removed := before - len(e.Messages)
+
+	// This compaction was asked for explicitly, so a half-done one is reported as
+	// failed rather than as a smaller number of messages removed.
+	if summarizeErr != nil {
+		return removed, summarizeErr
+	}
 	return removed, nil
 }
 

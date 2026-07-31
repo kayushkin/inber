@@ -54,8 +54,10 @@ func (e *Engine) prepareInput(input, sessionID string) string {
 		e.Messages = repaired
 	}
 
-	// 1b. Summarize if conversation is very long (compress old turns into summary)
-	e.summarizeIfNeeded()
+	// 1b. Summarize if conversation is very long (compress old turns into summary).
+	// Best effort: a failed summarization has already logged and left the conversation
+	// whole, and losing a compaction is not a reason to fail the user's turn.
+	_ = e.summarizeIfNeeded()
 	// 1c. Prune remaining conversation (truncate tool results, old messages)
 	e.emitStatus("Pruning context...")
 	e.pruneIfNeeded()
