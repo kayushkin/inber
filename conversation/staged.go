@@ -129,7 +129,11 @@ func CrossZoneDedup(frozen, staging []anthropic.MessageParam) []string {
 			continue
 		}
 		for _, block := range msg.Content {
-			if path, ok := toolUseFilePath(block); ok {
+			paths, ok := toolUseFilePaths(block)
+			if !ok {
+				continue
+			}
+			for _, path := range paths {
 				frozenPaths[path] = true
 			}
 		}
@@ -142,7 +146,11 @@ func CrossZoneDedup(frozen, staging []anthropic.MessageParam) []string {
 			continue
 		}
 		for _, block := range msg.Content {
-			if path, ok := toolUseFilePath(block); ok {
+			paths, ok := toolUseFilePaths(block)
+			if !ok {
+				continue
+			}
+			for _, path := range paths {
 				if frozenPaths[path] {
 					superseded = append(superseded, path)
 				}
