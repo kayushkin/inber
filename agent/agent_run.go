@@ -294,6 +294,18 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 		outcome, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks, cachedPrimaryOutput, a.ToolRefusal)
 		output := outcome.combined
 		if isError {
+			// The dispatcher reports a result it produced itself; the ones it
+			// returns as errors — refused, unknown tool, the tool failed — it
+			// hands back for the caller to report, so say so here or they reach
+			// neither the display nor the session log. Without this the
+			// transcript carries a tool_use with no tool_result, and
+			// Turn.ConsecutiveErrors — incremented only in this hook — never
+			// moves, which leaves the whole error-recovery context ladder
+			// unreachable. Same line, same reason, as the OpenAI-served loop in
+			// engine/turn_openai.go; the two paths have to agree.
+			if a.hooks != nil && a.hooks.OnToolResult != nil {
+				a.hooks.OnToolResult(block.ID, block.Name, output, true)
+			}
 			finalOutput := output
 			if a.hooks != nil && a.hooks.ModifyToolResult != nil {
 				if modified := a.hooks.ModifyToolResult(block.ID, block.Name, output, true); modified != "" {
