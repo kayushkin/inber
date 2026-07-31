@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,7 +161,19 @@ func setupSession(repoRoot, agentName, commandName string, newSession, detach bo
 	} else {
 		workspace = ws
 		if !newSession {
-			if msgs, err := ws.LoadMessages(); err == nil && len(msgs) > 0 {
+			msgs, err := ws.LoadMessages()
+			// No transcript yet is the ordinary case: every workspace is that
+			// until its first turn ends. A transcript that exists and cannot be
+			// read is not, and it must not be walked past — saveResumableState
+			// rewrites this same file at the end of every turn, so carrying on
+			// would replace the conversation we failed to read with one that
+			// starts empty. Stop and say which file, so it can be moved aside.
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return nil, nil, nil, nil, 0, fmt.Errorf(
+					"read workspace transcript %s: %w (move it aside or pass --new to start a fresh session)",
+					filepath.Join(ws.Dir, "messages.json"), err)
+			}
+			if len(msgs) > 0 {
 				repaired := conversation.RepairEmptyContent(msgs)
 				repaired, repairCount := conversation.RepairDanglingToolUse(repaired)
 				repaired = conversation.RepairAlternation(repaired)

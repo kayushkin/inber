@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -119,7 +121,10 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 	// Don't set them at creation time — they'd become stale.
 
 	// Try to load existing messages and their turn count from persistence.
-	msgs, turnCounter := g.loadPersistedSession(key)
+	msgs, turnCounter, err := g.loadPersistedSession(key)
+	if err != nil {
+		return nil, err
+	}
 	if len(msgs) > 0 {
 		// Repair interrupted sessions.
 		msgs = conversation.RepairEmptyContent(msgs)
@@ -212,20 +217,30 @@ func (g *Server) restoreGuardState(key string, sessionGuard *guard.Guard) {
 // loadPersistedSession loads a session's messages and the turn count recorded
 // against them from the server data dir. They are loaded together because a
 // turn count without its transcript describes messages that are not there.
-func (g *Server) loadPersistedSession(key string) ([]anthropic.MessageParam, int) {
+//
+// A session with nothing persisted yet is the ordinary case — every session is
+// that on its first turn — and returns no messages and no error. A transcript
+// that exists and cannot be read is not: the caller must not build a session
+// over it, because persistSessionState overwrites messages.json at the end of
+// every turn, so continuing here would replace a transcript we failed to read
+// with one that starts empty. Report it instead.
+func (g *Server) loadPersistedSession(key string) ([]anthropic.MessageParam, int, error) {
 	dir := filepath.Join(g.config.DataDir, "sessions", key)
-	data, err := os.ReadFile(filepath.Join(dir, "messages.json"))
+	path := filepath.Join(dir, "messages.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, 0, nil
+	}
 	if err != nil {
-		return nil, 0
+		return nil, 0, fmt.Errorf("read transcript for %s: %w", key, err)
 	}
 	var msgs []anthropic.MessageParam
 	if err := json.Unmarshal(data, &msgs); err != nil {
-		log.Printf("[server] failed to load messages for %s: %v", key, err)
-		return nil, 0
+		return nil, 0, fmt.Errorf("parse transcript %s for %s: %w", path, key, err)
 	}
 	turnCounter, err := sessionMod.LoadTurnCounter(dir)
 	if err != nil {
 		log.Printf("[server] turn counter unreadable for %s, resuming as if from turn 0: %v", key, err)
 	}
-	return msgs, turnCounter
+	return msgs, turnCounter, nil
 }

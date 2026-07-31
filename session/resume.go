@@ -10,11 +10,23 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/conversation"
 	"github.com/kayushkin/inber/internal/toolid"
 )
 
 // LoadMessages reads a session JSONL and reconstructs the conversation as MessageParams.
 // Correctly groups tool_use blocks into assistant messages and tool_result blocks into user messages.
+//
+// A JSONL is an append-only record of what happened, and what happened is not
+// always a conversation the API will accept: a session that exits while a tool
+// call is in flight leaves a tool_call entry with no tool_result after it, and
+// the API refuses any request whose tool_use block goes unanswered. Grouping
+// alone would hand that straight back. So the reconstruction ends by running
+// the same repairs every live resume path runs (engine.setupSession,
+// Server.createSession), which is where the answer to "what does an unanswered
+// tool call become" is already decided — a synthetic error result saying the
+// session was interrupted. Deciding it a second time here is how the two
+// answers would drift.
 func LoadMessages(logFile string) ([]anthropic.MessageParam, error) {
 	f, err := os.Open(logFile)
 	if err != nil {
@@ -115,6 +127,10 @@ func LoadMessages(logFile string) ([]anthropic.MessageParam, error) {
 			messages = append(messages, anthropic.NewUserMessage(blocks...))
 		}
 	}
+
+	messages = conversation.RepairEmptyContent(messages)
+	messages, _ = conversation.RepairDanglingToolUse(messages)
+	messages = conversation.RepairAlternation(messages)
 
 	return messages, nil
 }

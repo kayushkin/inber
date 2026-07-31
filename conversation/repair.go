@@ -4,6 +4,13 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
+// interruptedToolResultText is what the model is told became of a tool call
+// that was never answered. Both passes below synthesise the same block, so the
+// sentence lives here rather than being written out at each of them: it is the
+// one thing a resumed conversation says about a call that did not finish, and
+// two copies of it are two answers waiting to drift apart.
+const interruptedToolResultText = "[session interrupted — tool call was not completed]"
+
 // repairDanglingToolUse fixes messages where a tool_use block has no
 // corresponding tool_result in the next message. This happens when a
 // session is interrupted mid-tool-call. The Anthropic API requires
@@ -41,53 +48,37 @@ func RepairDanglingToolUse(messages []anthropic.MessageParam) ([]anthropic.Messa
 			continue
 		}
 
-		// Check if next message is user with matching tool_results
+		// A user message follows, so any result that is missing is missing from
+		// a message that exists. RepairMissingToolResults, the second pass
+		// below, both appends those and counts them — so this pass must leave
+		// them alone. It used to count them here as well, and report twice as
+		// many repairs as it made.
 		if i+1 < len(messages) && messages[i+1].Role == anthropic.MessageParamRoleUser {
-			nextMsg := messages[i+1]
-			resultIDs := make(map[string]bool)
-			for _, block := range nextMsg.Content {
-				if block.OfToolResult != nil {
-					resultIDs[block.OfToolResult.ToolUseID] = true
-				}
-			}
-
-			// Find missing tool_results
-			var missing []string
-			for _, id := range toolUseIDs {
-				if !resultIDs[id] {
-					missing = append(missing, id)
-				}
-			}
-
-			if len(missing) > 0 {
-				// Append missing tool_results to the next user message
-				// We'll modify in place since we haven't appended it yet
-				repairsNeeded += len(missing)
-			}
-		} else {
-			// No user message follows — this is the last message and it has
-			// dangling tool_use blocks. Insert a synthetic user message with
-			// tool_results.
-			var toolResults []anthropic.ContentBlockParamUnion
-			for _, id := range toolUseIDs {
-				toolResults = append(toolResults, anthropic.ContentBlockParamUnion{
-					OfToolResult: &anthropic.ToolResultBlockParam{
-						ToolUseID: id,
-						IsError:   anthropic.Bool(true),
-						Content: []anthropic.ToolResultBlockParamContentUnion{
-							{OfText: &anthropic.TextBlockParam{
-								Text: "[session interrupted — tool call was not completed]",
-							}},
-						},
-					},
-				})
-			}
-			repaired = append(repaired, anthropic.MessageParam{
-				Role:    anthropic.MessageParamRoleUser,
-				Content: toolResults,
-			})
-			repairsNeeded += len(toolUseIDs)
+			continue
 		}
+
+		// Nothing answers this message: it is either the last one, or the next
+		// one is another assistant message. Every one of its calls is dangling,
+		// so insert the user message that answers them.
+		var toolResults []anthropic.ContentBlockParamUnion
+		for _, id := range toolUseIDs {
+			toolResults = append(toolResults, anthropic.ContentBlockParamUnion{
+				OfToolResult: &anthropic.ToolResultBlockParam{
+					ToolUseID: id,
+					IsError:   anthropic.Bool(true),
+					Content: []anthropic.ToolResultBlockParamContentUnion{
+						{OfText: &anthropic.TextBlockParam{
+							Text: interruptedToolResultText,
+						}},
+					},
+				},
+			})
+		}
+		repaired = append(repaired, anthropic.MessageParam{
+			Role:    anthropic.MessageParamRoleUser,
+			Content: toolResults,
+		})
+		repairsNeeded += len(toolUseIDs)
 	}
 
 	// Second pass: fix cases where next user message exists but is missing
@@ -193,7 +184,7 @@ func RepairMissingToolResults(messages []anthropic.MessageParam) ([]anthropic.Me
 					IsError:   anthropic.Bool(true),
 					Content: []anthropic.ToolResultBlockParamContentUnion{
 						{OfText: &anthropic.TextBlockParam{
-							Text: "[session interrupted — tool call was not completed]",
+							Text: interruptedToolResultText,
 						}},
 					},
 				},

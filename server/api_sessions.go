@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -176,8 +177,16 @@ func (g *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request, k
 		s.mu.Unlock()
 	} else {
 		// History rendering wants the transcript only; the turn count that
-		// comes with it has no reader here.
-		msgs, _ = g.loadPersistedSession(key)
+		// comes with it has no reader here. An unreadable transcript is not an
+		// empty one, and answering with [] would show the caller a session that
+		// lost its history rather than one we could not read.
+		var err error
+		msgs, _, err = g.loadPersistedSession(key)
+		if err != nil {
+			log.Printf("[server] history for %s: %v", key, err)
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	if len(msgs) == 0 {
