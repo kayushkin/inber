@@ -177,7 +177,9 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 			for i, t := range e.agentTools {
 				toolInfos[i] = sessionMod.ToolInfo{Name: t.Name, Description: t.Description}
 			}
-			e.workspace.WriteToolsList(toolInfos)
+			if err := e.workspace.WriteToolsList(toolInfos); err != nil {
+				Log.Warn("failed to write workspace tool list: %v", err)
+			}
 		}
 	}
 	timing.ToolsBuildingTime = time.Since(phaseStart)

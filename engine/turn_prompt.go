@@ -152,7 +152,9 @@ func (e *Engine) BuildSystemPrompt(userMessage string) ([]sessionMod.NamedBlock,
 		}
 
 		if e.workspace != nil {
-			e.workspace.WriteSystem(blocks)
+			if err := e.workspace.WriteSystem(blocks); err != nil {
+				Log.Warn("failed to write workspace system blocks: %v", err)
+			}
 		}
 		return blocks, nil
 	}
@@ -166,7 +168,9 @@ func (e *Engine) BuildSystemPrompt(userMessage string) ([]sessionMod.NamedBlock,
 	}
 
 	if e.workspace != nil {
-		e.workspace.WriteSystem(blocks)
+		if err := e.workspace.WriteSystem(blocks); err != nil {
+			Log.Warn("failed to write workspace system blocks: %v", err)
+		}
 	}
 	return blocks, nil
 }

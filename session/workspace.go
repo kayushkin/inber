@@ -5,28 +5,41 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// Workspace is a live-editable prompt directory for a session.
-// Before each turn, the engine writes the current prompt pieces here.
-// The user can edit/delete files between turns, and the engine reads them back.
+// Workspace is a generated, read-only view of a session's prompt, on disk for a
+// human to inspect between turns.
 //
-// Layout:
+// It is NOT a control surface. system/ is deleted and rewritten from the engine's
+// own blocks before every turn, so an edit made to a file in it is discarded at the
+// start of the next turn, and a file added to it is deleted. Nothing reads system/
+// back — this comment used to promise that the engine did, and it never has.
 //
-//	session/{agent}/
+// Making it editable is a design change, not a missing call. The directory is keyed
+// on the agent name, not the session, so two concurrent sessions of the same agent
+// in the same repository share it; a read-back that asks "did a human change this
+// file?" would have to distinguish a user's edit from a peer session's write, and
+// answering that needs a per-write manifest and a decision about the sharing. See
+// noteboard todo 9def7d6b and docs/write-read-gate-audit.md.
+//
+// messages.json is the exception and is genuinely read back — it is how a resumed
+// session recovers its transcript (LoadMessages).
+//
+// Layout, under the repository root:
+//
+//	.inber/workspace/{agent}/
 //	├── system/
 //	│   ├── 01-memory-instructions.md
 //	│   ├── 02-identity.md
 //	│   ├── 03-repo-map.md
 //	│   └── ...
-//	├── tools.json
+//	├── tools.md
 //	└── messages.json
 type Workspace struct {
-	Dir string // e.g. "session/main"
+	Dir string // e.g. "<repo>/.inber/workspace/main"
 }
 
 // NewWorkspace creates a workspace for the given agent under baseDir/.inber/workspace/{agent}.
@@ -35,8 +48,9 @@ func NewWorkspace(baseDir, agentName string) *Workspace {
 	return &Workspace{Dir: dir}
 }
 
-// WriteSystem writes each system prompt block as a numbered .md file.
-// Clears old system files first so deleted blocks don't persist.
+// WriteSystem regenerates system/ from the given blocks, deleting whatever was
+// there. Anything a user put in that directory, edit or new file, is lost here;
+// see the type comment for why that is the behaviour and not a bug.
 func (w *Workspace) WriteSystem(blocks []NamedBlock) error {
 	sysDir := filepath.Join(w.Dir, "system")
 	// Remove old system dir and recreate
@@ -57,43 +71,6 @@ func (w *Workspace) WriteSystem(blocks []NamedBlock) error {
 		}
 	}
 	return nil
-}
-
-// ReadSystem reads system prompt blocks from the workspace.
-// Files are sorted by name (so 01-*, 02-*, etc. maintain order).
-// Returns nil if the system/ dir doesn't exist (first turn or deleted).
-func (w *Workspace) ReadSystem() ([]NamedBlock, error) {
-	sysDir := filepath.Join(w.Dir, "system")
-	entries, err := os.ReadDir(sysDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to read system directory %s: %w", sysDir, err)
-	}
-
-	// Sort by name for stable ordering
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
-	})
-
-	var blocks []NamedBlock
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(sysDir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		// Derive ID from filename: "02-identity.md" -> "identity"
-		name := strings.TrimSuffix(entry.Name(), ".md")
-		if idx := strings.Index(name, "-"); idx >= 0 {
-			name = name[idx+1:]
-		}
-		blocks = append(blocks, NamedBlock{ID: name, Text: string(data)})
-	}
-	return blocks, nil
 }
 
 // ToolInfo is a minimal tool representation for workspace display.

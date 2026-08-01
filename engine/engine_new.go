@@ -570,7 +570,9 @@ func (e *Engine) initTools(cfg EngineConfig) {
 		for i, t := range e.agentTools {
 			toolInfos[i] = sessionMod.ToolInfo{Name: t.Name, Description: t.Description}
 		}
-		e.workspace.WriteToolsList(toolInfos)
+		if err := e.workspace.WriteToolsList(toolInfos); err != nil {
+			Log.Warn("failed to write workspace tool list: %v", err)
+		}
 	}
 }
 
