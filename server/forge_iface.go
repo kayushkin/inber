@@ -13,6 +13,7 @@ import (
 //
 // The interface encompasses the full lifecycle of ephemeral workspaces:
 //   - CreateWorkspace: Set up isolated project copies for sub-agents
+//   - GetWorkspace / ListWorkspaces: Find a workspace this process did not create
 //   - CommitAll: Save sub-agent changes to the spawn branch
 //   - MergeToMain: Integrate approved changes into main branches
 //   - PushAll: Sync changes to remote repositories  
@@ -27,7 +28,18 @@ type WorkspaceManager interface {
 	// The agent parameter identifies who is creating the workspace (for naming/tracking).
 	// The projects parameter lists the project IDs to include in the workspace.
 	CreateWorkspace(agent string, projects []string) (*forge.Workspace, error)
-	
+
+	// GetWorkspace returns the workspace with this id as forge recorded it, and an
+	// error when there is no such workspace or its record cannot be read. This is
+	// how a workspace outlives the process that created it: everything else here
+	// takes a *forge.Workspace that some caller has been holding in memory.
+	GetWorkspace(id string) (*forge.Workspace, error)
+
+	// ListWorkspaces returns every workspace forge has on disk. The error reports
+	// workspace directories it could not read, and arrives alongside the ones it
+	// could — one unreadable workspace must not hide the rest.
+	ListWorkspaces() ([]*forge.Workspace, error)
+
 	// CommitAll commits all pending changes in the workspace with the given message.
 	// Returns per-repository commit results (hash, dirty status, errors).
 	CommitAll(ws *forge.Workspace, message string) (map[string]forge.CommitResult, error)

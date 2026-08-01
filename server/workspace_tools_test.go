@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/kayushkin/forge"
@@ -19,6 +21,11 @@ type mockWorkspaceManager struct {
 	cleanupErr   error
 	reopenErr    error
 
+	// recorded stands in for what forge has on disk: the workspaces a restarted
+	// server can still find, as opposed to the ones it happens to hold in memory.
+	recorded    map[string]*forge.Workspace
+	recordedErr error
+
 	// Track calls for assertions.
 	createCalls  []createCall
 	commitCalls  []commitCall
@@ -26,6 +33,7 @@ type mockWorkspaceManager struct {
 	pushCalls    int
 	cleanupCalls int
 	reopenCalls  int
+	getCalls     []string
 }
 
 type createCall struct {
@@ -103,6 +111,24 @@ func (m *mockWorkspaceManager) ReopenWorkspace(ws *forge.Workspace) error {
 	return m.reopenErr
 }
 
+func (m *mockWorkspaceManager) GetWorkspace(id string) (*forge.Workspace, error) {
+	m.getCalls = append(m.getCalls, id)
+	ws, recorded := m.recorded[id]
+	if !recorded {
+		return nil, fmt.Errorf("no workspace %s", id)
+	}
+	return ws, nil
+}
+
+func (m *mockWorkspaceManager) ListWorkspaces() ([]*forge.Workspace, error) {
+	workspaces := make([]*forge.Workspace, 0, len(m.recorded))
+	for _, ws := range m.recorded {
+		workspaces = append(workspaces, ws)
+	}
+	sort.Slice(workspaces, func(i, j int) bool { return workspaces[i].ID < workspaces[j].ID })
+	return workspaces, m.recordedErr
+}
+
 func (m *mockWorkspaceManager) Close() error { return nil }
 
 // newTestServer creates a Server with a mock workspace manager.
@@ -123,9 +149,9 @@ func newTestServer(t *testing.T, mock *mockWorkspaceManager) *Server {
 			MainConcurrency:     4,
 			SubagentConcurrency: 8,
 			Agents: map[string]AgentConfig{
-				"claxon":  {Name: "claxon", Model: "test-model"},
-				"brigid":  {Name: "brigid", Model: "test-model", Projects: []string{"kayushkin"}},
-				"oisin":   {Name: "oisin", Model: "test-model", Projects: []string{"si", "bus"}},
+				"claxon": {Name: "claxon", Model: "test-model"},
+				"brigid": {Name: "brigid", Model: "test-model", Projects: []string{"kayushkin"}},
+				"oisin":  {Name: "oisin", Model: "test-model", Projects: []string{"si", "bus"}},
 			},
 		},
 		store:      store,
@@ -277,28 +303,119 @@ func TestListWorkspacesTool(t *testing.T) {
 		t.Errorf("expected empty message, got: %s", result)
 	}
 
-	// Add workspaces.
-	srv.mu.Lock()
-	srv.workspaces["brigid-111"] = &forge.Workspace{
-		ID:     "brigid-111",
-		Repos:  map[string]string{"kayushkin": "/tmp"},
-		Branch: "spawn/brigid-111",
-		Status: "done",
+	// Add workspaces — to forge, which is where they live. The in-memory map
+	// holds what THIS process spawned, and a server that has just restarted has
+	// spawned nothing while the worktrees are still on disk holding the work.
+	mock.recorded = map[string]*forge.Workspace{
+		"brigid-111": {
+			ID:     "brigid-111",
+			Repos:  map[string]string{"kayushkin": "/tmp"},
+			Branch: "spawn/brigid-111",
+			Status: "done",
+		},
+		"oisin-222": {
+			ID:     "oisin-222",
+			Repos:  map[string]string{"si": "/tmp", "bus": "/tmp"},
+			Branch: "spawn/oisin-222",
+			Status: "created",
+		},
 	}
-	srv.workspaces["oisin-222"] = &forge.Workspace{
-		ID:     "oisin-222",
-		Repos:  map[string]string{"si": "/tmp", "bus": "/tmp"},
-		Branch: "spawn/oisin-222",
-		Status: "created",
-	}
-	srv.mu.Unlock()
 
 	result, err = tool.Run(context.Background(), "{}")
 	if err != nil {
 		t.Fatalf("list failed: %v", err)
 	}
-	if result == "No active workspaces." {
-		t.Error("expected workspaces in list")
+	for _, id := range []string{"brigid-111", "oisin-222"} {
+		if !strings.Contains(result, id) {
+			t.Errorf("workspace %s is on disk and the list does not mention it: %s", id, result)
+		}
+	}
+}
+
+func TestAWorkspaceDirectoryForgeCannotReadIsReportedInTheList(t *testing.T) {
+	// One workspace that predates forge's records, or is half-deleted, must not
+	// hide the ones that can still be merged — and must not go unmentioned
+	// either, since nothing else will ever tell anyone it is there.
+	mock := &mockWorkspaceManager{
+		recorded: map[string]*forge.Workspace{
+			"brigid-111": {
+				ID:     "brigid-111",
+				Repos:  map[string]string{"kayushkin": "/tmp"},
+				Branch: "spawn/brigid-111",
+				Status: "done",
+			},
+		},
+		recordedErr: fmt.Errorf("1 workspace directories could not be read: the workspace at /home/x/forge/work/oisin-222 kept no workspace.json"),
+	}
+	srv := newTestServer(t, mock)
+
+	result, err := srv.ListWorkspacesTool().Run(context.Background(), "{}")
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if !strings.Contains(result, "brigid-111") {
+		t.Errorf("an unreadable workspace hid a readable one: %s", result)
+	}
+	if !strings.Contains(result, "oisin-222") {
+		t.Errorf("the unreadable workspace went unreported: %s", result)
+	}
+}
+
+func TestAWorkspaceOutlivesTheProcessThatSpawnedIt(t *testing.T) {
+	// The defect: Server.workspaces is in memory, and it was the only thing the
+	// workspace tools consulted. After a restart merge_workspace, reject_workspace
+	// and fix_workspace all refused with "workspace not found" — so a revived
+	// session's work sat in a worktree that nothing could merge or push.
+	recorded := &forge.Workspace{
+		ID:      "brigid-999",
+		Repos:   map[string]string{"kayushkin": "/tmp/ws/kayushkin"},
+		Primary: "kayushkin",
+		Branch:  "spawn/brigid-999",
+		Status:  "done",
+	}
+	mock := &mockWorkspaceManager{recorded: map[string]*forge.Workspace{"brigid-999": recorded}}
+	srv := newTestServer(t, mock)
+
+	// Nothing in the map: this server did not spawn it.
+	input, _ := json.Marshal(map[string]any{"workspace_id": "brigid-999"})
+	if _, err := srv.MergeWorkspaceTool().Run(context.Background(), string(input)); err != nil {
+		t.Fatalf("merge of a recorded workspace failed: %v", err)
+	}
+	if mock.mergeCalls != 1 {
+		t.Errorf("expected the recorded workspace to be merged, got %d merge calls", mock.mergeCalls)
+	}
+	if len(mock.getCalls) != 1 || mock.getCalls[0] != "brigid-999" {
+		t.Errorf("the workspace was not looked up in forge: %v", mock.getCalls)
+	}
+}
+
+func TestAWorkspaceLookedUpOnceIsNotLookedUpAgain(t *testing.T) {
+	// Two tools acting on one workspace have to hold one value, because status is
+	// a field of it and forge moves it — a second copy would let a reopen read a
+	// status that the merge has already changed.
+	recorded := &forge.Workspace{
+		ID:      "brigid-888",
+		Repos:   map[string]string{"kayushkin": "/tmp/ws/kayushkin"},
+		Primary: "kayushkin",
+		Branch:  "spawn/brigid-888",
+		Status:  "done",
+	}
+	mock := &mockWorkspaceManager{recorded: map[string]*forge.Workspace{"brigid-888": recorded}}
+	srv := newTestServer(t, mock)
+
+	first, err := srv.workspaceByID("brigid-888")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := srv.workspaceByID("brigid-888")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Error("two lookups of one workspace produced two values")
+	}
+	if len(mock.getCalls) != 1 {
+		t.Errorf("forge was asked %d times for a workspace already resolved", len(mock.getCalls))
 	}
 }
 

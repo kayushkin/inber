@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -42,11 +43,9 @@ func (g *Server) MergeWorkspaceTool() agent.Tool {
 				return "", err
 			}
 
-			g.mu.RLock()
-			ws, ok := g.workspaces[in.WorkspaceID]
-			g.mu.RUnlock()
-			if !ok {
-				return "", fmt.Errorf("workspace not found: %s", in.WorkspaceID)
+			ws, err := g.workspaceByID(in.WorkspaceID)
+			if err != nil {
+				return "", err
 			}
 
 			if g.forgeDB == nil {
@@ -130,11 +129,9 @@ func (g *Server) RejectWorkspaceTool() agent.Tool {
 				return "", err
 			}
 
-			g.mu.RLock()
-			ws, ok := g.workspaces[in.WorkspaceID]
-			g.mu.RUnlock()
-			if !ok {
-				return "", fmt.Errorf("workspace not found: %s", in.WorkspaceID)
+			ws, err := g.workspaceByID(in.WorkspaceID)
+			if err != nil {
+				return "", err
 			}
 
 			if g.forgeDB == nil {
@@ -194,11 +191,9 @@ func (g *Server) FixWorkspaceTool() agent.Tool {
 				return "", err
 			}
 
-			g.mu.RLock()
-			ws, ok := g.workspaces[in.WorkspaceID]
-			g.mu.RUnlock()
-			if !ok {
-				return "", fmt.Errorf("workspace not found: %s", in.WorkspaceID)
+			ws, err := g.workspaceByID(in.WorkspaceID)
+			if err != nil {
+				return "", err
 			}
 
 			if g.forgeDB == nil {
@@ -267,6 +262,14 @@ func (g *Server) FixWorkspaceTool() agent.Tool {
 }
 
 // ListWorkspacesTool shows active workspaces.
+//
+// It reads forge rather than Server.workspaces, and that is the whole point of
+// it: the map holds the workspaces this process spawned, so after a restart the
+// tool answered "No active workspaces" over a disk full of unmerged work — and
+// a model that cannot name a workspace id cannot merge, reject or fix one
+// either. Every workspace forge creates records itself beside its worktrees, so
+// what forge lists is a superset of the map and is what the workspace tools
+// will resolve against.
 func (g *Server) ListWorkspacesTool() agent.Tool {
 	return agent.Tool{
 		Name:        "list_workspaces",
@@ -275,21 +278,31 @@ func (g *Server) ListWorkspacesTool() agent.Tool {
 			Properties: map[string]any{},
 		},
 		Run: func(ctx context.Context, raw string) (string, error) {
-			g.mu.RLock()
-			defer g.mu.RUnlock()
-
-			if len(g.workspaces) == 0 {
-				return "No active workspaces.", nil
+			if g.forgeDB == nil {
+				return "", fmt.Errorf("forge not available")
 			}
 
+			// A workspace directory forge cannot read comes back alongside the ones
+			// it can, and is reported rather than dropped: it is a directory of work
+			// that no tool here will be able to act on, which the model has to be
+			// told about while it can still ask a person.
+			workspaces, unreadable := g.forgeDB.ListWorkspaces()
+
 			var sb strings.Builder
-			for id, ws := range g.workspaces {
+			for _, ws := range workspaces {
 				repos := make([]string, 0, len(ws.Repos))
 				for name := range ws.Repos {
 					repos = append(repos, name)
 				}
+				sort.Strings(repos)
 				sb.WriteString(fmt.Sprintf("%s [%s] repos=%s branch=%s\n",
-					id, ws.Status, strings.Join(repos, ","), ws.Branch))
+					ws.ID, ws.Status, strings.Join(repos, ","), ws.Branch))
+			}
+			if unreadable != nil {
+				sb.WriteString(fmt.Sprintf("⚠️ %v\n", unreadable))
+			}
+			if sb.Len() == 0 {
+				return "No active workspaces.", nil
 			}
 			return sb.String(), nil
 		},
