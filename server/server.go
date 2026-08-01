@@ -282,11 +282,13 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 		// One-off session: unique key, won't affect main session.
 		sessionKey = fmt.Sprintf("agent:%s:detach-%d", agentName, time.Now().UnixMilli())
 	} else if req.NewSession {
-		// Fresh session: clear existing and use main key.
-		sessionKey = fmt.Sprintf("agent:%s:main", agentName)
-		g.sessions.Delete(sessionKey)
+		// Fresh session: use the main key. The session already sitting under
+		// that key is released inside the queue below, not here — the queue's
+		// per-session lock has by then serialized this request behind any turn
+		// still running on that key, which is what makes closing it safe.
+		sessionKey = mainSessionKey(agentName)
 	} else if sessionKey == "" {
-		sessionKey = fmt.Sprintf("agent:%s:main", agentName)
+		sessionKey = mainSessionKey(agentName)
 	}
 
 	// Prepare input (prefix with author if present).
@@ -296,22 +298,8 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 	}
 
 	// Check if session is already running — inject instead of queuing.
-	if val, ok := g.sessions.Load(sessionKey); ok {
-		sess := val.(*Session)
-		sess.mu.Lock()
-		isRunning := sess.Status == Running
-		sess.mu.Unlock()
-
-		if isRunning {
-			logger.WithComponent("server").Debug("session busy, injecting message mid-turn", map[string]interface{}{
-				"session_key": sessionKey,
-			})
-			sess.inject(input)
-			return &RunResponse{
-				Text:       "[Message injected into running session — agent will see it during current work]",
-				SessionKey: sessionKey,
-			}, nil
-		}
+	if resp, injected := g.injectIfBusy(sessionKey, input, req); injected {
+		return resp, nil
 	}
 
 	// Ensure session exists in DB.
@@ -321,6 +309,14 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 
 	// Enqueue the work (serialized by session, capped by lane).
 	err := g.queue.Enqueue(ctx, "main", sessionKey, func(ctx context.Context) error {
+		// A fresh session replaces whatever is under this key. Release it here,
+		// inside the queue: the per-session lock is held, so any turn that was
+		// running on this key has finished, and the engine can be closed
+		// without closing it under a live turn.
+		if req.NewSession {
+			g.releaseSession(sessionKey)
+		}
+
 		sess, err := g.getOrCreateSession(ctx, sessionKey, agentName, ac, req, onEvent)
 		if err != nil {
 			return fmt.Errorf("session %s: %w", sessionKey, err)
