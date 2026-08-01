@@ -304,7 +304,30 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 		}
 		outcome.combined += note
 		if hooks != nil && hooks.OnToolResult != nil {
-			hooks.OnToolResult(blockID+"-chain", outcome.chainNotRunTool, strings.TrimSpace(note), true)
+			// The note is already in outcome.combined, which is the whole of
+			// what the model reads, so this second report exists for the
+			// session log and the display — and for one consumer that counts
+			// rather than renders. engine's OnToolResult increments
+			// Turn.ConsecutiveErrors on every result it is handed as an error,
+			// and that counter drives the error-recovery context ladder in
+			// engine.contextBudget: one error widens memory recall from 6,000
+			// tokens to 20,000, three to 35,000, five to 50,000, each of which
+			// also rewrites the cached system-prompt prefix and pays for the
+			// whole prompt again.
+			//
+			// So the note counts as a failure only when it is the block's
+			// failure. When executeWithChain returns isError, the primary call
+			// is the thing that went wrong and both dispatchers report the
+			// block themselves — agent_run.go and engine/turn_openai.go each
+			// say so at their call site. Flagging the note as well made one
+			// refused call carrying a "then" climb the ladder two rungs, so
+			// three ordinary policy refusals recalled memory as if there had
+			// been six failures. When the primary call succeeded, nothing else
+			// reports a failure for this block and the note is the only record
+			// that part of what the model asked for did not happen — then it
+			// must count, or a session that fails only its chains never widens
+			// its recall at all.
+			hooks.OnToolResult(blockID+"-chain", outcome.chainNotRunTool, strings.TrimSpace(note), !isError)
 		}
 	}()
 
