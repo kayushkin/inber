@@ -13,10 +13,18 @@ import (
 // result, because to the model a completed task and a silently discarded one
 // look identical.
 
+// sidebandSummary runs the fields with no gate wired, which is the shape of a
+// session that has no guard. sidebandSummaryGated is for the cases about the
+// gate itself.
 func sidebandSummary(t *testing.T, callbacks *SidebandCallbacks, input string) string {
 	t.Helper()
+	return sidebandSummaryGated(t, callbacks, input, nil)
+}
+
+func sidebandSummaryGated(t *testing.T, callbacks *SidebandCallbacks, input string, refusal func(tool, input string) string) string {
+	t.Helper()
 	_, sb := extractSideband(input)
-	return processSideband(context.Background(), sb, callbacks)
+	return processSideband(context.Background(), sb, callbacks, refusal)
 }
 
 func TestASidebandFieldThatCannotBeReadSaysSo(t *testing.T) {
@@ -109,11 +117,17 @@ func TestAToolCallWithNoSidebandFieldsSaysNothing(t *testing.T) {
 	}
 }
 
-// The sideband callbacks fire before the primary tool is even dispatched, so by
-// the time a call is refused or fails, the task really has been completed and
-// the note really has been saved. That report used to be thrown away with the
-// primary tool's output, which is the same silence one level up: work that
-// happened, and a model that was never told.
+// A sideband field the gate allows is applied even when the call it rode in on
+// is refused, so by the time that refusal is reported the task really has been
+// completed. That report used to be thrown away with the primary tool's output,
+// which is the same silence one level up: work that happened, and a model that
+// was never told.
+//
+// The gate here refuses the primary tool by name and nothing else, which is
+// what makes this a test about reporting rather than about authorization. It
+// used to refuse everything it was asked about, including the sideband field,
+// and still assert the field had been applied — the test encoded the
+// authorization bug that TestObserveModeRefusesTheSidebandFields now covers.
 func TestTheSidebandReportSurvivesACallThatDoesNotRun(t *testing.T) {
 	completed := 0
 	a := &Agent{
@@ -123,7 +137,7 @@ func TestTheSidebandReportSurvivesACallThatDoesNotRun(t *testing.T) {
 				return nil
 			},
 		},
-		ToolRefusal: func(string, string) string { return "not in this mode" },
+		ToolRefusal: refuseTools("primary"),
 	}
 
 	outputs := runBlocks(t, a, []Tool{(&recordingTool{}).tool("primary")},

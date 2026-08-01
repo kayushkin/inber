@@ -36,6 +36,27 @@ func TestObserveModeRefusesTheToolsThatChangeThings(t *testing.T) {
 	}
 }
 
+// TestObserveModeRefusesTheSidebandFields drives the real guard with the names
+// the sideband fields are gated under. The agent package refuses them on this
+// answer, so if guard.CheckTool ever started allowing an unclassified name in
+// observe mode, a `done` would reach `bash -c` again and the agent-side tests
+// would all still pass — they supply their own gate.
+func TestObserveModeRefusesTheSidebandFields(t *testing.T) {
+	e := &Engine{Guard: guard.New(guard.Config{Mode: guard.Observe})}
+	refusal := e.buildToolRefusal()
+
+	for _, field := range []string{"sideband:done", "sideband:note", "sideband:split"} {
+		reason := refusal(field, "{}")
+		if reason == "" {
+			t.Errorf("observe mode allowed %s, which writes a file and can run the build command", field)
+			continue
+		}
+		if !strings.Contains(reason, "observe") {
+			t.Errorf("refusal of %s reads %q, and does not say which mode refused it", field, reason)
+		}
+	}
+}
+
 // TestAssistModeRefusesWhatItCannotAsk. Assist routes dangerous tools through
 // an approver, and no session here has one — inber sets no ApprovalFunc and
 // emits no approval event for llm-bridge to answer. A held call must be

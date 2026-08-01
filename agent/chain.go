@@ -273,9 +273,12 @@ func ExecuteToolCallWithChainAndSideband(ctx context.Context, toolMap map[string
 // run — skipping them discarded half of what the model asked for while telling
 // it nothing.
 func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string, rawInput string, hooks *Hooks, blockID string, sbCallbacks *SidebandCallbacks, cachedPrimaryOutput *string, refusal func(tool, input string) string) (outcome toolCallOutcome, isError bool) {
-	// Extract sideband fields first, then chain.
+	// Extract sideband fields first, then chain. The sideband fields go to the
+	// gate under their own names, inside processSideband — they are a third
+	// thing this block asks for, alongside the primary call and the chain, and
+	// each of the three has to be refused on its own account.
 	cleanInput, sb := extractSideband(rawInput)
-	sbSummary := processSideband(ctx, sb, sbCallbacks)
+	sbSummary := processSideband(ctx, sb, sbCallbacks, refusal)
 	cleanInput, chain, thenRaw, dropped := extractChain(cleanInput)
 	outcome.primaryInput = cleanInput
 
@@ -284,10 +287,13 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 	// its primary call is reported on the tool result the model reads — once,
 	// in one wording, whether or not that primary call ran.
 	//
-	// The sideband summary is part of that. Its callbacks have already fired by
-	// this line: a task really was completed, a note really was saved, and
-	// reporting it only on the paths where the primary tool succeeded meant a
-	// refused or failed call swallowed the record of work that did happen.
+	// The sideband summary is part of that. Its fields have already been put to
+	// the gate and, where allowed, applied by this line: a task really was
+	// completed, a note really was saved, and reporting it only on the paths
+	// where the primary tool succeeded meant a refused or failed call swallowed
+	// the record of work that did happen. A field the gate refused is in the
+	// same summary, said in the same place, for the same reason — the model
+	// asked for it and has to learn what became of it.
 	defer func() {
 		if sbSummary != "" {
 			outcome.combined = sbSummary + "\n" + outcome.combined
@@ -320,10 +326,16 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 		outcome.chainNotRunReason = reason
 	}
 
-	// Ask the gate before anything else this block asks for happens. A refused
-	// call is refused whether or not the read cache could have answered it: the
-	// cached stub is still that tool's output, and the sideband fields are
-	// instructions that arrived attached to a call that is not going to run.
+	// Ask the gate about the primary call. A refused call is refused whether or
+	// not the read cache could have answered it: the cached stub is still that
+	// tool's output.
+	//
+	// The sideband fields have their own answer from the same gate and are not
+	// revisited here. They are instructions in their own right — an allowed
+	// primary carrying a `done` is the case a gate on the primary alone cannot
+	// see — so a refusal of this call is not on its own a refusal of them.
+	// Whether it should ALSO refuse them, and how Assist mode should treat a
+	// rider that can reach a subprocess, is the open half of this finding.
 	if refusal != nil {
 		if reason := refusal(name, cleanInput); reason != "" {
 			outcome.combined = RefuseToolCall(name, reason)

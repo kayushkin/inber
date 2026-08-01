@@ -17,6 +17,18 @@ const (
 	sbSplit = "split" // {index, into: ["subtask1", ...]} to break down a task
 )
 
+// sidebandGatePrefix namespaces the name a sideband field is gated under.
+//
+// The gate is keyed on a name, and the three field names are ones the model
+// writes into a tool's arguments — so asking the gate about a bare "done"
+// would put a rider and any tool that ever answers to that name on the same
+// key. The prefix is a name no tool can have, which keeps the two apart
+// permanently rather than until the collision happens.
+const sidebandGatePrefix = "sideband:"
+
+// sidebandGateName is the name the gate is asked about for a sideband field.
+func sidebandGateName(field string) string { return sidebandGatePrefix + field }
+
 // SidebandCallbacks are called when sideband fields are present.
 type SidebandCallbacks struct {
 	// CompleteTasks marks task indices as done and removes them. Completing
@@ -161,15 +173,38 @@ func extractSideband(rawInput string) (cleanInput string, sb *sidebandData) {
 	return string(cleanBytes), &data
 }
 
+// sidebandPayload renders a sideband field's own value as the input the gate is
+// asked about. A field that will not marshal is asked about with no input,
+// which is what the gate already gets for a tool whose arguments it does not
+// need to look at.
+func sidebandPayload(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
 // processSideband executes sideband callbacks and returns a summary string.
 //
-// It reports what it could not do as well as what it did. The sideband schema
-// is injected into every tool of every agent (agent_run.go), so a model can
-// always write "done" — including to an agent that has no task list behind it,
-// where nothing is listening and the field is deleted from the input anyway.
-// Saying so is the difference between a task the model knows was not completed
-// and one it believes was.
-func processSideband(ctx context.Context, sb *sidebandData, cb *SidebandCallbacks) string {
+// Every field is put to the gate under its own name before its callback runs.
+// A sideband field is not bookkeeping the gate can ignore: each of the three
+// writes a file, and a `done` that empties the task plan runs the project's
+// build command, which is `bash -c`. Gating the tool the field rode in on is
+// not enough and never was — the fields are injected into the schema of every
+// tool of every agent (agent_run.go), so an allowed `read_files` carrying
+// `done` reaches the same subprocess an outright `shell_commands` would have
+// been refused for. Observe mode is documented as read-only, no file writes,
+// no shell execution (guard/guard.go), and that is a promise about the whole
+// tool_use block, not about its primary call.
+//
+// It reports what it could not do as well as what it did, refusals included.
+// The sideband schema is injected into every tool of every agent, so a model
+// can always write "done" — including to an agent that has no task list behind
+// it, where nothing is listening and the field is deleted from the input
+// anyway. Saying so is the difference between a task the model knows was not
+// completed and one it believes was.
+func processSideband(ctx context.Context, sb *sidebandData, cb *SidebandCallbacks, refusal func(tool, input string) string) string {
 	if sb == nil {
 		return ""
 	}
@@ -183,7 +218,22 @@ func processSideband(ctx context.Context, sb *sidebandData, cb *SidebandCallback
 		parts = append(parts, fmt.Sprintf("[%s ignored: this agent has nothing to apply it to]", field))
 	}
 
-	if len(sb.Done) > 0 {
+	// allowed asks the gate about one field and records the refusal if there is
+	// one. The name it asks under is namespaced, and the name it reports back
+	// is the one the model wrote.
+	allowed := func(field string, payload any) bool {
+		if refusal == nil {
+			return true
+		}
+		reason := refusal(sidebandGateName(field), sidebandPayload(payload))
+		if reason == "" {
+			return true
+		}
+		parts = append(parts, fmt.Sprintf("[%s]", RefuseToolCall(field, reason)))
+		return false
+	}
+
+	if len(sb.Done) > 0 && allowed(sbDone, sb.Done) {
 		switch {
 		case cb == nil || cb.CompleteTasks == nil:
 			unhandled(sbDone)
@@ -196,7 +246,7 @@ func processSideband(ctx context.Context, sb *sidebandData, cb *SidebandCallback
 		}
 	}
 
-	if sb.Note != nil {
+	if sb.Note != nil && allowed(sbNote, sb.Note) {
 		switch {
 		case cb == nil || cb.SaveNote == nil:
 			unhandled(sbNote)
@@ -209,7 +259,7 @@ func processSideband(ctx context.Context, sb *sidebandData, cb *SidebandCallback
 		}
 	}
 
-	if sb.Split != nil {
+	if sb.Split != nil && allowed(sbSplit, sb.Split) {
 		switch {
 		case cb == nil || cb.SplitTask == nil:
 			unhandled(sbSplit)

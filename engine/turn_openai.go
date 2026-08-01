@@ -126,8 +126,8 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 				// One call to the same dispatcher the Anthropic path uses. It
 				// runs the primary call, the "then" chain the block may carry,
 				// and the done/note/split sideband fields, and it asks the gate
-				// about the chained call as well as the primary one — none of
-				// which this loop did while it dispatched tools itself.
+				// about all three — none of which this loop did while it
+				// dispatched tools itself.
 				output, isError := agent.ExecuteToolCallWithChainAndSideband(
 					ctx, toolMap, block.Name, string(block.Input),
 					hooks, block.ID, sidebandCallbacks, refusal,
