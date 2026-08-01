@@ -38,18 +38,8 @@ func pruneToolResult(block anthropic.ContentBlockParamUnion, age int, cfg Manage
 	// Drop entirely if too old. The marker still names the tool and the size,
 	// so the transcript records what was lost rather than only that something was.
 	if age >= cfg.ToolResultDrop {
-		return anthropic.ContentBlockParamUnion{
-			OfToolResult: &anthropic.ToolResultBlockParam{
-				ToolUseID: toolResult.ToolUseID,
-				Content: []anthropic.ToolResultBlockParamContentUnion{
-					{
-						OfText: &anthropic.TextBlockParam{
-							Text: fmt.Sprintf("[%s: dropped - too old, %d bytes]", toolLabel(toolName), len(originalContent)),
-						},
-					},
-				},
-			},
-		}, true
+		return replaceToolResultText(block,
+			fmt.Sprintf("[%s: dropped - too old, %d bytes]", toolLabel(toolName), len(originalContent))), true
 	}
 
 	// Keep full if recent
@@ -62,20 +52,27 @@ func pruneToolResult(block anthropic.ContentBlockParamUnion, age int, cfg Manage
 		return block, false // Keep short results as-is
 	}
 
-	summary := summarizeToolResult(toolName, originalContent)
+	return replaceToolResultText(block, summarizeToolResult(toolName, originalContent)), true
+}
 
-	return anthropic.ContentBlockParamUnion{
-		OfToolResult: &anthropic.ToolResultBlockParam{
-			ToolUseID: toolResult.ToolUseID,
-			Content: []anthropic.ToolResultBlockParamContentUnion{
-				{
-					OfText: &anthropic.TextBlockParam{
-						Text: summary,
-					},
-				},
-			},
-		},
-	}, true
+// replaceToolResultText swaps a tool result's content for text and leaves every
+// other field of the result exactly as it was.
+//
+// Pruning rewrites what a result SAYS. It must not rewrite what the result IS,
+// and building a fresh ToolResultBlockParam does precisely that: it silently
+// drops every field the literal forgets. The field that matters is is_error.
+// The engine sets it on every result it appends (agent/agent_run.go,
+// engine/turn_openai.go), so a rebuild turned a call that FAILED into a call
+// that succeeded the moment it aged past ToolResultKeepFull — and the drop path
+// deleted the error text as well, leaving nothing at all to say it had failed.
+// Copying the struct also means a field added to the SDK later is carried
+// through rather than quietly lost here.
+func replaceToolResultText(block anthropic.ContentBlockParamUnion, text string) anthropic.ContentBlockParamUnion {
+	replaced := *block.OfToolResult
+	replaced.Content = []anthropic.ToolResultBlockParamContentUnion{
+		{OfText: &anthropic.TextBlockParam{Text: text}},
+	}
+	return anthropic.ContentBlockParamUnion{OfToolResult: &replaced}
 }
 
 // truncateToolCall summarizes a tool call input

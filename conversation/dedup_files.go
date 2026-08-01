@@ -265,24 +265,20 @@ func DeduplicateFileRefs(messages []anthropic.MessageParam) int {
 				continue
 			}
 
-			// Check if already stubbed (idempotent)
-			existing := extractToolResultContent(block.OfToolResult.Content)
-			if strings.HasPrefix(existing, "[") && strings.Contains(existing, "superseded") {
+			// Already stubbed, so there is nothing to write. Compare against the
+			// stub computed for THIS tool id rather than sniffing the text for a
+			// "[" and the word "superseded": any tool can return both — a read
+			// of this very file does — and such a result was skipped and never
+			// deduplicated at all. That was the live cost; a second pass does
+			// not reach here, because pass 4 has already rewritten the call's
+			// input and it is no longer a file reference. An exact match cannot
+			// be forged into a wrong answer: content equal to what we would
+			// write needs no write either way.
+			if extractToolResultContent(block.OfToolResult.Content) == stub {
 				continue
 			}
 
-			messages[i].Content[j] = anthropic.ContentBlockParamUnion{
-				OfToolResult: &anthropic.ToolResultBlockParam{
-					ToolUseID: block.OfToolResult.ToolUseID,
-					Content: []anthropic.ToolResultBlockParamContentUnion{
-						{
-							OfText: &anthropic.TextBlockParam{
-								Text: stub,
-							},
-						},
-					},
-				},
-			}
+			messages[i].Content[j] = replaceToolResultText(block, stub)
 			deduped++
 		}
 	}
