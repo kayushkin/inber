@@ -134,27 +134,14 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 			publishStatus("responding")
 		}
 
-		// Original delta publishing.
-		delta := messages.NewChatDelta(agent, "inber", sessionID, ev.Kind)
-		delta.MessageID = ev.MessageID
-		switch ev.Kind {
-		case "delta":
-			delta.Type = "text"
-			delta.Text = ev.Text
-			fullText.WriteString(ev.Text)
-		case "thinking":
-			delta.Text = ev.Text
-		case "tool_call":
-			delta.Type = "tool"
-			delta.Tool = ev.Tool
-			delta.ToolInput = ev.Text
-		case "tool_result":
-			delta.Tool = ev.Tool
-			delta.ToolOutput = ev.Text
-		case "done":
-			return // handled after Stream() returns
-		default:
+		// Original delta publishing. "done" is skipped here and published
+		// after Stream() returns.
+		delta, ok := busDeltaFor(agent, sessionID, ev)
+		if !ok {
 			return
+		}
+		if ev.Kind == "delta" {
+			fullText.WriteString(ev.Text)
 		}
 		if err := bm.server.bus.PublishDelta(delta); err != nil {
 			bm.server.logWarning(agent, sessionID, msg.Text, "failed to publish delta: "+err.Error())

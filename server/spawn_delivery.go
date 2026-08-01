@@ -120,19 +120,21 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 			var onEvent func(StreamEvent)
 			if g.bus != nil {
 				onEvent = func(ev StreamEvent) {
-					delta := messages.NewChatDelta(parent.AgentName, "inber", sessionID, ev.Kind)
-					delta.MessageID = ev.MessageID
+					// This path relays prose only. Tool traffic from a
+					// spawn-result turn has never reached the bus, and
+					// narrowing here rather than in busDeltaFor keeps that
+					// difference from the chat.inbound path visible.
 					switch ev.Kind {
-					case "delta":
-						delta.Type = "text"
-						delta.Text = ev.Text
-						fullText.WriteString(ev.Text)
-					case "thinking":
-						delta.Text = ev.Text
-					case "done":
-						return
+					case "delta", "thinking":
 					default:
 						return
+					}
+					delta, ok := busDeltaFor(parent.AgentName, sessionID, ev)
+					if !ok {
+						return
+					}
+					if ev.Kind == "delta" {
+						fullText.WriteString(ev.Text)
 					}
 					g.bus.PublishDelta(delta)
 				}
