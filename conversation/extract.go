@@ -13,6 +13,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/google/uuid"
 	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/internal/textutil"
 	"github.com/kayushkin/inber/memory"
 )
 
@@ -66,9 +67,7 @@ func BackgroundExtractMemories(
 		// Truncate exchange to fit budget
 		maxExchangeTokens := 500 - memory.EstimateTokens(extractionPrompt)
 		exchangeChars := (maxExchangeTokens * 4) // ~4 chars per token
-		if len(exchange) > exchangeChars {
-			exchange = exchange[:exchangeChars] + "..."
-		}
+		exchange = textutil.TruncateWith(exchange, exchangeChars, "...")
 	}
 
 	fullPrompt := extractionPrompt + exchange

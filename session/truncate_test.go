@@ -3,6 +3,7 @@ package session
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestTruncateToolResult_NoTruncation(t *testing.T) {
@@ -161,5 +162,18 @@ func TestTruncateToolResult_PreservesContent(t *testing.T) {
 	// Should show truncation happened
 	if !strings.Contains(result.Displayed, "truncated") {
 		t.Error("should indicate truncation")
+	}
+}
+
+// Head and tail are cut at byte offsets derived from a token budget, so a
+// multibyte rune can straddle either cut. What comes back is tool output the
+// model reads.
+func TestTruncateHeadTailCutsOnRuneBoundaries(t *testing.T) {
+	content := strings.Repeat("héllo wörld\n", 400) + "🦀 tail"
+	for _, headTokens := range []int{5, 6, 7, 8, 50} {
+		got := truncateHeadTail(content, headTokens, headTokens)
+		if !utf8.ValidString(got) {
+			t.Fatalf("truncateHeadTail(head=tail=%d) is not valid UTF-8", headTokens)
+		}
 	}
 }

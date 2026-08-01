@@ -7,6 +7,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/guard"
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 // buildInjectCheck creates a closure that drains the injection channel.
@@ -29,10 +30,7 @@ func (e *Engine) buildInjectCheck() func() []string {
 }
 
 func truncateLog(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
+	return textutil.TruncateWith(s, n, "...")
 }
 
 // buildLimitCheck creates a closure that checks turn/token/time limits.

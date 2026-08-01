@@ -3,6 +3,8 @@ package session
 import (
 	"fmt"
 	"strings"
+
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 // TruncateStrategy defines how content should be truncated.
@@ -101,8 +103,8 @@ func truncateHeadTail(content string, headTokens, tailTokens int) string {
 	}
 
 	// Find good break points (try to break on newlines)
-	head := content[:headChars]
-	tail := content[len(content)-tailChars:]
+	head := textutil.Truncate(content, headChars)
+	tail := textutil.TruncateTail(content, tailChars)
 
 	// Try to break on newline for cleaner display
 	if idx := strings.LastIndex(head, "\n"); idx > headChars/2 {

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 // StartsUserTurn reports whether a message begins a new conversation turn.
@@ -177,10 +178,7 @@ func extractToolResultText(block anthropic.ContentBlockParamUnion) string {
 		}
 	}
 	result := strings.Join(texts, "\n")
-	if len(result) > 200 {
-		return result[:200] + "..."
-	}
-	return result
+	return textutil.TruncateWith(result, 200, "...")
 }
 
 // fixAlternation ensures messages alternate properly between user and assistant roles

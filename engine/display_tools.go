@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 // DisplayToolCall prints a tool call to the terminal with inline payload.
@@ -25,9 +27,7 @@ func DisplayToolResult(name string, output string, isError bool) {
 	if isError {
 		// Show error inline, truncated
 		errMsg := strings.ReplaceAll(output, "\n", " ")
-		if len(errMsg) > 100 {
-			errMsg = errMsg[:100] + "…"
-		}
+		errMsg = textutil.TruncateWith(errMsg, 100, "…")
 		fmt.Fprintf(os.Stderr, "%s  ✗ %s%s\n", red, errMsg, reset)
 		return
 	}
@@ -43,10 +43,7 @@ func formatToolPayload(name, rawInput string) string {
 	var input map[string]interface{}
 	if err := json.Unmarshal([]byte(rawInput), &input); err != nil {
 		// If parsing fails, just show truncated raw
-		if len(rawInput) <= 120 {
-			return rawInput
-		}
-		return rawInput[:120] + "…"
+		return textutil.TruncateWith(rawInput, 120, "…")
 	}
 
 	// Tool-specific formatting
@@ -54,7 +51,7 @@ func formatToolPayload(name, rawInput string) string {
 	case "shell", "shell_commands", "bash":
 		if cmd, ok := input["command"].(string); ok {
 			if len(cmd) > 100 {
-				return fmt.Sprintf("$ %s…", cmd[:100])
+				return fmt.Sprintf("$ %s…", textutil.Truncate(cmd, 100))
 			}
 			return fmt.Sprintf("$ %s", cmd)
 		}
@@ -105,16 +102,14 @@ func formatToolPayload(name, rawInput string) string {
 
 	case "memory_save":
 		if content, ok := input["content"].(string); ok {
-			if len(content) > 60 {
-				content = content[:60] + "…"
-			}
+			content = textutil.TruncateWith(content, 60, "…")
 			return fmt.Sprintf("{\"content\":\"%s\"}", content)
 		}
 
 	case "memory_search":
 		if query, ok := input["query"].(string); ok {
 			if len(query) > 60 {
-				return fmt.Sprintf("{\"query\":\"%s…\"}", query[:60])
+				return fmt.Sprintf("{\"query\":\"%s…\"}", textutil.Truncate(query, 60))
 			}
 			return fmt.Sprintf("{\"query\":\"%s\"}", query)
 		}
@@ -138,10 +133,7 @@ func formatToolPayload(name, rawInput string) string {
 	}
 	
 	s := string(compact)
-	if len(s) <= 120 {
-		return s
-	}
-	return s[:120] + "…"
+	return textutil.TruncateWith(s, 120, "…")
 }
 
 // formatToolResult formats the tool result for inline display.

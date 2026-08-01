@@ -12,6 +12,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 // RegistryAgent represents an agent entry from the bus-agent registry.
@@ -159,7 +160,7 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 
 			taskPreview := in.Task
 			if len(taskPreview) > 100 {
-				taskPreview = taskPreview[:97] + "..."
+				taskPreview = textutil.Truncate(taskPreview, 97) + "..."
 			}
 
 			target := in.Agent

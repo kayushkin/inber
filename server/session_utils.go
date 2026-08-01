@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kayushkin/inber/internal/textutil"
 	"github.com/kayushkin/inber/internal/timeutil"
 )
 
@@ -18,5 +19,6 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n-3] + "..."
+	// n is the whole budget here, ellipsis included.
+	return textutil.Truncate(s, n-3) + "..."
 }

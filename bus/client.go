@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 	natsbus "github.com/kayushkin/bus"
 	"github.com/kayushkin/bus/messages"
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 // Client subscribes to the bus for inbound messages and publishes
@@ -139,8 +140,5 @@ func (c *Client) Close() {
 }
 
 func truncateBus(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
+	return textutil.TruncateWith(s, n, "...")
 }

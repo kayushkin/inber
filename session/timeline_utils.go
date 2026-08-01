@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 func truncateStr(s string, max int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
+	return textutil.TruncateWith(s, max, "...")
 }
 
 func summarizeToolInput(name, raw string) string {
@@ -25,7 +24,7 @@ func summarizeToolInput(name, raw string) string {
 		}
 		if err := json.Unmarshal([]byte(raw), &input); err == nil && input.Command != "" {
 			if len(input.Command) > 100 {
-				return fmt.Sprintf("`%s...`", input.Command[:100])
+				return fmt.Sprintf("`%s...`", textutil.Truncate(input.Command, 100))
 			}
 			return fmt.Sprintf("`%s`", input.Command)
 		}
@@ -49,11 +48,7 @@ func summarizeToolInput(name, raw string) string {
 	}
 	
 	// Generic: truncate
-	s := raw
-	if len(s) > 80 {
-		s = s[:80] + "..."
-	}
-	return s
+	return textutil.TruncateWith(raw, 80, "...")
 }
 
 func summarizeToolOutput(output string) string {

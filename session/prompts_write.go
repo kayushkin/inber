@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 // WritePromptBreakdown writes prompt files for a given turn.
@@ -190,11 +191,7 @@ func writeAllMessages(sb *strings.Builder, messages []anthropic.MessageParam, st
 			if block.OfText != nil {
 				text := block.OfText.Text
 				msgTokens += estimateTokens(text)
-				if len(text) > 80 {
-					contentPreview = strings.ReplaceAll(text[:80], "|", "\\|") + "..."
-				} else {
-					contentPreview = strings.ReplaceAll(text, "|", "\\|")
-				}
+				contentPreview = strings.ReplaceAll(textutil.TruncateWith(text, 80, "..."), "|", "\\|")
 			} else if block.OfToolUse != nil {
 				msgTokens += 50
 				contentPreview = fmt.Sprintf("[tool_use: %s]", block.OfToolUse.Name)

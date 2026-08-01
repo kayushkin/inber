@@ -17,6 +17,7 @@ import (
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/bus"
 	"github.com/kayushkin/inber/logger"
+	"github.com/kayushkin/inber/internal/textutil"
 	modelstore "github.com/kayushkin/model-store"
 	sessionMod "github.com/kayushkin/inber/session"
 )
@@ -474,10 +475,7 @@ func (g *Server) writeErrorLog(logEntry map[string]interface{}) {
 
 // truncateInput truncates input text to the specified length
 func truncateInput(input string, maxLen int) string {
-	if len(input) <= maxLen {
-		return input
-	}
-	return input[:maxLen] + "..."
+	return textutil.TruncateWith(input, maxLen, "...")
 }
 
 func fileExists(path string) bool {

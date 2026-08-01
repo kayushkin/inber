@@ -17,6 +17,7 @@ import (
 	"github.com/kayushkin/bus/messages"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/bus"
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 // proxyToOpenClaw forwards a bus message to OpenClaw's chat completions API
@@ -82,7 +83,7 @@ func (g *Server) proxyToOpenClaw(ctx context.Context, msg bus.InboundMessage) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("[openclaw] HTTP %d: %s", resp.StatusCode, string(body)[:200])
+		log.Printf("[openclaw] HTTP %d: %s", resp.StatusCode, textutil.TruncateWith(string(body), 200, "..."))
 		return
 	}
 

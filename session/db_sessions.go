@@ -3,6 +3,8 @@ package session
 import (
 	"database/sql"
 	"time"
+
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 // InsertSession creates a new session record.
@@ -27,9 +29,7 @@ func (d *SQLiteStore) EndSession(id, status, errMsg string) error {
 
 // SetTask sets the task description for a session (first user message, truncated).
 func (d *SQLiteStore) SetTask(sessionID, task string) error {
-	if len(task) > 200 {
-		task = task[:200] + "…"
-	}
+	task = textutil.TruncateWith(task, 200, "…")
 	_, err := d.db.Exec(`UPDATE sessions SET task = ? WHERE id = ?`, task, sessionID)
 	return err
 }

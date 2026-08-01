@@ -8,6 +8,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
+	"github.com/kayushkin/inber/internal/textutil"
 )
 
 // SteerAgentTool creates a tool for sending messages to running sub-agents.
@@ -139,7 +140,7 @@ func (g *Server) SpawnAgentTool(parentSessionKey string) agent.Tool {
 
 			taskPreview := in.Task
 			if len(taskPreview) > 100 {
-				taskPreview = taskPreview[:97] + "..."
+				taskPreview = textutil.Truncate(taskPreview, 97) + "..."
 			}
 
 			return fmt.Sprintf("🚀 Spawned %s (%s)\nTask: %s\nFork: %v\n\nResult will be delivered when complete.",

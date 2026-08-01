@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/conversation"
+	"github.com/kayushkin/inber/internal/textutil"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
 )
@@ -270,9 +271,7 @@ func SaveSessionSummary(store memory.MemoryStore, messages []anthropic.MessagePa
 		for _, block := range msg.Content {
 			if block.OfText != nil {
 				text := block.OfText.Text
-				if len(text) > 200 {
-					text = text[:200] + "..."
-				}
+				text = textutil.TruncateWith(text, 200, "...")
 				parts = append(parts, fmt.Sprintf("%s: %s", role, text))
 			}
 		}
@@ -283,9 +282,7 @@ func SaveSessionSummary(store memory.MemoryStore, messages []anthropic.MessagePa
 	}
 
 	summary := fmt.Sprintf("Session summary (%s):\n%s", agentName, strings.Join(parts, "\n"))
-	if len(summary) > 2000 {
-		summary = summary[:2000]
-	}
+	summary = textutil.Truncate(summary, 2000)
 
 	m := memory.Memory{
 		ID:         uuid.New().String(),

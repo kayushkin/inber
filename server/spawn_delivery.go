@@ -9,6 +9,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/bus/messages"
+	"github.com/kayushkin/inber/internal/textutil"
 	"github.com/kayushkin/inber/memory"
 )
 
@@ -183,7 +184,7 @@ func (g *Server) updateMainSession(agentName, task, status, summary string) {
 
 	summaryTrunc := summary
 	if len(summaryTrunc) > 500 {
-		summaryTrunc = summaryTrunc[:497] + "..."
+		summaryTrunc = textutil.Truncate(summaryTrunc, 497) + "..."
 	}
 
 	msg := fmt.Sprintf("[Context update] Completed spawned task.\n"+

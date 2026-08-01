@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -98,4 +99,30 @@ func prunedSummary(t *testing.T, block anthropic.ContentBlockParamUnion) string 
 		t.Fatalf("pruned input has no _summary string: %v", input)
 	}
 	return summary
+}
+
+// A pruned tool call's arguments go into the next request verbatim. The cut is
+// a byte budget, so a multibyte rune sitting on the boundary used to be split
+// in half and the prompt carried invalid UTF-8. The padding is swept rather
+// than guessed: one of these lengths puts a four-byte rune across the cut.
+func TestTruncateToolCallCutsArgumentsOnARuneBoundary(t *testing.T) {
+	for pad := 40; pad <= 70; pad++ {
+		task := strings.Repeat("a", pad) + "\U0001F980" + strings.Repeat("b", 40)
+		input, err := json.Marshal(map[string]string{"task": task})
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := anthropic.ContentBlockParamUnion{
+			OfToolUse: &anthropic.ToolUseBlockParam{
+				ID:    "toolu_02",
+				Name:  "spawn_agent",
+				Input: json.RawMessage(input),
+			},
+		}
+
+		summary := prunedSummary(t, truncateToolCall(block))
+		if !utf8.ValidString(summary) {
+			t.Fatalf("pad %d: pruned summary is not valid UTF-8: %q", pad, summary)
+		}
+	}
 }

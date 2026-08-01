@@ -4,20 +4,20 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/internal/textutil"
 	"github.com/kayushkin/inber/memory"
 )
 
-// truncateToOneLine truncates text to a single line with max length
+// truncateToOneLine flattens text onto one line and cuts it to maxLen bytes,
+// on a rune boundary. What it returns goes into the model's prompt, so a
+// half-rune here is invalid UTF-8 in the request.
 func truncateToOneLine(text string, maxLen int) string {
 	// Remove newlines
 	text = strings.ReplaceAll(text, "\n", " ")
 	text = strings.ReplaceAll(text, "\r", "")
 	text = strings.TrimSpace(text)
 	
-	if len(text) <= maxLen {
-		return text
-	}
-	return text[:maxLen] + "..."
+	return textutil.TruncateWith(text, maxLen, "...")
 }
 
 // truncateToSummary extracts first 2-3 sentences from text
@@ -45,11 +45,8 @@ func truncateToSummary(text string) string {
 	}
 	
 	if len(result) == 0 {
-		// Fallback: just take first 300 chars
-		if len(text) <= 300 {
-			return text
-		}
-		return text[:300] + "..."
+		// Fallback: just take first 300 bytes
+		return textutil.TruncateWith(text, 300, "...")
 	}
 	
 	return strings.Join(result, ". ") + "."
