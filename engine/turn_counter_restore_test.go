@@ -2,6 +2,8 @@ package engine
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	sessionMod "github.com/kayushkin/inber/session"
@@ -88,6 +90,36 @@ func TestSaveResumableState_WritesTheTurnCountBesideTheTranscript(t *testing.T) 
 	}
 	if turnCounter != 5 {
 		t.Fatalf("resumed at turn %d, want 5 — the count this session reached", turnCounter)
+	}
+}
+
+// The count only means anything as a description of the transcript it was
+// written beside. saveResumableState used to throw away SaveMessages' error and
+// write the count regardless, so a failed transcript write left the previous
+// transcript on disk under a count that belonged to a longer conversation — and
+// nothing said so. Now the count follows the transcript or is not written.
+func TestSaveResumableState_SkipsTheTurnCountWhenTheTranscriptCannotBeWritten(t *testing.T) {
+	repoRoot := t.TempDir()
+	workspace := sessionMod.NewWorkspace(repoRoot, "tester")
+
+	// A directory where messages.json goes: the write fails, the directory it
+	// lives in stays perfectly writable, so only the transcript is blocked.
+	if err := os.MkdirAll(filepath.Join(workspace.Dir, "messages.json"), 0o755); err != nil {
+		t.Fatalf("stage the unwritable transcript: %v", err)
+	}
+
+	e := &Engine{workspace: workspace}
+	e.RestoreSession(restoredTranscript(4), 4)
+	e.Turn.Counter++
+
+	e.saveResumableState()
+
+	counter, err := sessionMod.LoadTurnCounter(workspace.Dir)
+	if err != nil {
+		t.Fatalf("LoadTurnCounter: %v", err)
+	}
+	if counter != 0 {
+		t.Fatalf("turn count %d was written beside a transcript that was not, so the next resume would replay an older conversation as if it had reached turn %d", counter, counter)
 	}
 }
 

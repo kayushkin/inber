@@ -202,17 +202,22 @@ func (s *Session) LogPrune(removed int, tokensFreed int, strategy string) {
 }
 
 // EndTurn records turn completion in the DB (called after each API response).
+//
+// It used to also append the turn to a timeline.md beside the session log. That
+// file had no reader: the one consumer, GET /api/sessions/{key}/timeline, calls
+// ReadTimelineFromJSONL and regenerates the timeline from session.jsonl, which
+// is the source of truth the derived file was copied from. Producing it cost a
+// Sync plus a parse and format of the *entire* log on every turn, to slice out
+// the one turn that had just finished — so turn latency grew with the length of
+// the session in service of a file nobody opened.
 func (s *Session) EndTurn(inTokens, outTokens, toolCalls int, stopReason, errMsg string) {
 	s.mu.Lock()
 	turn := s.turn
 	s.mu.Unlock()
-	
+
 	if s.store != nil {
 		// Calculate cost for just this turn
 		cost := s.calculateTurnCost(inTokens, outTokens)
 		s.store.EndTurn(s.sessionID, turn, inTokens, outTokens, toolCalls, cost, stopReason, errMsg)
 	}
-	
-	// Append to timeline.md after each turn completes
-	s.appendTimelineEntry(turn, inTokens, outTokens, toolCalls)
 }

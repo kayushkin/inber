@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -242,64 +241,6 @@ func (s *Session) write(e Entry) {
 
 	// Send copy to logstack if available (async, best-effort)
 	s.logstack.Log(e)
-}
-
-// appendTimelineEntry appends the current turn's timeline entry to timeline.md.
-func (s *Session) appendTimelineEntry(turn, inTokens, outTokens, toolCalls int) {
-	// Flush the JSONL file to ensure all entries are written
-	s.file.Sync()
-
-	// Reconstruct timeline events for this turn from the JSONL
-	events, startTime, err := ReconstructTimelineFromJSONL(s.file.Name(), s.modelStore)
-	if err != nil {
-		// Log error to stderr (won't crash session, but visible in terminal)
-		fmt.Fprintf(os.Stderr, "timeline generation failed (turn %d): %v\n", turn, err)
-		return
-	}
-
-	timelinePath := filepath.Join(filepath.Dir(s.file.Name()), "timeline.md")
-	
-	// If it's turn 1, create file with header; otherwise append
-	var f *os.File
-	if turn == 1 {
-		f, err = os.Create(timelinePath)
-		if err != nil {
-			return
-		}
-		defer f.Close()
-		fmt.Fprintf(f, "# Session Timeline — %s\n", startTime.Format("2006-01-02 15:04"))
-	} else {
-		f, err = os.OpenFile(timelinePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return
-		}
-		defer f.Close()
-	}
-
-	// Format the full timeline and extract just this turn's section
-	fullTimeline := FormatTimeline(events, startTime)
-	lines := strings.Split(fullTimeline, "\n")
-	
-	var turnLines []string
-	inCurrentTurn := false
-	turnHeader := fmt.Sprintf("## Turn %d", turn)
-	
-	for _, line := range lines {
-		if strings.HasPrefix(line, turnHeader) {
-			inCurrentTurn = true
-		}
-		if inCurrentTurn {
-			// Stop at the next turn header
-			if strings.HasPrefix(line, "## Turn ") && !strings.HasPrefix(line, turnHeader) {
-				break
-			}
-			turnLines = append(turnLines, line)
-		}
-	}
-	
-	if len(turnLines) > 0 {
-		fmt.Fprintln(f, strings.Join(turnLines, "\n"))
-	}
 }
 
 // cost calculates the total session cost in USD based on token usage.

@@ -237,21 +237,34 @@ func (e *Engine) checkpointIfNeeded() {
 //
 // Only the workspace copy is resumable, which is why only it gets the turn
 // count: the session log dir is a new directory per invocation, so nothing ever
-// reads its transcript back into an engine.
+// reads its transcript back into an engine. The log-dir copy is kept because it
+// is the only lossless record in that directory — session.jsonl is an
+// append-only log, and reconstructing messages from it drops any tool call the
+// process died in the middle of (session.LoadMessagesFromDir prefers the
+// snapshot for exactly that reason).
+//
+// Every write here used to discard its error, so a full disk lost the
+// transcript in silence. The counter is written only after its transcript is,
+// because a count without the messages it describes tells the next session it
+// is fifty turns into a conversation that is not there.
 func (e *Engine) saveResumableState() {
 	data, err := json.Marshal(e.Messages)
 	if err != nil {
+		Log.Warn("transcript not persisted, this turn will be missing from the next resume: %v", err)
 		return
 	}
 	if e.workspace != nil {
-		e.workspace.SaveMessages(data)
-		if err := sessionMod.SaveTurnCounter(e.workspace.Dir, e.Turn.Counter); err != nil {
+		if err := e.workspace.SaveMessages(data); err != nil {
+			Log.Warn("transcript not persisted to the workspace, the next resume will replay an older conversation: %v", err)
+		} else if err := sessionMod.SaveTurnCounter(e.workspace.Dir, e.Turn.Counter); err != nil {
 			Log.Warn("turn counter not persisted, next resume will start from turn 0: %v", err)
 		}
 	}
 	if e.Session != nil {
 		sessDir := filepath.Dir(e.Session.FilePath())
-		os.WriteFile(filepath.Join(sessDir, "messages.json"), data, 0644)
+		if err := os.WriteFile(filepath.Join(sessDir, "messages.json"), data, 0644); err != nil {
+			Log.Warn("transcript snapshot not written to the session log dir, that session is now reconstruct-only: %v", err)
+		}
 	}
 }
 

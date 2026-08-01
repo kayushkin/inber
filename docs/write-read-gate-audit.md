@@ -63,18 +63,22 @@ write**, and that call is the owner's.
 
 | artifact | write | read |
 |---|---|---|
-| `messages.json` in the session log dir | `engine/lifecycle.go:253`, every turn, error discarded | none — `session.LoadMessagesFromDir` has no production caller. Self-documented at `lifecycle.go:238`: "nothing ever reads its transcript back into an engine" |
+| `messages.json` in the session log dir **KEPT, error no longer discarded** | `engine/lifecycle.go`, every turn | none in production — `session.LoadMessagesFromDir` has no production caller. But it is the only *lossless* copy in that directory: `session.jsonl` is append-only, so reconstructing from it drops any tool call the process died inside, which is why `LoadMessagesFromDir` prefers the snapshot when it is there (`resume_pairing_test.go`: 14 of this host's 23 session dirs carry one). Deleting the write would make every future log dir the lossy kind and would foreclose the wire-it option in todo `875aa19e`, which owns that reader. So: write kept, all three errors in `saveResumableState` now logged, and the turn counter is written only after the transcript it counts |
 | `checkpoint.json` | `session/checkpoint.go:45`, every 20th turn | none — `LoadCheckpoint`/`ListCheckpoints` have zero callers. `pruneOldCheckpoints` is a `return nil` stub, so `MaxCheckpoints: 5` is enforced by nothing |
-| `timeline.md` | `session/session.go:258`, every turn, by re-parsing the whole JSONL | none — the one consumer, `GET /api/sessions/{key}/timeline`, regenerates from `session.jsonl` instead |
+| ~~`timeline.md`~~ **RESOLVED, write deleted** | was `session/session.go:258`, every turn, by re-parsing the whole JSONL | Still none, and now nothing produces the file either. The one consumer, `GET /api/sessions/{key}/timeline`, calls `ReadTimelineFromJSONL` and regenerates the same markdown from `session.jsonl` — it had already chosen the source of truth over the derived copy. `appendTimelineEntry` is deleted; `session/timeline_artifact_test.go` pins that `EndTurn` writes no artifact **and** that the timeline is still answerable from the log. Todo `4efefbc0` |
 | `turns.cost` / `in_tokens` / `out_tokens` / `tool_calls` / `stop_reason` | `session/db_turns.go:19`, every turn | none reachable — `GetTurns`, `ListSessions`, `ListActive` have zero production callers. `IncrementToolCalls` has none at all |
 | ~~workspace `system/*.md`~~ **RESOLVED, doc side** | `engine/turn_prompt.go:155,169` — `RemoveAll` + rewrite each turn | Still none, and now that is what the code says. `Workspace.ReadSystem` is deleted (it had zero callers, tests included) and the type comment no longer promises a read-back it never did; `session/workspace_test.go` pins that an edit and a user-added file are both discarded on the next turn. The write itself is unchanged and its error is no longer discarded. Making the directory genuinely editable stays open as a design call — it is keyed on the agent, not the session, so two concurrent sessions share it and a read-back would need a per-write manifest plus an answer to the sharing. Todo `9def7d6b` |
 | `Session.truncateRefs` | `session/session_logging.go:84`, holding the **full** output of every truncated tool result | none — `GetFullToolResult` has zero callers. It defeats the truncation that populates it, in memory, for the life of the process |
 | session summary | `engine/lifecycle.go:273`, every session that had messages | none that names it. `memory_search` applies no tag filter so the row is reachable, but nothing searches for it, no id is left behind, and `memory/auto_context.go:15` already concedes it "leaves none, and it is the one that cannot" |
 
-Two of these cost real work per turn: `timeline.md` re-parses the entire session
-log every `EndTurn`, so turn latency grows with session length in service of a file
-nobody opens, and the log-dir `messages.json` rewrites the whole transcript each
-turn into a directory that is new per invocation.
+The one that cost real work per turn was `timeline.md`: it re-parsed and
+reformatted the entire session log on every `EndTurn` to slice out the turn that
+had just finished, so the cost of ending a turn grew with the length of the
+session. That write is gone. The log-dir `messages.json` also rewrites the whole
+transcript each turn, but it is a single marshal already done for the workspace
+copy and one `WriteFile`, and it buys the only lossless record in the directory —
+so it stays, and the case for deleting it now belongs to `875aa19e` along with the
+reader.
 
 ## Paired — confirmed, do not re-check
 
