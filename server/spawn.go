@@ -175,8 +175,14 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 		ac.Model = req.Model
 	}
 
-	// Generate child session key.
-	childKey := sessionKeyForChild(req.ParentKey)
+	// Mint the child's session key, and hold it until the child is in the
+	// session map. A key that is already a sibling's is a key that inherits that
+	// sibling's recorded budget and agent — see mintChildSessionKey.
+	childKey, err := g.mintChildSessionKey(req.ParentKey)
+	if err != nil {
+		return nil, err
+	}
+	defer g.releaseChildSessionKey(childKey)
 
 	// Create ephemeral workspace if agent has projects configured.
 	var ws *forge.Workspace
@@ -211,7 +217,6 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 
 	// Create child session.
 	var child *Session
-	var err error
 
 	if req.Fork {
 		child, err = g.forkSession(ctx, parent, childKey, req.Agent, ac, nil)

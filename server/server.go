@@ -28,6 +28,11 @@ import (
 type Server struct {
 	config     Config
 	sessions   sync.Map          // sessionKey → *Session
+	// pendingChildKeys holds the keys mintChildSessionKey has handed out and
+	// whose sessions are not in sessions yet, so that two concurrent spawns
+	// cannot both be told the same key is free. Entries live for the length of
+	// one spawn; see releaseChildSessionKey.
+	pendingChildKeys sync.Map // sessionKey → struct{}
 	queue      *Queue
 	store      *Store            // session/request persistence
 	events     *EventPublisher   // bus event publisher (nil = disabled)

@@ -343,6 +343,28 @@ func (s *Store) SessionAgent(key string) (string, error) {
 	return agent, nil
 }
 
+// SessionExists reports whether this table already holds a row for a key.
+//
+// It answers the question a key generator has to ask before handing a key out,
+// and it is separate from SessionAgent because SessionAgent cannot answer it:
+// that returns the empty name both for a key the store has never seen and for a
+// row whose agent was recorded empty, and a generator reading it would treat the
+// second as free. The distinction matters here because UpsertSession leaves
+// agent, lineage and workspace alone on conflict — so a second session handed an
+// existing key does not overwrite that row, it is silently recorded as the first
+// session's agent, and agentForSession then rebuilds it as that agent.
+func (s *Store) SessionExists(key string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM sessions WHERE key = ?`, key).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check whether session %s is recorded: %w", key, err)
+	}
+	return true, nil
+}
+
 // TouchSession updates last_active and message count.
 func (s *Store) TouchSession(key string, messageCount int) error {
 	_, err := s.db.Exec(`

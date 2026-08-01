@@ -114,6 +114,17 @@ On the fork path the transcript half is masked, because `RestoreSession` overwri
 
 Measured on the live store: 29 children on record, 27 of them under one parent, 29 distinct suffixes, **no collision has happened yet**. In a 100,000-wide space, 27 draws carry roughly a 0.35% chance of one. Small, and it is a name-derived join in a repository whose standing rule is to join on ids — the parent key plus a store-assigned id would cost nothing and close it.
 
+### What a collision costs, re-measured (2026-08-01)
+
+The audit priced the collision as transcript + guard state. Two corrections, both measured on the live box:
+
+- **The store row is the worse half, and the audit did not name it.** `UpsertSession` leaves agent, lineage and workspace **alone** on conflict, so the second child's own agent name is not written — it is silently recorded as the first child's, and `agentForSession` (`api_bridge.go:982`) reads that row on every rebuild. That is exactly the defect `session_agent_resolution_test.go` exists to close, arriving by a different door. It crosses agents in practice: the 27 children of `agent:claxon:main` are brigid's, fionn's and manannan's.
+- **The guard-state half has no material on disk yet.** `command find ~/.inber/server/sessions -name guard_state.json` returns **0** across all 95 session directories; every one holds `messages.json` and nothing else. The sidecar's only writer is `persistSessionState`, landed in `88780d7` (2026-07-31), and the box has barely spawned since (`3a968e87`). So today a collision costs the transcript, the turn counter and the row; it costs the recorded budget from the next spawn onwards.
+
+**Fixed, option C of `704c5000`:** `mintChildSessionKey` proposes a key and then checks it — against the live session map, the store row (new `Store.SessionExists`, because `SessionAgent` cannot tell "no row" from "empty agent") and the transcript directory — reserving each proposal in `Server.pendingChildKeys` so two concurrent spawns cannot both be told one key is free. A check that cannot be completed refuses; 100 taken proposals in a row refuse. `sessionKeyForChild` is now a proposal, not an answer.
+
+The identity question is untouched and still open: the key is still derived from the clock and still readable by `backfillSessionLineageFromChildKeys`. Options A and B of `704c5000` remain a choice for the owner.
+
 ## Do not re-derive
 
 - The write-back is a fact of `buildRequest`, not of the engine, and it is pinned in `agent/volatile_context_writeback_test.go`. Both assertions were sabotage-verified by making the injection request-local; both failed.

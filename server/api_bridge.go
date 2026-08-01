@@ -602,7 +602,13 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	childKey := sessionKeyForChild(id)
+	childKey, err := g.mintChildSessionKey(id)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("fork failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer g.releaseChildSessionKey(childKey)
+
 	agentName := parent.AgentName
 	ac, _ := g.GetAgentConfig(agentName)
 
