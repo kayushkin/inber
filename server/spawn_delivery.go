@@ -181,7 +181,19 @@ func (g *Server) saveSpawnToMemory(child *Session, agentName, task, status, summ
 		content += "\n\nKey actions:\n" + transcript
 	}
 
+	// The child's session key is the id. memory-store's Save upserts on the id
+	// and defaults every field of a row except that one, so saving with no ID
+	// wrote every spawn result a workspace ever produced onto the single key ""
+	// — one row, overwritten by the next spawn, and unaddressable by memory_expand
+	// because nothing could name it.
+	//
+	// The key is the right name to reach for rather than a minted one:
+	// mintChildSessionKey already checked it against live sessions, the store and
+	// the data directory, so it is unique per spawn, and it is reproducible, so
+	// delivering the same spawn's result twice updates its memory instead of
+	// leaving two.
 	err := child.Engine.MemStore.Save(memory.Memory{
+		ID:         "spawn:" + child.Key,
 		Content:    content,
 		Tags:       []string{"spawn", "task-result", agentName},
 		Importance: 0.7,
