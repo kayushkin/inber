@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -12,8 +13,66 @@ import (
 	"github.com/kayushkin/inber/session"
 )
 
+// configuredLogsRoots returns every distinct logs root the configured agents
+// point at, in a stable order.
+//
+// A logs root belongs to a workspace, not to an agent. session.New writes
+// <workspace>/logs/<agent>/<session>/session.jsonl and owns the <agent>
+// segment itself, so the root is shared by every agent that runs there — and
+// two agents do land in one workspace, because a workspace is a repo root and
+// buildConfigFromRegistry resolves an agent with no explicit workspace to
+// ~/life/repos/<project>, keyed on the agent's project rather than its name.
+// Walking once per agent would therefore report every session in a shared root
+// once per agent sharing it, each copy labelled with whichever agent the loop
+// happened to be on.
+func (g *Server) configuredLogsRoots() []string {
+	seen := make(map[string]struct{}, len(g.config.Agents))
+	roots := make([]string, 0, len(g.config.Agents))
+	for _, ac := range g.config.Agents {
+		if ac.Workspace == "" {
+			continue
+		}
+		root := filepath.Join(ac.Workspace, "logs")
+		if _, dup := seen[root]; dup {
+			continue
+		}
+		seen[root] = struct{}{}
+		roots = append(roots, root)
+	}
+	sort.Strings(roots)
+	return roots
+}
+
+// agentFromSessionParent names the agent that owns a session, given the logs
+// root it was found under and the directory holding the session.
+//
+// The agent is the FIRST path component below the root, never the whole
+// relative path: session.New owns the layout and writes exactly one agent
+// segment directly under the root. Sessions written before inber 6271cfa sit
+// one level deeper — logs/<agent>/<agent>/<session> — because the caller joined
+// the agent name a second time, and taking the first component reads those
+// correctly instead of reporting the agent as "claxon/claxon", a name no agent
+// has. A session written with no agent name sits directly under the root and
+// has no agent to report.
+func agentFromSessionParent(logsDir, sessionParent string) string {
+	rel, err := filepath.Rel(logsDir, sessionParent)
+	if err != nil || rel == "." {
+		return ""
+	}
+	first, _, _ := strings.Cut(rel, string(filepath.Separator))
+	if first == ".." {
+		return ""
+	}
+	return first
+}
+
 // GET /api/sessions/history?agent=<name>&limit=<n>
 // Lists historical sessions from the logs directory.
+//
+// The agent filter matches the agent a session was logged under, which is not
+// the same thing as the agent whose configuration named the workspace: one
+// workspace can hold several agents' sessions, so filtering by the configured
+// name would return every agent's sessions in that shared root.
 func (g *Server) handleSessionHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -38,61 +97,50 @@ func (g *Server) handleSessionHistory(w http.ResponseWriter, r *http.Request) {
 
 	var sessions []sessionEntry
 
-	// Scan all agent workspaces for logs.
-	for name, ac := range g.config.Agents {
-		if agentFilter != "" && name != agentFilter {
-			continue
-		}
-		if ac.Workspace == "" {
-			continue
-		}
-
-		logsDir := filepath.Join(ac.Workspace, "logs")
+	for _, logsDir := range g.configuredLogsRoots() {
 		filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil
 			}
-			if d.Name() == "session.jsonl" {
+			var sessionID, agentName string
+			switch {
+			case d.Name() == "session.jsonl":
 				// Format: logs/{agent}/{session_id}/session.jsonl
 				sessionDir := filepath.Dir(path)
-				sessionID := filepath.Base(sessionDir)
-				agentDir := filepath.Dir(sessionDir)
-				relAgent, _ := filepath.Rel(logsDir, agentDir)
-				agentName := ""
-				if relAgent != "." {
-					agentName = relAgent
-				}
-				timePart := sessionID
-				if len(timePart) > 17 {
-					timePart = timePart[:17]
-				}
-				if t, err := time.Parse("2006-01-02_150405", timePart); err == nil {
-					sessions = append(sessions, sessionEntry{ID: sessionID, Agent: agentName, StartTime: t, FilePath: path})
-				}
-			} else if strings.HasSuffix(d.Name(), ".jsonl") && d.Name() != "server-errors.jsonl" {
+				sessionID = filepath.Base(sessionDir)
+				agentName = agentFromSessionParent(logsDir, filepath.Dir(sessionDir))
+			case strings.HasSuffix(d.Name(), ".jsonl") && d.Name() != "server-errors.jsonl":
 				// Legacy: logs/{agent}/{session_id}.jsonl
-				relDir, _ := filepath.Rel(logsDir, filepath.Dir(path))
-				agentName := ""
-				if relDir != "." {
-					agentName = relDir
-				}
-				n := strings.TrimSuffix(d.Name(), ".jsonl")
-				if t, err := time.Parse("2006-01-02_150405", n); err == nil {
-					sessions = append(sessions, sessionEntry{ID: n, Agent: agentName, StartTime: t, FilePath: path})
-				}
+				sessionID = strings.TrimSuffix(d.Name(), ".jsonl")
+				agentName = agentFromSessionParent(logsDir, filepath.Dir(path))
+			default:
+				return nil
 			}
+			if agentFilter != "" && agentName != agentFilter {
+				return nil
+			}
+			timePart := sessionID
+			if len(timePart) > 17 {
+				timePart = timePart[:17]
+			}
+			t, err := time.Parse("2006-01-02_150405", timePart)
+			if err != nil {
+				return nil
+			}
+			sessions = append(sessions, sessionEntry{ID: sessionID, Agent: agentName, StartTime: t, FilePath: path})
 			return nil
 		})
 	}
 
-	// Sort newest first.
-	for i := 0; i < len(sessions); i++ {
-		for j := i + 1; j < len(sessions); j++ {
-			if sessions[j].StartTime.After(sessions[i].StartTime) {
-				sessions[i], sessions[j] = sessions[j], sessions[i]
-			}
+	// Newest first, and by path within one timestamp: the session id carries
+	// only whole seconds, so two sessions opened in the same second tie, and a
+	// tie broken by nothing at all reorders the list between identical calls.
+	sort.Slice(sessions, func(i, j int) bool {
+		if !sessions[i].StartTime.Equal(sessions[j].StartTime) {
+			return sessions[i].StartTime.After(sessions[j].StartTime)
 		}
-	}
+		return sessions[i].FilePath < sessions[j].FilePath
+	})
 
 	if limit > 0 && len(sessions) > limit {
 		sessions = sessions[:limit]
