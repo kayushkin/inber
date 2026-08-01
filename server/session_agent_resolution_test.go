@@ -27,7 +27,7 @@ const (
 
 func TestARevivedChildResolvesToItsOwnAgentNotTheOneItsKeyNames(t *testing.T) {
 	server := &Server{store: tempStore(t)}
-	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}); err != nil {
+	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
 
@@ -67,7 +67,7 @@ func TestAnUnrecordedChildSessionResolvesToNothing(t *testing.T) {
 func TestALoadedSessionAnswersForItselfBeforeTheStoreIsAsked(t *testing.T) {
 	server := &Server{store: tempStore(t)}
 	// The store disagrees on purpose: a live session is the fresher record.
-	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}); err != nil {
+	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
 	server.sessions.Store(childKey, &Session{Key: childKey, AgentName: "fionn"})
@@ -89,7 +89,7 @@ func TestALoadedSessionAnswersForItselfBeforeTheStoreIsAsked(t *testing.T) {
 func TestTheRecordedAgentBeatsTheOneTheKeySpells(t *testing.T) {
 	server := &Server{store: tempStore(t)}
 	// What POST /api/run {"agent":"brigid","session_key":"agent:claxon:main"} writes.
-	if err := server.store.UpsertSession(parentKey, "brigid", "main", SessionLineage{}); err != nil {
+	if err := server.store.UpsertSession(parentKey, "brigid", "main", SessionLineage{}, nil); err != nil {
 		t.Fatalf("record the run: %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestTheRecordedAgentBeatsTheOneTheKeySpells(t *testing.T) {
 // record behind it still is — a nameless session must not shadow the row.
 func TestANamelessLiveSessionDoesNotShadowTheRecord(t *testing.T) {
 	server := &Server{store: tempStore(t)}
-	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}); err != nil {
+	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
 	server.sessions.Store(childKey, &Session{Key: childKey})
@@ -139,10 +139,10 @@ func TestATopLevelSessionWithNoRecordStillResolvesFromItsKey(t *testing.T) {
 // the fix above would then be reading back the wrong answer it just wrote.
 func TestALaterUpsertCannotRewriteTheAgentASessionWasCreatedWith(t *testing.T) {
 	store := tempStore(t)
-	if err := store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}); err != nil {
+	if err := store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
-	if err := store.UpsertSession(childKey, "claxon", "main", SessionLineage{}); err != nil {
+	if err := store.UpsertSession(childKey, "claxon", "main", SessionLineage{}, nil); err != nil {
 		t.Fatalf("touch the session: %v", err)
 	}
 
@@ -179,7 +179,7 @@ func TestSendRefusesASessionNoRecordCanNameRatherThanRunningItAsTheDefaultAgent(
 
 func TestSendAcceptsAChildSessionOnceItsAgentIsOnRecord(t *testing.T) {
 	server := &Server{store: tempStore(t), config: Config{DefaultAgent: "claxon"}}
-	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}); err != nil {
+	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
 
@@ -206,7 +206,7 @@ func TestSendAcceptsAChildSessionOnceItsAgentIsOnRecord(t *testing.T) {
 // this test is about, and it needs no engine to see it.
 func TestResumeLooksUpTheAgentTheSessionRanAsNotTheOneItsKeySpells(t *testing.T) {
 	server := &Server{store: tempStore(t), config: Config{DataDir: t.TempDir()}}
-	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}); err != nil {
+	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
 
@@ -229,7 +229,7 @@ func TestResumeLooksUpTheAgentTheSessionRanAsNotTheOneItsKeySpells(t *testing.T)
 // there — a database fault reported as a missing session.
 func TestAStoreThatCannotBeReadIsReportedRatherThanReadAsNoAgent(t *testing.T) {
 	server := &Server{store: tempStore(t)}
-	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}); err != nil {
+	if err := server.store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{ParentKey: parentKey, SpawnDepth: 1}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
 	if err := server.store.Close(); err != nil {
@@ -255,7 +255,7 @@ func TestDiscoverListsTheSessionsOfTheAgentTheChildActuallyIs(t *testing.T) {
 		{"agent:brigid:main", "brigid", "main"},
 		{parentKey, "claxon", "main"},
 	} {
-		if err := server.store.UpsertSession(session.key, session.agent, session.kind, SessionLineage{}); err != nil {
+		if err := server.store.UpsertSession(session.key, session.agent, session.kind, SessionLineage{}, nil); err != nil {
 			t.Fatalf("record %s: %v", session.key, err)
 		}
 	}

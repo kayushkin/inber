@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kayushkin/inber/engine"
 	"github.com/kayushkin/inber/internal/sqlitewal"
 	_ "modernc.org/sqlite"
 )
@@ -53,6 +55,7 @@ func migrateGatewayDB(db *sql.DB) error {
 			kind TEXT NOT NULL DEFAULT 'main',  -- 'main' | 'spawn'
 			parent_key TEXT NOT NULL DEFAULT '',
 			spawn_depth INTEGER NOT NULL DEFAULT 0,
+			workspace_roots TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			message_count INTEGER DEFAULT 0
@@ -83,17 +86,23 @@ func migrateGatewayDB(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if err := addSessionLineageColumns(db); err != nil {
+	if err := addSessionColumns(db); err != nil {
 		return err
 	}
 	return backfillSessionLineageFromChildKeys(db)
 }
 
-// addSessionLineageColumns brings a sessions table created before lineage was
-// recorded up to the schema above. CREATE TABLE IF NOT EXISTS leaves an
+// addSessionColumns brings a sessions table created before a session's origin
+// was recorded up to the schema above. CREATE TABLE IF NOT EXISTS leaves an
 // existing table exactly as it found it, so on every host that ran an earlier
-// build the two columns are missing and every read of them is an error.
-func addSessionLineageColumns(db *sql.DB) error {
+// build these columns are missing and every read of them is an error.
+//
+// There is no backfill for workspace_roots, and there cannot be one: unlike a
+// child's lineage, which its key spells out, nothing on disk says which forge
+// worktree a session already recorded was working in. Sessions spawned before
+// this column existed stay unrecorded, and resuming one is refused rather than
+// guessed at — see workspaceRootsForSession.
+func addSessionColumns(db *sql.DB) error {
 	existing, err := columnNames(db, "sessions")
 	if err != nil {
 		return err
@@ -104,6 +113,7 @@ func addSessionLineageColumns(db *sql.DB) error {
 	}{
 		{"parent_key", `ALTER TABLE sessions ADD COLUMN parent_key TEXT NOT NULL DEFAULT ''`},
 		{"spawn_depth", `ALTER TABLE sessions ADD COLUMN spawn_depth INTEGER NOT NULL DEFAULT 0`},
+		{"workspace_roots", `ALTER TABLE sessions ADD COLUMN workspace_roots TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, addition := range additions {
 		if existing[addition.name] {
@@ -227,15 +237,68 @@ type SessionLineage struct {
 
 // UpsertSession creates or updates a session.
 //
-// Lineage is written when the row is created and, like the agent name, left
-// alone on conflict: where a session came from is settled at the moment it is
-// spawned and never changes afterwards.
-func (s *Store) UpsertSession(key, agent, kind string, lineage SessionLineage) error {
-	_, err := s.db.Exec(`
-		INSERT INTO sessions (key, agent, kind, parent_key, spawn_depth) VALUES (?, ?, ?, ?, ?)
+// Lineage and workspace roots are written when the row is created and, like the
+// agent name, left alone on conflict: where a session came from and where on
+// disk it works are both settled at the moment it is spawned and never change
+// afterwards. That the update clause touches only last_active is what keeps a
+// later main-session touch of the same key from erasing a child's origin.
+func (s *Store) UpsertSession(key, agent, kind string, lineage SessionLineage, workspaceRoots []engine.WorkspaceRoot) error {
+	encodedRoots, err := encodeWorkspaceRoots(workspaceRoots)
+	if err != nil {
+		return fmt.Errorf("record workspace of session %s: %w", key, err)
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO sessions (key, agent, kind, parent_key, spawn_depth, workspace_roots) VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET last_active = CURRENT_TIMESTAMP
-	`, key, agent, kind, lineage.ParentKey, lineage.SpawnDepth)
+	`, key, agent, kind, lineage.ParentKey, lineage.SpawnDepth, encodedRoots)
 	return err
+}
+
+// encodeWorkspaceRoots renders a session's workspace for the column, using the
+// empty string — not "null" — for a session that has no forge workspace, so
+// that the value written by a session outside a workspace is byte-identical to
+// the column default a pre-existing row already carries.
+func encodeWorkspaceRoots(roots []engine.WorkspaceRoot) (string, error) {
+	if len(roots) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(roots)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+// SessionWorkspaceRoots returns the forge worktrees recorded against a session
+// key, and no roots when the store has never seen that key or the session was
+// never in a workspace.
+//
+// This table is the only durable record of it. A spawned session's workspace is
+// built by forge at spawn time, written over the agent's stored config in the
+// request that spawned it, and kept in Server.workspaces — an in-memory map. So
+// before this column existed, a session recreated from its persisted messages
+// came back holding the agent's ordinary repository: a conversation entirely
+// about ~/forge/work/<id>/<repo> whose every filesystem tool was rooted at this
+// host's live checkout of the same repository. Since inber 9f363dc the tools no
+// longer resolve against the process directory, which makes this worse and not
+// better — they resolve confidently against the wrong worktree.
+func (s *Store) SessionWorkspaceRoots(key string) ([]engine.WorkspaceRoot, error) {
+	var encoded string
+	err := s.db.QueryRow(`SELECT workspace_roots FROM sessions WHERE key = ?`, key).Scan(&encoded)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read workspace of session %s: %w", key, err)
+	}
+	if encoded == "" {
+		return nil, nil
+	}
+	var roots []engine.WorkspaceRoot
+	if err := json.Unmarshal([]byte(encoded), &roots); err != nil {
+		return nil, fmt.Errorf("read workspace of session %s: %w", key, err)
+	}
+	return roots, nil
 }
 
 // SessionLineage returns the lineage recorded against a session key, and the

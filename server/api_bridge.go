@@ -8,6 +8,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -146,7 +147,7 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		sessionKey := fmt.Sprintf("agent:%s:bridge-%d", agentName, time.Now().UnixNano())
-		g.store.UpsertSession(sessionKey, agentName, "main", SessionLineage{})
+		g.store.UpsertSession(sessionKey, agentName, "main", SessionLineage{}, nil)
 
 		now := time.Now()
 		sess := bridgeSession{
@@ -551,6 +552,14 @@ func (g *Server) handleBridgeResume(w http.ResponseWriter, r *http.Request, id s
 
 	sess, err := g.createSession(r.Context(), id, agentName, ac, RunRequest{}, nil)
 	if err != nil {
+		// A session whose forge worktree has been cleaned up is refused rather
+		// than rebuilt in the agent's ordinary repository: its whole
+		// conversation is about the worktree, and every filesystem tool would
+		// resolve against this host's live checkout of the same repository.
+		if errors.Is(err, ErrWorkspaceGone) {
+			jsonError(w, fmt.Sprintf("cannot resume session %s: %v", id, err), http.StatusConflict)
+			return
+		}
 		jsonError(w, fmt.Sprintf("resume failed: %v", err), http.StatusInternalServerError)
 		return
 	}

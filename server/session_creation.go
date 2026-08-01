@@ -98,10 +98,19 @@ func applyRequestOverrides(cfg *engine.EngineConfig, req RunRequest) {
 func (g *Server) createSession(ctx context.Context, key, agentName string, ac AgentConfig, req RunRequest, onEvent func(StreamEvent)) (*Session, error) {
 	injections := make(chan string, 10)
 
+	// Where this session works is resolved here, once, for every way a session
+	// is born. Doing it at the call sites is what let a rebuild come back in
+	// the wrong repository: two of them — resume and fork — reach for the
+	// agent's stored config, which names this host's live checkout.
+	repoRoot, workspaceRoots, err := g.workspaceRootsForSession(key, ac)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := engine.EngineConfig{
 		AgentName:        agentName,
-		RepoRoot:         ac.Workspace,
-		WorkspaceRoots:   ac.WorkspaceRoots,
+		RepoRoot:         repoRoot,
+		WorkspaceRoots:   workspaceRoots,
 		Model:            ac.Model,
 		Thinking:         ac.Thinking,
 		CommandName:      "serve",
@@ -160,16 +169,84 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 	lineage := g.lineageForSession(key)
 
 	return &Session{
-		Key:        key,
-		AgentName:  agentName,
-		Engine:     eng,
-		Status:     Idle,
-		SpawnDepth: lineage.SpawnDepth,
-		ParentKey:  lineage.ParentKey,
-		CreatedAt:  time.Now(),
-		LastActive: time.Now(),
-		injections: injections,
+		Key:            key,
+		AgentName:      agentName,
+		Engine:         eng,
+		Status:         Idle,
+		SpawnDepth:     lineage.SpawnDepth,
+		ParentKey:      lineage.ParentKey,
+		WorkspaceRoots: workspaceRoots,
+		CreatedAt:      time.Now(),
+		LastActive:     time.Now(),
+		injections:     injections,
 	}, nil
+}
+
+// workspaceRootsForSession answers which repositories a session works in, and
+// which of them relative paths resolve against.
+//
+// A spawn is the only moment a forge workspace is created, and at that moment
+// the answer is on the config the spawn just overwrote — the store has no row
+// for the child yet. Every later rebuild of the same session has the opposite
+// problem: the config it is handed is the agent's stored one, naming this
+// host's live checkout, and the workspace exists only in Server.workspaces,
+// which does not survive a restart. So the config wins while it has an answer,
+// and the record answers afterwards.
+//
+// A recorded workspace whose worktrees are gone from disk REFUSES the rebuild.
+// Falling back to the agent's repository would be the original defect with an
+// extra step: a session whose entire conversation is about a worktree, resumed
+// into the live checkout, with every filesystem tool rooted there and nothing
+// in the transcript to suggest it. A caller that gets an error can handle it;
+// nobody can handle a turn that has already edited the wrong repository.
+func (g *Server) workspaceRootsForSession(key string, ac AgentConfig) (string, []engine.WorkspaceRoot, error) {
+	if len(ac.WorkspaceRoots) > 0 {
+		return ac.Workspace, ac.WorkspaceRoots, nil
+	}
+	if g.store == nil {
+		return ac.Workspace, ac.WorkspaceRoots, nil
+	}
+	recorded, err := g.store.SessionWorkspaceRoots(key)
+	if err != nil {
+		return "", nil, fmt.Errorf("session %s: %w", key, err)
+	}
+	if len(recorded) == 0 {
+		return ac.Workspace, ac.WorkspaceRoots, nil
+	}
+	if err := workspaceRootsStillOnDisk(recorded); err != nil {
+		return "", nil, fmt.Errorf("%w: session %s: %w", ErrWorkspaceGone, key, err)
+	}
+	return engine.PrimaryWorkspaceRoot(recorded), recorded, nil
+}
+
+// ErrWorkspaceGone reports that a session recorded a forge workspace that is no
+// longer on disk, so the session cannot be rebuilt where it used to work.
+//
+// It is a sentinel because the HTTP layer has to tell this apart from a failure
+// to build a session: nothing is broken here, the worktree was cleaned up, and
+// the caller's request is the thing that cannot be satisfied. Answering 500
+// would invite a retry that can never succeed.
+var ErrWorkspaceGone = errors.New("workspace no longer exists")
+
+// workspaceRootsStillOnDisk checks that every worktree a session was recorded
+// in is still there, and still a directory.
+//
+// forge.Cleanup removes a workspace, and a merged or expired one is meant to be
+// gone. This is the check that turns "its worktree was deleted" into a refusal
+// at rebuild time rather than a session rooted at a path that no longer exists —
+// which the engine would accept, since it validates that the roots agree with
+// each other and not that they are real.
+func workspaceRootsStillOnDisk(roots []engine.WorkspaceRoot) error {
+	for _, root := range roots {
+		info, err := os.Stat(root.Path)
+		if err != nil {
+			return fmt.Errorf("its worktree for %s is gone (%s): %w", root.Name, root.Path, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("its worktree for %s is not a directory (%s)", root.Name, root.Path)
+		}
+	}
+	return nil
 }
 
 // lineageForSession answers where a session came from by asking the record that

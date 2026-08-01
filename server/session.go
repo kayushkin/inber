@@ -53,6 +53,13 @@ type Session struct {
 	CreatedAt  time.Time
 	LastActive time.Time
 
+	// WorkspaceRoots is the forge workspace this session works in, empty for a
+	// session that works in its agent's ordinary repository. It is set once, by
+	// createSession, from whichever source answered — so a fork can hand its
+	// parent's workspace to its child, and recordChildSession can write down
+	// where the child works without being told.
+	WorkspaceRoots []engine.WorkspaceRoot
+
 	mu              sync.Mutex
 	cancel          context.CancelFunc
 	injections      chan string

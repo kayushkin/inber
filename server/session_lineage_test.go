@@ -25,7 +25,7 @@ import (
 func TestASpawnedChildsLineageOutlivesTheProcess(t *testing.T) {
 	store := tempStore(t)
 	if err := store.UpsertSession(childKey, "brigid", "spawn",
-		SessionLineage{ParentKey: parentKey, SpawnDepth: 2}); err != nil {
+		SessionLineage{ParentKey: parentKey, SpawnDepth: 2}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
 
@@ -47,10 +47,10 @@ func TestASpawnedChildsLineageOutlivesTheProcess(t *testing.T) {
 func TestATouchOfAnExistingSessionDoesNotRewriteItsLineage(t *testing.T) {
 	store := tempStore(t)
 	if err := store.UpsertSession(childKey, "brigid", "spawn",
-		SessionLineage{ParentKey: parentKey, SpawnDepth: 2}); err != nil {
+		SessionLineage{ParentKey: parentKey, SpawnDepth: 2}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
-	if err := store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{}); err != nil {
+	if err := store.UpsertSession(childKey, "brigid", "spawn", SessionLineage{}, nil); err != nil {
 		t.Fatalf("touch the session: %v", err)
 	}
 
@@ -88,7 +88,7 @@ func TestARevivedChildStillCountsAgainstTheSpawnDepthCap(t *testing.T) {
 		config: Config{MaxSpawnDepth: 2, MaxChildrenPerAgent: 4},
 	}
 	if err := server.store.UpsertSession(childKey, "brigid", "spawn",
-		SessionLineage{ParentKey: parentKey, SpawnDepth: 2}); err != nil {
+		SessionLineage{ParentKey: parentKey, SpawnDepth: 2}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
 
@@ -118,7 +118,7 @@ func TestAChildUnderTheCapIsNotStoppedByIt(t *testing.T) {
 		config: Config{MaxSpawnDepth: 2, MaxChildrenPerAgent: 4},
 	}
 	if err := server.store.UpsertSession(childKey, "brigid", "spawn",
-		SessionLineage{ParentKey: parentKey, SpawnDepth: 1}); err != nil {
+		SessionLineage{ParentKey: parentKey, SpawnDepth: 1}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestARebuiltSessionComesBackKnowingWhoseChildItIs(t *testing.T) {
 	workspace := t.TempDir()
 	server := &Server{store: tempStore(t), config: Config{DataDir: t.TempDir()}}
 	if err := server.store.UpsertSession(childKey, "brigid", "spawn",
-		SessionLineage{ParentKey: parentKey, SpawnDepth: 2}); err != nil {
+		SessionLineage{ParentKey: parentKey, SpawnDepth: 2}, nil); err != nil {
 		t.Fatalf("record the spawn: %v", err)
 	}
 
@@ -176,7 +176,7 @@ func TestARebuiltSessionComesBackKnowingWhoseChildItIs(t *testing.T) {
 func TestARebuiltTopLevelSessionComesBackARoot(t *testing.T) {
 	workspace := t.TempDir()
 	server := &Server{store: tempStore(t), config: Config{DataDir: t.TempDir()}}
-	if err := server.store.UpsertSession(parentKey, "claxon", "main", SessionLineage{}); err != nil {
+	if err := server.store.UpsertSession(parentKey, "claxon", "main", SessionLineage{}, nil); err != nil {
 		t.Fatalf("record the session: %v", err)
 	}
 
@@ -285,7 +285,7 @@ func TestChildrenRecordedBeforeTheColumnsExistedAreRepairedOnOpen(t *testing.T) 
 		}
 	}
 	// And a top-level session, which the repair must leave alone.
-	if err := store.UpsertSession(parentKey, "claxon", "main", SessionLineage{}); err != nil {
+	if err := store.UpsertSession(parentKey, "claxon", "main", SessionLineage{}, nil); err != nil {
 		t.Fatalf("record the parent: %v", err)
 	}
 	store.Close()
