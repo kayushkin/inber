@@ -11,59 +11,86 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// Checkpoint represents a saved conversation state
+// Checkpoint represents a saved conversation state.
+//
+// Two different turn counters run side by side in this process, and this record
+// is stamped with the one the checkpoint gate actually used. UserTurn counts
+// user messages (the engine's Turn.Counter, one per RunTurn); Session.turn
+// counts API round-trips, of which a single user message can cost many. The
+// gate that fires a checkpoint reads the user-turn counter, so a checkpoint
+// stamped with the round-trip counter named a turn that nothing had decided
+// anything about — a session checkpointed at user turn 20 recorded 87.
 type Checkpoint struct {
-	SessionID   string                     `json:"session_id"`
-	Turn        int                        `json:"turn"`
-	CreatedAt   time.Time                  `json:"created_at"`
-	Summary     string                     `json:"summary"`              // Brief summary of conversation so far
-	KeyFacts    []string                   `json:"key_facts"`            // Important facts to remember
-	Messages    []anthropic.MessageParam   `json:"messages"`             // Last N messages (full)
-	TotalTokens int                        `json:"total_tokens"`         // Total tokens consumed so far
-	ModelInfo   string                     `json:"model"`                // Model used
+	SessionID   string                   `json:"session_id"`
+	UserTurn    int                      `json:"user_turn"`    // User-message turn the checkpoint gate fired on
+	CreatedAt   time.Time                `json:"created_at"`
+	Summary     string                   `json:"summary"`      // Brief summary of conversation so far
+	KeyFacts    []string                 `json:"key_facts"`    // Important facts to remember
+	Messages    []anthropic.MessageParam `json:"messages"`     // Last N messages (full)
+	TotalTokens int                      `json:"total_tokens"` // Total tokens consumed so far
+	ModelInfo   string                   `json:"model"`        // Model used
 }
 
-// CheckpointConfig configures checkpointing behavior
+// CheckpointConfig configures checkpointing behavior.
+//
+// There is no retention setting because there is nothing to retain: a session
+// writes one checkpoint.json and every later checkpoint overwrites it. This
+// used to carry a MaxCheckpoints of 5, enforced by a pruneOldCheckpoints that
+// was a bare `return nil` — a retention policy that read as if four older
+// checkpoints were being kept, when no second file was ever created. Rotation
+// belongs with a reader that needs it; today LoadCheckpoint has no callers.
 type CheckpointConfig struct {
-	Enabled         bool  // Enable checkpointing
-	Interval        int   // Create checkpoint every N turns (default: 20)
-	KeepMessages    int   // Number of recent messages to keep in checkpoint (default: 30)
-	MaxCheckpoints  int   // Maximum checkpoints to keep (default: 5, keeps most recent)
+	Enabled      bool // Enable checkpointing
+	Interval     int  // Create checkpoint every N user turns (default: 20)
+	KeepMessages int  // Number of recent messages to keep in checkpoint (default: 30)
 }
 
 // DefaultCheckpointConfig returns sensible defaults
 func DefaultCheckpointConfig() CheckpointConfig {
 	return CheckpointConfig{
-		Enabled:        true,
-		Interval:       20,
-		KeepMessages:   30,
-		MaxCheckpoints: 5,
+		Enabled:      true,
+		Interval:     20,
+		KeepMessages: 30,
 	}
 }
 
-// SaveCheckpoint creates a checkpoint file for the current session state
-func (s *Session) SaveCheckpoint(messages []anthropic.MessageParam, summary string, keyFacts []string) error {
+// SaveCheckpoint writes the current session state to checkpoint.json beside the
+// session log, overwriting any earlier checkpoint.
+//
+// userTurn is supplied by the caller because the session cannot know it: the
+// counter this session owns advances once per API round-trip, and the gate that
+// decides when to checkpoint counts user messages. Passing it in keeps the two
+// clocks from being confused for each other, which is exactly what the record
+// used to do.
+func (s *Session) SaveCheckpoint(userTurn int, messages []anthropic.MessageParam, summary string, keyFacts []string) error {
 	if s.sessionID == "" {
 		return fmt.Errorf("session ID not set")
 	}
 
 	cfg := DefaultCheckpointConfig()
-	
+
 	// Determine messages to keep
 	messagesToKeep := messages
 	if len(messages) > cfg.KeepMessages {
 		messagesToKeep = messages[len(messages)-cfg.KeepMessages:]
 	}
 
+	// The token totals are written by LogAssistant under the mutex, so they
+	// have to be read under it too — a checkpoint runs while the turn that
+	// produced those tokens is still logging.
+	s.mu.Lock()
+	totalTokens := s.totalIn + s.totalOut
+	s.mu.Unlock()
+
 	// Create checkpoint
 	checkpoint := Checkpoint{
 		SessionID:   s.sessionID,
-		Turn:        s.turn,
+		UserTurn:    userTurn,
 		CreatedAt:   time.Now(),
 		Summary:     summary,
 		KeyFacts:    keyFacts,
 		Messages:    messagesToKeep,
-		TotalTokens: s.totalIn + s.totalOut,
+		TotalTokens: totalTokens,
 		ModelInfo:   s.model,
 	}
 
@@ -77,9 +104,6 @@ func (s *Session) SaveCheckpoint(messages []anthropic.MessageParam, summary stri
 	if err := os.WriteFile(checkpointPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write checkpoint: %w", err)
 	}
-
-	// Clean up old checkpoints
-	s.pruneOldCheckpoints(cfg.MaxCheckpoints)
 
 	return nil
 }
@@ -104,27 +128,20 @@ func (s *Session) LoadCheckpoint() (*Checkpoint, error) {
 	return &checkpoint, nil
 }
 
-// ShouldCheckpoint determines if a checkpoint should be created at this turn
-func ShouldCheckpoint(turn int, cfg CheckpointConfig) bool {
+// ShouldCheckpoint determines whether a checkpoint should be created at this
+// user turn. The caller must pass the same user-turn counter it later hands to
+// SaveCheckpoint, not the session's API round-trip counter.
+func ShouldCheckpoint(userTurn int, cfg CheckpointConfig) bool {
 	if !cfg.Enabled {
 		return false
 	}
-	return turn > 0 && turn%cfg.Interval == 0
+	return userTurn > 0 && userTurn%cfg.Interval == 0
 }
 
 // checkpointPath returns the path to the checkpoint file for this session
 func (s *Session) checkpointPath() string {
 	sessionDir := filepath.Dir(s.file.Name())
 	return filepath.Join(sessionDir, "checkpoint.json")
-}
-
-// pruneOldCheckpoints removes old checkpoint files, keeping only the N most recent
-func (s *Session) pruneOldCheckpoints(keep int) error {
-	// For now we only keep one checkpoint file (checkpoint.json)
-	// In the future, we could keep numbered checkpoints (checkpoint-1.json, checkpoint-2.json, etc.)
-	// and implement rotation logic here
-	
-	return nil
 }
 
 // ListCheckpoints lists all available checkpoints for a session directory

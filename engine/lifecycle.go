@@ -224,7 +224,7 @@ func (e *Engine) checkpointIfNeeded() {
 	summary := sessionMod.GenerateConversationSummary(e.Messages)
 	keyFacts := sessionMod.ExtractKeyFacts(e.Messages, 10)
 
-	err := e.Session.SaveCheckpoint(e.Messages, summary, keyFacts)
+	err := e.Session.SaveCheckpoint(e.Turn.Counter, e.Messages, summary, keyFacts)
 	if err != nil {
 		Log.Warn("checkpoint failed: %v", err)
 	} else {
