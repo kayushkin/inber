@@ -210,22 +210,24 @@ func setupSession(repoRoot, agentName, commandName string, newSession, detach bo
 		}
 	}
 
-	// Create a basic session for engine hooks - we'll do full initialization later
-	// For now, we just need a non-nil session that can handle CurrentTurn() calls
+	// The session logger every engine hook writes through. sessionMod.New
+	// creates the log directory itself, so there is no directory to make here.
 	logsDir := filepath.Join(repoRoot, "logs")
 	if agentName != "" {
 		logsDir = filepath.Join(logsDir, agentName)
 	}
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		Log.Warn("failed to create logs directory: %v", err)
-	}
-	
-	// Create a minimal session that will work with the engine hooks
+
+	// A session that cannot be created fails session setup. The fallback that
+	// used to stand here — a zero-value Session, installed with a comment
+	// saying it prevented nil pointer crashes — did the opposite: its json
+	// encoder and log file are both nil, so LogUser, LogToolResult, FilePath
+	// and Close each panic on first use. LogUser runs on every turn, so the
+	// warning below the failure was one turn away from a crash it described as
+	// avoided. There is nothing to degrade to: a logger with no file open logs
+	// nothing, and every caller here treats the session as writable.
 	session, err = sessionMod.New(logsDir, "", agentName, "", nil)
 	if err != nil {
-		Log.Warn("failed to create session: %v", err)
-		// Create an even more minimal session to prevent nil pointer crashes
-		session = &sessionMod.Session{}
+		return nil, nil, nil, nil, 0, fmt.Errorf("create session logger in %s: %w", logsDir, err)
 	}
 
 	return session, sessionDB, workspace, messages, turnCounter, nil
