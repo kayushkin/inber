@@ -81,16 +81,7 @@ func (e *Engine) BuildSystemPrompt(userMessage string) ([]sessionMod.NamedBlock,
 		messageTags := memory.AutoTag(userMessage, "user")
 		minImportance, tokenBudget := e.contextBudget(userMessage)
 
-		req := memory.BuildContextRequest{
-			Tags:              messageTags,
-			TokenBudget:       tokenBudget,
-			MinImportance:     minImportance,
-			IncludeAlwaysLoad: true,
-			ExcludeTags:       []string{"session-summary", "repo-map", "code-introspection"},
-			MaxChunkSize:      5000,
-			TruncateThreshold: 1000, // only truncate if memory >1000 tokens AND preview is <50% of content
-			TruncatePreview:   800,  // ~270 token preview — enough to understand what the memory is about
-		}
+		req := memory.AutomaticContextRequest(messageTags, minImportance, tokenBudget)
 
 		memories, tokensUsed, err := e.MemStore.BuildContext(req)
 		if err != nil {

@@ -68,16 +68,24 @@ func SummarizeConversation(
 	// Save the full old conversation to memory. This runs only after the summary
 	// exists, because the row claims a compaction happened: writing it on the
 	// failure path would file a copy of the whole transcript on every retry.
+	//
+	// The row is kept out of the next prompt by its tags — see
+	// ConversationArchiveTags. It used to say so with `IsLazy: true` and the
+	// comment "don't auto-load, but available via memory_expand", which was not a
+	// second belt: memory-store's IsLazy means "the content is not in this row,
+	// read it from RefTarget", the content here is in the row, and no read path
+	// has ever treated the flag as a context policy. A flag that states an intent
+	// nothing enforces reads as protection and is not any, so it is gone rather
+	// than kept alongside the tag that does the work.
 	if cfg.SaveToMemory && memStore != nil {
 		memID := fmt.Sprintf("conversation-summary:%s:%s", sessionID, uuid.New().String()[:8])
 		if err := memStore.Save(memory.Memory{
 			ID:         memID,
 			Content:    oldText,
 			Summary:    fmt.Sprintf("Full conversation history (%d turns, ~%d tokens) from session %s", result.SummarizedTurns, oldTokens, sessionID),
-			Tags:       []string{"conversation", "history", "session:" + sessionID},
+			Tags:       ConversationArchiveTags(sessionID),
 			Importance: 0.4,
 			Source:     "summarization",
-			IsLazy:     true, // Don't auto-load, but available via memory_expand
 		}); err != nil {
 			// Log but don't fail
 			fmt.Printf("warning: failed to save conversation to memory: %v\n", err)

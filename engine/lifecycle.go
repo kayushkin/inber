@@ -287,7 +287,7 @@ func SaveSessionSummary(store memory.MemoryStore, messages []anthropic.MessagePa
 	m := memory.Memory{
 		ID:         uuid.New().String(),
 		Content:    summary,
-		Tags:       []string{"session-summary", agentName},
+		Tags:       []string{memory.TagSessionSummary, agentName},
 		Importance: 0.4,
 		Source:     "system",
 	}

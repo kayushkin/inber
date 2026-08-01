@@ -116,7 +116,7 @@ func StashLargeContent(
 	contentType := DetectContentType(content)
 
 	// Generate tags
-	tags := []string{"large-input", "stashed", sessionID, string(contentType)}
+	tags := StashedContentTags(sessionID, contentType)
 
 	// Save to memory
 	memID := uuid.New().String()
