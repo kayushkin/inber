@@ -194,12 +194,25 @@ func ShouldManage(messages []anthropic.MessageParam, cfg ManagementConfig) bool 
 
 // ShouldPrune determines if conversation should be pruned (backward compatibility)
 func ShouldPrune(messages []anthropic.MessageParam, cfg PruneConfig) bool {
-	// Message count check — prune if we have too many messages regardless of
-	// token estimate (the estimator is known to undercount by 3-4x)
+	// A long conversation is pruned on its length alone, without weighing it.
 	if len(messages) > cfg.KeepRecentTurns*2 {
 		return true
 	}
 
+	// ⚠️ A short conversation is NOT pruned, however heavy it is, and
+	// ManageConversation repeats this bail so the same holds if you call it
+	// directly. Measured on 2026-08-01: 33 messages carrying 20KB of
+	// read_files output each — 80,036 estimated tokens, well past every
+	// budget on this path — free nothing, while the same conversation three
+	// messages longer sheds 90% of its weight. Below the line the weight is
+	// simply not consulted.
+	//
+	// That is deliberate to the extent that pruning keeps recent turns in
+	// full anyway. It is wrong to the extent that the tool-result thresholds
+	// age content in three, ten and ten TURNS, which is well inside
+	// KeepRecentTurns messages, so there is usually plenty to free. Which of
+	// the two wins needs a number nobody has picked — noteboard `6bf8a070`
+	// carries the measurement and the choice. Do not quietly drop the bail.
 	if len(messages) <= cfg.KeepRecentTurns {
 		return false
 	}

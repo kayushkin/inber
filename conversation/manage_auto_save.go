@@ -30,7 +30,7 @@ func autoSaveToMemory(
 			continue // Won't be truncated
 		}
 
-		content := extractTextContent(msg.Content)
+		content := extractTextBlockContent(msg.Content)
 		if content == "" {
 			continue
 		}
