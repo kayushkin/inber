@@ -308,3 +308,36 @@ but in the Anthropic format tool-result batches are user-role messages — so `K
 mean eight tool-result round-trips **inside one user turn**, and the split point can land past the
 user's actual request. `stripOrphanedToolResults` keeps the payload legal; the retention semantics
 are not what the config name says. Fix the count or rename the knob.
+
+## Harness-watch — 2026-08-01: a wrapper's own message is not the error — extraction must be ordered by proximity to the origin
+
+[#12800](https://github.com/cline/cline/pull/12800). When Vercel AI Gateway relays an upstream
+rejection (their case: Alibaba Qwen refusing on context length), the object reaching
+`extractErrorMessage` has `message: "Stream error occurred"`, a `cause` that is an unrelated
+internal `ZodError` from the *gateway's own* parse failure, and the actual rejection JSON-encoded
+inside `value.error_message`. Every rung of the extraction chain found something plausible before
+reaching the real one, so the user was shown the gateway's generic wrapper and told nothing about
+the context-length refusal that would have explained the failure. The fix teaches the structured
+extractor to descend into `payload.value.error_message` — recursively, since it may be a JSON string
+or a plain one — replaces a try/catch `JSON.parse` with `safeJsonParse` so *"not JSON"* and
+*"parsed to undefined"* stop being conflated, and adds a final fallback that JSON-stringifies an
+opaque object rather than rendering `[object Object]`.
+
+**What inber should consider:** the ordering rule generalizes past provider errors —
+**an extraction chain must be ordered by proximity to the origin, and every rung needs a fallback
+that is still actionable.** The nearest inber instance is not an error string but a *success* that
+masks an upstream condition: `conversation/summary_generation.go:59-76` never reads
+`response.StopReason`. The only rejected response is an empty one (`:72-74`), so a summary the model
+cut off at `max_tokens` returns `err == nil` and is treated as finished. The budget makes that the
+expected case rather than the edge: `conversation/summarize_config.go:35-37` condenses 80 messages
+(~40 turns) into `MaxSummaryTokens: 1024`, and `:42-44` condenses 40 messages into **800**.
+Compaction is destructive — `engine/lifecycle.go:111` assigns `e.Messages = summarized` and
+`saveResumableState` (`:241-256`) writes the post-summary array over both `messages.json` copies —
+so a summary truncated mid-sentence becomes the session's only transcript, and
+`engine/lifecycle.go:112` logs `"summarized %d turns → %d token summary"` exactly as it does on
+success. The verbatim archive at `conversation/summarize.go:80-96` is reachable only if the model
+calls `memory_expand`, which `summaryFooter` (`:150-158`) advertises only when that tool is on the
+wire. What a fix has to decide is genuinely open: abort compaction on a `max_tokens` stop (safe, but
+a session that consistently overruns then never compacts and hits the emergency flush at
+`engine/lifecycle.go:174` instead), retry with a raised ceiling or a smaller slice (needs a retry
+bound and a cost policy), or accept-but-mark so the injected block states its own incompleteness.

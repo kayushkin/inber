@@ -588,3 +588,57 @@ asserting the final tool result is unchanged, because the moment streaming and t
 a buffer, display back-pressure starts silently editing what the model sees. This is the display
 half of the shell/cancel contract written up in `cline.md` (07-31 §1), where the more urgent finding
 is that inber's interrupt endpoint cannot actually stop a running command.
+
+## Harness-watch — 2026-08-01: deny is the absorbing element in a multi-inspector merge, a path comparison must run on canonicalized paths, and a tool result is structured content rather than a string
+
+Three from this window; the first two are written up cross-cuttingly in
+`agentic-design-patterns.md` (2026-08-01, §1 and "Also in-window"), so only the goose-specific
+detail is repeated here.
+
+**[#10612](https://github.com/block/goose/pull/10612) — denied tool request precedence.**
+`apply_inspection_results_to_permissions` merges verdicts from N independent inspectors (security
+scanners, LLM judges, static rules) into `approved` / `needs_approval` / `denied`. On a
+`RequireApproval` verdict it checked only whether the request was already in `needs_approval` before
+pushing it there — never whether it was already in `denied` — so a request an earlier inspector had
+**refused outright** was re-added to `needs_approval` and became reachable by a user click. The new
+tests pin the real invariant, `denial_dominates_regardless_of_inspection_result_order`, over both
+permutations. A merge implemented as a sequence of *"if not in bucket X, push to bucket Y"* is not a
+lattice; it is a race between inspectors, and the winner is whoever ran last.
+
+**[#10545](https://github.com/block/goose/pull/10545) — contain subdirectory hint discovery.**
+`SubdirectoryHintTracker::load_new_hints` decided containment with `dir.starts_with(working_dir)` on
+as-written paths, so a path reached through a symlink, a `..` segment or a differently-spelled prefix
+either escaped containment or failed it spuriously — and the tracker then loaded (or refused to
+load) `AGENTS.md`-style hint files from outside the workspace. Now both sides canonicalize first, an
+uncanonicalizable working dir bails, and an uncanonicalizable entry is skipped rather than admitted.
+The tests moved from hardcoded `/home/user/project` strings to real `TempDir`s — the old ones never
+touched a filesystem, which is why they could not have caught it.
+
+**[#10340](https://github.com/block/goose/pull/10340) — forward images and MCP embedded-resource
+blobs.** Anthropic/Google message formatting flattened every MCP tool result to a joined text
+string, keeping only `as_text()` blocks, so any `ContentBlock::Image` and any `BlobResourceContents`
+(a screenshot, a PDF) was **silently dropped** — a screenshot tool returned nothing to the model.
+The fix emits typed `image`/`document` blocks with `source: {type: base64, media_type, data}` when
+media is present and keeps the plain-string form when it is not, so no existing behaviour shifts.
+The guardrail is a hard allowlist (`image/jpeg|png|gif|webp` plus `application/pdf`); everything
+else, `image/svg+xml` included, falls through to a `[Image: <mime>]` **text marker** rather than
+being handed to a provider that will 400 the turn.
+
+**What inber should consider:** the media half is latent, not live, and worth recording before it
+becomes live. `agent.Tool.Run` returns `(string, error)`, so an inber tool result is *structurally* a
+string and an image cannot be forwarded at all — and `tools/mcp/client.go:406-410` accumulates only
+`content.Type == "text"`, dropping every image/resource/audio block, while never reading `isError`
+so an MCP tool failure is reported to the model as a success. That package still has zero importers
+outside itself, so this is a design constraint to settle **before** MCP is wired, not a defect today:
+widening the tool-result type is a change to every tool in the tree, and doing it after MCP lands
+means doing it under a deadline. Take the allowlist-with-text-fallback shape when it happens — a
+pass-through hands the provider bytes it will reject, and a silent drop is what #10340 was fixing.
+
+Two more, dismissed as inber-irrelevant but noted so the next sweep does not re-derive them:
+[#10487](https://github.com/block/goose/pull/10487) (incremental streaming render; inber's
+`OnTextDelta` is a pure pass-through at `engine/build_hooks.go:127-131`, no accumulate-and-rescan
+buffer exists) and [#10409](https://github.com/block/goose/pull/10409) (`to_string_pretty` →
+`to_string` on model-facing tool schemas — inber already uses plain `json.Marshal` on that path).
+The principle in #10409 is still worth stating: **model-facing serialization has no human reader, so
+pretty-printing there is a pure token tax**, and the regression test should pin losslessness rather
+than a byte count.

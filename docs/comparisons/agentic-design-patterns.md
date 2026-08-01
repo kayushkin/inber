@@ -2127,3 +2127,143 @@ make `:148-151` return `isError=true`; bound the recorded arguments and emit a n
 rather than dropping. The 07-29 entry already covers typed truncation records in general — what is
 new here is the contract for **nested calls that have no tool-call item of their own**, plus the
 retry-cache idempotence, neither of which applies to the sites that entry named.
+
+## Harness-watch — 2026-08-01: authority covers the *rider*, not just the call; a durable history is a *singly-owned* resource; and a denial is its own event class
+
+### 1. A field riding along with a tool call is part of the call, and the gate must cover it
+
+codex [#36350](https://github.com/openai/codex/pull/36350) rejects a `shell_command` /
+`exec_command` call that carries a `justification` argument but no `sandbox_permissions`, **before
+any part of the call executes**, with a model-visible error telling the caller to request
+`require_escalated` explicitly or drop the justification. The change is three lines and the
+principle is large: a *rider* — a field the model attaches alongside a tool's own arguments — is
+part of the call and must be validated under the same authority as the call. goose
+[#10612](https://github.com/block/goose/pull/10612) is the same rule stated as a lattice. Its
+`apply_inspection_results_to_permissions` merges verdicts from N independent inspectors into
+`approved` / `needs_approval` / `denied`, and when an inspector returned `RequireApproval` the code
+checked only whether the request was already in `needs_approval` — so a request an earlier inspector
+had **denied** was re-added to `needs_approval` and became reachable by a user click. The fix adds
+the `denied` check and pins `denial_dominates_regardless_of_inspection_result_order` over both
+permutations. **Deny is the absorbing element, and an escalation must never be able to lift one.**
+codex [#36365](https://github.com/openai/codex/pull/36365) closes the third face: an approval marker
+supplied by a party you don't control is a *claim*, so the review request is rebuilt from the
+harness's own live invocation details, and every inconclusive branch (unavailable, malformed,
+policy-disallowed) fails **closed** rather than falling back to "ask a human" — which is exactly what
+is unavailable in the automated case the path exists for.
+
+**What inber should consider:** inber has this defect live, and its own code comment says so.
+`agent/chain.go:323-326` reads *"Ask the gate before anything else this block asks for happens … the
+sideband fields are instructions that arrived attached to a call that is not going to run."* The gate
+runs at `:327`. **`processSideband` already ran at `agent/chain.go:278`, 49 lines earlier.** The
+sideband fields are injected into the schema of *every* tool of *every* agent (`agent/chain.go:100`,
+applied at `agent/agent_run.go:26` and `engine/turn_openai.go:32`) and the callbacks are wired
+whenever `e.repoRoot != ""` (`engine/build.go:86-88`), so both dispatch paths are affected. Those
+callbacks are not bookkeeping: `SaveNote` writes the scratchpad file unconditionally, with no
+precondition (`engine/build_sideband.go:57-64`); `done`/`split` rewrite `.task.md`
+(`engine/build_sideband.go:40,90`); and a `done` that empties the plan reaches
+`toolstoretools.RunBuildCheck` → `childprocess.NewCommand(ctx, "bash", "-c", cmd)`
+(`tool-store/tools/task_plan.go:301`, `TaskPlanBuildCommand` defaulting to a non-empty
+`"go build ./..."`). So a session in `mode: observe` — documented at `guard/guard.go:6` as
+"read-only tools. No file writes, no shell execution" — that denies `write_files` has **already
+written a file** if the same block carried `note`, and has **already run `bash -c`** if it carried
+`done`. The tool result hands the model both at once: `"[✓ completed 1 task(s)]\nrefused:
+write_files was not run — observe mode allows read-only tools only"`. This is the same bypass class
+`agent/tool_gate_test.go:44-47` closed for the `then` chain ("a gate wired to the first alone leaves
+the model a way to run any tool it likes"), one field over — and
+`agent/sideband_ignored_test.go:112-144` currently **pins the bug as correct**, asserting
+`completed == 1` for a refused call. That test is right about the *reporting* requirement and
+encodes the *authorization* bug: a green test carrying the same false premise as the defect.
+Adopt #36350's placement (validate the whole block, riders included, before anything runs) and
+#10612's lattice (deny dominates every sibling effect, not just sibling verdicts).
+
+### 2. A durable conversation history is singly-owned — acquire at create *and* resume, release on failed init *and* clean shutdown
+
+codex [#36389](https://github.com/openai/codex/pull/36389) makes writer-ownership uniform across
+thread-history modes. Its paginated store already had cross-process guards; the legacy mode had
+none. Now a writer lock is acquired and retained whenever a thread is created **or resumed** in
+either mode, the same ownership check runs before archiving or deleting, and ownership is released
+on two symmetric events — initialization failing partway, and the active thread shutting down. The
+corollary that matters: **when one storage path is guarded and an older one isn't, the unguarded
+path is the whole property**, because it is the one anything can reach.
+
+**What inber should consider:** inber has four session-removal sites and exactly one forgets to
+close. `server/server.go:287` is a bare `g.sessions.Delete(sessionKey)` on the `req.NewSession`
+path; every other site pairs removal with `close()` (`server/session_reaper.go:80-85` uses
+`LoadAndDelete` then `s.close()`, and so do `server/session_creation.go:37-40`,
+`server/api_bridge.go:541-543`, `server/server.go:165`). The dropped `*Session` becomes unreachable,
+so `Engine.Close()` (`engine/engine.go:453-484`) never runs, which skips per leaked session:
+`MemStore.Close()`, `SessionDB.Close()`, `forgeDB.Close()`, `Session.Close()` (JSONL writers) — and
+`SaveSessionSummary(e.MemStore, e.Messages, e.AgentName)` at `:463-465`. Go's `sql.DB` has no
+finalizer, so those descriptors are held for the process lifetime; N `new_session` calls leak N
+engines on the same long-lived `inber-server` the reaper exists to keep from OOMing. The behavioural
+half is worse than the resource half: `SaveSessionSummary` is what distils a finished conversation
+into memory, and **starting a fresh session is precisely when you want the old one summarized** —
+it is the one path that never does. Note the second-order question #36389 also raises: `new_session`
+reuses the key `agent:<name>:main`, so the replacement's `loadPersistedSession`
+(`server/session_creation.go:228-247`) reads the *old* session's `messages.json` back off disk.
+"Fresh" is fresh in memory only.
+
+### 3. A policy denial is its own event class — folding it into the error channel makes it indistinguishable from a tool that simply broke
+
+codex [#36207](https://github.com/openai/codex/pull/36207) introduces unified sandbox-violation
+types in `codex-sandboxing`, emitted through one tracing channel, classified by **backend** and
+**reason**, carrying an optional path and a bounded output snippet, plus a sandbox-type field on
+exec-server responses so a *remote* denial can be classified rather than guessed. It is recorded
+across every enforcement path (exec, apply-patch, shell escalation, unified exec, managed network)
+and explicitly **does not change denial behaviour** — it only makes the denial a typed, named
+record, because filesystem denials and network blocks previously surfaced in different shapes and
+every consumer downstream parsed backend-specific output to learn anything had been denied at all.
+
+**What inber should consider:** in inber a denial is a `bool`, and it is the same `bool` a crashing
+tool sets. `agent/agent_run.go:307` fires `OnToolResult(…, true)` for a guard refusal, an unknown
+tool, and a tool that returned an error alike — indistinguishable at that call site — and a chain
+that did not run fires it a **second** time at `agent/chain.go:301`. Both land in the single branch
+at `engine/build_hooks.go:150-153` (`e.Turn.ConsecutiveErrors++`), whose only consumer is
+`engine/turn_context.go:12-20`: `>= 5` errors ⇒ memory-recall budget `(0, 50000)`, `>= 3` ⇒
+`(0, 35000)`, `>= 1` ⇒ `(0, 20000)`, against an ordinary 6,000 (`turn_context.go:38`). So three
+refused `write_files` calls that each carried a `then` chain increment the counter by **six**, and
+the next turn recalls memory at 50k tokens with `minImportance` dropped to 0 — the least selective
+recall the engine can do. Every memory block in the system prompt changes, so the cached prefix
+`engine/turn_prompt.go` orders for reuse is invalidated *on top of* the ~44k extra input tokens, and
+nothing resets the counter until a turn ends clean (`build_hooks.go:201-203`). A session running
+into its own policy is thus billed as a session whose tools are crashing. Meanwhile the actual
+signal reaches no event, no log line of its own and nothing an operator can query — the only trace
+is the literal string `refused: …` inside a tool result. Adopt #36207's shape: a refusal is a typed
+record with a reason, produced locally, separate from `isError`. Note `guard.RecordToolCall` /
+`IsRepeating` (`guard/guard.go:167,237`) already exist for this and have **zero callers**.
+
+### Also in-window, worth a line each
+
+- **A path comparison over strings is not a comparison of files.** goose
+  [#10545](https://github.com/block/goose/pull/10545) canonicalizes both sides before deciding
+  whether a harvested directory is inside the working dir, bails if the working dir won't
+  canonicalize, and **skips** (never admits) an entry that won't — and its tests were rewritten from
+  hardcoded `/home/user/project` strings to real `TempDir`s, because the old ones never touched a
+  filesystem and so could not have caught it. inber's read cache keys on the **raw, model-written**
+  path with no `Clean`, `Abs` or `EvalSymlinks` anywhere (`agent/read_cache.go:30,37,45`), and the
+  strings come straight out of the model's JSON *before* `tools/root.go:99-102` resolves them — so a
+  read cached under `engine/lifecycle.go` is not invalidated by an edit written as
+  `/home/…/engine/lifecycle.go`, and the next read returns `"[already in context — N lines, read on
+  turn T. No need to re-read.]"` for content that changed. The model is told its context is current;
+  it is stale, and every subsequent edit is computed against the wrong bytes.
+- **codex [#36367](https://github.com/openai/codex/pull/36367)** stores each runtime with its
+  **effective** exposure as a registry entry rather than wrapping runtimes, so visibility and
+  routability stop being derived separately and drifting; the test is the thesis — a hidden MCP tool
+  stays routable but is ineligible for parallel calls. inber is fine here today: `prepareTools`
+  derives model-visible params and the dispatch `toolMap` from one slice.
+- **codex [#36357](https://github.com/openai/codex/pull/36357)** resolves tool execution from the
+  `ToolRouter` in `StepContext` — the finalized plan for that step — and **deletes** the separate
+  router parameter so no caller can supply an alternative. The deletion is the load-bearing part.
+  inber gets retention right by construction, but the store the plan derives from has no ownership:
+  `POST /sessions/{id}/config` (`server/api_bridge.go:653-682`) takes `s.mu`, which `Session.turn`
+  **releases at `server/session.go:156` before calling `RunTurn` at `:166`** — so `SetDisabledTools`
+  writes the `e.agentTools` slice header while the turn goroutine reads it (`engine/build.go:75`,
+  reachable mid-turn via the thinking-signature rebuild at `engine/turn_execute.go:48`). A Go data
+  race in the `-race` sense, not merely a logical one.
+- **codex [#36306](https://github.com/openai/codex/pull/36306) / [#36310](https://github.com/openai/codex/pull/36310)** make credential scope a property *recorded on the stored credential*, enforced
+  at both read and write, failing closed when a load or save would cross the host/executor boundary
+  — and refuse at startup, before connecting, rather than at first use. No inber defect today (one
+  environment), but the shape is right for when `tools/mcp` is finally wired.
+- **cline [#12800](https://github.com/cline/cline/pull/12800)** — a wrapper's own message is not the
+  error. An error-extraction chain must be ordered by proximity to the origin, and every rung needs
+  a fallback that is still actionable.
