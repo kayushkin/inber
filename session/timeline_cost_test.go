@@ -122,6 +122,62 @@ func TestCachedCostDependsOnWhichModelRan(t *testing.T) {
 	}
 }
 
+// TestFreshInputIsChargedWhenMostOfThePromptWasCached is the defect the fixture
+// above could not see. Its numbers — a million input tokens against 600k of
+// cache — are the shape a turn never has: Anthropic reports the three counts as
+// disjoint buckets, so on a cached turn the input figure is the small uncached
+// remainder and the cache figures carry the rest. Every one of the 167 cached
+// requests in the server's own store has input smaller than read+write.
+//
+// CalcCostWithCache used to derive its input charge as inTok-cacheRead-cacheWrite
+// and clamp the negative result to zero, so on every real turn the uncached
+// input was billed at nothing. The assertion is differential rather than a
+// figure: adding fresh input to an otherwise identical turn has to cost more.
+// Under the subtraction it cost exactly the same, because both amounts clamped.
+func TestFreshInputIsChargedWhenMostOfThePromptWasCached(t *testing.T) {
+	store := registryWithTwoDifferentlyPricedModels(t)
+
+	const model = "claude-haiku-4-5-20251001"
+	const outputTokens = 500
+	const cacheRead, cacheWrite = 8_000, 8_000
+	const freshInput = 6_180 // a real row from the store, alongside 8,202 read and 16,292 written
+
+	withFresh := CalcCostWithCache(model, freshInput, outputTokens, cacheRead, cacheWrite, store)
+	withoutFresh := CalcCostWithCache(model, 0, outputTokens, cacheRead, cacheWrite, store)
+
+	if withFresh == withoutFresh {
+		t.Fatalf("a turn with %d fresh input tokens and one with none both cost $%.6f — "+
+			"uncached input is being charged at zero", freshInput, withFresh)
+	}
+
+	if want := freshInput * haikuInputCostPer1M / 1_000_000; !closeEnough(withFresh-withoutFresh, want) {
+		t.Errorf("the %d fresh input tokens added $%.6f, want $%.6f at the model's registered $%.2f per 1M",
+			freshInput, withFresh-withoutFresh, want, haikuInputCostPer1M)
+	}
+}
+
+// TestCacheReadIsCheaperThanCacheWrite pins the two multipliers apart. They are
+// the reason this function exists rather than CalcCost, and nothing else
+// asserts that the cheap one is cheap: the ratio test above scales every
+// component by the same factor, so it would pass with both multipliers set to
+// any single value.
+func TestCacheReadIsCheaperThanCacheWrite(t *testing.T) {
+	store := registryWithTwoDifferentlyPricedModels(t)
+
+	const model = "claude-haiku-4-5-20251001"
+	const tokens = 100_000
+
+	read := CalcCostWithCache(model, 0, 0, tokens, 0, store)
+	write := CalcCostWithCache(model, 0, 0, 0, tokens, store)
+	uncached := CalcCostWithCache(model, tokens, 0, 0, 0, store)
+
+	if !(read < uncached && uncached < write) {
+		t.Errorf("%d tokens cost $%.6f read from cache, $%.6f uncached, $%.6f written to cache; "+
+			"a cache read must be the cheapest of the three and a cache write the dearest",
+			tokens, read, uncached, write)
+	}
+}
+
 // TestUnknownModelStillFallsBackLoudly is the complement. The fallback is not
 // the bug — reaching it for models the registry knows was. It has to survive,
 // or a model-store outage would bill everything at zero.
