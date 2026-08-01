@@ -52,8 +52,14 @@ func (g *Server) forkSession(ctx context.Context, parent *Session, childKey, age
 	return child, nil
 }
 
+// childKeySeparator joins a parent's session key to the suffix that makes a
+// child's. One per level of the tree, so counting them counts spawn depth —
+// which is how backfillSessionLineageFromChildKeys repairs the children that
+// were recorded before there was a column to record their depth in.
+const childKeySeparator = ":sub:"
+
 // sessionKeyForChild generates a child session key.
 func sessionKeyForChild(parentKey string) string {
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano()%100000)
-	return parentKey + ":sub:" + suffix
+	return parentKey + childKeySeparator + suffix
 }

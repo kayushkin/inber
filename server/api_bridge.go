@@ -146,7 +146,7 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		sessionKey := fmt.Sprintf("agent:%s:bridge-%d", agentName, time.Now().UnixNano())
-		g.store.UpsertSession(sessionKey, agentName, "main")
+		g.store.UpsertSession(sessionKey, agentName, "main", SessionLineage{})
 
 		now := time.Now()
 		sess := bridgeSession{
@@ -604,7 +604,10 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	g.sessions.Store(childKey, child)
-	g.store.UpsertSession(childKey, agentName, "fork")
+	// forkSession has already set the child's lineage; record it, so the fork is
+	// still a child of this parent after a restart.
+	g.store.UpsertSession(childKey, agentName, "fork",
+		SessionLineage{ParentKey: child.ParentKey, SpawnDepth: child.SpawnDepth})
 
 	// Track as child of parent.
 	parent.mu.Lock()

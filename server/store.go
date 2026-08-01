@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/kayushkin/inber/internal/sqlitewal"
@@ -50,6 +51,8 @@ func migrateGatewayDB(db *sql.DB) error {
 			key TEXT PRIMARY KEY,
 			agent TEXT NOT NULL,
 			kind TEXT NOT NULL DEFAULT 'main',  -- 'main' | 'spawn'
+			parent_key TEXT NOT NULL DEFAULT '',
+			spawn_depth INTEGER NOT NULL DEFAULT 0,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			message_count INTEGER DEFAULT 0
@@ -77,7 +80,106 @@ func migrateGatewayDB(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 		CREATE INDEX IF NOT EXISTS idx_requests_parent ON requests(parent_request_id);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	if err := addSessionLineageColumns(db); err != nil {
+		return err
+	}
+	return backfillSessionLineageFromChildKeys(db)
+}
+
+// addSessionLineageColumns brings a sessions table created before lineage was
+// recorded up to the schema above. CREATE TABLE IF NOT EXISTS leaves an
+// existing table exactly as it found it, so on every host that ran an earlier
+// build the two columns are missing and every read of them is an error.
+func addSessionLineageColumns(db *sql.DB) error {
+	existing, err := columnNames(db, "sessions")
+	if err != nil {
+		return err
+	}
+	additions := []struct {
+		name       string
+		definition string
+	}{
+		{"parent_key", `ALTER TABLE sessions ADD COLUMN parent_key TEXT NOT NULL DEFAULT ''`},
+		{"spawn_depth", `ALTER TABLE sessions ADD COLUMN spawn_depth INTEGER NOT NULL DEFAULT 0`},
+	}
+	for _, addition := range additions {
+		if existing[addition.name] {
+			continue
+		}
+		if _, err := db.Exec(addition.definition); err != nil {
+			return fmt.Errorf("add sessions.%s: %w", addition.name, err)
+		}
+	}
+	return nil
+}
+
+func columnNames(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return nil, fmt.Errorf("read columns of %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	names := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("read columns of %s: %w", table, err)
+		}
+		names[name] = true
+	}
+	return names, rows.Err()
+}
+
+// backfillSessionLineageFromChildKeys fills in the lineage of children recorded
+// before there were columns to record it in.
+//
+// sessionKeyForChild builds a child's key as its parent's key with
+// ":sub:<suffix>" appended, so an existing child's key still carries its
+// parent's *key* — an id this table assigned, not a name — and one ":sub:" per
+// level of the tree. The repair is therefore exact. Without it every child
+// already on disk stays at depth zero forever, and the depth cap goes on lying
+// about exactly the sessions it was added for.
+//
+// ⛔ This is a migration and has to stay one. Reading lineage out of a key at
+// run time would be the same defect as reading the agent out of it: a key is a
+// string a caller chooses, and POST /api/run already takes session_key and
+// agent as independent fields.
+func backfillSessionLineageFromChildKeys(db *sql.DB) error {
+	rows, err := db.Query(
+		`SELECT key FROM sessions WHERE parent_key = '' AND spawn_depth = 0 AND key LIKE '%' || ? || '%'`,
+		childKeySeparator)
+	if err != nil {
+		return fmt.Errorf("find children with no recorded lineage: %w", err)
+	}
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			rows.Close()
+			return fmt.Errorf("find children with no recorded lineage: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("find children with no recorded lineage: %w", err)
+	}
+	rows.Close()
+
+	for _, key := range keys {
+		parentKey := key[:strings.LastIndex(key, childKeySeparator)]
+		depth := strings.Count(key, childKeySeparator)
+		if _, err := db.Exec(
+			`UPDATE sessions SET parent_key = ?, spawn_depth = ? WHERE key = ?`,
+			parentKey, depth, key); err != nil {
+			return fmt.Errorf("backfill lineage for session %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // Close closes the database.
@@ -112,13 +214,50 @@ type SessionRow struct {
 	MessageCount int
 }
 
+// SessionLineage is where a session came from: the key of the session that
+// asked for it, and how many spawns deep in that tree it sits. A top-level
+// session has neither, which is the zero value.
+//
+// The two travel together because either one alone describes a session that
+// cannot exist — a parent with no depth, or a depth with no parent.
+type SessionLineage struct {
+	ParentKey  string
+	SpawnDepth int
+}
+
 // UpsertSession creates or updates a session.
-func (s *Store) UpsertSession(key, agent, kind string) error {
+//
+// Lineage is written when the row is created and, like the agent name, left
+// alone on conflict: where a session came from is settled at the moment it is
+// spawned and never changes afterwards.
+func (s *Store) UpsertSession(key, agent, kind string, lineage SessionLineage) error {
 	_, err := s.db.Exec(`
-		INSERT INTO sessions (key, agent, kind) VALUES (?, ?, ?)
+		INSERT INTO sessions (key, agent, kind, parent_key, spawn_depth) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET last_active = CURRENT_TIMESTAMP
-	`, key, agent, kind)
+	`, key, agent, kind, lineage.ParentKey, lineage.SpawnDepth)
 	return err
+}
+
+// SessionLineage returns the lineage recorded against a session key, and the
+// zero lineage — a root — when the store has never seen that key.
+//
+// This table is the only durable record of it. Session.SpawnDepth and
+// Session.ParentKey are set by Spawn and forkSession and live in memory, so
+// before this column pair existed a restart rebuilt every child as a root: the
+// cap in Spawn is checked against the parent's depth, and a revived depth-2
+// child reading zero could spawn MaxSpawnDepth more levels, each of which
+// could do the same after the next restart.
+func (s *Store) SessionLineage(key string) (SessionLineage, error) {
+	var lineage SessionLineage
+	err := s.db.QueryRow(`SELECT parent_key, spawn_depth FROM sessions WHERE key = ?`, key).
+		Scan(&lineage.ParentKey, &lineage.SpawnDepth)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SessionLineage{}, nil
+	}
+	if err != nil {
+		return SessionLineage{}, fmt.Errorf("read lineage for session %s: %w", key, err)
+	}
+	return lineage, nil
 }
 
 // SessionAgent returns the agent name recorded against a session key, and an

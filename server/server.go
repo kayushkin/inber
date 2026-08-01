@@ -315,7 +315,7 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 	}
 
 	// Ensure session exists in DB.
-	g.store.UpsertSession(sessionKey, agentName, "main")
+	g.store.UpsertSession(sessionKey, agentName, "main", SessionLineage{})
 
 	var resp *RunResponse
 

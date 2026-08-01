@@ -21,7 +21,7 @@ func TestStoreSessionCRUD(t *testing.T) {
 	s := tempStore(t)
 
 	// Create session.
-	if err := s.UpsertSession("agent:claxon:main", "claxon", "main"); err != nil {
+	if err := s.UpsertSession("agent:claxon:main", "claxon", "main", SessionLineage{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -41,14 +41,14 @@ func TestStoreSessionCRUD(t *testing.T) {
 	}
 
 	// Upsert again (should not create duplicate).
-	s.UpsertSession("agent:claxon:main", "claxon", "main")
+	s.UpsertSession("agent:claxon:main", "claxon", "main", SessionLineage{})
 	sessions, _ = s.ListSessions("")
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session after upsert, got %d", len(sessions))
 	}
 
 	// Filter by kind.
-	s.UpsertSession("agent:ogma:spawn-123", "ogma", "spawn")
+	s.UpsertSession("agent:ogma:spawn-123", "ogma", "spawn", SessionLineage{})
 	mains, _ := s.ListSessions("main")
 	spawns, _ := s.ListSessions("spawn")
 	if len(mains) != 1 || len(spawns) != 1 {
@@ -58,7 +58,7 @@ func TestStoreSessionCRUD(t *testing.T) {
 
 func TestStoreRequestLifecycle(t *testing.T) {
 	s := tempStore(t)
-	s.UpsertSession("agent:claxon:main", "claxon", "main")
+	s.UpsertSession("agent:claxon:main", "claxon", "main", SessionLineage{})
 
 	// Create request.
 	reqID, err := s.CreateRequest("agent:claxon:main", "hello", nil)
@@ -114,8 +114,8 @@ func TestStoreRequestLifecycle(t *testing.T) {
 
 func TestStoreSpawnChain(t *testing.T) {
 	s := tempStore(t)
-	s.UpsertSession("agent:claxon:main", "claxon", "main")
-	s.UpsertSession("agent:ogma:spawn-1", "ogma", "spawn")
+	s.UpsertSession("agent:claxon:main", "claxon", "main", SessionLineage{})
+	s.UpsertSession("agent:ogma:spawn-1", "ogma", "spawn", SessionLineage{})
 
 	// Parent request.
 	parentID, _ := s.CreateRequest("agent:claxon:main", "deploy everything", nil)
@@ -141,7 +141,7 @@ func TestStoreSpawnChain(t *testing.T) {
 
 func TestStoreInterruptRunning(t *testing.T) {
 	s := tempStore(t)
-	s.UpsertSession("agent:claxon:main", "claxon", "main")
+	s.UpsertSession("agent:claxon:main", "claxon", "main", SessionLineage{})
 
 	// Create running requests.
 	s.CreateRequest("agent:claxon:main", "task1", nil)
@@ -173,7 +173,7 @@ func TestStoreInterruptRunning(t *testing.T) {
 
 func TestStoreTouchSession(t *testing.T) {
 	s := tempStore(t)
-	s.UpsertSession("agent:claxon:main", "claxon", "main")
+	s.UpsertSession("agent:claxon:main", "claxon", "main", SessionLineage{})
 
 	s.TouchSession("agent:claxon:main", 42)
 

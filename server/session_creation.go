@@ -157,15 +157,48 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 
 	g.restoreGuardState(key, eng.Guard)
 
+	lineage := g.lineageForSession(key)
+
 	return &Session{
 		Key:        key,
 		AgentName:  agentName,
 		Engine:     eng,
 		Status:     Idle,
+		SpawnDepth: lineage.SpawnDepth,
+		ParentKey:  lineage.ParentKey,
 		CreatedAt:  time.Now(),
 		LastActive: time.Now(),
 		injections: injections,
 	}, nil
+}
+
+// lineageForSession answers where a session came from by asking the record that
+// owns that fact.
+//
+// Session.SpawnDepth and Session.ParentKey are written by Spawn and
+// forkSession and live in memory, so a rebuild used to come back as a root and
+// three things read the lie. The cap in Spawn is checked against the parent's
+// depth, so a revived depth-2 child could spawn MaxSpawnDepth more levels, and
+// each of those could do the same after the next restart — the cap bounded a
+// tree only for as long as the process stayed up. sessionStatusInjector tells
+// the model its depth and parent only when the depth is above zero, so a
+// revived child was told nothing about who asked for the work. And a child's
+// results are delivered to its parent key, which came back empty.
+//
+// Nothing is inferred from the key here. A session with no lineage recorded is
+// a root, which is what the zero value already says; reading it out of the key
+// at run time would be the defect that handed a child's transcript to its
+// parent's agent, arriving a second way.
+func (g *Server) lineageForSession(key string) SessionLineage {
+	if g.store == nil {
+		return SessionLineage{}
+	}
+	lineage, err := g.store.SessionLineage(key)
+	if err != nil {
+		log.Printf("[server] lineage unreadable for %s, rebuilding it as a root: %v", key, err)
+		return SessionLineage{}
+	}
+	return lineage
 }
 
 // restoreGuardState puts the safety limits recorded against a session key, and
