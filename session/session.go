@@ -84,7 +84,14 @@ func shortID() string {
 	return hex.EncodeToString(b)
 }
 
-// New creates a session logger. Logs go to logsDir/agentName/YYYY-MM-DD_HHMMSS[-subN].jsonl.
+// New creates a session logger. It owns the layout under logsDir and writes to
+// logsDir/agentName/YYYY-MM-DD_HHMMSS_xxxx[-sub]/session.jsonl, creating every
+// directory on that path.
+//
+// logsDir is therefore the root shared by every agent, NOT this agent's own
+// directory: New appends the agent segment itself, so a caller that appends it
+// too gets logs/<agent>/<agent>/. Pass <repo root>/logs.
+//
 // agentName identifies the agent (for multi-agent support).
 // parentID is the parent session ID (empty string for root sessions).
 // modelStore provides model cost information (can be nil).

@@ -66,13 +66,61 @@ func TestSetupSessionFailsLoudlyWhenTheLogDirectoryCannotBeCreated(t *testing.T)
 	if !strings.Contains(err.Error(), "create session logger") {
 		t.Errorf("error does not name what failed: %v", err)
 	}
-	// Assert on the full logs directory, agent segment included. The wrapped
-	// error from sessionMod.New already names the parent it failed to mkdir,
-	// so asserting on <root>/logs alone passes even when setupSession stops
-	// reporting a path at all — the agent segment is the part only this
-	// function knows.
-	if !strings.Contains(err.Error(), filepath.Join(root, "logs", "testagent")) {
-		t.Errorf("error does not name the path that failed: %v", err)
+	// Assert on the message and the path as ONE CONTIGUOUS STRING, because a
+	// bare path is not enough: os.MkdirAll reports the first component that is
+	// not a directory rather than the path it was asked for, so the wrapped
+	// error from sessionMod.New says "mkdir <root>/logs" however deep the
+	// target was, and an assertion on <root>/logs alone is satisfied by the
+	// callee even when setupSession reports no path at all. The "create session
+	// logger in " prefix is the part only this function writes.
+	//
+	// This assertion used to be the bare filepath.Join(root, "logs", "testagent"),
+	// which pinned the outer frame correctly for as long as setupSession
+	// appended the agent segment itself — that was the one part of the path the
+	// callee's error could not contain. Now that sessionMod.New owns the
+	// segment, setupSession reports <root>/logs and no frame names the agent,
+	// so the old assertion does not go vacuous, it goes red.
+	if want := "create session logger in " + filepath.Join(root, "logs"); !strings.Contains(err.Error(), want) {
+		t.Errorf("error does not name the path that failed, want %q in: %v", want, err)
+	}
+}
+
+// TestSetupSessionWritesExactlyOneAgentSegment pins the layout itself, which no
+// test covered while it was wrong: setupSession appended the agent name to the
+// logs root and sessionMod.New appended it again, so every engine session on
+// this box landed in logs/<agent>/<agent>/. Both joins read as correct alone,
+// and the sessions on disk are the only place the pair was visible.
+func TestSetupSessionWritesExactlyOneAgentSegment(t *testing.T) {
+	root := t.TempDir()
+
+	session, _, _, _, _, err := setupSession(root, "testagent", "chat", true, true)
+	if err != nil {
+		t.Fatalf("setupSession failed on a writable root: %v", err)
+	}
+	defer session.Close()
+
+	// <root>/logs/testagent/<session id>/session.jsonl — one agent segment, and
+	// the session directory named for the session rather than the agent again.
+	got := session.FilePath()
+	rel, relErr := filepath.Rel(root, got)
+	if relErr != nil {
+		t.Fatalf("session log %q is not under the repo root %q: %v", got, root, relErr)
+	}
+	segments := strings.Split(rel, string(filepath.Separator))
+	if len(segments) != 4 {
+		t.Fatalf("want <root>/logs/<agent>/<session>/session.jsonl, got %q", rel)
+	}
+	if segments[0] != "logs" || segments[1] != "testagent" || segments[3] != "session.jsonl" {
+		t.Errorf("unexpected log layout: %q", rel)
+	}
+	if segments[2] == "testagent" {
+		t.Errorf("the agent name is joined twice — logs/%s/%s: %q", segments[1], segments[2], rel)
+	}
+
+	// Belt and braces, because the segment check above passes if the doubling
+	// ever moves to a different depth: the agent name must appear once.
+	if n := strings.Count(rel, "testagent"); n != 1 {
+		t.Errorf("agent name appears %d times in %q, want 1", n, rel)
 	}
 }
 

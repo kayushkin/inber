@@ -210,12 +210,14 @@ func setupSession(repoRoot, agentName, commandName string, newSession, detach bo
 		}
 	}
 
-	// The session logger every engine hook writes through. sessionMod.New
-	// creates the log directory itself, so there is no directory to make here.
+	// The session logger every engine hook writes through. sessionMod.New owns
+	// the whole layout below this root — the agent segment included — and
+	// creates the directories itself, so there is neither a join nor a mkdir to
+	// do here. This used to append agentName before handing the path over, and
+	// because sessionMod.New appends it again the logs landed in
+	// logs/<agent>/<agent>/. The registry, built eighty lines below this, has
+	// always passed the same root unjoined.
 	logsDir := filepath.Join(repoRoot, "logs")
-	if agentName != "" {
-		logsDir = filepath.Join(logsDir, agentName)
-	}
 
 	// A session that cannot be created fails session setup. The fallback that
 	// used to stand here — a zero-value Session, installed with a comment
