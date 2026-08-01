@@ -209,6 +209,37 @@ func TestARebuildIsRefusedWhenTheWorktreeIsGone(t *testing.T) {
 	}
 }
 
+// The refusal covers every repository, not just the one relative paths resolve
+// against. forge.Cleanup removes worktrees one at a time and collects the
+// failures per repository, so a workspace can lose one and keep the rest — and
+// a session resumed into that has a primary that works, a secondary the model
+// has been told about that is not there, and no error anywhere.
+//
+// This is the one a sabotage caught: narrowing the check to the primary root
+// passed a green suite, because every other test here deletes the primary.
+func TestARebuildIsRefusedWhenAnySecondaryWorktreeIsGone(t *testing.T) {
+	roots := worktreeRoots(t)
+	liveCheckout := t.TempDir()
+	server := &Server{store: tempStore(t)}
+	if err := server.store.UpsertSession(childKey, "brigid", "spawn",
+		SessionLineage{ParentKey: parentKey, SpawnDepth: 1}, roots); err != nil {
+		t.Fatalf("record the spawn: %v", err)
+	}
+	// The primary survives; a repository the model was told about does not.
+	if err := os.RemoveAll(roots[1].Path); err != nil {
+		t.Fatalf("clean up the worktree: %v", err)
+	}
+
+	repoRoot, _, err := server.workspaceRootsForSession(childKey, AgentConfig{Workspace: liveCheckout})
+	if err == nil {
+		t.Fatalf("a session missing its %s worktree was rebuilt at %q; the model will be told about a repository that is not there",
+			roots[1].Name, repoRoot)
+	}
+	if !errors.Is(err, ErrWorkspaceGone) {
+		t.Errorf("the refusal came back as %v, which the HTTP layer cannot tell from a broken server", err)
+	}
+}
+
 // The caller, not the resolver. workspaceRootsForSession answering correctly
 // says nothing about whether createSession — the one place a session is rebuilt
 // from its transcript — asks it. That gap is how the agent half of this same
