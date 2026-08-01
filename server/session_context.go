@@ -22,7 +22,12 @@ func (g *Server) contextInjectorsFor(sessionKey, agentName string) []engine.Cont
 }
 
 // agentFleetInjector returns an injector that provides the full agent fleet with statuses.
-// Injected into the system prompt so the orchestrator always knows its agents.
+//
+// The blocks it returns are volatile: engine.buildTurnPrompt collects every context
+// injector's output into Turn.VolatileContext and Agent.Run appends that to the last
+// user message, after the final tool_result. It does NOT reach the system prompt, and
+// must not — the fleet's statuses change between turns, and the system blocks carry the
+// BP2 cache breakpoint, so putting this there would re-create the prefix cache every turn.
 func (g *Server) agentFleetInjector() engine.ContextInjector {
 	return func() []sessionMod.NamedBlock {
 		if g.agentStore == nil {

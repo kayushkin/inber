@@ -196,6 +196,18 @@ The key insight: **Goose's architecture is more modular and extensible**, while 
 
 ## Harness-watch — 2026-06-02: blocking Stop hooks, keyed prompt fragments, live context window
 
+> **[Verified 2026-08-01 — §2's two defect claims are REFUTED; §1 and §3 are feature ideas, not defects.]**
+> *"Compose the prompt from named fragments"* — already done: `engine/turn_prompt.go:113,166`
+> build `sessionMod.NamedBlock{ID, Text}`. What is missing is a runtime API to set/clear one
+> by key, which is a feature. (Minor real gap: `buildSystemBlocks` drops the ID at
+> `turn_prompt.go:193`, but Anthropic has no per-block key to carry it anyway.)
+> *"Drive truncation from the live window, not a static per-model constant"* — already
+> single-sourced from model-store: `agent/models.go:101 ContextWindow: requestableContextWindow(model)`
+> → `engine/build.go:114` → used at `agent/agent_run.go:120-121`. The remaining constants are a
+> documented fallback for a *missing* registry row (`agent/models.go:25`) and a real client
+> ceiling (`agent/models.go:46`). No provider in inber's path advertises a live window, so
+> there is nothing to prefer over the registry.
+
 ### 1. Honor blocking Stop hook decisions, capped by a consecutive-block counter
 
 [PR 9468](https://github.com/block/goose/pull/9468) routes Stop hooks through the
@@ -248,7 +260,40 @@ useful for tuning what stays cacheable. (The related
 
 **What inber should consider:** Inber has at least two surfaces today that prepend per-turn rather than inject into the system prompt — the conversation summary header and the project-context block built by `engine/turn_prompt.go`. Whatever is *stable for the duration of a session* (project-level `INBER.md`, agent identity card, tool inventory description) belongs in the system prompt where it'll cache, not in the user turn where each new turn pushes it past the cache breakpoint. The goose pattern also argues for promoting any "project" concept inber adopts (today closest to forge worktree slots + agent-store config) to a server-side source rather than something the chat frontend owns. Worth a section in `docs/cache-optimization.md` cross-referencing `reference-based-prompt-architecture.md` — the two notes already converge on this thesis.
 
+> **[Verified 2026-08-01 — REFUTED. This is the most overstated passage in the file; do not action it.]**
+> *"The project-context block built by `engine/turn_prompt.go`"* — **no such block exists.**
+> `grep -rn "INBER.md" --include=*.go` returns nothing. What `turn_prompt.go:129-152` assembles
+> into the user turn is `VolatileContext`: fleet status, `fileref:`/`recent:`/`file:` memories,
+> task-plan/scratchpad injectors, source ref. Every one of those is genuinely per-turn volatile,
+> and putting them in the user message is **deliberate and correct for caching** — see
+> `turn_prompt.go:122-124` and `agent/agent_run.go:86-88` ("keeps it AFTER BP3, preventing cache
+> busting"). The passage recommends undoing a correct optimization.
+> *"Agent identity card, tool inventory belong in the system prompt"* — they already are
+> (`turn_prompt.go:126` + the doc comment at `:76-78`), with the breakpoint on the last stable
+> block (`turn_prompt.go:217,223`) and a byte-identity reuse path (`:202-212`).
+> *"The conversation summary header"* — real, but not per-turn: `conversation/summarize.go:104`
+> inserts it **once**, at compaction, after which it is part of the cacheable prefix. One
+> invalidation per compaction is inherent to compacting at all.
+> One genuine (tiny) defect found nearby, and it is not the one alleged:
+> `server/session_context.go:25-26` claims the injector's output is "injected into the system
+> prompt"; it actually goes to `VolatileContext` in the user turn. Lying comment — **fixed
+> 2026-08-01 in this pass.**
+
+
 ## Harness-watch — 2026-06-05: bound sub-tasks by turn budget the agent can see, not a wallclock timeout it can't
+
+> **[Verified 2026-08-01 — PARTLY: two of the three named subsystems are not inber's, but the `spawn_agent` half holds.]**
+> "autoworker / scoper / dispatcher sub-sessions" are llm-bridge/kanban concepts —
+> `grep -rni "autoworker|scoper"` returns zero in inber. Read the entry as being about
+> `spawn_agent` only.
+> That half is confirmed: the sole knob is wall-clock — `server/spawn_tools.go:100-103`
+> (`timeout_seconds`), `server/spawn.go:23` (`defaultSpawnTimeout = 5m`), enforced by
+> `context.WithTimeout` at `spawn.go:298`. `SpawnRequest` (`spawn.go:14-21`) has no `max_turns`.
+> Worse than the passage says: the child is created with `RunRequest{}` (`spawn.go:219`), so the
+> `MaxTurns = 25` default at `engine/engine_new.go:406-408` never applies — a child gets a turn
+> limit only if its agent-store config sets one, otherwise **unlimited turns**. And the limit is
+> surfaced only *after* exhaustion, as a stop reason (`engine/build_hooks.go:50-54`); nothing
+> puts the remaining allowance in the child's prompt (`spawn.go:302` passes `req.Task` verbatim).
 
 [PR 9571](https://github.com/block/goose/pull/9571) removes the 5-minute
 `CHECK_TIMEOUT_SECS` wall-clock cap on review subprocesses and replaces it with
@@ -270,6 +315,17 @@ task-completion-loop's dispatcher closure logic — a turn budget is a cleaner
 "this sub-card is over its allowance" signal than a timestamp.
 
 ## Harness-watch — 2026-06-09: org-managed security gates that read *strictly from process env*, so persisted config can't impersonate them
+
+> **[Verified 2026-08-01 — REFUTED as a defect: the named surfaces are not inber's.]**
+> "PreToolUse prehook gating" and "auto-allow for unattended autoworkers" live in
+> llm-bridge-server, not here — `grep -rni "PreToolUse|prehook|auto_allow|permission"` across
+> inber's Go returns one unrelated hit (`engine/openclaw_feed.go:187`). inber's actual toggle
+> is `guard.Mode` (`guard/guard.go:34-51`), enforced at `guard/guard.go:138-156` via
+> `engine/build_hooks.go:93-99`, set per session in `server/session_creation.go`. There is no
+> org-managed layer, so nothing can impersonate one — this is a greenfield feature, not a bug.
+> If it is ever built, note the collision: `guard.Unset` is documented at `guard/guard.go:38-45`
+> as meaning *full access*, so an env-override layer must decide how a silent config interacts
+> with an enforced floor.
 
 [PR 9612](https://github.com/block/goose/pull/9612) replaces goose's old
 `DEFAULT_SECURITY_*` "seed-once" defaults with runtime **override** env vars
@@ -298,6 +354,20 @@ lesson — deployed env is already the source of truth for "what's actually enfo
 
 ## Harness-watch — 2026-06-11: a provider-neutral *thinking-effort* enum that maps onto each provider's native reasoning knob
 
+> **[Verified 2026-08-01 — PARTLY: the premise is wrong, but there is a real fail-silent bug underneath. Filed.]**
+> *Premise wrong:* inber does not "route across providers (claudecode, jig, forgecode)" — inber
+> **is** one harness and stamps `Harness: "inber"` on every session it serves
+> (`server/api_bridge.go:110,156,324`). Harness routing is llm-bridge-server's job. What inber
+> actually routes across is Anthropic vs. OpenAI-compatible model clients
+> (`engine/turn_execute.go:29-30`, `agent/clients.go:92-99`).
+> *Real defect:* `server/api_bridge.go:657` already defines an abstract `Effort`
+> ("high"/"medium"/"low"), but `handleBridgeConfig` maps it **only** onto the Anthropic thinking
+> budget (`api_bridge.go:688-703` → `SetThinkingBudget` → `agent/agent_run.go:77-82`). The
+> OpenAI path (`engine/turn_openai.go:65`) never reads it — `reasoning_effort` appears nowhere
+> in the repo. So on an OpenAI-served session, `effort:"high"` is accepted with a 200 and
+> silently does nothing. That is worse than the "no-op where there is no knob" the passage
+> endorses, because OpenAI *does* have the knob.
+
 [PR 9743](https://github.com/block/goose/pull/9743) adds **canonical thinking modes** —
 a small fixed enum of reasoning-effort levels (low/medium/high-style) that goose defines
 once and then translates per-provider onto whatever that provider actually exposes:
@@ -319,6 +389,18 @@ with no knob. Keeps the routing decision (which model) orthogonal to the effort 
 spawn sites. Lives naturally next to the model-store mapping (`reference_model_store`).
 
 ## Harness-watch — 2026-06-15: unified cross-tool security telemetry schema + pattern-detector calibration
+
+> **[Verified 2026-08-01 — REFUTED, and wrong in the opposite direction to the claim.]**
+> The passage says inber's gates "each log in its own shape". In fact **none of them log at
+> all.** `guard.CheckTool` (`guard/guard.go:138-156`) returns a verdict with no logging, and its
+> only consumer renders it to the model as a refusal string and drops it
+> (`engine/build_hooks.go:95-98`). No event, no counter, no logstack write. The other named
+> surfaces (prehook, herald, autoworker) are other repos.
+> The real nearby gap is narrower and worth having: **a denied tool call leaves no audit trail
+> anywhere.** A minimal `logger.WithComponent("guard")` emission on `Denied`/`NeedsApproval` is
+> under an hour; the canonical cross-service schema is a different, larger question.
+> The calibration half is advice about future pattern detectors — inapplicable today, since
+> `isReadOnly`/`isDangerous` are tool-**name** allowlists with no regex anywhere in `guard/`.
 
 [PR 9713](https://github.com/block/goose/pull/9713) makes goose emit its security
 findings (prompt-injection, data-exfil egress, adversary ALLOW/BLOCK, tool-execution
@@ -425,6 +507,23 @@ session and confirm `creation → 0` on the conversation prefix. This is the mis
 of that doc's own thesis — the doc keeps dynamic content out of the *system* prefix but doesn't
 account for volatile system content invalidating the *message* prefix downstream.
 
+> **[Verified against the code 2026-08-01 — this entry is STALE. Do not action it.]**
+> inber has goose's **accepted** fix, not the rejected one. The migration this entry asks
+> for has already happened. `engine/turn_prompt.go:122-124` puts only stable content in the
+> system array and collects the volatile parts (fleet status, volatile memories, context
+> injectors, `sourceRef`) into `e.Turn.VolatileContext` at `turn_prompt.go:149`;
+> `agent/agent_run.go:85-115` then injects that string into the **last user message, after
+> the final `tool_result`** — precisely goose's `volatile-as-message-tail` case.
+> `buildSystemBlocks` says so itself at `turn_prompt.go:178-179`: "All system blocks are now
+> stable (volatile content moved to user message injection)."
+> Two leftovers found while checking, both harmless and neither the alleged defect:
+> `cacheBoundaryID` (`turn_prompt.go:56`) is retained but skipped as a "legacy marker"
+> (`turn_prompt.go:187`), and `buildDynamicBlocks` (`turn_prompt.go:229`) has no caller.
+> The one thing still worth a targeted test is ordering, not placement: `markLastContentBlock`
+> (`agent/agent.go:492`) marks the last content block of a breakpoint message while the
+> volatile block is appended after the last `tool_result`, so on a tool-result-only user
+> message the two can land on the same block.
+
 ## Harness-watch — 2026-07-13: *signed* thinking is an exactly-once replay contract — dedupe it, don't strip it (and never guess the cause from a generic error string)
 
 [goose #10083](https://github.com/block/goose/pull/10083) fixes a recurring Anthropic 400 by adding a `dedupe_signed_thinking` fixer to the shared `fix_messages` pipeline in `goose-provider-types/src/conversation.rs`, positioned **immediately after `merge_consecutive_messages`** (load-bearing — the merge is what creates the duplicates). `is_signed_thinking` = a `Thinking` block with a non-empty signature, or any `RedactedThinking`; a conversation-wide `seen` set drops exact (text + signature) repeats, keeping the first. The contract, verbatim from the diff's doc comment: **"Signed blocks must be replayed exactly; unsigned reasoning summaries need not"** — and unsigned reasoning is deliberately *left alone*, since providers like Kimi/DeepSeek require it echoed on every tool-call message. Duplicates arise two ways: intra-message (a standalone thinking message merged into a tool-call message that re-embedded it) and **cross-message (one provider turn split into several tool-call messages interleaved with tool results, each carrying a copy of the turn's signed thinking)**. Because the fixer sits in the provider-neutral repair pipeline upstream of every formatter, one change covers direct Anthropic, Bedrock, Databricks and Vertex.
@@ -454,7 +553,38 @@ The general rule: a tool's JSON Schema is authored once (often by a codegen that
 
 **What inber should consider:** inber has this exact bug latent today. `agent/openai_conversion.go:11 ConvertAnthropicToolsToOpenAI` marshals each tool's Anthropic `InputSchema` straight into the OpenAI `Parameters` map (`json.Marshal(t.InputSchema)` → `json.Unmarshal` → `Parameters: schemaMap`) with **zero normalization** — whatever `oneOf`/`$ref`/unsupported keyword an MCP tool declares is passed through unchanged to every OpenAI-compatible backend inber routes to (Kimi/Moonshot and OpenAI structured outputs among them). An MCP server whose tool schema uses `oneOf` (common: enums-with-docs, tagged unions) will 400 the whole turn against a strict validator, and inber currently has no path that would catch or rewrite it. Fix: add a schema-normalization pass in `ConvertAnthropicToolsToOpenAI` (and the equivalent Google projection) that recursively rewrites `oneOf`→`anyOf` and strips/downgrades keywords the destination provider is known to reject — a widening rewrite, applied at the bridge edge, keyed off the destination provider, never mutating the canonical `InputSchema`. This is the tool-schema analogue of the 07-18 modality-projection rule (`agentic-design-patterns.md`): *project the canonical artifact into what the destination will actually accept, at the edge, as data — don't forward it raw and don't assume every backend reads the same dialect.*
 
+> **[Verified against the code 2026-08-01 — DONE, and it was LATENT anyway. Do not action it.]**
+> The fix landed in `e6804c7` ("agent: normalize oneOf->anyOf in OpenAI tool-schema
+> projection"). `agent/openai_conversion.go:26` now calls `normalizeSchemaForOpenAI` between
+> the unmarshal and the `Parameters:` assignment; the function at `openai_conversion.go:56`
+> rewrites `oneOf`→`anyOf` recursively through `$defs`/properties/items and merges into any
+> pre-existing `anyOf`. Covered by `agent/openai_schema_normalize_test.go`, including an
+> assertion that the source `InputSchema` is not mutated.
+> Two corrections to the passage's framing, both worth keeping:
+> (1) **There is no "equivalent Google projection" to also fix.** `agent/clients.go:93` routes
+> `"google"` through `NewOpenAIClient`, so Google already shares the normalized path — one
+> site, not two.
+> (2) **The MCP premise was never live.** `grep -rn "inber/tools/mcp" --include=*.go` returns
+> zero importers outside `tools/mcp/` itself — nothing constructs `MCPToolRegistry`, so no
+> MCP-authored schema has ever reached this path. The fix was correct to make as portability
+> hardening, but the "will 400 the whole turn" urgency was hypothetical.
+
+
 ## Harness-watch — 2026-07-26: a compaction summary should be a typed, section-ordered, user-templatable artifact — not one opaque prose blob
+
+> **[Verified 2026-08-01 — PARTLY: the code reading is right, but the safety argument rests on a function that does not exist.]**
+> Confirmed: `conversation/summary_generation.go:27-38` is the freeform prompt with exactly the
+> five loose focus areas quoted; the join is `summary_generation.go:76` (**not** `summarize.go:88`,
+> which is the memory-archive `memStore.Save` block). No typed contract, no section ordering, no
+> template. Point (3) is also right — `conversation/summarize.go:99` estimates the *retained*
+> summary, so inber does not have goose's 2.3× overstatement bug; do not "fix" it toward the raw
+> usage number.
+> **Wrong, and load-bearing:** the passage claims a forgiving-parse fallback "is already inber's
+> error path (`generateSummary` err → `mechanicalSummary`)". **`mechanicalSummary` does not exist
+> anywhere in the tree** (zero hits, tests included). The real path is
+> `conversation/summarize.go:64-65`, which returns the error and **aborts compaction entirely**.
+> So the "the discipline already fits" argument is false — the verbatim fallback has to be built,
+> and that is exactly the safety property that made goose's change adoptable. Budget for it.
 
 [goose #10471](https://github.com/block/goose/pull/10471) replaces goose's freeform prose compaction summary with a structured contract. The compaction prompt now asks the model for an `<analysis>` scratchpad plus a single ```json block matching `StructuredSummary` (`context_mgmt/structured.rs`): **nine named sections — user intent, technical concepts, files + key code, errors and fixes, problem solving, user messages, pending tasks, current work, next step — each ordered most-important-first.** The parsed object is rendered to markdown by a **minijinja template the user can override** at `~/.config/goose/prompts/compaction_summary.md`, so changing *what survives compaction* is a config edit, not a code rebuild; unknown JSON fields are preserved so custom prompt+template pairs can carry extra sections. Parsing is deliberately forgiving — brace-balanced candidates are tried after each `</analysis>`/```json fence or at response start, wrong-shaped fields are stringified rather than rejected, and **any parse failure falls back to keeping the raw response verbatim, i.e. exactly the old behavior** (a strict widening, never worse). A blind-judge probe eval (30 replayed conversations, Haiku 4.5 + Sonnet 4.6) held summary fidelity at parity while improving decision-recall and retaining **24–48% fewer context tokens** post-compaction. A second fix in the same PR: goose's post-compaction context baseline had been using the summarizer call's *raw output token count*, overstating retained context ~2.3×; it now bills the raw output but sets the session baseline to the *estimated tokens of the actually-retained conversation*.
 
@@ -463,6 +593,33 @@ The general lesson: the summary a compaction step emits is a **data structure, n
 **What inber should consider:** inber's summarizer is exactly the opaque-blob shape goose just left. `conversation/summary_generation.go:generateSummary` prompts for a freeform bulleted summary against five loose focus areas ("main topics / key decisions / important info / project status / next steps") and joins the model's text into one string (`summarize.go:88`); there is no typed contract, no per-section importance ordering, and no way to trim or template what is retained. Adopt goose's shape: (1) prompt for a typed `StructuredSummary` (inber can reuse goose's nine sections nearly verbatim — they're generic agentic-session fields), parse it forgivingly, and **on any parse failure fall back to the current prose join** — that fallback is already inber's error path (`generateSummary` err → `mechanicalSummary`), so the discipline fits. (2) Render the parsed summary through a template so *what survives compaction* becomes tunable per role without touching Go. (3) One thing inber already gets right and should keep: `result.SummaryTokens = memory.EstimateTokens(summary)` estimates the *retained* summary text, not the API's raw output-token count — inber does **not** have goose's 2.3× baseline overstatement bug, so don't "fix" it toward the raw usage number. This complements, from the summary-structure side, the compaction rules already in `agentic-design-patterns.md` (07-13 budget projection, 07-13 drop-thinking-when-summarizing).
 
 ## Harness-watch — 2026-07-30: freeze the whole turn-context, not just the clock — plus a *message* needs its own identity, and a delegate inherits *runtime* state rather than config
+
+> **[Verified 2026-08-01 — the message-identity, delegate-inheritance and progress-hook entries HOLD; the schema-normalizer entry is overstated. All line citations below have drifted; current ones given.]**
+> **Message identity — CONFIRMED, filed.** `bus/messages/chat.go:40` declares `MessageID` and is
+> the only occurrence in the whole bus repo: zero writers. Zero occurrences of `MessageID` /
+> `message_id` anywhere in inber. Every producer goes through `messages.NewChatDelta(...)`
+> (`server/bus.go:58,88,105,138,174`, `server/events.go:46,53,65,71`, and two more) and never
+> sets it. One nuance in inber's favour that the passage misses: the OpenAI path **already**
+> propagates the provider id (`agent/openai_conversion.go:193,232` write `ID: resp.ID`); only the
+> Anthropic path drops it (`agent/agent_run.go:199` returns `resp` with no `resp.ID` read).
+> **Delegate inherits config, not runtime — CONFIRMED.** `engine/engine.go:314-317` (`SetModel`,
+> called from `server/api_bridge.go:685`) and `engine/turn_execute.go:23` (`e.Model = modelUsed`)
+> both mutate the parent's live model, while spawn resolves statically:
+> `server/spawn.go:170` → `session_creation.go:114 Model: ac.Model`, overridden only by an
+> explicit `req.Model` (`spawn.go:174-176`). Nothing reads the parent's live `Model` on the spawn
+> path and nothing logs the divergence.
+> **Progress hooks — CONFIRMED.** `engine/display.go:12-18` is `DisplayHooks` with `OnThinking`,
+> `OnTextDelta`, `OnToolCall`, `OnToolResult`, `OnStatus` — no progress channel. Shell output is
+> fully buffered: `tool-store/tools/shell.go:63 cmd.CombinedOutput()`, so a ten-minute build shows
+> nothing until it exits. This is an absent feature, not a wrong result.
+> **Schema normalizer — OVERSTATED.** "Re-derived per API call" is wrong: the normalizer is
+> called from inside the converter (`agent/openai_conversion.go:26`), and the converter runs at
+> `engine/turn_openai.go:32`, **above** the tool-call loop that opens at `turn_openai.go:56`. So
+> it is once per *turn*, not per API call — 1/N of the claimed cost, on a turn that already
+> marshals the whole conversation. The const-union collapse is genuinely absent
+> (`agent/chain.go:24` is the only `"enum"` in non-test Go) and is a decision-free sub-hour fix,
+> but its real payload is **latent**: `tools/mcp` has zero non-test importers, so no codegen
+> schema reaches this path today.
 
 ### 1. A multi-step turn is N API calls sharing one prefix — freeze every volatile input at turn start
 
@@ -590,6 +747,22 @@ half of the shell/cancel contract written up in `cline.md` (07-31 §1), where th
 is that inber's interrupt endpoint cannot actually stop a running command.
 
 ## Harness-watch — 2026-08-01: deny is the absorbing element in a multi-inspector merge, a path comparison must run on canonicalized paths, and a tool result is structured content rather than a string
+
+> **[Verified 2026-08-01 — the tool-result entry holds, its own "latent" caveat included. One correction: it bundles two fixes that are not coupled.]**
+> Confirmed: `agent/agent.go:30` types a tool `Run` as returning `(string, error)`, so a tool
+> result is structurally a string. `tools/mcp` has zero non-test importers, so the media half is
+> **latent** exactly as the entry says — that self-assessment is correct, unlike several older
+> entries in this file.
+> The drop happens one level earlier than described: `tools/mcp/client.go:394-399` decodes the
+> result into an anonymous struct whose `Content` elements carry **only** `Type` and `Text`, so
+> image/resource/audio blocks are discarded at `json.Unmarshal`, before the `Type == "text"`
+> filter at `:405-410` ever runs. Same outcome, stricter mechanism.
+> **Not coupled, and worth separating:** `isError` is ignored entirely (zero occurrences of
+> `isError`/`IsError` in `tools/mcp/`), so an MCP tool **failure returns as ordinary output with a
+> nil error** — a fail-silent. That is a ~5-line fix (decode the field, return an error or an
+> error-marked result) and does not depend on what `Run`'s signature eventually becomes. Widening
+> the tool-result type is the genuinely large cross-module change (every tool in inber plus the
+> separate `tool-store` module) and is correctly deferred.
 
 Three from this window; the first two are written up cross-cuttingly in
 `agentic-design-patterns.md` (2026-08-01, §1 and "Also in-window"), so only the goose-specific
