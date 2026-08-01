@@ -63,6 +63,27 @@ var TagsExcludedFromAutomaticContext = []string{
 	TagStashedContent,
 }
 
+// The names of the two tools that reach a memory the automatic context will not
+// offer. They are the read half of every writer above, so they are spelled once,
+// here beside the tags, and taken from here by the tools that declare them and by
+// the writers that decide whether to name them.
+//
+// A writer that points the model at one of these names is making a claim about
+// the session's wire, not about this repository: an agent's configured tool list
+// decides which of them a turn actually carries (engine.buildMemoryTools keeps
+// only the memory_ names the config asked for), and SetDisabledTools can take one
+// away afterwards. Of the ten agents configured on this host, four hold
+// memory_search without memory_expand and one holds neither.
+const (
+	// ToolNameMemorySearch finds a memory by semantic similarity. It applies no
+	// tag filter, so it is a real way back to an excluded memory — without an id.
+	ToolNameMemorySearch = "memory_search"
+
+	// ToolNameMemoryExpand returns one memory by id, which is the only way back
+	// to a memory whose id a writer left in the conversation.
+	ToolNameMemoryExpand = "memory_expand"
+)
+
 // AutomaticContextRequest is the read that assembles the memories in a system
 // prompt — the only read that injects memories nobody asked for. Engine
 // .BuildSystemPrompt makes it on every turn.

@@ -90,7 +90,7 @@ func TestArchivesAreNotOfferedForAutomaticInjection(t *testing.T) {
 			strings.Repeat("func handler() { /* stashed body */ }\n", 120),
 			fmt.Sprintf("sess-stash-%d", i),
 			store,
-			DefaultStashConfig(),
+			stashConfigWithBothRecallTools(),
 		)
 		if err != nil {
 			t.Fatalf("stash: %v", err)

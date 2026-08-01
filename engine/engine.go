@@ -344,10 +344,10 @@ func (e *Engine) SetDisabledTools(names []string) {
 }
 
 // memoryExpandToolName is the tool that recalls a memory by id. It is the read
-// that conversation.SummarizeConversation's archive write depends on, and it is
-// spelled here rather than at the use site so the two halves of that pair are
-// one string.
-const memoryExpandToolName = "memory_expand"
+// that conversation.SummarizeConversation's archive write depends on, and its
+// spelling comes from the memory package, beside the tag list that names the
+// same pair from the write's side, so the two halves are one string.
+const memoryExpandToolName = memory.ToolNameMemoryExpand
 
 // hasEnabledTool reports whether a turn would put the named tool on the wire.
 // It answers from agentTools, the set the model is actually sent, so a tool the

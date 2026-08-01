@@ -23,7 +23,7 @@ func (e *Engine) prepareInput(ctx context.Context, input, sessionID string) stri
 	if e.stashCfg.Enabled && e.MemStore != nil {
 		tokens := memory.EstimateTokens(input)
 		if tokens > e.stashCfg.UserMessageThreshold {
-			modifiedInput, stashed, err := conversation.DetectAndStashLargeBlocks(input, sessionID, e.MemStore, e.stashCfg)
+			modifiedInput, stashed, err := conversation.DetectAndStashLargeBlocks(input, sessionID, e.MemStore, e.stashConfigForTurn())
 			if err != nil {
 				Log.Warn("failed to stash large user message: %v", err)
 			} else if len(stashed) > 0 {

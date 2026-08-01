@@ -7,6 +7,20 @@ import (
 	"github.com/kayushkin/inber/memory"
 )
 
+// stashConfigForTurn is the stash configuration with the one field the engine
+// owns filled in: the tools this turn is actually putting on the wire.
+//
+// It is read per turn rather than stored on the engine because the wire set is
+// not fixed for a session's life — SetDisabledTools can take memory_expand away
+// between one turn and the next, and a config captured at construction would go
+// on promising a recall the model can no longer perform. summarizeIfNeeded reads
+// the same set at the same moment for the same reason.
+func (e *Engine) stashConfigForTurn() conversation.StashConfig {
+	cfg := e.stashCfg
+	cfg.RecallToolNames = e.EnabledToolNames()
+	return cfg
+}
+
 // stashAssistantResponse processes the last assistant message and stashes large blocks
 // to reduce context size if stashing is enabled and thresholds are met.
 func (e *Engine) stashAssistantResponse(sessionID string, result *agent.TurnResult) {
@@ -21,6 +35,8 @@ func (e *Engine) stashAssistantResponse(sessionID string, result *agent.TurnResu
 		return
 	}
 
+	stashCfg := e.stashConfigForTurn()
+
 	lastMsg := &e.Messages[len(e.Messages)-1]
 	var modifiedContent []anthropic.ContentBlockParamUnion
 	stashedAny := false
@@ -30,8 +46,8 @@ func (e *Engine) stashAssistantResponse(sessionID string, result *agent.TurnResu
 			text := block.OfText.Text
 			textTokens := memory.EstimateTokens(text)
 
-			if textTokens > e.stashCfg.MinBlockSize {
-				modifiedText, stashed, err := conversation.DetectAndStashLargeBlocks(text, sessionID, e.MemStore, e.stashCfg)
+			if textTokens > stashCfg.MinBlockSize {
+				modifiedText, stashed, err := conversation.DetectAndStashLargeBlocks(text, sessionID, e.MemStore, stashCfg)
 				if err != nil {
 					Log.Warn("failed to stash assistant response: %v", err)
 					modifiedContent = append(modifiedContent, block)

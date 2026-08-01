@@ -49,7 +49,7 @@ func SearchTool(store MemoryStore) agent.Tool {
 		Limit int    `json:"limit"`
 	}
 	return agent.Tool{
-		Name:        "memory_search",
+		Name:        ToolNameMemorySearch,
 		Description: "Search persistent memories by semantic similarity to a query. Returns relevant memories ranked by similarity, importance, and recency.",
 		InputSchema: props([]string{"query"}, map[string]any{
 			"query": str("Search query text"),
@@ -147,7 +147,7 @@ func ExpandTool(store MemoryStore) agent.Tool {
 		ID string `json:"id"`
 	}
 	return agent.Tool{
-		Name:        "memory_expand",
+		Name:        ToolNameMemoryExpand,
 		Description: "Retrieve the full content of a memory by ID. Useful for expanding compacted summaries or revisiting specific memories.",
 		InputSchema: props([]string{"id"}, map[string]any{
 			"id": str("Memory ID to retrieve"),

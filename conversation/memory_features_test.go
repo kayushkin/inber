@@ -68,7 +68,7 @@ func TestStashLargeContent(t *testing.T) {
 	// Create large content (>1000 tokens)
 	largeContent := strings.Repeat("This is a line of text with some meaningful content. ", 100)
 
-	cfg := DefaultStashConfig()
+	cfg := stashConfigWithBothRecallTools()
 	result, err := StashLargeContent(largeContent, "test-session", memStore, cfg)
 	if err != nil {
 		t.Fatalf("StashLargeContent failed: %v", err)
@@ -129,7 +129,7 @@ func TestDetectAndStashLargeBlocks(t *testing.T) {
 	largeCode := strings.Repeat("func example() {\n    // do something\n}\n", 50)
 	input := "Here's the code:\n```go\n" + largeCode + "```\nWhat do you think?"
 
-	cfg := DefaultStashConfig()
+	cfg := stashConfigWithBothRecallTools()
 	cfg.MinBlockSize = 100 // Lower threshold for testing
 
 	modified, stashed, err := DetectAndStashLargeBlocks(input, "test-session", memStore, cfg)
