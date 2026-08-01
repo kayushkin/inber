@@ -41,6 +41,17 @@ func PrimaryWorkspaceRoot(roots []WorkspaceRoot) string {
 	return ""
 }
 
+// RepoRoot returns the directory this session's filesystem tools resolve
+// relative paths against.
+//
+// It is exported because where a session actually works is the fact callers
+// have twice got wrong by reading it off something else — an agent's stored
+// config, a path-shaped display name — and a fact nobody can read is a fact
+// every test has to take on trust from the value it passed in.
+func (e *Engine) RepoRoot() string {
+	return e.repoRoot
+}
+
 // validateWorkspaceRoots checks that a set of roots describes one workspace the
 // engine can actually work in, and that its primary is the root the rest of the
 // engine was already built around.

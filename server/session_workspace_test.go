@@ -246,12 +246,25 @@ func TestARebuildIsRefusedWhenAnySecondaryWorktreeIsGone(t *testing.T) {
 // class of bug survived a green suite three separate times.
 //
 // Building an engine needs a workspace and the host's agent configuration, so
-// this skips where it cannot run rather than failing; the assertions above it
-// never skip.
+// this cannot simply fail where it cannot run. It must not simply skip either:
+// a blanket skip on any construction error is how a sabotage that ROOTED THE
+// ENGINE AT THE LIVE CHECKOUT passed a green suite. The engine refuses a
+// session whose roots and repo root disagree, so that sabotage failed
+// construction — and "construction failed" was the skip condition.
+//
+// So the environment is probed first with a session that has no workspace at
+// all. Once that has succeeded, every later failure here is the change under
+// test rather than the host, and is fatal.
 func TestARebuiltSessionComesBackInItsOwnWorktree(t *testing.T) {
 	roots := worktreeRoots(t)
 	liveCheckout := t.TempDir()
 	server := &Server{store: tempStore(t), config: Config{DataDir: t.TempDir()}}
+
+	if _, err := server.createSession(context.Background(), "agent:brigid:probe", "brigid",
+		AgentConfig{Workspace: liveCheckout}, RunRequest{}, nil); err != nil {
+		t.Skipf("no engine can be built here at all (%v); the recorded workspace is pinned by the tests above", err)
+	}
+
 	if err := server.store.UpsertSession(childKey, "brigid", "spawn",
 		SessionLineage{ParentKey: parentKey, SpawnDepth: 1}, roots); err != nil {
 		t.Fatalf("record the spawn: %v", err)
@@ -260,17 +273,23 @@ func TestARebuiltSessionComesBackInItsOwnWorktree(t *testing.T) {
 	rebuilt, err := server.createSession(context.Background(), childKey, "brigid",
 		AgentConfig{Workspace: liveCheckout}, RunRequest{}, nil)
 	if err != nil {
-		t.Skipf("no engine can be built here (%v); the recorded workspace is pinned by the tests above", err)
+		t.Fatalf("an engine builds here, but rebuilding the session in its worktree failed: %v", err)
 	}
 
+	// What the tools resolve against, not what the session says about itself.
+	// The two are separate values reaching the engine by separate routes, and
+	// asserting only on the session leaves the one that edits files unpinned.
+	if rebuilt.Engine.RepoRoot() == liveCheckout {
+		t.Fatalf("the rebuilt session's tools resolve against this host's live checkout %q", liveCheckout)
+	}
+	if rebuilt.Engine.RepoRoot() != roots[0].Path {
+		t.Errorf("the rebuilt session's tools resolve against %q, want its worktree %q", rebuilt.Engine.RepoRoot(), roots[0].Path)
+	}
 	if len(rebuilt.WorkspaceRoots) != len(roots) {
 		t.Fatalf("the rebuilt session works in %d repositories, want %d", len(rebuilt.WorkspaceRoots), len(roots))
 	}
 	if primary := engine.PrimaryWorkspaceRoot(rebuilt.WorkspaceRoots); primary != roots[0].Path {
 		t.Errorf("the rebuilt session is rooted at %q, want its worktree %q", primary, roots[0].Path)
-	}
-	if engine.PrimaryWorkspaceRoot(rebuilt.WorkspaceRoots) == liveCheckout {
-		t.Errorf("the rebuilt session is rooted at this host's live checkout")
 	}
 }
 
