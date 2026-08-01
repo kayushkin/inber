@@ -45,13 +45,28 @@ func lexicalPathIdentity(given, root string) string {
 }
 
 // canonicalPathIdentity follows symlinks so that a file reached by two routes
-// is one file. It returns "" when the path cannot be canonicalized — most often
-// because it does not exist yet, which is every create — and callers then fall
-// back to the lexical identity rather than admitting a key they cannot trust.
+// is one file.
+//
+// A file that does not exist cannot be resolved, and that case is not exotic:
+// it is every create, and it is every invalidation of a file something has just
+// deleted. Falling straight back to the lexical path there would give one file
+// two identities across its own lifetime — recorded under the resolved path
+// while it existed, invalidated under the unresolved one after — which is the
+// stale hit this whole file exists to stop. So the directory is resolved
+// instead, which needs no file, and the name is joined back on.
+//
+// It returns "" only when the directory cannot be resolved either. Callers then
+// fall back to the lexical identity rather than admitting a key they cannot
+// trust; a read cannot have succeeded under a directory that is not there, so
+// nothing is filed under such a key in the first place.
 func canonicalPathIdentity(lexical string) string {
-	canonical, err := filepath.EvalSymlinks(lexical)
+	if canonical, err := filepath.EvalSymlinks(lexical); err == nil {
+		return canonical
+	}
+	directory, name := filepath.Split(lexical)
+	canonicalDirectory, err := filepath.EvalSymlinks(filepath.Clean(directory))
 	if err != nil {
 		return ""
 	}
-	return canonical
+	return filepath.Join(canonicalDirectory, name)
 }

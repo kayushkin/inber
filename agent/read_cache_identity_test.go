@@ -75,6 +75,10 @@ func TestDotSlashIsTheSameFileAsTheBareName(t *testing.T) {
 	}
 }
 
+// Both halves matter and the negative one alone is not enough: a cache that
+// records under one identity and looks up under another passes "the write
+// invalidated the read" for the wrong reason — nothing was ever findable. So
+// assert the hit first, then the invalidation.
 func TestASymlinkedPathIsTheSameFileAsItsTarget(t *testing.T) {
 	cache, root, name := cacheAtRoot(t)
 
@@ -85,6 +89,11 @@ func TestASymlinkedPathIsTheSameFileAsItsTarget(t *testing.T) {
 	throughLink := filepath.Join(linkedDirectory, name)
 
 	cache.RecordFullRead(throughLink, 12)
+
+	if _, cached := cache.Check(name); !cached {
+		t.Fatalf("%q and %q are the same file and must share one entry", throughLink, name)
+	}
+
 	cache.Invalidate(name)
 
 	if stub, cached := cache.Check(throughLink); cached {
@@ -92,22 +101,51 @@ func TestASymlinkedPathIsTheSameFileAsItsTarget(t *testing.T) {
 	}
 }
 
-// The invalidation set has to be at least as wide as the key set, and a write
-// can change whether a path resolves at all — replacing a symlink, or removing
-// the file. Invalidate therefore drops both identities. Pin that, because the
-// obvious simplification (drop only the canonical one) is silent when it is
-// wrong.
-func TestInvalidateDropsTheEntryEvenWhenThePathNoLongerResolves(t *testing.T) {
-	cache, root, name := cacheAtRoot(t)
+// A file that has just been deleted cannot be resolved, so a fallback to the
+// lexical path would give one file two identities across its own lifetime:
+// filed under the resolved path while it existed, invalidated under the
+// unresolved one afterwards. The directory is resolved instead. This only bites
+// where the two differ, which is any session working inside a symlinked root —
+// a forge worktree, for one — so the test builds exactly that.
+func TestAFileDeletedMidTurnIsStillInvalidatedThroughASymlinkedRoot(t *testing.T) {
+	const name = "lifecycle.go"
+
+	target := t.TempDir()
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(resolvedTarget, name), []byte("package engine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkedRoot := filepath.Join(t.TempDir(), "root")
+	if err := os.Symlink(resolvedTarget, symlinkedRoot); err != nil {
+		t.Skipf("this host does not allow symlinks: %v", err)
+	}
+
+	cache := NewReadCache()
+	cache.SetRoot(symlinkedRoot)
 
 	cache.RecordFullRead(name, 12)
-	if err := os.Remove(filepath.Join(root, name)); err != nil {
+
+	// The file is gone at the moment the write is announced — a shell step
+	// removed it, or the write is a replace — so this is where an identity that
+	// needs the file to exist stops matching the one the read was filed under.
+	if err := os.Remove(filepath.Join(resolvedTarget, name)); err != nil {
 		t.Fatal(err)
 	}
 	cache.Invalidate(name)
 
-	if _, cached := cache.Check(name); cached {
-		t.Fatal("a deleted file stayed in the cache, so the next read is answered from content that no longer exists")
+	// And then the write puts it back, which is what makes a missed
+	// invalidation visible: the path resolves again, the old entry is found
+	// again, and the model is told the new file is the one it already read.
+	if err := os.WriteFile(filepath.Join(resolvedTarget, name), []byte("package engine // rewritten\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if stub, cached := cache.Check(name); cached {
+		t.Fatalf("a file deleted and rewritten mid-turn kept its cache entry: %q\n"+
+			"the model is told the rewritten file is already in context", stub)
 	}
 }
 

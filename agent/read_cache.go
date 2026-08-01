@@ -49,40 +49,30 @@ func (rc *ReadCache) Root() string {
 	return rc.root
 }
 
-// keyFor returns the entry key for a path as the model wrote it, and the
-// lexical identity it was derived from. The key follows symlinks when it can,
-// so one file reached by two routes is one entry; when it cannot — the file does
-// not exist yet, most often — the lexical identity is the key, which is still
-// spelling-independent.
-func (rc *ReadCache) keyFor(path string) (key, lexical string) {
-	lexical = lexicalPathIdentity(path, rc.root)
+// keyFor returns the entry key for a path as the model wrote it. The key
+// follows symlinks when it can, so one file reached by two routes is one entry;
+// when neither the file nor its directory can be resolved, the lexical identity
+// stands in, which is still spelling-independent.
+func (rc *ReadCache) keyFor(path string) string {
+	lexical := lexicalPathIdentity(path, rc.root)
 	if canonical := canonicalPathIdentity(lexical); canonical != "" {
-		return canonical, lexical
+		return canonical
 	}
-	return lexical, lexical
+	return lexical
 }
 
 // RecordFullRead marks a file as fully read during this turn.
 func (rc *ReadCache) RecordFullRead(path string, lines int) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	key, _ := rc.keyFor(path)
-	rc.files[key] = readEntry{lines: lines}
+	rc.files[rc.keyFor(path)] = readEntry{lines: lines}
 }
 
 // Invalidate removes a file from the cache (after write/edit).
-//
-// It drops both identities the file could have been filed under, because the
-// two can differ across the write: a path that resolved through a symlink when
-// it was read may not resolve at all once the write has replaced or removed it.
-// Dropping one identity too many costs a re-read; dropping one too few is the
-// model being told stale bytes are current.
 func (rc *ReadCache) Invalidate(path string) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	key, lexical := rc.keyFor(path)
-	delete(rc.files, key)
-	delete(rc.files, lexical)
+	delete(rc.files, rc.keyFor(path))
 }
 
 // Check returns a stub message if the file is already fully in context.
@@ -90,8 +80,7 @@ func (rc *ReadCache) Invalidate(path string) {
 func (rc *ReadCache) Check(path string) (string, bool) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	key, _ := rc.keyFor(path)
-	entry, ok := rc.files[key]
+	entry, ok := rc.files[rc.keyFor(path)]
 	if !ok {
 		return "", false
 	}
