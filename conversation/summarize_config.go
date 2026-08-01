@@ -12,6 +12,19 @@ type SummarizeConfig struct {
 	MaxSummaryTokens int
 	// Save full conversation to memory before summarizing
 	SaveToMemory bool
+	// ArchiveIsRecallable says whether the model reading the summary can call
+	// memory_expand. It decides one thing: whether the injected summary block
+	// names the archive's id.
+	//
+	// SaveToMemory alone cannot decide it. The archive is tagged out of the
+	// automatic context on purpose, so the only way back to it is a tool call by
+	// id, and the id lives nowhere the model can see. An agent whose configured
+	// tool list omits memory_expand has the archive written and no way to reach
+	// it; naming it there would be a pointer at a tool the model does not hold.
+	//
+	// The caller answers from the tools it actually put on the wire, not from a
+	// guess: engine.summarizeIfNeeded reads EnabledToolNames.
+	ArchiveIsRecallable bool
 }
 
 // DefaultSummarizeConfig returns defaults based on agent role

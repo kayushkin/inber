@@ -101,7 +101,7 @@ func SummarizeConversation(
 	// Build new message list: summary + recent messages
 	// The summary goes as a user message with assistant acknowledgment
 	// to maintain valid message alternation
-	summaryBlock := fmt.Sprintf("[Conversation Summary — %d earlier turns condensed]\n\n%s\n\n[End of summary. Recent conversation follows.]", result.SummarizedTurns, summary)
+	summaryBlock := fmt.Sprintf("[Conversation Summary — %d earlier turns condensed]\n\n%s\n\n%s", result.SummarizedTurns, summary, summaryFooter(result, cfg))
 
 	var newMessages []anthropic.MessageParam
 
@@ -130,4 +130,30 @@ func SummarizeConversation(
 	result.KeptMessages = len(newMessages)
 
 	return newMessages, result, nil
+}
+
+// summaryFooter closes the injected summary block, and names the archived
+// transcript when — and only when — the model can actually get it back.
+//
+// The compaction archive was a write with no reachable read. It is saved on
+// every compaction, it is tagged out of the automatic context so it is never
+// offered back, and memory_expand needs an id that was returned to the caller,
+// logged, and never put anywhere the model could see. StashLargeContent, the
+// other writer that takes content out of a conversation, has always left its
+// pointer inline; this one had nothing but a header claiming turns were
+// "condensed", which reads as "gone".
+//
+// The two conditions are the write's own and the read's own: the archive was
+// saved, and memory_expand is on the wire. A pointer emitted without the first
+// promises a recall of something that was never stored; without the second it
+// names a tool the model cannot call. Both are the failure this fixes, inverted.
+func summaryFooter(result *SummarizeResult, cfg SummarizeConfig) string {
+	const end = "[End of summary. Recent conversation follows.]"
+	if !result.MemorySaved || !cfg.ArchiveIsRecallable {
+		return end
+	}
+	return fmt.Sprintf(
+		"[The %d condensed turns are archived verbatim. memory_expand(id=\"%s\") returns them.]\n%s",
+		result.SummarizedTurns, result.MemoryID, end,
+	)
 }

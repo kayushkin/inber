@@ -70,6 +70,12 @@ func (e *Engine) summarizeIfNeeded(ctx context.Context) error {
 	}
 	cfg := conversation.DefaultSummarizeConfig(role)
 
+	// Whether the summary block may point at the archived transcript. Read off
+	// the tools this session actually puts on the wire, so a name the agent was
+	// never configured with — or one SetDisabledTools has since taken away —
+	// never gets advertised to the model.
+	cfg.ArchiveIsRecallable = e.hasEnabledTool(memoryExpandToolName)
+
 	if !conversation.ShouldSummarize(e.Messages, cfg) {
 		return nil
 	}

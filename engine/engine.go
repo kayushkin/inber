@@ -343,6 +343,25 @@ func (e *Engine) SetDisabledTools(names []string) {
 	e.applyDisabledTools()
 }
 
+// memoryExpandToolName is the tool that recalls a memory by id. It is the read
+// that conversation.SummarizeConversation's archive write depends on, and it is
+// spelled here rather than at the use site so the two halves of that pair are
+// one string.
+const memoryExpandToolName = "memory_expand"
+
+// hasEnabledTool reports whether a turn would put the named tool on the wire.
+// It answers from agentTools, the set the model is actually sent, so a tool the
+// agent config never asked for and a tool SetDisabledTools took away both read
+// as absent.
+func (e *Engine) hasEnabledTool(name string) bool {
+	for _, t := range e.agentTools {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // EnabledToolNames returns the names of the tools a turn would put on the wire,
 // in the order the model sees them. SetDisabledTools had no exported reader, so
 // a caller that changed a session's tool set had no way to find out what it had

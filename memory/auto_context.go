@@ -6,10 +6,16 @@ package memory
 // Three writers in this repository save a memory *in order to make a conversation
 // smaller* — the session summary written at shutdown, the transcript archived when
 // a conversation is compacted, and a large block moved out of a message by the
-// stasher. Each of them removes content from the conversation and leaves the model
-// a pointer to it (`memory_expand`, `memory_search`). None of them wants that
-// content back in the next prompt: putting it back undoes the saving that was the
-// reason for the write.
+// stasher. None of them wants that content back in the next prompt: putting it
+// back undoes the saving that was the reason for the write.
+//
+// Excluding a memory from the automatic context is therefore only half of each
+// writer's job. The other half is leaving the model a way to ask for it: the
+// stasher and the compaction archive both put `memory_expand(id=…)` in the text
+// they leave behind, naming the row they wrote. The shutdown summary is the one
+// that leaves none, and it is the one that cannot — the session it would tell is
+// over. A memory excluded here and named nowhere is not saved, it is discarded
+// with a copy kept.
 //
 // That intent has to be spelled the same way at both ends. It was not:
 // `BuildSystemPrompt` excluded `session-summary`, `repo-map` and
