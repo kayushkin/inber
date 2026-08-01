@@ -53,7 +53,6 @@ type Session struct {
 	store            Store           // session tracking store (nil if unavailable)
 	modelStore       *modelstore.Store // model store for cost calculation (nil if unavailable)
 	truncateCfg      TruncateConfig  // truncation config for tool results
-	truncateRefs     map[string]string // map of tool_id -> full output for references
 	logstack         *LogstackAdapter // optional logstack adapter for centralized logging
 	prevMessageCount int             // tracks message count for prompt breakdown diffs
 }
@@ -109,7 +108,6 @@ func New(logsDir, model, agentName, parentID string, modelStore *modelstore.Stor
 		sessionID:    sessionID,
 		modelStore:   modelStore,
 		truncateCfg:  DefaultTruncateConfig(),
-		truncateRefs: make(map[string]string),
 	}
 
 	// Initialize logstack adapter if URL is configured
@@ -188,14 +186,6 @@ func (s *Session) SetTruncateConfig(cfg TruncateConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.truncateCfg = cfg
-}
-
-// GetFullToolResult retrieves the full (untruncated) output for a tool call.
-// Returns empty string if tool result wasn't truncated or doesn't exist.
-func (s *Session) GetFullToolResult(toolID string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.truncateRefs[toolID]
 }
 
 // CurrentTurn returns the current turn number (0 before first request).

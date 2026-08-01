@@ -22,7 +22,6 @@ func TestSession_TruncateLargeToolResult(t *testing.T) {
 		HeadTokens: 50,
 		TailTokens: 20,
 		Strategy:   StrategyHeadTail,
-		CreateRef:  true,
 	})
 	
 	// Simulate large shell output (like your Go error example)
@@ -126,42 +125,5 @@ func TestSession_SmallToolResultNotTruncated(t *testing.T) {
 	// Content should be unchanged
 	if entry.Content != smallOutput {
 		t.Errorf("small output was modified: got %q, want %q", entry.Content, smallOutput)
-	}
-}
-
-func TestSession_GetFullToolResult(t *testing.T) {
-	tmpDir := t.TempDir()
-	
-	sess, err := New(tmpDir, "test-model", "test-agent", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sess.Close()
-	
-	// Configure truncation
-	sess.SetTruncateConfig(TruncateConfig{
-		Threshold:  50,
-		HeadTokens: 20,
-		TailTokens: 10,
-		Strategy:   StrategyHeadTail,
-	})
-	
-	// Large output
-	original := strings.Repeat("error line\n", 100)
-	
-	sess.LogToolResult("tool-789", "shell", original, true)
-	
-	// Retrieve full output
-	full := sess.GetFullToolResult("tool-789")
-	
-	if full != original {
-		t.Errorf("GetFullToolResult returned wrong content: got %d chars, want %d chars",
-			len(full), len(original))
-	}
-	
-	// Non-existent tool should return empty
-	missing := sess.GetFullToolResult("tool-999")
-	if missing != "" {
-		t.Errorf("GetFullToolResult for missing tool should return empty, got %q", missing)
 	}
 }

@@ -75,15 +75,21 @@ func (s *Session) LogToolResult(toolID, name, output string, isError bool) {
 	cfg := s.truncateCfg
 	s.mu.Unlock()
 
-	// Truncate if needed
+	// Truncate if needed.
+	//
+	// The untruncated output is NOT retained. It used to be held in a
+	// map[string]string on the Session so it could be "recovered later", and
+	// nothing ever recovered it: the only reader was an exported getter with no
+	// callers, so a session doing two hundred large ripgreps kept two hundred
+	// full outputs resident for the life of the process and handed none of them
+	// back. Holding a copy of the thing you just truncated, where no code path
+	// can reach it, is the truncation undone and the memory spent twice.
+	//
+	// If a truncated result should be recoverable, the recovery has to be a tool
+	// the model actually holds — that is what conversation.StashLargeContent and
+	// memory_expand are, and a pointer to them is only honest when that tool is
+	// on the wire. Do not reintroduce a side map here.
 	result := TruncateToolResult(name, output, cfg)
-	
-	// Store full output as reference if truncated
-	if result.Truncated {
-		s.mu.Lock()
-		s.truncateRefs[toolID] = output
-		s.mu.Unlock()
-	}
 
 	s.write(Entry{
 		Timestamp: time.Now(),

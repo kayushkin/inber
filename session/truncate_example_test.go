@@ -35,15 +35,18 @@ func ExampleSession_LogToolResult_truncation() {
 	// Log it - truncation happens automatically
 	sess.LogToolResult("tool-123", "shell", largeError, true)
 
-	// Can still retrieve full output if needed
-	full := sess.GetFullToolResult("tool-123")
-	fmt.Printf("Full output available: %d chars\n", len(full))
-	fmt.Printf("Matches original: %t\n", full == largeError)
+	// What lands in the log is the truncated text, and the session keeps no
+	// copy of the rest. Truncation here is a discard, not a move to somewhere
+	// else: if the full output has to survive, stash it (see
+	// conversation.StashLargeContent) before handing it to the session.
+	truncated := sess.TruncateToolResult("shell", largeError, true)
+	fmt.Printf("Logged size: %d chars\n", len(truncated))
+	fmt.Printf("Smaller than original: %t\n", len(truncated) < len(largeError))
 
 	// Output:
 	// Original size: 6000 chars
-	// Full output available: 6000 chars
-	// Matches original: true
+	// Logged size: 268 chars
+	// Smaller than original: true
 }
 
 // Example showing different truncation strategies by agent role

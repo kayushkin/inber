@@ -17,20 +17,25 @@ const (
 )
 
 // TruncateConfig controls truncation behavior.
+//
+// There is deliberately no "keep the full content somewhere" option here. This
+// package used to carry a CreateRef flag, set to true by three of the four role
+// configs, plus a RefID field on the result — a memory reference that no code
+// ever created and no code ever read. A config flag an operator can read and
+// set, wired to nothing, is a promise the code does not keep. Recovering
+// truncated content is conversation.StashLargeContent's job, because that is
+// the path with a tool (memory_expand) the model can actually call.
 type TruncateConfig struct {
 	Threshold  int              // truncate if > N tokens
 	HeadTokens int              // show first N tokens
 	TailTokens int              // show last N tokens
 	Strategy   TruncateStrategy // which strategy to use
-	CreateRef  bool             // create memory reference for full content
 }
 
 // TruncateResult contains the result of truncation.
 type TruncateResult struct {
 	Truncated   bool   // was truncation applied?
-	Original    string // original content
 	Displayed   string // what goes in context
-	RefID       string // memory reference ID (if created)
 	SavedTokens int    // tokens saved by truncation
 }
 
@@ -41,7 +46,6 @@ func DefaultTruncateConfig() TruncateConfig {
 		HeadTokens: 500,  // first 500 tokens
 		TailTokens: 200,  // last 200 tokens
 		Strategy:   StrategyAuto,
-		CreateRef:  true,
 	}
 }
 
@@ -58,7 +62,6 @@ func TruncateToolResult(toolName, output string, cfg TruncateConfig) TruncateRes
 	if tokens <= cfg.Threshold {
 		return TruncateResult{
 			Truncated: false,
-			Original:  output,
 			Displayed: output,
 		}
 	}
@@ -86,7 +89,6 @@ func TruncateToolResult(toolName, output string, cfg TruncateConfig) TruncateRes
 
 	return TruncateResult{
 		Truncated:   true,
-		Original:    output,
 		Displayed:   displayed,
 		SavedTokens: savedTokens,
 	}
@@ -145,7 +147,6 @@ func TruncateConfigForRole(role string) TruncateConfig {
 			HeadTokens: 500,
 			TailTokens: 200,
 			Strategy:   StrategyAuto,
-			CreateRef:  true,
 		}
 	case "project":
 		// Project agent: moderate (needs more context)
@@ -154,7 +155,6 @@ func TruncateConfigForRole(role string) TruncateConfig {
 			HeadTokens: 1500,
 			TailTokens: 500,
 			Strategy:   StrategyAuto,
-			CreateRef:  true,
 		}
 	case "run":
 		// Run agent: minimal truncation (expects large output)
@@ -163,7 +163,6 @@ func TruncateConfigForRole(role string) TruncateConfig {
 			HeadTokens: 2000,
 			TailTokens: 1000,
 			Strategy:   StrategyHeadTail,
-			CreateRef:  false,
 		}
 	default:
 		return DefaultTruncateConfig()
