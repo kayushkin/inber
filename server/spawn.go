@@ -188,9 +188,17 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 				"error": err,
 			})
 		} else {
+			// Point the agent at every repository forge checked out, and at the
+			// primary one as its working directory. A workspace that cannot
+			// name its own primary repository fails the spawn: running anyway
+			// would root the child at the server's process directory, and it
+			// would edit this host's live checkouts believing they were its
+			// worktree.
+			if err := useWorkspace(&ac, w); err != nil {
+				g.forgeDB.Cleanup(w)
+				return nil, fmt.Errorf("workspace for %s: %w", req.Agent, err)
+			}
 			ws = w
-			// Set agent's working directory to the primary repo worktree.
-			ac.Workspace = w.Repos[w.Primary]
 			logger.WithComponent("spawn").Info("workspace created", map[string]interface{}{
 				"workspace_id": w.ID,
 				"base_dir":     w.BaseDir,

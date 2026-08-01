@@ -100,6 +100,11 @@ func (e *Engine) buildTurnContext(processedInput string) ([]sessionMod.NamedBloc
 		Log.Warn("%v — reusing the system prompt from the previous turn", err)
 		systemBlocks = e.Cache.LastNamedBlocks
 	}
+	// Every repository the session works in is named once per turn. It is
+	// queued rather than written onto the field because BuildSystemPrompt
+	// assigns that field wholesale, and it is queued here rather than during
+	// preparation because it describes the session, not the conversation.
+	e.queueVolatileNote(renderWorkspaceRoots(e.workspaceRoots))
 	// BuildSystemPrompt assigns e.Turn.VolatileContext, so the notes queued
 	// during preparation are folded in after it, never before.
 	e.applyPendingVolatileNotes()

@@ -83,6 +83,10 @@ type Engine struct {
 
 	// --- Internal state ---
 	repoRoot string
+	// workspaceRoots is every repository this session works in, when it works
+	// in more than one. The turn names them all in its volatile context; see
+	// workspace_roots.go for why they are not in the system prompt.
+	workspaceRoots []WorkspaceRoot
 	// allTools is every tool the session was built with. agentTools is that set
 	// minus disabledToolNames, and is what a turn puts on the wire. Keeping both
 	// is what makes disabling reversible: filtering agentTools in place threw the
@@ -130,12 +134,16 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("repo root: %w", err)
 	}
+	if err := validateWorkspaceRoots(cfg.WorkspaceRoots, repoRoot); err != nil {
+		return nil, fmt.Errorf("workspace roots: %w", err)
+	}
 
 	stashCfg, extractCfg := initializeConfigs(cfg)
 
 	e := &Engine{
 		Model:              cfg.Model,
 		repoRoot:           repoRoot,
+		workspaceRoots:     cfg.WorkspaceRoots,
 		display:            cfg.Display,
 		thinkingBud:        cfg.Thinking,
 		stashCfg:           stashCfg,

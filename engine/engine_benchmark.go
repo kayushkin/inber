@@ -36,7 +36,10 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 	if err != nil {
 		return nil, timing, fmt.Errorf("failed to setup repo root: %w", err)
 	}
-	
+	if err := validateWorkspaceRoots(cfg.WorkspaceRoots, repoRoot); err != nil {
+		return nil, timing, fmt.Errorf("workspace roots: %w", err)
+	}
+
 	// Initialize default configurations
 	stashCfg, extractCfg := initializeConfigs(cfg)
 	timing.ConfigTime = time.Since(phaseStart)
@@ -45,6 +48,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 	e := &Engine{
 		Model:              cfg.Model,
 		repoRoot:           repoRoot,
+		workspaceRoots:     cfg.WorkspaceRoots,
 		display:            cfg.Display,
 		thinkingBud:        cfg.Thinking,
 		stashCfg:           stashCfg,

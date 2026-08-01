@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"time"
+
+	"github.com/kayushkin/inber/engine"
 )
 
 // Config defines the server's runtime configuration.
@@ -58,6 +60,12 @@ type AgentConfig struct {
 	Model     string   `json:"model"`
 	Thinking  int64    `json:"thinking"`
 	Tools     []string `json:"tools"`             // tool allowlist (empty = all)
+
+	// WorkspaceRoots is every repository of the forge workspace this agent was
+	// spawned into, filled in at spawn time alongside Workspace and never read
+	// from stored configuration — which is why it is not serialized. A session
+	// outside a workspace leaves it empty.
+	WorkspaceRoots []engine.WorkspaceRoot `json:"-"`
 }
 
 // BridgeSessionTTL is the default TTL for idle bridge sessions.

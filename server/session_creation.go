@@ -101,6 +101,7 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 	cfg := engine.EngineConfig{
 		AgentName:        agentName,
 		RepoRoot:         ac.Workspace,
+		WorkspaceRoots:   ac.WorkspaceRoots,
 		Model:            ac.Model,
 		Thinking:         ac.Thinking,
 		CommandName:      "serve",

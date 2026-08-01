@@ -221,8 +221,11 @@ func (g *Server) FixWorkspaceTool() agent.Tool {
 				return "", fmt.Errorf("unknown agent: %s", in.Agent)
 			}
 
-			// Override workspace to the existing worktree.
-			ac.Workspace = ws.Repos[ws.Primary]
+			// Override workspace to the existing worktree — all of it, not just
+			// the primary repository.
+			if err := useWorkspace(&ac, ws); err != nil {
+				return "", err
+			}
 
 			task := fmt.Sprintf("[FIX REQUEST — workspace %s]\n"+
 				"You are working in an existing workspace with previous changes.\n"+

@@ -29,8 +29,13 @@ type EngineConfig struct {
 	SystemOverride string // override system prompt entirely
 
 	// Session
-	RepoRoot    string
-	CommandName string // "chat", "run", or "serve"
+	RepoRoot string
+	// WorkspaceRoots is every repository the session has checked out, when it
+	// runs inside a forge workspace. Empty everywhere else — a session with one
+	// repository is fully described by RepoRoot. The root marked primary must
+	// be RepoRoot; NewEngine refuses the pair if it is not.
+	WorkspaceRoots []WorkspaceRoot
+	CommandName    string // "chat", "run", or "serve"
 	NewSession  bool   // start fresh instead of continuing default
 	Detach      bool   // one-off session, don't save to workspace
 
