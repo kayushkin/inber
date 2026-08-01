@@ -43,8 +43,8 @@ func endTwoTurns(t *testing.T) (logsDir, sessionID, sessionDir string) {
 			t.Fatalf("marshal request: %v", err)
 		}
 		session.LogRequest(request)
-		session.LogAssistant("reply to the "+prompt, 100, 50, 0)
-		session.EndTurn(100, 50, 0, "end_turn", "")
+		session.LogAssistant("reply to the "+prompt, TurnTokens{Input: 100, Output: 50}, 0)
+		session.EndTurn(TurnTokens{Input: 100, Output: 50}, 0, "end_turn", "")
 	}
 
 	sessionDir = filepath.Dir(session.FilePath())

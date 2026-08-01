@@ -30,8 +30,27 @@ type Entry struct {
 	IsError      bool            `json:"is_error,omitempty"`      // tool_result was an error
 	InputTokens  int             `json:"in_tokens,omitempty"`     // cumulative for this turn
 	OutputTokens int             `json:"out_tokens,omitempty"`    // cumulative for this turn
+	CacheRead    int             `json:"cache_read_tokens,omitempty"`  // cumulative for this turn
+	CacheWrite   int             `json:"cache_write_tokens,omitempty"` // cumulative for this turn
 	TotalCost    float64         `json:"cost_usd,omitempty"`      // cumulative session cost
 	Request      json.RawMessage `json:"request,omitempty"`       // full API request payload
+}
+
+// TurnTokens is one turn's usage as the provider reported it. The four counts
+// are disjoint — Input is the part of the prompt the cache did not cover — so
+// the prompt is their sum and no one of them can stand in for the whole.
+//
+// They travel together as a value because they were being carried apart. Every
+// producer here had all four and every consumer needed all four, but the two
+// logging entry points took only Input and Output, so the cache counts were
+// dropped at the doorway and the session's own dollar figure was left pricing a
+// twentieth of the prompt it had just sent. A struct is what stops the next
+// count added upstream from being lost the same way.
+type TurnTokens struct {
+	Input      int
+	Output     int
+	CacheRead  int
+	CacheWrite int
 }
 
 // toLogstackEntry moved to logstack.go
@@ -49,6 +68,8 @@ type Session struct {
 	turn             int             // current API round-trip number
 	totalIn          int
 	totalOut         int
+	totalCacheRead   int
+	totalCacheWrite  int
 	store            Store           // session tracking store (nil if unavailable)
 	modelStore       *modelstore.Store // model store for cost calculation (nil if unavailable)
 	truncateCfg      TruncateConfig  // truncation config for tool results
@@ -244,16 +265,17 @@ func (s *Session) write(e Entry) {
 }
 
 // cost calculates the total session cost in USD based on token usage.
+//
+// It prices through CalcCostWithCache rather than multiplying out the input and
+// output rates here. This function and its per-turn twin were a second
+// implementation of the package's own pricing, and the copy had no cache terms
+// at all: it charged the uncached remainder of the prompt and left the cache
+// reads and cache writes out entirely. On the traffic in the server's store
+// that is 781k tokens counted against 18.5M ignored, and cache writes bill at
+// 125% of the input rate, so the figure the session log reported and the figure
+// the server reported for the same turns disagreed by roughly five times.
 func (s *Session) cost() float64 {
-	info := agent.GetModelInfo(s.model, s.modelStore)
-	return (float64(s.totalIn) * info.InputCostPer1M / 1_000_000) +
-		(float64(s.totalOut) * info.OutputCostPer1M / 1_000_000)
-}
-
-// calculateTurnCost calculates the cost for a specific turn.
-func (s *Session) calculateTurnCost(inTokens, outTokens int) float64 {
-	info := agent.GetModelInfo(s.model, s.modelStore)
-	return (float64(inTokens)*info.InputCostPer1M + float64(outTokens)*info.OutputCostPer1M) / 1_000_000
+	return CalcCostWithCache(s.model, s.totalIn, s.totalOut, s.totalCacheRead, s.totalCacheWrite, s.modelStore)
 }
 
 // Hooks returns agent.Hooks wired to this session's logging methods.

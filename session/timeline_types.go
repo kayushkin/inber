@@ -27,6 +27,8 @@ type TimelineEvent struct {
 	// Stats
 	InputTokens  int
 	OutputTokens int
+	CacheRead    int
+	CacheWrite   int
 	ToolCalls    int
 	Cost         float64
 	Model        string

@@ -8,12 +8,25 @@ import (
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
+// turnTokens carries a turn's four usage counts from the agent's result into
+// the session log in one piece. Both call sites used to hand over the input and
+// output counts and leave the cache counts behind, which is how the session's
+// own cost line came to price a twentieth of the prompt.
+func turnTokens(result *agent.TurnResult) sessionMod.TurnTokens {
+	return sessionMod.TurnTokens{
+		Input:      result.InputTokens,
+		Output:     result.OutputTokens,
+		CacheRead:  result.CacheReadTokens,
+		CacheWrite: result.CacheCreationTokens,
+	}
+}
+
 // postProcessResult handles background memory extraction, response stashing, session save,
 // checkpointing, and usage tracking after a successful turn.
 func (e *Engine) postProcessResult(result *agent.TurnResult, input, sessionID string) error {
 	// Log assistant response to session
 	if e.Session != nil {
-		e.Session.LogAssistant(result.Text, result.InputTokens, result.OutputTokens, result.ToolCalls)
+		e.Session.LogAssistant(result.Text, turnTokens(result), result.ToolCalls)
 	}
 
 	// 2. BACKGROUND MEMORY EXTRACTION (after turn completes, async)

@@ -8,6 +8,7 @@ import (
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/guard"
 	"github.com/kayushkin/inber/internal/textutil"
+	sessionMod "github.com/kayushkin/inber/session"
 )
 
 // buildInjectCheck creates a closure that drains the injection channel.
@@ -192,8 +193,12 @@ func (e *Engine) buildHooks() *agent.Hooks {
 				}
 			}
 			e.Session.EndTurn(
-				int(resp.Usage.InputTokens),
-				int(resp.Usage.OutputTokens),
+				sessionMod.TurnTokens{
+					Input:      int(resp.Usage.InputTokens),
+					Output:     int(resp.Usage.OutputTokens),
+					CacheRead:  int(resp.Usage.CacheReadInputTokens),
+					CacheWrite: int(resp.Usage.CacheCreationInputTokens),
+				},
 				toolCalls,
 				stopReason,
 				"",

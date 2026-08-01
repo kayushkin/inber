@@ -78,8 +78,11 @@ func (s *Session) SaveCheckpoint(userTurn int, messages []anthropic.MessageParam
 	// The token totals are written by LogAssistant under the mutex, so they
 	// have to be read under it too — a checkpoint runs while the turn that
 	// produced those tokens is still logging.
+	// Cache reads and cache writes are part of what this session consumed, and
+	// on a cached session they are most of it, so leaving them out reported a
+	// twentieth of the real figure under a field named for the whole.
 	s.mu.Lock()
-	totalTokens := s.totalIn + s.totalOut
+	totalTokens := s.totalIn + s.totalOut + s.totalCacheRead + s.totalCacheWrite
 	s.mu.Unlock()
 
 	// Create checkpoint

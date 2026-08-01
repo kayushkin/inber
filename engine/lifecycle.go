@@ -278,7 +278,7 @@ func (e *Engine) LogUser(input string) {
 // LogAssistant logs an assistant response to the session.
 func (e *Engine) LogAssistant(result *agent.TurnResult) {
 	if e.Session != nil {
-		e.Session.LogAssistant(result.Text, result.InputTokens, result.OutputTokens, result.ToolCalls)
+		e.Session.LogAssistant(result.Text, turnTokens(result), result.ToolCalls)
 	}
 }
 

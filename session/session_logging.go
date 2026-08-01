@@ -23,10 +23,12 @@ func (s *Session) LogUser(text string) {
 }
 
 // LogAssistant logs an assistant response with token counts.
-func (s *Session) LogAssistant(text string, inTokens, outTokens, toolCalls int) {
+func (s *Session) LogAssistant(text string, tokens TurnTokens, toolCalls int) {
 	s.mu.Lock()
-	s.totalIn += inTokens
-	s.totalOut += outTokens
+	s.totalIn += tokens.Input
+	s.totalOut += tokens.Output
+	s.totalCacheRead += tokens.CacheRead
+	s.totalCacheWrite += tokens.CacheWrite
 	cost := s.cost()
 	turn := s.turn
 	s.mu.Unlock()
@@ -37,8 +39,10 @@ func (s *Session) LogAssistant(text string, inTokens, outTokens, toolCalls int) 
 		Role:         "assistant",
 		Content:      text,
 		Model:        s.model,
-		InputTokens:  inTokens,
-		OutputTokens: outTokens,
+		InputTokens:  tokens.Input,
+		OutputTokens: tokens.Output,
+		CacheRead:    tokens.CacheRead,
+		CacheWrite:   tokens.CacheWrite,
 		TotalCost:    cost,
 	})
 }
@@ -210,14 +214,17 @@ func (s *Session) LogPrune(removed int, tokensFreed int, strategy string) {
 // Sync plus a parse and format of the *entire* log on every turn, to slice out
 // the one turn that had just finished — so turn latency grew with the length of
 // the session in service of a file nobody opened.
-func (s *Session) EndTurn(inTokens, outTokens, toolCalls int, stopReason, errMsg string) {
+func (s *Session) EndTurn(tokens TurnTokens, toolCalls int, stopReason, errMsg string) {
 	s.mu.Lock()
 	turn := s.turn
 	s.mu.Unlock()
 
 	if s.store != nil {
-		// Calculate cost for just this turn
-		cost := s.calculateTurnCost(inTokens, outTokens)
-		s.store.EndTurn(s.sessionID, turn, inTokens, outTokens, toolCalls, cost, stopReason, errMsg)
+		// The turn's own cost, priced through the same function the session
+		// total and the server's request row use. The turns table records only
+		// the two token columns it always had, so the cache counts reach the
+		// row as the money they cost rather than as columns of their own.
+		cost := CalcCostWithCache(s.model, tokens.Input, tokens.Output, tokens.CacheRead, tokens.CacheWrite, s.modelStore)
+		s.store.EndTurn(s.sessionID, turn, tokens.Input, tokens.Output, toolCalls, cost, stopReason, errMsg)
 	}
 }

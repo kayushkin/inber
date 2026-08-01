@@ -35,7 +35,7 @@ func sessionAfterRoundTrips(t *testing.T, roundTrips int) *Session {
 
 	for range roundTrips {
 		session.LogRequest(json.RawMessage(`{"messages":[]}`))
-		session.LogAssistant("reply", 100, 50, 0)
+		session.LogAssistant("reply", TurnTokens{Input: 100, Output: 50}, 0)
 	}
 
 	if got := session.CurrentTurn(); got != roundTrips {
@@ -168,7 +168,7 @@ func TestSaveCheckpointReadsTokenTotalsUnderTheMutex(t *testing.T) {
 	go func() {
 		defer waitGroup.Done()
 		for range 200 {
-			session.LogAssistant("reply", 100, 50, 0)
+			session.LogAssistant("reply", TurnTokens{Input: 100, Output: 50}, 0)
 		}
 	}()
 

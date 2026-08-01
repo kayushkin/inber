@@ -113,8 +113,11 @@ func ReconstructTimelineFromJSONL(logFilePath string, store *modelstore.Store) (
 				ResponseText: truncateStr(entry.Content, 120),
 			})
 
-			// Add stats after response
-			if entry.InputTokens > 0 || entry.OutputTokens > 0 {
+			// Add stats after response. A turn whose whole prompt was served
+			// from the cache has no fresh input at all, so gating on the input
+			// and output counts alone would drop the stats line for the turns
+			// the cache worked best on.
+			if entry.InputTokens > 0 || entry.OutputTokens > 0 || entry.CacheRead > 0 || entry.CacheWrite > 0 {
 				// Count tool calls in this turn
 				toolCalls := 0
 				for j := len(events) - 1; j >= 0; j-- {
@@ -131,9 +134,15 @@ func ReconstructTimelineFromJSONL(logFilePath string, store *modelstore.Store) (
 					Timestamp:    entry.Timestamp,
 					InputTokens:  entry.InputTokens,
 					OutputTokens: entry.OutputTokens,
+					CacheRead:    entry.CacheRead,
+					CacheWrite:   entry.CacheWrite,
 					ToolCalls:    toolCalls,
-					Cost:         CalcCost(entry.Model, entry.InputTokens, entry.OutputTokens, store),
-					Model:        entry.Model,
+					// The rebuilt timeline is the one cost figure a user reads
+					// directly, so it prices the cache the same way the live
+					// path does. CalcCost has no cache terms and was charging
+					// this turn for its uncached remainder only.
+					Cost:  CalcCostWithCache(entry.Model, entry.InputTokens, entry.OutputTokens, entry.CacheRead, entry.CacheWrite, store),
+					Model: entry.Model,
 				})
 			}
 		}

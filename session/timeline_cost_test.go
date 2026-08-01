@@ -234,6 +234,50 @@ func TestRebuiltTimelinePricesTheModelTheTurnRanOn(t *testing.T) {
 	}
 }
 
+// TestSessionCostCountsTheCacheTraffic is the same defect one layer up. The
+// session's own running total priced totalIn and totalOut through a private
+// copy of the input/output arithmetic that had no cache terms, so the
+// "session complete — cost: $..." line and every cost_usd in the log reported
+// what the uncached remainder cost and nothing else. Cache writes bill at 125%
+// of the input rate and were the largest single charge on the traffic in the
+// server's store, so the omission ran one way: always under.
+//
+// The assertion is again differential. A turn that wrote 20k tokens into the
+// cache has to cost more than the identical turn that wrote none; under the
+// private copy the two were equal to the cent.
+func TestSessionCostCountsTheCacheTraffic(t *testing.T) {
+	store := registryWithTwoDifferentlyPricedModels(t)
+	const model = "claude-haiku-4-5-20251001"
+
+	newSession := func(t *testing.T) *Session {
+		t.Helper()
+		session, err := New(t.TempDir(), model, "cost-test", "", store)
+		if err != nil {
+			t.Fatalf("new session: %v", err)
+		}
+		t.Cleanup(func() { session.Close() })
+		return session
+	}
+
+	withCache := newSession(t)
+	withCache.LogAssistant("reply", TurnTokens{Input: 50, Output: 500, CacheRead: 8_000, CacheWrite: 20_000}, 0)
+
+	withoutCache := newSession(t)
+	withoutCache.LogAssistant("reply", TurnTokens{Input: 50, Output: 500}, 0)
+
+	if withCache.cost() == withoutCache.cost() {
+		t.Fatalf("a turn that read 8,000 tokens from the cache and wrote 20,000 into it "+
+			"costs the same $%.6f as one that never touched the cache — "+
+			"the session total is not pricing cache traffic", withCache.cost())
+	}
+
+	want := CalcCostWithCache(model, 50, 500, 8_000, 20_000, store)
+	if !closeEnough(withCache.cost(), want) {
+		t.Errorf("session reports $%.6f, want $%.6f — the running total and the package's "+
+			"pricing function disagree about the same four counts", withCache.cost(), want)
+	}
+}
+
 func writeSessionLogForOneTurn(t *testing.T, logFile, model string, inputTokens, outputTokens int) {
 	t.Helper()
 
