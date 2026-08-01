@@ -11,7 +11,7 @@ require (
 	github.com/kayushkin/bus v0.0.0-20260402051322-d9429109f21a
 	github.com/kayushkin/forge v0.0.0
 	github.com/kayushkin/llm-bridge v0.0.0
-	github.com/kayushkin/logstack v0.0.0-20260322075744-a4ca356093f8
+	github.com/kayushkin/logstack v0.0.0-20260801142810-d1430087ac3e
 	github.com/kayushkin/memory-store v0.0.0
 	github.com/kayushkin/model-store v0.0.0-20260307230928-77f7530097d2
 	github.com/kayushkin/repodetect v0.0.0
