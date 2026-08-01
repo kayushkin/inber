@@ -2,9 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kayushkin/inber/engine"
 )
 
 // A spawned child's parent key and spawn depth were set on the in-memory
@@ -183,6 +188,78 @@ func TestARebuiltTopLevelSessionComesBackARoot(t *testing.T) {
 
 	if rebuilt.ParentKey != "" || rebuilt.SpawnDepth != 0 {
 		t.Errorf("a top-level session was rebuilt as a child of %q at depth %d", rebuilt.ParentKey, rebuilt.SpawnDepth)
+	}
+}
+
+// The write side, through a real caller. The fork endpoint is the one child-
+// creating path a test can follow all the way: Spawn's own write sits above a
+// goroutine that runs the child's first turn against a live model client, so
+// what covers Spawn is the recorder both callers share, exercised here.
+func TestAForkIsRecordedAsAChildOfTheSessionItBranchedFrom(t *testing.T) {
+	workspace := t.TempDir()
+	server := &Server{
+		store: tempStore(t),
+		config: Config{
+			DataDir: t.TempDir(),
+			Agents:  map[string]AgentConfig{"claxon": {Workspace: workspace}},
+		},
+	}
+	// A parent that is itself a child, so a depth that is merely copied rather
+	// than incremented shows up.
+	server.sessions.Store(childKey, &Session{
+		Key:        childKey,
+		AgentName:  "claxon",
+		SpawnDepth: 1,
+		ParentKey:  parentKey,
+		Engine:     &engine.Engine{},
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/sessions/"+childKey+"/fork", strings.NewReader("{}"))
+	server.handleBridgeFork(recorder, request, childKey)
+	if recorder.Code != http.StatusCreated {
+		t.Skipf("the fork endpoint did not run here (%d: %s)", recorder.Code, recorder.Body.String())
+	}
+
+	var forked struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &forked); err != nil {
+		t.Fatalf("read the fork response: %v", err)
+	}
+
+	lineage, err := server.store.SessionLineage(forked.SessionID)
+	if err != nil {
+		t.Fatalf("read the fork's lineage: %v", err)
+	}
+	if lineage.ParentKey != childKey {
+		t.Errorf("the fork was recorded under parent %q, want %q", lineage.ParentKey, childKey)
+	}
+	if lineage.SpawnDepth != 2 {
+		t.Errorf("the fork was recorded at depth %d, want 2 — its parent is already a child", lineage.SpawnDepth)
+	}
+}
+
+// The recorder reads lineage off the child it is given, and nothing else can
+// be handed to it in place of that. Spawn's write is this call.
+func TestRecordingAChildTakesItsLineageFromTheChild(t *testing.T) {
+	server := &Server{store: tempStore(t)}
+	server.recordChildSession(&Session{
+		Key:        childKey,
+		SpawnDepth: 2,
+		ParentKey:  parentKey,
+	}, "brigid", "spawn")
+
+	lineage, err := server.store.SessionLineage(childKey)
+	if err != nil {
+		t.Fatalf("read lineage: %v", err)
+	}
+	if lineage != (SessionLineage{ParentKey: parentKey, SpawnDepth: 2}) {
+		t.Errorf("a child recorded at depth 2 under %q came back as %+v", parentKey, lineage)
+	}
+	agentName, _ := server.store.SessionAgent(childKey)
+	if agentName != "brigid" {
+		t.Errorf("the child was recorded under agent %q, want brigid", agentName)
 	}
 }
 

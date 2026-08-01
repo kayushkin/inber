@@ -52,6 +52,17 @@ func (g *Server) forkSession(ctx context.Context, parent *Session, childKey, age
 	return child, nil
 }
 
+// recordChildSession writes a child's row, and its lineage with it.
+//
+// It takes the child rather than a lineage so that neither caller can record a
+// child while leaving out where it came from: the parent key and the spawn
+// depth are read off the session that has just been built, which is the only
+// place they are set. Spawn and handleBridgeFork both go through here.
+func (g *Server) recordChildSession(child *Session, agentName, kind string) {
+	g.store.UpsertSession(child.Key, agentName, kind,
+		SessionLineage{ParentKey: child.ParentKey, SpawnDepth: child.SpawnDepth})
+}
+
 // childKeySeparator joins a parent's session key to the suffix that makes a
 // child's. One per level of the tree, so counting them counts spawn depth —
 // which is how backfillSessionLineageFromChildKeys repairs the children that

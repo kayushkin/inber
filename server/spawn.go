@@ -252,8 +252,7 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 	// Ensure spawn session exists in DB. The lineage goes down with it: it is
 	// set on the Session above and nowhere else, so without this row the depth
 	// cap and the parent's address are forgotten at the next restart.
-	g.store.UpsertSession(childKey, req.Agent, "spawn",
-		SessionLineage{ParentKey: child.ParentKey, SpawnDepth: child.SpawnDepth})
+	g.recordChildSession(child, req.Agent, "spawn")
 
 	// Look up the parent's active request ID for linking.
 	var parentReqID *int
