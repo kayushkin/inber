@@ -108,6 +108,11 @@ func (e *Engine) buildHooks() *agent.Hooks {
 	// Display hooks are resolved dynamically via GetDisplayHooks() so the
 	// gateway can swap them per-request without rebuilding the engine.
 
+	// Which message the session is producing is not a logging concern, so this
+	// is wired whether or not the session logs — every consumer that stamps an
+	// event with its message reads it from here.
+	hooks.OnMessageID = e.SetCurrentMessageID
+
 	if e.Session != nil {
 		logHooks := e.Session.Hooks()
 

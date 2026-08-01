@@ -103,6 +103,7 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 			if g.bus != nil {
 				onEvent = func(ev StreamEvent) {
 					delta := messages.NewChatDelta(parent.AgentName, "inber", sessionID, ev.Kind)
+					delta.MessageID = ev.MessageID
 					switch ev.Kind {
 					case "delta":
 						delta.Type = "text"

@@ -91,6 +91,13 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 		// to call EndTurn by hand and do neither of the other two, so an
 		// OpenAI-served session logged no responses and its error count only
 		// ever went up.
+		// This provider does not stream, so the message is named at the same
+		// moment its content arrives. Report it before anything derived from
+		// the response goes out, so those events carry the id too.
+		if hooks.OnMessageID != nil && anthropicResp.ID != "" {
+			hooks.OnMessageID(anthropicResp.ID)
+		}
+
 		if hooks.OnResponse != nil {
 			hooks.OnResponse(anthropicResp)
 		}

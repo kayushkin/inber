@@ -91,18 +91,19 @@ func (s *Session) updateHooks() {
 	}
 	if onEvent != nil {
 		sess := s.Engine.Session // for turn number access
+		eng := s.Engine          // for the message these events belong to
 		s.Engine.SetDisplayHooks(&engine.DisplayHooks{
 			OnThinking: func(text string) {
-				onEvent(StreamEvent{Kind: "thinking", Text: text, Turn: sess.CurrentTurn()})
+				onEvent(StreamEvent{Kind: "thinking", Text: text, Turn: sess.CurrentTurn(), MessageID: eng.CurrentMessageID()})
 			},
 			OnTextDelta: func(text string) {
-				onEvent(StreamEvent{Kind: "delta", Text: text, Turn: sess.CurrentTurn()})
+				onEvent(StreamEvent{Kind: "delta", Text: text, Turn: sess.CurrentTurn(), MessageID: eng.CurrentMessageID()})
 			},
 			OnToolCall: func(name, input string) {
-				onEvent(StreamEvent{Kind: "tool_call", Tool: name, Text: input, Turn: sess.CurrentTurn()})
+				onEvent(StreamEvent{Kind: "tool_call", Tool: name, Text: input, Turn: sess.CurrentTurn(), MessageID: eng.CurrentMessageID()})
 			},
 			OnToolResult: func(name, output string, isError bool) {
-				onEvent(StreamEvent{Kind: "tool_result", Tool: name, Text: output, Turn: sess.CurrentTurn()})
+				onEvent(StreamEvent{Kind: "tool_result", Tool: name, Text: output, Turn: sess.CurrentTurn(), MessageID: eng.CurrentMessageID()})
 			},
 			OnStatus: func(text string) {
 				onEvent(StreamEvent{Kind: "status", Text: text, Turn: sess.CurrentTurn()})

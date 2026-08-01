@@ -250,7 +250,12 @@ type StreamEvent struct {
 	Text string `json:"text,omitempty"`
 	Tool string `json:"tool,omitempty"`
 	Turn int    `json:"turn,omitempty"` // API round-trip number from session
-	Data any    `json:"data,omitempty"`
+	// MessageID is the model provider's own identifier for the assistant
+	// message this event belongs to. It is what a consumer joins a stream of
+	// deltas back onto the finished message with. Empty on events that belong
+	// to no message (status, done) and on providers that name nothing.
+	MessageID string `json:"message_id,omitempty"`
+	Data      any    `json:"data,omitempty"`
 }
 
 // Run sends a message to an agent session. Creates the session if needed.

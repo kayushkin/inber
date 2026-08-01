@@ -34,6 +34,14 @@ type Tool struct {
 type Hooks struct {
 	OnRequest    func(params *anthropic.MessageNewParams)                    // called before each API request
 	OnResponse   func(resp *anthropic.Message)                               // called after each API response
+	// OnMessageID reports the provider's own identifier for the assistant
+	// message the turn is producing, as soon as the provider names it. On a
+	// streamed response that is the message_start event, which arrives before
+	// any text delta of that message, so an observer can key the deltas it is
+	// about to receive on the message they belong to. On a response that is
+	// not streamed it fires once the response is in hand, alongside
+	// OnResponse. It may fire more than once with the same id.
+	OnMessageID  func(messageID string)
 	OnThinking   func(text string)                                           // called when thinking blocks are received
 	OnTextDelta  func(text string)                                           // called for each text chunk during streaming
 	OnToolCall   func(toolID, name string, input []byte)

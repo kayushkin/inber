@@ -136,6 +136,7 @@ func (bm *BusManager) handleBusMessage(ctx context.Context, msg bus.InboundMessa
 
 		// Original delta publishing.
 		delta := messages.NewChatDelta(agent, "inber", sessionID, ev.Kind)
+		delta.MessageID = ev.MessageID
 		switch ev.Kind {
 		case "delta":
 			delta.Type = "text"

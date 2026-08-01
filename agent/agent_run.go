@@ -153,10 +153,18 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 			apiErr = err
 		} else {
 			var accumulated anthropic.Message
+			var announcedID string
 			for streamResp.Next() {
 				event := streamResp.Current()
 				if err := accumulated.Accumulate(event); err != nil {
 					continue
+				}
+				// message_start names the message before any of its content
+				// arrives. Report it here, ahead of the first delta below, so
+				// everything downstream can key this message's deltas on it.
+				if accumulated.ID != "" && accumulated.ID != announcedID {
+					announcedID = accumulated.ID
+					a.announceMessageID(accumulated.ID)
 				}
 				// Emit text deltas
 				if delta, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
@@ -216,8 +224,24 @@ func deliveredText(resp *anthropic.Message) string {
 	return text.String()
 }
 
+// announceMessageID reports the provider's identifier for the assistant
+// message now being produced. Streaming calls it at message_start;
+// processResponse calls it for responses that were not streamed. Both may
+// report the same id for one message, which is why the hook is documented as
+// repeatable.
+func (a *Agent) announceMessageID(messageID string) {
+	if messageID == "" {
+		return
+	}
+	if a.hooks != nil && a.hooks.OnMessageID != nil {
+		a.hooks.OnMessageID(messageID)
+	}
+}
+
 // processResponse handles thinking blocks and text extraction, updates result stats
 func (a *Agent) processResponse(resp *anthropic.Message, result *TurnResult) {
+	a.announceMessageID(resp.ID)
+
 	result.InputTokens += int(resp.Usage.InputTokens)
 	result.OutputTokens += int(resp.Usage.OutputTokens)
 	

@@ -872,6 +872,7 @@ func streamEventToBridge(e StreamEvent, sessionID string) msg.Event {
 	case "delta":
 		bridgeEvent.Type = msg.EventStream
 		bridgeEvent.Stream = &msg.HarnessStream{
+			MessageID: e.MessageID,
 			Delta: &msg.BlockDelta{
 				Type: msg.DeltaText,
 				Text: e.Text,
@@ -885,15 +886,17 @@ func streamEventToBridge(e StreamEvent, sessionID string) msg.Event {
 	case "tool_call":
 		bridgeEvent.Type = msg.EventToolCall
 		bridgeEvent.ToolCall = &msg.ToolCallEvent{
-			Name:  e.Tool,
-			Input: json.RawMessage(e.Text),
+			Name:      e.Tool,
+			Input:     json.RawMessage(e.Text),
+			MessageID: e.MessageID,
 		}
 
 	case "tool_result":
 		bridgeEvent.Type = msg.EventToolResult
 		bridgeEvent.ToolResult = &msg.ToolResultEvent{
-			Name:   e.Tool,
-			Output: e.Text,
+			Name:      e.Tool,
+			Output:    e.Text,
+			MessageID: e.MessageID,
 		}
 
 	case "done":

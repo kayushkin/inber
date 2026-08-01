@@ -92,11 +92,20 @@ type Engine struct {
 	// is what makes disabling reversible: filtering agentTools in place threw the
 	// full set away, so each call subtracted from the previous answer and no
 	// request could turn a tool back on.
-	allTools            []agent.Tool
-	disabledToolNames   map[string]bool
-	agentTools          []agent.Tool
-	display             *DisplayHooks
-	displayMu           sync.Mutex
+	allTools          []agent.Tool
+	disabledToolNames map[string]bool
+	agentTools        []agent.Tool
+	display           *DisplayHooks
+	displayMu         sync.Mutex
+	// currentMessageID is the provider's identifier for the assistant message
+	// this session is producing right now. The agent reports it as soon as the
+	// provider names the message, which on a streamed response is before the
+	// first delta — so an event emitted while that message is arriving can be
+	// stamped with the message it belongs to. It stays put between messages so
+	// that a tool result, which arrives after the message that asked for the
+	// tool, is still stamped with that message.
+	currentMessageID    string
+	messageIDMu         sync.Mutex
 	workspace           *sessionMod.Workspace
 	thinkingBud         int64
 	stashCfg            conversation.StashConfig
@@ -314,6 +323,26 @@ func (e *Engine) RunTurn(ctx context.Context, input string) (*agent.TurnResult, 
 func (e *Engine) SetModel(model string) {
 	e.Model = model
 	e.modelExplicitlySet = true
+}
+
+// SetCurrentMessageID records the provider's identifier for the assistant
+// message now being produced. The agent reports it through the OnMessageID
+// hook as soon as the provider names the message; nothing else should call
+// this, because nothing else knows the answer.
+func (e *Engine) SetCurrentMessageID(messageID string) {
+	e.messageIDMu.Lock()
+	e.currentMessageID = messageID
+	e.messageIDMu.Unlock()
+}
+
+// CurrentMessageID returns the provider's identifier for the assistant message
+// this session is producing, or the last one it produced. Empty until the
+// first response of the session is named, and empty for the whole session on a
+// provider that names nothing.
+func (e *Engine) CurrentMessageID() string {
+	e.messageIDMu.Lock()
+	defer e.messageIDMu.Unlock()
+	return e.currentMessageID
 }
 
 // SetThinkingBudget updates the extended thinking token budget for subsequent turns.
