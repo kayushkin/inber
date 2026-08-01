@@ -117,6 +117,9 @@ func ManageStaging(
 	// won't hit the prune thresholds. But if FlushInterval is large or
 	// emergency management fires, some might qualify.
 	stagingAges := computeAges(staging)
+	// Pair over the whole conversation, not just the staging zone: a result in
+	// staging can answer a call made back in the frozen zone.
+	toolNames := toolNamesByUseID(messages)
 	for i := range staging {
 		if staging[i].Role != anthropic.MessageParamRoleUser {
 			continue
@@ -125,7 +128,7 @@ func ManageStaging(
 		for j := range staging[i].Content {
 			block := staging[i].Content[j]
 			if block.OfToolResult != nil {
-				pruned, wasPruned := pruneToolResult(block, age, cfg)
+				pruned, wasPruned := pruneToolResult(block, age, cfg, toolNames[block.OfToolResult.ToolUseID])
 				if wasPruned {
 					staging[i].Content[j] = pruned
 				}

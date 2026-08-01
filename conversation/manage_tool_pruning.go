@@ -7,15 +7,36 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// pruneToolResult applies age-based pruning to a tool result block
-func pruneToolResult(block anthropic.ContentBlockParamUnion, age int, cfg ManagementConfig) (anthropic.ContentBlockParamUnion, bool) {
+// toolNamesByUseID pairs each tool_use id with the name of the tool that was
+// called. A tool_result block carries only the id, so a summary of that result
+// can name its tool only by looking the id up here.
+func toolNamesByUseID(messages []anthropic.MessageParam) map[string]string {
+	names := make(map[string]string)
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			// An id-less call is skipped: its entry would answer to every
+			// result that also has no id, and name it wrongly.
+			if block.OfToolUse != nil && block.OfToolUse.ID != "" {
+				names[block.OfToolUse.ID] = block.OfToolUse.Name
+			}
+		}
+	}
+	return names
+}
+
+// pruneToolResult applies age-based pruning to a tool result block. toolName is
+// the name of the tool that produced the result, from toolNamesByUseID; pass
+// "" when the pairing is missing.
+func pruneToolResult(block anthropic.ContentBlockParamUnion, age int, cfg ManagementConfig, toolName string) (anthropic.ContentBlockParamUnion, bool) {
 	if block.OfToolResult == nil {
 		return block, false
 	}
 
 	toolResult := block.OfToolResult
+	originalContent := extractToolResultContent(toolResult.Content)
 
-	// Drop entirely if too old
+	// Drop entirely if too old. The marker still names the tool and the size,
+	// so the transcript records what was lost rather than only that something was.
 	if age >= cfg.ToolResultDrop {
 		return anthropic.ContentBlockParamUnion{
 			OfToolResult: &anthropic.ToolResultBlockParam{
@@ -23,7 +44,7 @@ func pruneToolResult(block anthropic.ContentBlockParamUnion, age int, cfg Manage
 				Content: []anthropic.ToolResultBlockParamContentUnion{
 					{
 						OfText: &anthropic.TextBlockParam{
-							Text: "[result dropped - too old]",
+							Text: fmt.Sprintf("[%s: dropped - too old, %d bytes]", toolLabel(toolName), len(originalContent)),
 						},
 					},
 				},
@@ -37,14 +58,12 @@ func pruneToolResult(block anthropic.ContentBlockParamUnion, age int, cfg Manage
 	}
 
 	// Summarize if in middle range
-	originalContent := extractToolResultContent(toolResult.Content)
 	if originalContent == "" || len(originalContent) < 100 {
 		return block, false // Keep short results as-is
 	}
 
-	// Create summary based on tool type (we don't have direct tool name, use heuristics)
-	summary := summarizeToolResultByContent(originalContent)
-	
+	summary := summarizeToolResult(toolName, originalContent)
+
 	return anthropic.ContentBlockParamUnion{
 		OfToolResult: &anthropic.ToolResultBlockParam{
 			ToolUseID: toolResult.ToolUseID,
@@ -93,52 +112,29 @@ func extractToolResultContent(content []anthropic.ToolResultBlockParamContentUni
 	return strings.Join(parts, "\n")
 }
 
-// summarizeToolResultByContent creates a one-line summary of tool result content
-func summarizeToolResultByContent(content string) string {
-	lines := strings.Split(content, "\n")
-	lineCount := len(lines)
+// toolLabel names the tool a pruned result came from. An unpaired result says
+// so; it never guesses a tool from the content.
+func toolLabel(toolName string) string {
+	if toolName == "" {
+		return "tool result"
+	}
+	return toolName
+}
 
-	// Detect tool type by content patterns
-	lower := strings.ToLower(content)
-	
-	// Shell command output
-	if strings.Contains(content, "exit code") || strings.Contains(lower, "error:") || 
-	   strings.Contains(lower, "warning:") || len(lines) > 5 {
-		firstLine := ""
-		if len(lines) > 0 {
-			firstLine = truncateToOneLine(lines[0], 80)
-		}
-		return fmt.Sprintf("[shell: %d lines] %s", lineCount, firstLine)
-	}
-	
-	// File read
-	if lineCount > 20 && !strings.Contains(lower, "exit") {
-		return fmt.Sprintf("[read file: %d lines, %d bytes]", lineCount, len(content))
-	}
-	
-	// File write
-	if strings.Contains(lower, "wrote") || strings.Contains(lower, "written") {
-		return fmt.Sprintf("[wrote file: %d bytes]", len(content))
-	}
-	
-	// List files
-	if strings.Contains(content, "/") && lineCount > 3 {
-		return fmt.Sprintf("[listed %d files]", lineCount)
-	}
-	
-	// Memory search
-	if strings.Contains(lower, "found") || strings.Contains(lower, "results") {
-		return fmt.Sprintf("[search: %d results]", lineCount)
-	}
-	
-	// Generic: first line + byte count
-	firstLine := truncateToOneLine(lines[0], 80)
-	return fmt.Sprintf("[%d bytes] %s", len(content), firstLine)
+// summarizeToolResult creates a one-line summary of a tool result. It names the
+// tool that produced the result and keeps both the line count and the byte
+// count, so the transcript always records how much was dropped.
+func summarizeToolResult(toolName, content string) string {
+	lines := strings.Split(content, "\n")
+	summary := fmt.Sprintf("[%s: %d lines, %d bytes] %s",
+		toolLabel(toolName), len(lines), len(content), truncateToOneLine(lines[0], 80))
+	return strings.TrimRight(summary, " ")
 }
 
 // truncateOldToolResults applies aggressive truncation to tool results in old messages (legacy)
 func truncateOldToolResults(messages []anthropic.MessageParam) int {
 	truncated := 0
+	toolNames := toolNamesByUseID(messages)
 
 	for i := range messages {
 		if messages[i].Role != anthropic.MessageParamRoleUser {
@@ -155,7 +151,7 @@ func truncateOldToolResults(messages []anthropic.MessageParam) int {
 
 				if originalContent != "" && len(originalContent) > 200 {
 					// Apply summarization
-					summarized := summarizeToolResultByContent(originalContent)
+					summarized := summarizeToolResult(toolNames[toolResult.ToolUseID], originalContent)
 					
 					// Update the content
 					toolResult.Content = []anthropic.ToolResultBlockParamContentUnion{

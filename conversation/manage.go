@@ -83,7 +83,11 @@ func ManageConversation(
 	// Apply role-based pruning per message
 	var finalMessages []anthropic.MessageParam
 	tokensFreed := 0
-	
+
+	// A tool_result names only the id of the call it answers, so pair the ids
+	// with their tool names before pruning summarises any of them.
+	toolNames := toolNamesByUseID(managedMessages)
+
 	for i, msg := range managedMessages {
 		age := messageAges[i]
 		managedMsg := msg
@@ -95,7 +99,7 @@ func ManageConversation(
 			var prunedContent []anthropic.ContentBlockParamUnion
 			for _, block := range msg.Content {
 				if block.OfToolResult != nil {
-					prunedBlock, wasPruned := pruneToolResult(block, age, cfg)
+					prunedBlock, wasPruned := pruneToolResult(block, age, cfg, toolNames[block.OfToolResult.ToolUseID])
 					prunedContent = append(prunedContent, prunedBlock)
 					if wasPruned {
 						pruned = true
