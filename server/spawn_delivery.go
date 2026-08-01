@@ -13,6 +13,24 @@ import (
 	"github.com/kayushkin/inber/memory"
 )
 
+// describeSpawnTokens renders a child's usage for the completion message its
+// parent reads.
+//
+// It names the whole prompt, not the fresh part. TokenUsage's four counts are
+// disjoint — Input is the portion of the prompt that was neither read from the
+// cache nor written to it — and inber caches deliberately, so on the server's
+// own traffic Input is about 4% of what a child actually sent. This line used
+// to report that 4% under the bare word "in", so a sub-agent that pushed 1.5M
+// prompt tokens announced itself to its parent as 39,915. The parent is a model
+// deciding whether to spawn again, and it was reading the cost right next to a
+// token figure twenty-five times too small to explain it.
+func describeSpawnTokens(tokens TokenUsage) string {
+	return fmt.Sprintf("prompt=%d (fresh=%d cache_read=%d cache_write=%d) out=%d ($%.3f)",
+		tokens.Input+tokens.CacheRead+tokens.CacheWrite,
+		tokens.Input, tokens.CacheRead, tokens.CacheWrite,
+		tokens.Output, tokens.Cost)
+}
+
 // deliverProgress sends progress messages from child to parent session.
 func (g *Server) deliverProgress(parentKey, childKey, agentName, message string) {
 	val, ok := g.sessions.Load(parentKey)
@@ -46,13 +64,13 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 		"Task: %s\n"+
 		"Status: %s\n"+
 		"Duration: %s\n"+
-		"Tokens: %d in / %d out ($%.3f)\n"+
+		"Tokens: %s\n"+
 		"\nResult:\n%s",
 		result.Agent, result.ChildKey,
 		result.Task,
 		result.Status,
 		result.Duration.Round(time.Second),
-		result.Tokens.Input, result.Tokens.Output, result.Tokens.Cost,
+		describeSpawnTokens(result.Tokens),
 		result.Summary,
 	)
 
