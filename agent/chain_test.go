@@ -77,7 +77,7 @@ func runBlocks(t *testing.T, a *Agent, tools []Tool, blocks ...anthropic.Content
 // believed it had run.
 func TestCachedReadStillRunsThenChain(t *testing.T) {
 	a := &Agent{readCache: NewReadCache()}
-	a.readCache.RecordFullRead("/a.go", 1, 12)
+	a.readCache.RecordFullRead("/a.go", 12)
 
 	chained := &recordingTool{output: "build ok"}
 	reader := &recordingTool{output: "should not be read again"}
@@ -112,7 +112,7 @@ func TestCachedReadStillRunsThenChain(t *testing.T) {
 // chain and were dropped by the same short-circuit.
 func TestCachedReadStillProcessesSideband(t *testing.T) {
 	a := &Agent{readCache: NewReadCache()}
-	a.readCache.RecordFullRead("/a.go", 1, 12)
+	a.readCache.RecordFullRead("/a.go", 12)
 
 	var completed []int
 	var noteKey, noteValue string
@@ -188,7 +188,7 @@ func TestChainedReadIsRecordedUnderItsOwnPath(t *testing.T) {
 // describing content that no longer exists.
 func TestChainedWriteInvalidatesTheCache(t *testing.T) {
 	a := &Agent{readCache: NewReadCache()}
-	a.readCache.RecordFullRead("/a.go", 1, 12)
+	a.readCache.RecordFullRead("/a.go", 12)
 
 	reader := &recordingTool{output: "stub path, never reached"}
 	writer := &recordingTool{output: "written"}

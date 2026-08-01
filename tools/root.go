@@ -3,8 +3,6 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
-	"strings"
 
 	"github.com/kayushkin/inber/agent"
 )
@@ -193,9 +191,10 @@ func resolveArgumentPaths(raw, root string, pathArguments filesystemPathArgument
 // resolvePathAgainstRoot joins a relative path onto root. An absolute path, and
 // a path the model anchored at "~", are returned as written — see ScopeToRoot
 // for why those two are the model's to choose and not this function's to move.
+//
+// The rule itself lives in agent.ResolvePathAgainstRoot because the read cache
+// identifies files by it too, and a cache that resolves paths differently from
+// the tools would file one file under two keys.
 func resolvePathAgainstRoot(given, root string) string {
-	if filepath.IsAbs(given) || given == "~" || strings.HasPrefix(given, "~/") {
-		return given
-	}
-	return filepath.Join(root, given)
+	return agent.ResolvePathAgainstRoot(given, root)
 }

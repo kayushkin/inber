@@ -162,6 +162,27 @@ func (a *Agent) SetThinking(budgetTokens int64) {
 }
 
 // SetContextWindow sets the model's context window size for overflow protection.
+// SetRepoRoot tells the agent which root its tools resolve relative paths
+// against — the same root tools.ScopeToRoot was given. The read cache needs it
+// to identify a file by the file it is rather than by the spelling the model
+// used, so a relative read and an absolute write meet on one entry.
+func (a *Agent) SetRepoRoot(root string) {
+	if a.readCache != nil {
+		a.readCache.SetRoot(root)
+	}
+}
+
+// RepoRoot returns the root this agent's tools resolve relative paths against.
+// The read cache holds it, because the cache is the only part of the agent that
+// has to reason about which file a path names; asking it is how callers read the
+// value back without a second copy going stale.
+func (a *Agent) RepoRoot() string {
+	if a.readCache == nil {
+		return ""
+	}
+	return a.readCache.Root()
+}
+
 func (a *Agent) SetContextWindow(tokens int) {
 	a.contextWindow = tokens
 }

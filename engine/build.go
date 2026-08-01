@@ -26,6 +26,12 @@ func (e *Engine) buildAgent(blocks []sessionMod.NamedBlock) *agent.Agent {
 	
 	a := agent.NewWithSystemBlocks(provider, systemBlocks)
 
+	// The same root setToolSet resolves the tools against. The read cache
+	// identifies a file by the path the tool will open, so it has to be given
+	// the root the tools were given or a relative read and an absolute write
+	// land on two different entries.
+	a.SetRepoRoot(e.repoRoot)
+
 	// OAuth identity injection removed (2026-04-04): using API key auth now.
 	
 	// Hand over the volatile context for injection into the last user message.

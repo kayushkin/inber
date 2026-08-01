@@ -76,7 +76,7 @@ func TestTheChainCannotGetAroundTheGate(t *testing.T) {
 // file contents anyway.
 func TestARefusedReadIsNotAnsweredFromTheCache(t *testing.T) {
 	a := &Agent{readCache: NewReadCache(), ToolRefusal: refuseTools("read_files")}
-	a.readCache.RecordFullRead("/a.go", 1, 12)
+	a.readCache.RecordFullRead("/a.go", 12)
 
 	reader := &recordingTool{output: "package main"}
 	outputs := runBlocks(t, a,

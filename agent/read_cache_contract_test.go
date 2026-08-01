@@ -70,7 +70,7 @@ func TestTruncatedReadDoesNotEnterTheReadCache(t *testing.T) {
 			// And so the cache stays empty, and a later ranged read runs.
 			cache := NewReadCache()
 			if lines := extractCompleteFileLines(out); lines > 0 {
-				cache.RecordFullRead(path, 1, lines)
+				cache.RecordFullRead(path, lines)
 			}
 			if stub, cached := cache.Check(path); cached {
 				t.Errorf("later reads of a truncated file are stubbed with %q", stub)
@@ -92,7 +92,7 @@ func TestCompleteReadStillEntersTheReadCache(t *testing.T) {
 	}
 
 	cache := NewReadCache()
-	cache.RecordFullRead(path, 1, lines)
+	cache.RecordFullRead(path, lines)
 	stub, cached := cache.Check(path)
 	if !cached {
 		t.Fatalf("a complete read was not cached")

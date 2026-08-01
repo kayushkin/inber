@@ -322,7 +322,7 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 		if a.readCache != nil {
 			if path, isFull := isFullRead(block.Name, outcome.primaryInput); isFull {
 				if lines := extractCompleteFileLines(outcome.primaryOutput); lines > 0 {
-					a.readCache.RecordFullRead(path, result.ToolCalls, lines)
+					a.readCache.RecordFullRead(path, lines)
 				}
 			}
 			// The chained call is a real tool call and needs the same
@@ -335,7 +335,7 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 				if !outcome.chainFailed {
 					if path, isFull := isFullRead(outcome.chainTool, outcome.chainInput); isFull {
 						if lines := extractCompleteFileLines(outcome.chainOutput); lines > 0 {
-							a.readCache.RecordFullRead(path, result.ToolCalls, lines)
+							a.readCache.RecordFullRead(path, lines)
 						}
 					}
 				}
