@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,6 +119,26 @@ func (s *Store) UpsertSession(key, agent, kind string) error {
 		ON CONFLICT(key) DO UPDATE SET last_active = CURRENT_TIMESTAMP
 	`, key, agent, kind)
 	return err
+}
+
+// SessionAgent returns the agent name recorded against a session key, and an
+// empty name when the store has never seen that key.
+//
+// This table is where a session's agent is written when the session is created,
+// and for a spawned child it is the only place that records the child's own
+// agent: the child's key is its parent's key with a suffix, so the key names the
+// parent. UpsertSession deliberately leaves agent alone on conflict, so the name
+// written at creation is the name this returns for the life of the session.
+func (s *Store) SessionAgent(key string) (string, error) {
+	var agent string
+	err := s.db.QueryRow(`SELECT agent FROM sessions WHERE key = ?`, key).Scan(&agent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read agent for session %s: %w", key, err)
+	}
+	return agent, nil
 }
 
 // TouchSession updates last_active and message count.

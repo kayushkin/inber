@@ -259,8 +259,18 @@ func (g *Server) handleBridgeSend(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
-	// Resolve agent from session key.
-	agentName := agentFromSessionKey(id)
+	// Resolve the agent this session belongs to. Getting it wrong runs the next
+	// turn of someone else's conversation under someone else's agent, so an
+	// unresolvable session is refused rather than routed to the default agent.
+	agentName, err := g.agentForSession(id)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("resolve agent for session %s: %v", id, err), http.StatusInternalServerError)
+		return
+	}
+	if agentName == "" {
+		jsonError(w, fmt.Sprintf("no agent recorded for session %s", id), http.StatusNotFound)
+		return
+	}
 
 	// Build a RunRequest targeting this specific session.
 	runReq := RunRequest{
@@ -520,10 +530,17 @@ func (g *Server) handleBridgeResume(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 
-	// Not loaded — try to recreate from persisted messages.
-	agentName := agentFromSessionKey(id)
+	// Not loaded — try to recreate from persisted messages. The agent comes from
+	// the row written when the session was created: rebuilding a spawned child
+	// under the agent its key names would rebuild it as its parent, and load the
+	// child's transcript into the parent's system prompt, model and workspace.
+	agentName, err := g.agentForSession(id)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("resolve agent for session %s: %v", id, err), http.StatusInternalServerError)
+		return
+	}
 	if agentName == "" {
-		jsonError(w, "cannot determine agent from session key", http.StatusBadRequest)
+		jsonError(w, fmt.Sprintf("no agent recorded for session %s", id), http.StatusBadRequest)
 		return
 	}
 	ac, ok := g.GetAgentConfig(agentName)
@@ -746,7 +763,11 @@ func (g *Server) handleBridgeDiscover(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 
-	agentName := agentFromSessionKey(id)
+	agentName, err := g.agentForSession(id)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("resolve agent for session %s: %v", id, err), http.StatusInternalServerError)
+		return
+	}
 
 	// List all stored sessions and filter by agent.
 	rows, err := g.store.ListSessions("")
@@ -924,8 +945,49 @@ func (g *Server) countSessionsByState() (running, idle, completed int) {
 	return
 }
 
-// agentFromSessionKey extracts agent name from session keys like "agent:NAME:main".
-func agentFromSessionKey(key string) string {
+// agentForSession answers which agent a session key belongs to, by asking the
+// records that own that fact rather than by reading the key.
+//
+// A loaded session carries the agent it was built with; the sessions table
+// carries the agent written when the session was created, and UpsertSession
+// never overwrites it. A spawned child is why this exists: its key is its
+// parent's key plus a suffix (sessionKeyForChild), so the key spells the
+// parent's name while the child runs a different agent entirely. Reading the
+// agent out of the key handed brigid's transcript to claxon.
+//
+// An empty name means no record of this key exists and the key itself cannot
+// be read — the caller is naming a session that has never run, and every
+// caller here reports that rather than routing to a default.
+func (g *Server) agentForSession(key string) (string, error) {
+	if val, ok := g.sessions.Load(key); ok {
+		if name := val.(*Session).AgentName; name != "" {
+			return name, nil
+		}
+	}
+	if g.store != nil {
+		name, err := g.store.SessionAgent(key)
+		if err != nil {
+			return "", err
+		}
+		if name != "" {
+			return name, nil
+		}
+	}
+	return agentFromTopLevelSessionKey(key), nil
+}
+
+// agentFromTopLevelSessionKey reads the agent name out of a top-level session
+// key like "agent:NAME:main", and returns an empty name for anything else.
+//
+// It is the last resort behind agentForSession, for a key no record knows.
+// A child key ("agent:NAME:main:sub:41287") carries its *parent's* name in that
+// position and says nothing about the child's own agent, so this refuses to
+// answer for one: an empty name becomes a visible error at the call site,
+// where the parent's name would have become a silently wrong agent.
+func agentFromTopLevelSessionKey(key string) string {
+	if strings.Contains(key, ":sub:") {
+		return ""
+	}
 	parts := strings.SplitN(key, ":", 3)
 	if len(parts) >= 2 {
 		return parts[1]
