@@ -97,8 +97,8 @@ func timeoutFromHealth(h *modelstore.ModelHealth, defaultTimeout time.Duration) 
 //
 // The filter is load-bearing, not tidiness. model-store's health table is
 // host-shared, persistent and read across processes, and a single error flips a
-// model to unhealthy — model-store/health.go marks it down the moment
-// LastErrorAt is after LastSuccessAt, with no threshold and no decay. selectModel
+// model to unhealthy — model-store/health.go marks it down whenever the last
+// outcome it recorded was an error, with no threshold and no decay. selectModel
 // then fails over on that. So an error inber raised about itself, written here,
 // degrades model selection for every session on the machine until some other
 // session happens to record a success against the same model.

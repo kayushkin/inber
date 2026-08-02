@@ -76,11 +76,17 @@ func TestPolicyDeadlineDoesNotMarkTheModelUnhealthy(t *testing.T) {
 
 	e.recordModelHealth(model, 600_000, context.DeadlineExceeded)
 
-	// Assert on the stamp, not on IsHealthy: model_health timestamps are unix
-	// seconds, so an error written in the same second as the setup success would
-	// leave IsHealthy true anyway and the test would pass without the fix.
-	if h := store.GetHealth(model); !h.LastErrorAt.IsZero() {
+	h := store.GetHealth(model)
+	if !h.LastErrorAt.IsZero() {
 		t.Fatalf("a policy deadline stamped LastErrorAt on %s (%q)", model, h.LastError)
+	}
+	// Assert the consequence too, not just the row. This used to be unassertable:
+	// model_health stores unix seconds, so an error written in the same second as
+	// the setup success left IsHealthy true whatever the filter did, and the test
+	// would have passed without the fix. IsHealthy now reads the outcome counter,
+	// so it is a real assertion again.
+	if !h.IsHealthy(healthWindow) {
+		t.Fatalf("a policy deadline failed %s over for every session on the box", model)
 	}
 }
 
@@ -96,21 +102,25 @@ func TestOwnAPICallCapDoesNotMarkTheModelUnhealthy(t *testing.T) {
 	// Exactly what Agent.Run builds, wrapper and count included.
 	e.recordModelHealth(model, 300_000, fmt.Errorf("%w (%d)", agent.ErrMaxAPICallsExceeded, 50))
 
-	if h := store.GetHealth(model); !h.LastErrorAt.IsZero() {
+	h := store.GetHealth(model)
+	if !h.LastErrorAt.IsZero() {
 		t.Fatalf("inber's own runaway cap stamped LastErrorAt on %s (%q) — that row is what "+
 			"selectModel reads on the next turn, in this process and every other one", model, h.LastError)
+	}
+	if !h.IsHealthy(healthWindow) {
+		t.Fatalf("inber's own runaway cap failed %s over for every session on the box", model)
 	}
 }
 
 // TestProviderFailureStillMarksTheModelUnhealthy is the control. Without it a
 // recordModelHealth that recorded nothing ever would pass every test above.
 //
-// It asserts on the row rather than on IsHealthy for a reason worth knowing:
-// model_health stores unix seconds, so an error arriving in the same second as a
-// success leaves LastErrorAt equal to — not after — LastSuccessAt, and
-// ModelHealth.IsHealthy keeps returning true. A real 529 does flip health, but
-// only because a turn takes longer than a second; the assertion here must not
-// rest on that.
+// It asserts the model actually goes unhealthy, which is what failover reads.
+// That assertion was impossible while ModelHealth.IsHealthy compared
+// LastErrorAt against LastSuccessAt: both are stored as unix seconds, so an
+// error recorded in the same second as this setup success compared equal rather
+// than after, and IsHealthy stayed true no matter what was written. IsHealthy
+// now reads the outcome counter, so the control is a control.
 func TestProviderFailureStillMarksTheModelUnhealthy(t *testing.T) {
 	e, store := engineWithTempModelStore(t)
 	const model = "claude-sonnet-4-5"
@@ -124,6 +134,10 @@ func TestProviderFailureStillMarksTheModelUnhealthy(t *testing.T) {
 	}
 	if h.LastError == "" {
 		t.Fatal("the provider's complaint was not recorded, so an operator cannot see why failover fired")
+	}
+	if h.IsHealthy(healthWindow) {
+		t.Fatal("a 529 was recorded but left the model healthy, so selectModel will keep " +
+			"choosing it and failover never fires")
 	}
 }
 
