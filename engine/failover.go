@@ -109,12 +109,12 @@ func timeoutFromHealth(h *modelstore.ModelHealth, defaultTimeout time.Duration) 
 // capped turn is when the user pressed stop or a policy clock expired, not a
 // response time. AvgResponseMs is a timeout estimator (timeoutFromHealth), so
 // handing it a fabricated duration is worse than handing it nothing.
-func (e *Engine) recordModelHealth(model string, durationMs int64, err error) {
+func (e *Engine) recordModelHealth(turnContext context.Context, model string, durationMs int64, err error) {
 	if e.modelStore == nil {
 		return
 	}
 	if err != nil {
-		if !errorIsEvidenceAboutTheModel(err) {
+		if !errorIsEvidenceAboutTheModel(turnContext, err) {
 			Log.Info("model health: leaving %s unchanged — %q is inber reporting on inber, not on the provider", model, err)
 			return
 		}
@@ -133,25 +133,43 @@ func (e *Engine) recordModelHealth(model string, durationMs int64, err error) {
 //   - context.Canceled — the user pressed stop. It arrives from Agent.Run's
 //     cancellation check, which sees it because InterruptSession calls
 //     Session.cancel; that is what the stop button in dash and llm-bridge does.
-//   - context.DeadlineExceeded — a policy clock ran out. Every deadline a turn
-//     runs under is inber's own: a sub-agent spawn timeout, a session's
-//     max_duration, the bus handler's cap. The one deadline that would have been
-//     evidence about a model, selectModel's timeoutHint derived from
-//     AvgResponseMs, is discarded by executeAgent and never applied to a
-//     context — so there is no provider-response timeout to confuse this with.
+//     A cancel is always somebody deciding to stop, never a provider's answer,
+//     so it is excluded whatever the turn context says.
+//   - context.DeadlineExceeded — excluded only when inber's own clock is the one
+//     that ran out, which is what turnContext.Err() reports. See below.
 //   - agent.ErrMaxAPICallsExceeded — inber's own runaway cap. Hitting it means
 //     the provider answered every one of those calls.
+//
+// The deadline case has to ask whose clock fired, because inber runs two kinds
+// and only one of them is its own. Its own are on the turn context: a sub-agent
+// spawn timeout, a session's max_duration, the bus handler's cap. The other one
+// is not on any context — agent/openai.go gives the OpenAI-compatible client a
+// flat 120s http.Client.Timeout, which serves openai, google, openrouter, ollama
+// and the catch-all for every provider inber does not name. When that fires,
+// net/http returns an error satisfying errors.Is(err, context.DeadlineExceeded)
+// while the turn context is still perfectly live.
+//
+// Reading that as inber-reporting-on-inber discards the only signal a hung
+// provider on that path ever produces: nothing is recorded, the model never goes
+// unhealthy, selectModel keeps choosing it, and every turn burns 120s forever
+// without failover firing once. So the test is not what the error looks like, it
+// is whether inber's own clock actually ran out.
+//
+// turnContext must be the context the turn ran under, and must not be nil: a nil
+// one would answer "no clock of mine fired" for every deadline there is, which is
+// exactly the reading this function exists to stop being automatic.
 //
 // Everything else is deliberately left to record an error, including "unexpected
 // stop reason". Whether a refusal, or a pause_turn inber has no branch for, is a
 // provider fault, a model fault or a gap in inber is an open question on todo
 // 4c511c8f; deciding it here would settle it by accident.
-func errorIsEvidenceAboutTheModel(err error) bool {
+func errorIsEvidenceAboutTheModel(turnContext context.Context, err error) bool {
 	switch {
 	case errors.Is(err, context.Canceled),
-		errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, agent.ErrMaxAPICallsExceeded):
 		return false
+	case errors.Is(err, context.DeadlineExceeded):
+		return turnContext.Err() == nil
 	}
 	return true
 }

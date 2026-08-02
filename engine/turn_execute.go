@@ -51,9 +51,11 @@ func (e *Engine) executeAgent(ctx context.Context, systemBlocks []sessionMod.Nam
 	}
 
 	// Record health for outcomes that are evidence about the model. A turn that
-	// inber itself stopped — a cancel, a policy deadline, its own API-call cap —
-	// leaves the record alone; see recordModelHealth.
-	e.recordModelHealth(modelUsed, time.Since(apiStart).Milliseconds(), err)
+	// inber itself stopped — a cancel, one of its own policy deadlines, its own
+	// API-call cap — leaves the record alone. ctx is passed because that is how
+	// the deadline case tells inber's own clock from the OpenAI client's flat
+	// 120s timeout, which is a provider not answering; see recordModelHealth.
+	e.recordModelHealth(ctx, modelUsed, time.Since(apiStart).Milliseconds(), err)
 
 	return result, err
 }

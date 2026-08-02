@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kayushkin/inber/agent"
 	modelstore "github.com/kayushkin/model-store"
@@ -25,11 +28,30 @@ func engineWithTempModelStore(t *testing.T) (*Engine, *modelstore.Store) {
 	return &Engine{modelStore: store}, store
 }
 
+// cancelledTurnContext is the turn context as recordModelHealth finds it after
+// the stop button: Session.turn hands RunTurn the context whose cancel func
+// InterruptSession calls, so by the time the error surfaces the context is done.
+// Passing a live context here instead would test a state that cannot occur.
+func cancelledTurnContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// expiredTurnContext is the turn context after one of inber's own policy clocks
+// ran out — a sub-agent spawn timeout, a session max_duration, the bus cap. All
+// three are context deadlines on the turn context, so all three leave it done.
+func expiredTurnContext() context.Context {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	cancel()
+	return ctx
+}
+
 // healthyModel puts a model in the state selectModel wants to find: a recent
 // success and no error after it.
 func healthyModel(t *testing.T, e *Engine, model string) {
 	t.Helper()
-	e.recordModelHealth(model, 1200, nil)
+	e.recordModelHealth(context.Background(), model, 1200, nil)
 	if !e.modelStore.GetHealth(model).IsHealthy(healthWindow) {
 		t.Fatalf("setup failed: %s is not healthy after a recorded success", model)
 	}
@@ -46,7 +68,7 @@ func TestPressingStopDoesNotMarkTheModelUnhealthy(t *testing.T) {
 	before := store.GetHealth(model)
 
 	// What Agent.Run returns when Session.cancel fires: the bare ctx.Err().
-	e.recordModelHealth(model, 40, context.Canceled)
+	e.recordModelHealth(cancelledTurnContext(), model, 40, context.Canceled)
 
 	after := store.GetHealth(model)
 	if !after.IsHealthy(healthWindow) {
@@ -66,15 +88,15 @@ func TestPressingStopDoesNotMarkTheModelUnhealthy(t *testing.T) {
 }
 
 // TestPolicyDeadlineDoesNotMarkTheModelUnhealthy covers the other context error.
-// Every deadline a turn runs under is inber's own — a spawn timeout, a session
-// max_duration, the bus cap — because selectModel's timeoutHint is discarded by
-// executeAgent and never applied.
+// The deadlines a turn runs under on its own context are all inber's own — a
+// spawn timeout, a session max_duration, the bus cap — and each leaves that
+// context done, which is how the filter recognises them.
 func TestPolicyDeadlineDoesNotMarkTheModelUnhealthy(t *testing.T) {
 	e, store := engineWithTempModelStore(t)
 	const model = "claude-opus-4-6"
 	healthyModel(t, e, model)
 
-	e.recordModelHealth(model, 600_000, context.DeadlineExceeded)
+	e.recordModelHealth(expiredTurnContext(), model, 600_000, context.DeadlineExceeded)
 
 	h := store.GetHealth(model)
 	if !h.LastErrorAt.IsZero() {
@@ -100,7 +122,7 @@ func TestOwnAPICallCapDoesNotMarkTheModelUnhealthy(t *testing.T) {
 	healthyModel(t, e, model)
 
 	// Exactly what Agent.Run builds, wrapper and count included.
-	e.recordModelHealth(model, 300_000, fmt.Errorf("%w (%d)", agent.ErrMaxAPICallsExceeded, 50))
+	e.recordModelHealth(context.Background(), model, 300_000, fmt.Errorf("%w (%d)", agent.ErrMaxAPICallsExceeded, 50))
 
 	h := store.GetHealth(model)
 	if !h.LastErrorAt.IsZero() {
@@ -126,7 +148,7 @@ func TestProviderFailureStillMarksTheModelUnhealthy(t *testing.T) {
 	const model = "claude-sonnet-4-5"
 	healthyModel(t, e, model)
 
-	e.recordModelHealth(model, 8000, errors.New(`api call failed: POST "https://api.anthropic.com/v1/messages": 529 Overloaded`))
+	e.recordModelHealth(context.Background(), model, 8000, errors.New(`api call failed: POST "https://api.anthropic.com/v1/messages": 529 Overloaded`))
 
 	h := store.GetHealth(model)
 	if h.LastErrorAt.IsZero() {
@@ -150,7 +172,7 @@ func TestUnexpectedStopReasonStillRecordsAnError(t *testing.T) {
 	const model = "claude-opus-4-6"
 	healthyModel(t, e, model)
 
-	e.recordModelHealth(model, 2000, fmt.Errorf("unexpected stop reason: %s", "pause_turn"))
+	e.recordModelHealth(context.Background(), model, 2000, fmt.Errorf("unexpected stop reason: %s", "pause_turn"))
 
 	if store.GetHealth(model).LastErrorAt.IsZero() {
 		t.Fatal("an unexpected stop reason stopped being recorded — that is an open decision, " +
@@ -164,7 +186,7 @@ func TestSuccessStillRecordsAResponseTime(t *testing.T) {
 	e, store := engineWithTempModelStore(t)
 	const model = "claude-sonnet-4-5"
 
-	e.recordModelHealth(model, 1500, nil)
+	e.recordModelHealth(context.Background(), model, 1500, nil)
 
 	h := store.GetHealth(model)
 	if !h.IsHealthy(healthWindow) {
@@ -192,7 +214,85 @@ func TestMaxAPICallsMessageIsUnchanged(t *testing.T) {
 // a provider fault.
 func TestCancelWrappedByACallerIsStillACancel(t *testing.T) {
 	wrapped := fmt.Errorf("running agent on claude-sonnet-4-5: %w", context.Canceled)
-	if errorIsEvidenceAboutTheModel(wrapped) {
+	if errorIsEvidenceAboutTheModel(context.Background(), wrapped) {
 		t.Fatalf("a wrapped cancel (%v) was read as evidence about the model", wrapped)
 	}
+}
+
+// TestAProviderThatStopsAnsweringIsRecorded is the regression test for the hole
+// the cancel fix opened.
+//
+// The OpenAI-compatible client carries a flat 120s http.Client.Timeout
+// (agent/openai.go) and serves openai, google, openrouter, ollama and the
+// catch-all for every provider inber does not name. When a provider on that path
+// hangs, net/http returns an error that satisfies errors.Is(context.DeadlineExceeded)
+// — so a filter reading only the error shape wrote nothing, the model never went
+// unhealthy, selectModel kept choosing it, and every turn burned 120s with
+// failover never firing. That timeout is the only signal a hung provider on that
+// path produces.
+//
+// The error is built by making a request that really times out, not by hand: the
+// point of the test is the shape net/http hands back, and a hand-written error
+// would pin my guess at it instead.
+func TestAProviderThatStopsAnsweringIsRecorded(t *testing.T) {
+	e, store := engineWithTempModelStore(t)
+	const model = "llama3.3:70b"
+	healthyModel(t, e, model)
+
+	err := timeoutFromAProviderThatNeverAnswers(t)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("premise gone: a client timeout no longer reads as a deadline (%v)", err)
+	}
+
+	// The turn context is live and stays live: nothing of inber's expired here.
+	e.recordModelHealth(context.Background(), model, 120_000, err)
+
+	h := store.GetHealth(model)
+	if h.LastErrorAt.IsZero() {
+		t.Fatalf("a provider that stopped answering was not recorded against %s — nothing else "+
+			"reports it, so selectModel keeps choosing it and every turn burns the full timeout", model)
+	}
+	if h.IsHealthy(healthWindow) {
+		t.Fatalf("a provider that stopped answering left %s healthy, so failover never fires", model)
+	}
+}
+
+// TestAPolicyDeadlineDuringAProviderTimeoutIsStillInbersOwn covers the overlap.
+// A session's max_duration can expire while an OpenAI-compatible request is
+// already timing out, and then both clocks have fired. inber's own wins: it is
+// the one that decided to stop, and marking a host-shared model unhealthy is the
+// damaging direction, so the tie goes to writing nothing.
+func TestAPolicyDeadlineDuringAProviderTimeoutIsStillInbersOwn(t *testing.T) {
+	e, store := engineWithTempModelStore(t)
+	const model = "gpt-5.2"
+	healthyModel(t, e, model)
+
+	e.recordModelHealth(expiredTurnContext(), model, 120_000, timeoutFromAProviderThatNeverAnswers(t))
+
+	if h := store.GetHealth(model); !h.LastErrorAt.IsZero() {
+		t.Fatalf("inber's own max_duration was recorded against %s as a provider fault (%q)", model, h.LastError)
+	}
+}
+
+// timeoutFromAProviderThatNeverAnswers returns the error the OpenAI-compatible
+// client produces when the provider does not answer in time, wrapped exactly as
+// ChatCompletion and runOpenAITurn wrap it on the way to recordModelHealth.
+func timeoutFromAProviderThatNeverAnswers(t *testing.T) error {
+	t.Helper()
+	provider := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		time.Sleep(2 * time.Second)
+	}))
+	t.Cleanup(provider.Close)
+
+	client := &http.Client{Timeout: 50 * time.Millisecond}
+	req, err := http.NewRequestWithContext(context.Background(), "POST", provider.URL+"/chat/completions", nil)
+	if err != nil {
+		t.Fatalf("building the request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("the provider answered inside the timeout; this helper produces no error")
+	}
+	return fmt.Errorf("OpenAI API call failed: %w", fmt.Errorf("send request: %w", err))
 }
