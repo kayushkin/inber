@@ -1,5 +1,5 @@
-// Package guard provides safety controls for agent execution: execution modes,
-// cost/token/turn limits, tool repetition detection, and anti-pattern monitoring.
+// Package guard provides safety controls for agent execution: execution modes
+// and cost/token/turn/duration limits.
 //
 // Execution modes control what an agent is allowed to do per-session:
 //
@@ -14,17 +14,19 @@
 //	MaxCost         — cumulative dollar cost cap
 //	MaxDuration     — wall-clock cap on how long the session may go on running
 //
-// Detectors watch for stuck or harmful agent behavior:
-//
-//	RepetitionDetector  — same tool + same input N times in a row
-//	DelegationDetector  — spawn depth or delegation chain too deep
-//	RubberStampDetector — review agent approving everything without substance
+// This package once advertised three detectors — repetition, delegation depth
+// and rubber-stamping. Only the first was ever written, and it does not run:
+// RecordToolCall has no caller outside this package's own tests, so repeatCount
+// never leaves zero, IsRepeating always answers false, and RepetitionThreshold
+// is a knob no non-test caller can set feeding a counter nothing increments.
+// See RecordToolCall for what would have to change. Delegation depth is bounded,
+// but in the server (MaxSpawnDepth), not here. Nothing checks for rubber-stamping.
 //
 // Usage:
 //
 //	g := guard.New(guard.Config{Mode: guard.Assist, MaxCost: 5.00})
 //	g.CheckTool("shell_commands", input)  // → allowed, denied, or needs_approval
-//	g.RecordToolCall("shell_commands", input, output)
+//	g.RecordTurn(result.InputTokens)
 //	g.RecordCost(0.02)
 //	if exceeded, reason := g.CheckLimits(); exceeded { ... }
 package guard
@@ -164,6 +166,15 @@ func (g *Guard) Mode() Mode {
 }
 
 // RecordToolCall tracks a tool invocation for repetition detection.
+//
+// Nothing calls it. The engine dispatches every tool through agent.Hooks
+// (engine/build_hooks.go), and no hook reaches this method, so the counter it
+// feeds has stayed at zero for the life of every session — which is why
+// IsRepeating has never once answered true and RepetitionThreshold has never
+// been compared against anything. Wiring it is one line in the OnToolResult
+// hook; what a caller should then DO when IsRepeating goes true is the part
+// nobody has decided, and building the write before naming that reader is how
+// this pair got here.
 func (g *Guard) RecordToolCall(tool, input, output string) {
 	if tool == g.lastTool && input == g.lastInput {
 		g.repeatCount++
@@ -233,7 +244,8 @@ func (g *Guard) SetMaxInputTokens(max int) {
 	g.cfg.MaxInputTokens = max
 }
 
-// IsRepeating returns true if the agent is stuck calling the same tool.
+// IsRepeating returns true if the agent is stuck calling the same tool. It has
+// no caller either, and cannot be true while RecordToolCall has none. See there.
 func (g *Guard) IsRepeating() bool {
 	return g.repeatCount >= g.cfg.RepetitionThreshold
 }

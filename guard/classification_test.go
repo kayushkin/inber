@@ -50,9 +50,12 @@ func knownToolNames(t *testing.T) map[string]bool {
 // through ApprovalFunc, so write_files and edit_files would have been treated as
 // safe and executed with no approval gate at all.
 //
-// The classifiers are unreachable today — CheckTool has no caller and the engine
-// hardcodes Autonomous mode, which allows everything — so this was latent rather
-// than live. It stops being latent the moment somebody wires up Assist.
+// This comment used to end "the classifiers are unreachable today — CheckTool
+// has no caller and the engine hardcodes Autonomous mode". Both halves are now
+// false: Engine.buildToolRefusal (engine/build_hooks.go) is CheckTool's caller
+// on every tool call, and engine.NewEngine parses the mode the create request
+// asked for. A session created with mode "assist" is gated for real, so a
+// misclassification is live rather than latent.
 func TestClassifiedToolsExist(t *testing.T) {
 	known := knownToolNames(t)
 
@@ -123,5 +126,103 @@ func TestObserveModeAllowsTheRealReadTools(t *testing.T) {
 		if verdict := g.CheckTool(tool, "{}"); verdict != Denied {
 			t.Errorf("CheckTool(%q) in Observe = %v, want Denied", tool, verdict)
 		}
+	}
+}
+
+// TestEveryKnownToolIsClassifiedOrNamedHere is the converse of
+// TestClassifiedToolsExist, and it is the direction that fails open.
+//
+// TestClassifiedToolsExist asks whether every name the guard classifies belongs
+// to a real tool. It cannot see the opposite mistake: a real tool the guard
+// classifies as neither read-only nor dangerous. Observe refuses such a tool,
+// which is safe. Assist runs it with no approval, because CheckTool's Assist
+// branch only diverts the names isDangerous knows and lets everything else
+// through — so an unclassified tool is not "not yet reviewed", it is approved.
+//
+// Six tools are in that position today and this test names all six, so the set
+// can only change deliberately. Registering a seventh tool reddens this test at
+// the moment the tool is added, which is the moment somebody can still answer
+// "should assist mode run this unattended?" while the answer is cheap.
+//
+// The set is not asserted to be empty, because emptying it is a policy call and
+// not this test's to make. Two of the six are the sharp ones and are recorded
+// here so the next reader does not have to re-derive them:
+//
+//   - "scheduler" creates and deletes cron jobs, and this host's scheduler runs
+//     shell commands. An assist session can therefore schedule shell work it is
+//     not allowed to run directly, and nothing asks an approver.
+//   - "memory_forget" deletes memories. Memory is where an agent's identity and
+//     instructions live (see engine.BuildSystemPrompt), so this is a write in
+//     the strongest sense while being classified as neither kind.
+//
+// "spawn_agent" belongs on this list and is absent from it only because it is
+// built outside the constructors knownToolNames can reach. It is tracked in
+// noteboard todo 9e31d359, together with the reason it matters: a spawned child
+// is created from a zero RunRequest, so it inherits no mode at all.
+func TestEveryKnownToolIsClassifiedOrNamedHere(t *testing.T) {
+	unclassifiedToday := map[string]string{
+		"browser":       "drives a real browser; reads pages but also clicks and types",
+		"end_turn":      "control flow, not an effect — reaches no model today either",
+		"memory_forget": "deletes memories, including the ones carrying identity",
+		"memory_save":   "writes a memory that later turns read back as instructions",
+		"scheduler":     "creates cron jobs, and cron jobs on this host run shell",
+		"web_fetch":     "network read; note web_search IS classified read-only",
+	}
+
+	for name := range knownToolNames(t) {
+		readOnly, dangerous := isReadOnly(name), isDangerous(name)
+
+		if readOnly && dangerous {
+			t.Errorf("%q is classified both read-only and dangerous — CheckTool reads isReadOnly first in Observe and isDangerous first in Assist, so the two modes would disagree about the same tool", name)
+			continue
+		}
+
+		_, named := unclassifiedToday[name]
+		switch {
+		case !readOnly && !dangerous && !named:
+			t.Errorf("%q is classified as neither read-only nor dangerous and is not named in this test, so assist mode runs it with no approval and nobody chose that. Classify it in isReadOnly or isDangerous, or add it here with the reason it is safe to leave unclassified", name)
+		case (readOnly || dangerous) && named:
+			t.Errorf("%q is now classified, so remove it from this test's list — a stale entry here silences the check for a name that no longer needs it", name)
+		}
+	}
+
+	// The list must not outlive the tools it describes, or it goes on excusing
+	// names nothing answers to — the same rot TestClassifiedToolsExist caught in
+	// the classifiers themselves.
+	known := knownToolNames(t)
+	for name := range unclassifiedToday {
+		if !known[name] {
+			t.Errorf("this test names %q as a known-but-unclassified tool, but no tool has that name", name)
+		}
+	}
+}
+
+// TestAssistRunsAnUnclassifiedToolWithNoApproval pins the behaviour the list
+// above describes, at the level that matters — the verdict, not the classifier.
+//
+// It asserts the current answer, which is Allowed, so it pins the gap as
+// present rather than pretending it is closed. Whoever classifies these tools
+// will have to change this test, and that is the point: the change should be
+// deliberate and visible, not a green diff nobody read.
+func TestAssistRunsAnUnclassifiedToolWithNoApproval(t *testing.T) {
+	approvalsAsked := 0
+	g := New(Config{Mode: Assist, ApprovalFunc: func(tool, input string) bool {
+		approvalsAsked++
+		return false
+	}})
+
+	if verdict := g.CheckTool("scheduler", `{"action":"create"}`); verdict != Allowed {
+		t.Errorf("CheckTool(\"scheduler\") in Assist = %v, want Allowed — if this now diverts, the tool was classified and TestEveryKnownToolIsClassifiedOrNamedHere should have said so first", verdict)
+	}
+	if approvalsAsked != 0 {
+		t.Errorf("the approver was asked %d times about an unclassified tool; Assist only consults it for names isDangerous knows", approvalsAsked)
+	}
+
+	// The contrast, in one place: same guard, same approver, a classified tool.
+	if verdict := g.CheckTool("shell_commands", "{}"); verdict != NeedsApproval {
+		t.Errorf("CheckTool(\"shell_commands\") in Assist = %v, want NeedsApproval", verdict)
+	}
+	if approvalsAsked != 1 {
+		t.Errorf("the approver was asked %d times about a classified dangerous tool, want 1", approvalsAsked)
 	}
 }
