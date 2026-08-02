@@ -12,17 +12,43 @@ import (
 // chainField is the JSON field name used for tool chaining.
 const chainField = "then"
 
+// turnTerminatorToolName is the name a tool would have to answer to for
+// AddChainAndSidebandFields to withhold the chain field from it: ending a turn
+// is the one thing nothing can follow.
+//
+// No path in this repository registers a tool under this name. tools.All(),
+// engine.buildDefaultTools and the DefaultRegistry all omit it, and
+// engine.findStandardTool returns nil for it, so an agent config that lists it
+// does not get it either. The special case below is therefore dormant, and it
+// is written as a constant rather than a literal so that the test which pins
+// that fact has one thing to refer to.
+//
+// This name used to appear in the two descriptions below as an instruction to
+// the model, which is the defect TestThenDescriptionsNameOnlyOfferedTools now
+// pins: the model was told to chain a tool that is not in the enum and cannot
+// be dispatched, and each attempt cost a turn plus a rung on the error-recovery
+// context ladder. Whether end_turn should become a real registered tool is a
+// model-visible contract change and belongs to todo 87399239.
+const turnTerminatorToolName = "end_turn"
+
 // buildThenSchema creates the schema for the "then" field with tool names as enum.
 // Must be called with the actual tool names available to the agent.
+//
+// The descriptions must not name a specific tool. The enum already carries the
+// only names that can be dispatched, and a name written into prose here cannot
+// be checked against it — that is exactly how the model came to be told, twice,
+// to chain a tool nothing answers to. "then" is an optional property (it is
+// never added to the schema's Required list), so omitting it is what a model
+// with no follow-up should do, and saying so needs no tool name at all.
 func buildThenSchema(toolNames []string) map[string]any {
 	return map[string]any{
-		"type": "object",
-		"description": "Chain another tool to run after this one. Avoids wasting an API turn. Use for: verify after write (edit + build), read related files, or any follow-up you already know you need. Use end_turn when no follow-up is needed.",
+		"type":        "object",
+		"description": "Chain another tool to run after this one. Avoids wasting an API turn. Use for: verify after write (edit + build), read related files, or any follow-up you already know you need. Omit this field entirely when no follow-up is needed.",
 		"properties": map[string]any{
 			"tool": map[string]any{
 				"type":        "string",
 				"enum":        toolNames,
-				"description": "Tool to chain next. Use end_turn if no follow-up needed.",
+				"description": "Tool to chain next. Must be one of the listed names. Omit the whole field if no follow-up is needed.",
 			},
 			"input": map[string]any{
 				"type":        "object",
@@ -98,7 +124,7 @@ func AddChainAndSidebandFields(tools []Tool) []Tool {
 	for i, t := range tools {
 		prepared[i] = t
 		schema := injectFields(t.InputSchema, sbSchema)
-		if t.Name != "end_turn" {
+		if t.Name != turnTerminatorToolName {
 			schema = injectChainField(schema, thenSchema)
 		}
 		prepared[i].InputSchema = schema
