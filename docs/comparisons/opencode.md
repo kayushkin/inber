@@ -473,12 +473,15 @@ the declared root) and composes with the existing per-session permission gating.
 > yet `offerToTurnInFlightLocked` already reported `DeliveredMidTurn`. The message sat buffered
 > until an unrelated later turn made a second call and surfaced it there, out of context.
 > `Session.turn` now requeues anything unread onto `pendingMessages`.
-> Still open and genuinely the owner's: the marker strings are load-bearing control flow —
-> `conversation/message_utils.go:20-27` and `session/turn_counter.go:20-25` parse
-> `"[New message from user while you were working]"` and `"[BUDGET LIMIT REACHED]"` back out of the
-> transcript, so removing the decoration would break turn-boundary detection. That is the same
-> class as todo `657601a9` (a plain-text pruning marker any tool output can forge); fold it there
-> rather than filing it again.
+> **Checked and REFUTED before it could be filed:** that the decoration is load-bearing control
+> flow. `conversation/message_utils.go:20-27` and `session/turn_counter.go:20-25` **name** both
+> strings, but only in comments — nothing parses them. `StartsUserTurn` keys off block **shape**
+> (`block.OfToolResult == nil`), and the turn counter is persisted precisely *because* the count
+> cannot be recovered from the text. So option (C) of todo `657601a9` — "nothing reads a marker
+> back" — still stands, and removing the wrapper would not break turn-boundary detection.
+> What the injection does change is shape: appending a text block to a tool-result message makes
+> that message answer true to `StartsUserTurn`. That is defensible (a real user message did
+> arrive), and it is noted here so the next reader does not rediscover it as a bug.
 
 [PR 33039](https://github.com/sst/opencode/pull/33039) removes the "steering-only system
 reminder wrapper" that opencode used to wrap a prompt submitted **while a turn was already
