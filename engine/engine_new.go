@@ -217,7 +217,11 @@ func setupSession(repoRoot, agentName, commandName string, newSession, detach bo
 	// because sessionMod.New appends it again the logs landed in
 	// logs/<agent>/<agent>/. The registry, built eighty lines below this, has
 	// always passed the same root unjoined.
-	logsDir := filepath.Join(repoRoot, "logs")
+	//
+	// The join itself is sessionMod.LogsRoot because the server's history
+	// endpoint makes the same one to find these files again, and a writer and a
+	// reader that each spell out a layout drift into disagreeing about it.
+	logsDir := sessionMod.LogsRoot(repoRoot)
 
 	// A session that cannot be created fails session setup. The fallback that
 	// used to stand here — a zero-value Session, installed with a comment

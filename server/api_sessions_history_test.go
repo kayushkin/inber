@@ -8,7 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
+
+	"github.com/kayushkin/inber/engine"
+	"github.com/kayushkin/inber/session"
 )
 
 // historyEntry mirrors the anonymous struct handleSessionHistory serialises.
@@ -241,8 +245,15 @@ func TestConfiguredLogsRootsAreDistinctAndOrdered(t *testing.T) {
 		"unhomed": {Workspace: ""},
 	}}}
 
-	got := server.configuredLogsRoots()
-	want := []string{filepath.Join("/repos/dash", "logs"), filepath.Join("/repos/inber", "logs")}
+	assertLogsRoots(t, server, filepath.Join("/repos/dash", "logs"), filepath.Join("/repos/inber", "logs"))
+}
+
+func assertLogsRoots(t *testing.T, server *Server, want ...string) {
+	t.Helper()
+	got, err := server.sessionLogsRoots()
+	if err != nil {
+		t.Fatalf("sessionLogsRoots: %v", err)
+	}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -250,6 +261,195 @@ func TestConfiguredLogsRootsAreDistinctAndOrdered(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got %v, want %v", got, want)
 		}
+	}
+}
+
+// recordForgeSession writes the store row a spawn into a forge workspace
+// leaves behind: the only durable record that a session ever worked there.
+func recordForgeSession(t *testing.T, store *Store, key, agent, workspace string) {
+	t.Helper()
+	roots := []engine.WorkspaceRoot{{Path: workspace, Primary: true}}
+	if err := store.UpsertSession(key, agent, "spawn", SessionLineage{}, roots); err != nil {
+		t.Fatalf("record session %s: %v", key, err)
+	}
+}
+
+// A session spawned into a forge workspace writes its transcript under the
+// worktree slot, which no agent's configuration names. The reader used to build
+// its search set from configuration alone, so the endpoint answered that those
+// sessions did not exist — not that they were elsewhere.
+func TestAForgeWorkspaceSessionIsListed(t *testing.T) {
+	liveCheckout := t.TempDir()
+	worktree := t.TempDir()
+	store := tempStore(t)
+	recordForgeSession(t, store, "agent:claxon:spawn-1", "claxon", worktree)
+
+	writeSessionLog(t, liveCheckout, "claxon", "2026-06-02_061800_1903")
+	writeSessionLog(t, worktree, "claxon", "2026-06-03_061800_2201")
+
+	server := &Server{store: store, config: Config{Agents: map[string]AgentConfig{
+		"claxon": {Workspace: liveCheckout},
+	}}}
+
+	got := agentsOf(readHistory(t, server, ""))
+	if _, listed := got["2026-06-03_061800_2201"]; !listed {
+		t.Fatalf("the forge-workspace session is missing from the listing: %v", got)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want the live checkout's session and the worktree's, got %v", got)
+	}
+	if agent := got["2026-06-03_061800_2201"]; agent != "claxon" {
+		t.Errorf("forge-workspace session: agent = %q, want %q", agent, "claxon")
+	}
+}
+
+// The recorded roots widen the scan, they do not replace it. A session whose
+// store row is gone — the store is not the record of where an ordinary session
+// works — is still found on disk under the agent's configured workspace.
+func TestRecordedWorkspacesAddToTheConfiguredOnes(t *testing.T) {
+	liveCheckout := t.TempDir()
+	worktree := t.TempDir()
+	store := tempStore(t)
+	recordForgeSession(t, store, "agent:claxon:spawn-1", "claxon", worktree)
+
+	server := &Server{store: store, config: Config{Agents: map[string]AgentConfig{
+		"claxon": {Workspace: liveCheckout},
+	}}}
+
+	want := []string{session.LogsRoot(liveCheckout), session.LogsRoot(worktree)}
+	sort.Strings(want)
+	assertLogsRoots(t, server, want...)
+}
+
+// A session outside a workspace records an empty column, and its logs are under
+// the agent's configured workspace the caller already walks. Reading one as a
+// root would walk "/logs" — an absolute path in nobody's workspace.
+func TestASessionWithNoWorkspaceAddsNoRoot(t *testing.T) {
+	liveCheckout := t.TempDir()
+	store := tempStore(t)
+	if err := store.UpsertSession("agent:claxon:main-1", "claxon", "main", SessionLineage{}, nil); err != nil {
+		t.Fatalf("record session: %v", err)
+	}
+
+	server := &Server{store: store, config: Config{Agents: map[string]AgentConfig{
+		"claxon": {Workspace: liveCheckout},
+	}}}
+
+	assertLogsRoots(t, server, session.LogsRoot(liveCheckout))
+}
+
+// Two sessions spawned into one workspace name it once, and a workspace that is
+// also an agent's configured one is not walked twice.
+func TestRecordedWorkspacesAreDistinct(t *testing.T) {
+	shared := t.TempDir()
+	store := tempStore(t)
+	recordForgeSession(t, store, "agent:claxon:spawn-1", "claxon", shared)
+	recordForgeSession(t, store, "agent:fionn:spawn-2", "fionn", shared)
+
+	server := &Server{store: store, config: Config{Agents: map[string]AgentConfig{
+		"claxon": {Workspace: shared},
+	}}}
+
+	assertLogsRoots(t, server, session.LogsRoot(shared))
+}
+
+// A forge workspace holds one worktree per repository the session works in, and
+// the transcript goes under the primary one — that is the root the engine is
+// handed. Reading any other root would point the search at a sibling repository
+// that has no logs directory at all, and only the primary flag says which is
+// which: the roots arrive in no meaningful order.
+func TestOnlyThePrimaryRootOfAWorkspaceHoldsTheLogs(t *testing.T) {
+	primary := t.TempDir()
+	secondary := t.TempDir()
+	store := tempStore(t)
+	roots := []engine.WorkspaceRoot{
+		{Path: secondary, Primary: false},
+		{Path: primary, Primary: true},
+		{Path: t.TempDir(), Primary: false},
+	}
+	if err := store.UpsertSession("agent:claxon:spawn-1", "claxon", "spawn", SessionLineage{}, roots); err != nil {
+		t.Fatalf("record session: %v", err)
+	}
+
+	got, err := store.RecordedPrimaryWorkspaces()
+	if err != nil {
+		t.Fatalf("RecordedPrimaryWorkspaces: %v", err)
+	}
+	if len(got) != 1 || got[0] != primary {
+		t.Fatalf("got %v, want [%s]", got, primary)
+	}
+}
+
+// A roots set with no primary is a workspace the engine refuses to build a
+// session in, so a row holding one is corrupt. Skipping it would take every
+// session in that workspace out of a listing that still said 200 — this defect
+// again, with the cause hidden.
+func TestAWorkspaceWithNoPrimaryRootIsReported(t *testing.T) {
+	store := tempStore(t)
+	roots := []engine.WorkspaceRoot{
+		{Path: t.TempDir(), Primary: false},
+		{Path: t.TempDir(), Primary: false},
+	}
+	if err := store.UpsertSession("agent:claxon:spawn-1", "claxon", "spawn", SessionLineage{}, roots); err != nil {
+		t.Fatalf("record session: %v", err)
+	}
+
+	got, err := store.RecordedPrimaryWorkspaces()
+	if err == nil {
+		t.Fatalf("a workspace with no primary root was accepted, returning %v", got)
+	}
+	if !strings.Contains(err.Error(), "agent:claxon:spawn-1") {
+		t.Errorf("the error does not name the session that holds the bad row: %v", err)
+	}
+}
+
+// findLogsDir and findSessionLogFile answer the per-session endpoints — context,
+// timeline, prompts — and they derived the search set separately from the
+// listing. A forge-workspace session the listing can now see must not still be
+// "session not found" everywhere else.
+func TestThePerSessionLookupsFindAForgeWorkspaceSession(t *testing.T) {
+	liveCheckout := t.TempDir()
+	worktree := t.TempDir()
+	store := tempStore(t)
+	recordForgeSession(t, store, "agent:claxon:spawn-1", "claxon", worktree)
+	writeSessionLog(t, worktree, "claxon", "2026-06-03_061800_2201")
+
+	server := &Server{store: store, config: Config{Agents: map[string]AgentConfig{
+		"claxon": {Workspace: liveCheckout},
+	}}}
+
+	logsDir, err := server.findLogsDir("2026-06-03_061800_2201")
+	if err != nil {
+		t.Fatalf("findLogsDir: %v", err)
+	}
+	if want := session.LogsRoot(worktree); logsDir != want {
+		t.Errorf("findLogsDir = %q, want %q", logsDir, want)
+	}
+
+	logFile, err := server.findSessionLogFile("2026-06-03_061800_2201")
+	if err != nil {
+		t.Fatalf("findSessionLogFile: %v", err)
+	}
+	if want := filepath.Join(worktree, "logs", "claxon", "2026-06-03_061800_2201", "session.jsonl"); logFile != want {
+		t.Errorf("findSessionLogFile = %q, want %q", logFile, want)
+	}
+}
+
+// A store that cannot be read is a hole in the answer, and a listing that
+// quietly drops every workspace session is the defect this change closes,
+// wearing a 200. The endpoint says so instead.
+func TestAnUnreadableStoreFailsTheListingRatherThanShrinkingIt(t *testing.T) {
+	store := tempStore(t)
+	store.Close()
+
+	server := &Server{store: store, config: Config{Agents: map[string]AgentConfig{
+		"claxon": {Workspace: t.TempDir()},
+	}}}
+
+	recorder := httptest.NewRecorder()
+	server.handleSessionHistory(recorder, httptest.NewRequest(http.MethodGet, "/api/sessions/history", nil))
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want %d (body %s)", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
 	}
 }
 

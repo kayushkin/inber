@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -299,6 +300,60 @@ func (s *Store) SessionWorkspaceRoots(key string) ([]engine.WorkspaceRoot, error
 		return nil, fmt.Errorf("read workspace of session %s: %w", key, err)
 	}
 	return roots, nil
+}
+
+// RecordedPrimaryWorkspaces returns every distinct directory a recorded session
+// worked in — the primary root of each session's workspace — in a stable order.
+//
+// A session's transcript is written under the directory it works in, so this is
+// also the set of places a forge-workspace session's logs can be. It is the
+// only durable answer to that question: the workspace is built by forge at
+// spawn time and kept in Server.workspaces, an in-memory map, and both the
+// transcript directory and the session database that records the transcript's
+// path live *inside* the worktree, so they go with it when forge cleans it up.
+// Nothing outside this column survives to say a session was ever there.
+//
+// Sessions outside a workspace contribute nothing: their column is empty, and
+// their logs are under the agent's configured workspace, which the caller
+// already knows about.
+// A recorded workspace with no primary root is reported rather than skipped. It
+// describes a session working in several repositories and none of them, which
+// the engine refuses to build, so a row like it is a corrupted record and not an
+// old shape — and skipping it would drop every session in that workspace out of
+// a listing that still answered 200.
+func (s *Store) RecordedPrimaryWorkspaces() ([]string, error) {
+	rows, err := s.db.Query(`SELECT key, workspace_roots FROM sessions WHERE workspace_roots <> ''`)
+	if err != nil {
+		return nil, fmt.Errorf("read recorded workspaces: %w", err)
+	}
+	defer rows.Close()
+
+	seen := make(map[string]struct{})
+	var workspaces []string
+	for rows.Next() {
+		var key, encoded string
+		if err := rows.Scan(&key, &encoded); err != nil {
+			return nil, fmt.Errorf("read recorded workspaces: %w", err)
+		}
+		var roots []engine.WorkspaceRoot
+		if err := json.Unmarshal([]byte(encoded), &roots); err != nil {
+			return nil, fmt.Errorf("read workspace of session %s: %w", key, err)
+		}
+		primary := engine.PrimaryWorkspaceRoot(roots)
+		if primary == "" {
+			return nil, fmt.Errorf("session %s records %d workspace roots and no primary one", key, len(roots))
+		}
+		if _, dup := seen[primary]; dup {
+			continue
+		}
+		seen[primary] = struct{}{}
+		workspaces = append(workspaces, primary)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read recorded workspaces: %w", err)
+	}
+	sort.Strings(workspaces)
+	return workspaces, nil
 }
 
 // SessionLineage returns the lineage recorded against a session key, and the

@@ -13,8 +13,8 @@ import (
 	"github.com/kayushkin/inber/session"
 )
 
-// configuredLogsRoots returns every distinct logs root the configured agents
-// point at, in a stable order.
+// sessionLogsRoots returns every distinct logs root a session on this host can
+// have written to, in a stable order.
 //
 // A logs root belongs to a workspace, not to an agent. session.New writes
 // <workspace>/logs/<agent>/<session>/session.jsonl and owns the <agent>
@@ -25,22 +25,56 @@ import (
 // Walking once per agent would therefore report every session in a shared root
 // once per agent sharing it, each copy labelled with whichever agent the loop
 // happened to be on.
-func (g *Server) configuredLogsRoots() []string {
+//
+// There are two sources for that set and both are needed. The agents' configured
+// workspaces are where an ordinary session works. A session spawned into a forge
+// workspace does not: workspaceRootsForSession hands the engine the worktree
+// slot under ~/forge/work/<id>/<repo>, and the transcript is written there. The
+// endpoint used to build its search set from configuration alone, so every one
+// of those sessions was not merely missing from the listing — it was reported as
+// not existing.
+//
+// The recorded workspaces come from the store rather than from a scan of forge's
+// directories, because a reader that walks ~/forge/work/*/*/logs is a second
+// place that knows where forge puts things, and it would go wrong the moment
+// forge changed its layout. They are added to the configured roots rather than
+// replacing them: the walk stays a filesystem scan, so a session whose store row
+// is gone is still listed from disk exactly as it is today.
+func (g *Server) sessionLogsRoots() ([]string, error) {
 	seen := make(map[string]struct{}, len(g.config.Agents))
 	roots := make([]string, 0, len(g.config.Agents))
-	for _, ac := range g.config.Agents {
-		if ac.Workspace == "" {
-			continue
+	add := func(workspace string) {
+		if workspace == "" {
+			return
 		}
-		root := filepath.Join(ac.Workspace, "logs")
+		root := session.LogsRoot(workspace)
 		if _, dup := seen[root]; dup {
-			continue
+			return
 		}
 		seen[root] = struct{}{}
 		roots = append(roots, root)
 	}
+
+	for _, ac := range g.config.Agents {
+		add(ac.Workspace)
+	}
+
+	if g.store != nil {
+		// A store that cannot be read is reported, never skipped. Answering
+		// with the configured roots alone would be this defect again with the
+		// failure hidden: a 200 listing that silently omits every session in a
+		// workspace reads as "those sessions do not exist".
+		recorded, err := g.store.RecordedPrimaryWorkspaces()
+		if err != nil {
+			return nil, err
+		}
+		for _, workspace := range recorded {
+			add(workspace)
+		}
+	}
+
 	sort.Strings(roots)
-	return roots
+	return roots, nil
 }
 
 // agentFromSessionParent names the agent that owns a session, given the logs
@@ -97,7 +131,13 @@ func (g *Server) handleSessionHistory(w http.ResponseWriter, r *http.Request) {
 
 	var sessions []sessionEntry
 
-	for _, logsDir := range g.configuredLogsRoots() {
+	logsRoots, err := g.sessionLogsRoots()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	for _, logsDir := range logsRoots {
 		filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil
@@ -151,7 +191,11 @@ func (g *Server) handleSessionHistory(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/sessions/{key}/context — extract system prompt from session JSONL
 func (g *Server) handleSessionContext(w http.ResponseWriter, r *http.Request, sessionID string) {
-	logFile := g.findSessionLogFile(sessionID)
+	logFile, err := g.findSessionLogFile(sessionID)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if logFile == "" {
 		jsonError(w, "session not found", http.StatusNotFound)
 		return
@@ -188,7 +232,11 @@ func (g *Server) handleSessionContext(w http.ResponseWriter, r *http.Request, se
 
 // GET /api/sessions/{key}/timeline — return session timeline
 func (g *Server) handleSessionTimeline(w http.ResponseWriter, r *http.Request, sessionID string) {
-	logsDir := g.findLogsDir(sessionID)
+	logsDir, err := g.findLogsDir(sessionID)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if logsDir == "" {
 		jsonError(w, "session not found", http.StatusNotFound)
 		return
@@ -205,7 +253,11 @@ func (g *Server) handleSessionTimeline(w http.ResponseWriter, r *http.Request, s
 
 // GET /api/sessions/{key}/prompts — list prompt breakdowns
 func (g *Server) handleSessionPrompts(w http.ResponseWriter, r *http.Request, sessionID string) {
-	logsDir := g.findLogsDir(sessionID)
+	logsDir, err := g.findLogsDir(sessionID)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if logsDir == "" {
 		jsonError(w, "session not found", http.StatusNotFound)
 		return
@@ -227,7 +279,11 @@ func (g *Server) handleSessionPrompts(w http.ResponseWriter, r *http.Request, se
 
 // GET /api/sessions/{key}/prompts/{turn} — read specific prompt breakdown
 func (g *Server) handleSessionPromptDetail(w http.ResponseWriter, r *http.Request, sessionID string, turn int) {
-	logsDir := g.findLogsDir(sessionID)
+	logsDir, err := g.findLogsDir(sessionID)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if logsDir == "" {
 		jsonError(w, "session not found", http.StatusNotFound)
 		return
@@ -242,32 +298,40 @@ func (g *Server) handleSessionPromptDetail(w http.ResponseWriter, r *http.Reques
 	jsonResponse(w, map[string]string{"content": content})
 }
 
-// findSessionLogFile searches all agent workspaces for a session's JSONL log file.
-func (g *Server) findSessionLogFile(sessionID string) string {
-	for _, ac := range g.config.Agents {
-		if ac.Workspace == "" {
-			continue
-		}
-		logsDir := filepath.Join(ac.Workspace, "logs")
+// findSessionLogFile searches every logs root a session can have been written
+// to for one session's JSONL log file, and returns an empty path when no root
+// holds it.
+//
+// It searches the same set the listing walks, and for the same reason: a
+// session in a forge workspace is under a root no agent's configuration names,
+// so deriving the set here from configuration alone answered "not found" for
+// every session the listing could not see either.
+func (g *Server) findSessionLogFile(sessionID string) (string, error) {
+	roots, err := g.sessionLogsRoots()
+	if err != nil {
+		return "", err
+	}
+	for _, logsDir := range roots {
 		if f := findSessionFileInDir(logsDir, sessionID); f != "" {
-			return f
+			return f, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
-// findLogsDir returns the logs directory that contains the given session.
-func (g *Server) findLogsDir(sessionID string) string {
-	for _, ac := range g.config.Agents {
-		if ac.Workspace == "" {
-			continue
-		}
-		logsDir := filepath.Join(ac.Workspace, "logs")
+// findLogsDir returns the logs root that contains the given session, and an
+// empty path when no root holds it.
+func (g *Server) findLogsDir(sessionID string) (string, error) {
+	roots, err := g.sessionLogsRoots()
+	if err != nil {
+		return "", err
+	}
+	for _, logsDir := range roots {
 		if f := findSessionFileInDir(logsDir, sessionID); f != "" {
-			return logsDir
+			return logsDir, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // findSessionFileInDir searches a logs directory for a session file.

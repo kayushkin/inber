@@ -102,3 +102,33 @@ func TestNewSeparatesAgentsUnderOneRoot(t *testing.T) {
 		t.Errorf("fionn's log is not under %q: %q", fionnDir, second.FilePath())
 	}
 }
+
+// LogsRoot is the one join above the segment New owns, and it exists because
+// the writer and the server's history reader both make it. Pinning it here
+// pins the whole path a session is written to and read back from: a change to
+// either half that this test survives is a change both halves made.
+func TestLogsRootIsTheRootNewIsHandedForARepository(t *testing.T) {
+	repoRoot := t.TempDir()
+
+	session, err := New(LogsRoot(repoRoot), "", "claxon", "", nil)
+	if err != nil {
+		t.Fatalf("New failed under the logs root of a writable repository: %v", err)
+	}
+	defer session.Close()
+
+	rel, err := filepath.Rel(repoRoot, session.FilePath())
+	if err != nil {
+		t.Fatalf("log file %q is not under the repository %q: %v", session.FilePath(), repoRoot, err)
+	}
+
+	segments := strings.Split(rel, string(filepath.Separator))
+	if len(segments) != 4 {
+		t.Fatalf("want <repo>/logs/<agent>/<session>/session.jsonl, got %q", rel)
+	}
+	if segments[0] != "logs" {
+		t.Errorf("a session is not written under the repository's logs directory: %q", rel)
+	}
+	if segments[1] != "claxon" {
+		t.Errorf("the agent segment is not directly under the logs root: %q", rel)
+	}
+}
