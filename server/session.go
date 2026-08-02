@@ -168,6 +168,7 @@ func (s *Session) turn(ctx context.Context, input string) (*agent.TurnResult, er
 		s.Status = Idle
 		s.LastActive = time.Now()
 		s.cancel = nil
+		s.requeueInjectionsTheTurnNeverReadLocked()
 		s.mu.Unlock()
 	}()
 
@@ -197,6 +198,57 @@ const (
 	// input of the session's next turn.
 	DeliveredNextTurn DeliveryRoute = "next-turn"
 )
+
+// requeueInjectionsTheTurnNeverReadLocked moves anything still sitting in the
+// injection channel onto the pending queue, as the turn that accepted it ends.
+// s.mu must be held.
+//
+// offerToTurnInFlightLocked reports DeliveredMidTurn the moment the message is
+// in the channel, but the only reader is Agent.Run, and it reads from its
+// SECOND API call onward. A turn the model answers without calling a tool makes
+// exactly one, so it never reads, and until this drain existed the message
+// stayed buffered until some unrelated later turn happened to make a second
+// call — surfacing there, out of context, hours later, wrapped in "[New message
+// from user while you were working]".
+//
+// That is the same failure offerToTurnInFlightLocked's comment describes in the
+// past tense. Holding the lock across the status test and the send closed the
+// half where a delivery raced Status = Idle; this closes the half where the
+// reader was real, took the message, and then finished without reading it.
+//
+// The pending queue is where both other overflow paths already go — a full
+// buffer and a session that is not running — so this adds no new semantics: the
+// message is answered by the next turn, as its own input, instead of appearing
+// mid-way through an unrelated one.
+//
+// Draining here is safe because RunTurn has returned, so Agent.Run is no longer
+// reading.
+//
+// What makes it correct against a concurrent deliverer is that it shares ONE
+// hold of s.mu with Status = Idle — not the order of the two inside that hold.
+// Measured by sabotage: swapping them, or moving the drain after the unlock,
+// both stay green, because a deliverer can only run wholly before the critical
+// section (its message enters the channel and this drains it) or wholly after
+// (Status is Idle, so offerToTurnInFlightLocked refuses and it queues itself).
+// Split them into two holds with the drain first and it strands messages within
+// ~130 rounds — that is the shape to keep out, so do not "tidy" this into its
+// own lock hold above the status write.
+func (s *Session) requeueInjectionsTheTurnNeverReadLocked() {
+	if s.injections == nil {
+		return
+	}
+	for {
+		select {
+		case msg := <-s.injections:
+			s.pendingMessages = append(s.pendingMessages, msg)
+			logger.WithComponent("session").Debug("requeued a mid-turn message the turn never read", map[string]interface{}{
+				"session_key": s.Key,
+			})
+		default:
+			return
+		}
+	}
+}
 
 // queuePending adds a message to be delivered on the next turn.
 func (s *Session) queuePending(msg string) {
