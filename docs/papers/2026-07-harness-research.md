@@ -18,6 +18,50 @@ out-of-window work with in-window-looking IDs).
   is that the leader's bottleneck is **least-privilege granting**, not perception.
   Jump to `# 2026-07-18 sweep` below.
 
+## Mined 2026-08-02 — verdicts on this file's claims about inber's own code
+
+Walked end to end by a nightly worker against the code, the way
+`comparisons/opencode.md` was. The findings-per-doc table on todo `a88bca06`
+counts 26 passages here; the honest count of **claims that name a defect in
+inber with a file:line** is five, and their verdicts are below. Do not re-walk
+this file for defects — read the verdicts and go to a `comparisons/` file
+instead.
+
+| claim | where | verdict |
+|---|---|---|
+| hand-written `InputSchema` can drift from the input struct that parses it | *One object as tools, state and prompt* | **NO LIVE DRIFT, and the passage missed the real defect** — see below |
+| `memory_forget` soft-deletes any ID, ignoring the layer distinction `memory_save` respects | *Self-state attacks* | **TRUE, and honestly the owner's** — its own (a)/(b)/(c) are a policy call |
+| `TagWithToolName` is written and called by nobody | *Involuntary memory* | **TRUE** — wiring it is a design change, not a fix: (b) of the same passage says the new block must land after `__CACHE_BOUNDARY__` |
+| `codeindex` is a wired-in no-op | *Repository context as a served system* | **TRUE and already known** — the Context row of `harness-control-matrix.md`; wire-it-or-delete-it is the standing decision |
+| `CrossZoneDedup`'s stale-read correction is a note, and the note is dead code | *CORVUS* | **SPENT** — fixed by the `goose.md` 2026-07-30 §1 mining, inber `f343eaa` |
+
+**The schema-drift claim is right about the seam and wrong about the risk, and
+checking it found something else.** All eleven hand-written schemas were read
+against the struct their `Run` unmarshals into — `memory/tools.go` (four),
+`agent/registry/spawn_tool.go`, `server/spawn_tools.go` (two),
+`server/status_tools.go`, `server/workspace_tools.go` (three). Every advertised
+property binds to a field, and no `Run` reads a field its schema omits. So the
+reflection refactor the passage proposes is prophylactic, not curative.
+
+What *was* live sat in three of the same files: the model-facing strings were
+being built by **ranging a Go map**. `spawn_agent`'s description listed the
+configured agents in a fresh permutation on every build, and
+`agent/agent_run.go` anchors the `cache_control` breakpoint on the last tool
+definition — so those bytes key the whole tools block and every cached segment
+after it, and no two sessions, no fork and its parent, and no session and its
+resume could share a cache entry. `GET /api/agents` had the same range, and
+`agent/registry/spawn_tool.go` renders that body straight into the CLI's own
+tool description. The default-agent fallback broke out of a map range, so which
+agent `agent_tools.go` treats as the orchestrator — the one handed
+`merge_workspace` / `reject_workspace` / `fix_workspace` — was drawn afresh on
+every process start. Fixed in inber `b6c3ece`; the remaining question, whether
+the server should refuse to guess a default at all, is todo `f82e1a82`.
+
+*The lesson for the next pass: this file's entries are overwhelmingly design
+proposals, and its four defect claims were already known, already spent, or
+already the owner's. The one thing that paid was opening the files a proposal
+cited in order to price the proposal.*
+
 # 2026-07-13 sweep
 
 ## ActPlane: Programmable OS-Level Policy Enforcement for Agent Harnesses
