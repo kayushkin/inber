@@ -181,6 +181,22 @@ Inber's smart truncation and context loading is more automatic and fine-tuned.
 
 ## Harness-watch — 2026-05-11: cache-policy auto-placement is the new default
 
+> **[Verified 2026-08-02 — SPENT. Do not act on the BP3 prescription; doing exactly what it says
+> would have been a regression.]**
+> The file it cites, `engine/build_prompts.go`, **does not exist**. By the time anyone acted on
+> this, BP3 no longer sat on the second-to-last message — the frozen/staging design had moved it
+> to the frozen boundary. Retargeting it to the latest user message would have traded a good
+> long-lived breakpoint for a good intra-turn one. The answer taken instead was to spend the
+> fourth `cache_control` block and place **two** history breakpoints, frozen boundary + turn
+> anchor: `agent/agent.go` `HistoryCacheBreakpointIndices`, shipped 2026-07-31. Measured A/B in
+> `agent/cache_prefix_measure_test.go` (49,231 → 21,168 full-price message tokens over one turn).
+> Full write-up: `docs/cache-optimization.md`, "2026-07-31 — the turn anchor".
+> The **breakpoint-cap** half of this entry is the part still worth reading, and it is now the
+> live constraint: inber spends all four blocks (1 tools + 1 system + 2 history) and has **no
+> runtime counter**. A fifth marker anywhere is a 400 on every request. As of 2026-08-02 that is
+> pinned by tests only — `agent/turn_anchor_run_test.go`, which now counts all three surfaces
+> instead of hardcoding two of them. The "always cache" default flip is still open.
+
 A three-PR sequence in opencode's new in-house `packages/llm` lands a declarative cache policy and flips its default from `none` to `auto`:
 
 - [PR 26779](https://github.com/sst/opencode/pull/26779) (merged 2026-05-11) adds a shared **breakpoint cap** across tools/system/messages — Anthropic and Bedrock-Claude both reject >4 cache markers, so the budget is allocated by priority `tools → system → messages` and the 5th+ marker is silently dropped (with a warning). Adds `CacheHint` support on `ToolDefinition` and `ToolResultPart`, and a `ttlBucket` helper that maps `ttlSeconds >= 3600` to the provider's "1h" bucket.
@@ -316,6 +332,15 @@ folding into `docs/async-spawning.md`.
 
 ## Harness-watch — 2026-06-06: v2 context-management subsystem — session-scoped prompt-cache key, provider-neutral overflow recovery, centralized tool-output bounding
 
+> **[Verified 2026-08-02 — none of the three is a defect in inber's code; all three are design
+> proposals. Filing any of them as a bug would misdescribe it.]**
+> (1) and the paired 2026-06-09 gateway-affinity entry are a **two-part infrastructure change**
+> (inber sets a header, the gateway hashes on it) — they only pay off together, so neither is a
+> one-session fix. (2) overflow-recovery is a real behavioural gap but the retry-once policy and
+> what counts as "durable output" are the owner's calls. (3) tool-output bounding overlaps
+> `docs/smart-truncation.md` and inber already bounds per-tool; moving the cap to a settle point is
+> a refactor with a model-visible blast radius.
+
 A coherent batch landed on the v2 runner after the epoch/prompt-lifecycle work
 (06-05 entry), turning context handling into a deliberate subsystem:
 
@@ -400,6 +425,12 @@ moot. The two changes are a pair, not alternatives; document them together in
 
 ## Harness-watch — 2026-06-15: advertise MCP client `roots` so servers scope to the workspace
 
+> **[Verified 2026-08-02 — LATENT, and do not budget a night on it.]**
+> `tools/mcp` has **zero non-test importers**; nothing constructs `MCPToolRegistry`. Every MCP
+> finding in this file and in `goose.md` bottoms out there, however alarming the prose. Confirm an
+> importer exists before treating any of them as live. Fold this into todo `fb0dd7cc` (MCP read
+> bounds) whenever that is picked up, rather than filing it separately.
+
 [PR 32230](https://github.com/sst/opencode/pull/32230) has opencode advertise the MCP
 client **`roots` capability** and answer `roots/list` with the instance's working
 directory as a `file://` URI, registered before connection on both the plain and OAuth
@@ -419,6 +450,35 @@ small handshake addition with a real blast-radius payoff (servers can't wander o
 the declared root) and composes with the existing per-session permission gating.
 
 ## Harness-watch — 2026-06-19: a mid-run prompt must enter history as a *plain* user message — the steering wrapper busts the cache
+
+> **[Verified 2026-08-02 — PARTLY. The wrapper is real; the cache mechanic this entry is built on
+> does NOT transfer to inber. A different, live defect was found underneath it and is fixed.]**
+> **Real:** inber does wrap. `agent/agent.go:315` appends
+> `"\n\n[New message from user while you were working]\n" + text`. It is also **durable** — the
+> injection mutates `&e.Messages`, which `engine/lifecycle.go:251-268` marshals to `messages.json`,
+> and `session/resume.go:178-187` prefers that snapshot over reconstructing. So the decoration is
+> replayed on every later turn and every resume.
+> **REFUTED — the cache argument.** It assumes the wrap perturbs bytes after the live breakpoint.
+> Inber's history breakpoints are the frozen boundary and the **turn anchor**, and the anchor is
+> set at `agent/agent.go:279` to the turn's opening message; the injection appends to
+> `messages[len-1]`, always *after* the anchor. Everything after the anchor is re-sent at full
+> price regardless, so the wrapper costs nothing in cache terms. Do not file it as a cache bug.
+> **REFUTED — role confusion.** `Run`'s loop has exactly one `continue` (`agent/agent.go:398`) and
+> it is preceded by appending a user tool-result message, so the target is always a user message.
+> Worth knowing the invariant is structural, not guarded: `agent_run.go:90` checks
+> `Role == MessageParamRoleUser` before writing volatile context; `agent.go:310` and the budget
+> notice at `agent.go:330` do not.
+> **The live defect underneath, now fixed (`1018979`).** `InjectCheck` is called only from the
+> second API call onward, so a turn the model answers without a tool call never reads the channel —
+> yet `offerToTurnInFlightLocked` already reported `DeliveredMidTurn`. The message sat buffered
+> until an unrelated later turn made a second call and surfaced it there, out of context.
+> `Session.turn` now requeues anything unread onto `pendingMessages`.
+> Still open and genuinely the owner's: the marker strings are load-bearing control flow —
+> `conversation/message_utils.go:20-27` and `session/turn_counter.go:20-25` parse
+> `"[New message from user while you were working]"` and `"[BUDGET LIMIT REACHED]"` back out of the
+> transcript, so removing the decoration would break turn-boundary detection. That is the same
+> class as todo `657601a9` (a plain-text pruning marker any tool output can forge); fold it there
+> rather than filing it again.
 
 [PR 33039](https://github.com/sst/opencode/pull/33039) removes the "steering-only system
 reminder wrapper" that opencode used to wrap a prompt submitted **while a turn was already
