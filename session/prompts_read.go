@@ -4,28 +4,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // ListPromptBreakdowns lists prompt breakdown files for a session.
+//
+// A file belongs to the session its own path names — see PromptBreakdown, which
+// owns both layouts. Asking instead whether the id appeared somewhere in the
+// path listed another session's turns whenever this id was a prefix of that
+// one's, and listed every turn under a root whose own directory name held an
+// id. The legacy half was looser still: it claimed any .md file whose name
+// merely started with the id, which is every system block file a run of that
+// session wrote.
 func ListPromptBreakdowns(logsDir, sessionID string) ([]string, error) {
 	var files []string
 
-	// New format: look in {logsDir}/*/{sessionID}/prompts/
-	// Legacy: look in {logsDir}/*/prompts/{sessionID}-turn-*.md
+	// Current: {logsDir}/*/{sessionID}/prompts/turn-N.md
+	// Legacy:  {logsDir}/*/prompts/{sessionID}-turn-N.md
 	err := filepath.Walk(logsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(info.Name(), ".md") {
-			return nil
-		}
-		// New format: turn-N.md inside a session dir
-		if strings.HasPrefix(info.Name(), "turn-") && strings.Contains(path, sessionID) {
-			files = append(files, path)
-		}
-		// Legacy format: sessionID-turn-N.md
-		if strings.HasPrefix(info.Name(), sessionID) {
+		if owner, _, ok := PromptBreakdown(path); ok && owner == sessionID {
 			files = append(files, path)
 		}
 		return nil
@@ -38,17 +37,17 @@ func ListPromptBreakdowns(logsDir, sessionID string) ([]string, error) {
 }
 
 // ReadPromptBreakdown reads a specific prompt breakdown.
+//
+// It asks the same question ListPromptBreakdowns asks, so a turn that is listed
+// is a turn that reads back. The two used to spell the match differently, and
+// the current-layout half was the substring test described there.
 func ReadPromptBreakdown(logsDir, sessionID string, turn int) (string, error) {
-	newFilename := fmt.Sprintf("turn-%d.md", turn)
-	legacyFilename := fmt.Sprintf("%s-turn-%d.md", sessionID, turn)
-
 	var found string
 	filepath.Walk(logsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
-		if (info.Name() == newFilename && strings.Contains(path, sessionID)) ||
-			info.Name() == legacyFilename {
+		if owner, n, ok := PromptBreakdown(path); ok && owner == sessionID && n == turn {
 			found = path
 			return filepath.SkipAll
 		}

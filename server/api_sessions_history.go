@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -142,20 +143,18 @@ func (g *Server) handleSessionHistory(w http.ResponseWriter, r *http.Request) {
 			if err != nil || d.IsDir() {
 				return nil
 			}
-			var sessionID, agentName string
-			switch {
-			case d.Name() == "session.jsonl":
-				// Format: logs/{agent}/{session_id}/session.jsonl
-				sessionDir := filepath.Dir(path)
-				sessionID = filepath.Base(sessionDir)
-				agentName = agentFromSessionParent(logsDir, filepath.Dir(sessionDir))
-			case strings.HasSuffix(d.Name(), ".jsonl") && d.Name() != "server-errors.jsonl":
-				// Legacy: logs/{agent}/{session_id}.jsonl
-				sessionID = strings.TrimSuffix(d.Name(), ".jsonl")
-				agentName = agentFromSessionParent(logsDir, filepath.Dir(path))
-			default:
+			sessionID := session.SessionIDOfTranscript(path)
+			if sessionID == "" {
 				return nil
 			}
+			// The agent segment sits above the session directory in the current
+			// layout and above the file itself in the legacy one, which is the
+			// one thing the two layouts do not share.
+			agentParent := filepath.Dir(path)
+			if d.Name() == "session.jsonl" {
+				agentParent = filepath.Dir(agentParent)
+			}
+			agentName := agentFromSessionParent(logsDir, agentParent)
 			if agentFilter != "" && agentName != agentFilter {
 				return nil
 			}
@@ -307,49 +306,75 @@ func (g *Server) handleSessionPromptDetail(w http.ResponseWriter, r *http.Reques
 // so deriving the set here from configuration alone answered "not found" for
 // every session the listing could not see either.
 func (g *Server) findSessionLogFile(sessionID string) (string, error) {
-	roots, err := g.sessionLogsRoots()
-	if err != nil {
-		return "", err
-	}
-	for _, logsDir := range roots {
-		if f := findSessionFileInDir(logsDir, sessionID); f != "" {
-			return f, nil
-		}
-	}
-	return "", nil
+	_, logFile, err := g.locateSession(sessionID)
+	return logFile, err
 }
 
 // findLogsDir returns the logs root that contains the given session, and an
 // empty path when no root holds it.
 func (g *Server) findLogsDir(sessionID string) (string, error) {
-	roots, err := g.sessionLogsRoots()
-	if err != nil {
-		return "", err
-	}
-	for _, logsDir := range roots {
-		if f := findSessionFileInDir(logsDir, sessionID); f != "" {
-			return logsDir, nil
-		}
-	}
-	return "", nil
+	logsDir, _, err := g.locateSession(sessionID)
+	return logsDir, err
 }
 
-// findSessionFileInDir searches a logs directory for a session file.
-func findSessionFileInDir(logsDir, sessionID string) string {
-	var logFile string
+// locateSession finds the one transcript a session id names, and returns the
+// root holding it alongside it. Both are empty when no root holds the session.
+//
+// It searches every root rather than stopping at the first that answers, and
+// refuses to choose when two answer. Session ids are minted per workspace —
+// <timestamp>_<4 hex>, from a clock and a random suffix, with nothing in them
+// naming the root — so two roots CAN hold the same id, and the old search
+// resolved that by taking whichever root sorted first. That is a coin flip
+// dressed as an answer: /context, /timeline and /prompts all read through here,
+// so the loser's transcript is served under the winner's id with no error
+// anywhere. An id that names two sessions is a broken question, and the caller
+// is told so.
+//
+// Measured on this host 2026-08-02: 171 sessions across five roots, zero
+// duplicate ids and zero ids that are a prefix of another. The refusal costs
+// nothing today; it is what keeps the silent pick from coming back.
+func (g *Server) locateSession(sessionID string) (logsDir, logFile string, err error) {
+	roots, err := g.sessionLogsRoots()
+	if err != nil {
+		return "", "", err
+	}
+	for _, root := range roots {
+		found := findSessionFilesInDir(root, sessionID)
+		if len(found) == 0 {
+			continue
+		}
+		if len(found) > 1 {
+			return "", "", fmt.Errorf("session %s names %d transcripts under %s: %s", sessionID, len(found), root, strings.Join(found, ", "))
+		}
+		if logFile != "" {
+			return "", "", fmt.Errorf("session %s names transcripts in two logs roots: %s and %s", sessionID, logFile, found[0])
+		}
+		logsDir, logFile = root, found[0]
+	}
+	return logsDir, logFile, nil
+}
+
+// findSessionFilesInDir returns every transcript in a logs directory that
+// belongs to the given session, in walk order.
+//
+// It returns all of them because finding a second one is the only way to know
+// the first was not the answer. The search this replaced returned the first hit
+// and stopped, so it could not tell a unique match from an arbitrary one.
+func findSessionFilesInDir(logsDir, sessionID string) []string {
+	if sessionID == "" {
+		// Every path that is not a transcript answers with the empty id, so an
+		// empty query would otherwise match all of them.
+		return nil
+	}
+	var found []string
 	filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
-		if d.Name() == "session.jsonl" && strings.Contains(filepath.Dir(path), sessionID) {
-			logFile = path
-			return filepath.SkipAll
-		}
-		if strings.Contains(d.Name(), sessionID) && strings.HasSuffix(d.Name(), ".jsonl") {
-			logFile = path
-			return filepath.SkipAll
+		if session.SessionIDOfTranscript(path) == sessionID {
+			found = append(found, path)
 		}
 		return nil
 	})
-	return logFile
+	return found
 }

@@ -176,13 +176,17 @@ func ReadTimelineFromJSONL(logsDir, sessionID string, store *modelstore.Store) (
 }
 
 // findSessionJSONL finds the session.jsonl file for a given session ID.
+//
+// The match is on the id the path spells, not on the id appearing somewhere in
+// it: a prefix of a longer session's id used to win here and return that other
+// session's whole transcript as this one's timeline.
 func findSessionJSONL(logsDir, sessionID string) string {
 	var found string
 	filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
-		if d.Name() == "session.jsonl" && strings.Contains(path, sessionID) {
+		if d.Name() == "session.jsonl" && SessionIDOfTranscript(path) == sessionID {
 			found = path
 			return filepath.SkipAll
 		}
