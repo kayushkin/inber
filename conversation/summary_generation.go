@@ -33,6 +33,8 @@ Your task is to create a concise summary that captures:
 4. Current project status/context
 5. Any unresolved questions or next steps
 
+A tool result written as [tool_result failed: ...] is a call that did NOT succeed. Its output may read like a result, and it may have been cut short before the error text. Never record such a call as a confirmed result — say what was attempted and that it failed, so the work is not treated as done later.
+
 Focus on actionable information and context that would be useful for continuing the conversation. Avoid unnecessary details while preserving important context.
 
 Keep the summary under the token limit. Write in clear, bullet-point format when appropriate.`

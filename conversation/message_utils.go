@@ -137,7 +137,20 @@ func countTurns(messages []anthropic.MessageParam) int {
 	return turns
 }
 
-// messagesToText converts messages to plain text for summarization
+// messagesToText converts messages to plain text for summarization.
+//
+// This is the only thing the summarizing model ever sees of the turns being
+// compacted, and the summary replaces them, so whatever this rendering leaves
+// out leaves the conversation with it — and the memory archive too.
+//
+// So a failed tool call has to arrive marked as one. is_error is the single
+// structured signal that a call failed; the text alone cannot carry it, because
+// the output is truncated to the first 200 characters and a command that prints
+// progress and then dies puts its error message last. Rendered without the
+// flag, `make: *** [all] Error 2` after forty ok lines reads to the summarizer
+// as a clean build, and the summary then states it as one for the rest of the
+// session. pruneToolResult already carries is_error through for the same reason
+// (see replaceToolResultText); this path is where it was still being dropped.
 func messagesToText(messages []anthropic.MessageParam) string {
 	var lines []string
 	
@@ -152,7 +165,11 @@ func messagesToText(messages []anthropic.MessageParam) string {
 			} else if block.OfToolUse != nil {
 				contentParts = append(contentParts, fmt.Sprintf("[tool_use: %s]", block.OfToolUse.Name))
 			} else if block.OfToolResult != nil {
-				contentParts = append(contentParts, fmt.Sprintf("[tool_result: %s]", extractToolResultText(block)))
+				label := "tool_result"
+				if block.OfToolResult.IsError.Or(false) {
+					label = "tool_result failed"
+				}
+				contentParts = append(contentParts, fmt.Sprintf("[%s: %s]", label, extractToolResultText(block)))
 			}
 		}
 		
