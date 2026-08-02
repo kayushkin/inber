@@ -383,6 +383,19 @@ nothing in `conversation/summarize.go` or `summary_generation.go` mentions exit 
 status. There is a `prune_preserves_is_error_test.go`; the equivalent assertion for the *summarize*
 path does not exist. One session's work to check.
 
+**✅ Checked and FIXED, inber `efafc69` (2026-08-02, nightly worker mining `a88bca06`). The claim
+held, and the code was worse than the paragraph.** The gap is not in `summarize.go` or
+`summary_generation.go` — it is one level down, in `messagesToText`
+(`conversation/message_utils.go:154`), which builds the only text the summarizing model ever sees.
+It rendered every result as `[tool_result: <first 200 chars>]`, `is_error` and all. Because the
+truncation keeps the *head*, a command that prints progress and then dies loses its error message to
+the ellipsis: the fixture `40 ok lines + "make: *** [all] Error 2"` reached the summarizer as forty
+ok lines and nothing else. Exit codes are a red herring — inber never sees one; `is_error` is the
+signal, and it was on the block the whole time. A failed result now renders `[tool_result failed:
+...]` and the system prompt says such a call must not be written up as a confirmed result. Pinned by
+`conversation/summarize_preserves_is_error_test.go` (three cases, sabotage-verified both ways). **Do
+not re-file.**
+
 ## Checked and rejected
 
 - **2607.15593** *Scalable LLM Agent Tool Access in the Cloud* (07-17) — 98% Top-15 recall over
