@@ -658,10 +658,17 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 // re-enables everything. That makes the nil/empty distinction load-bearing —
 // absent means "do not touch the tool set", `[]` means "disable nothing" — and
 // it is why the handler tests this field for nil rather than for length.
+//
+// That is also why the field carries no omitempty: the tag cannot tell an empty
+// slice from a nil one and drops both, so a caller that marshals this struct to
+// build the request would send `{}` for the very request the handler was
+// written to honour. llm-bridge's msg.ConfigSessionRequest — the type
+// bridge-server re-marshals on the way here — had exactly that tag, and the
+// re-enable-everything request arrived at this handler as an absent field.
 type ConfigRequest struct {
 	Model         string   `json:"model,omitempty"`
 	Effort        string   `json:"effort,omitempty"` // "high", "medium", "low" or raw token count
-	DisabledTools []string `json:"disabled_tools,omitempty"`
+	DisabledTools []string `json:"disabled_tools"`
 	MaxBudget     int      `json:"max_budget,omitempty"` // max input tokens
 }
 
