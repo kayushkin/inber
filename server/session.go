@@ -184,6 +184,20 @@ func (s *Session) turn(ctx context.Context, input string) (*agent.TurnResult, er
 	return result, nil
 }
 
+// DeliveryRoute names the path a message took into a session. Every message
+// handed to deliver takes one of them; there is deliberately no route that
+// means "lost", because the caller reports the route to a user.
+type DeliveryRoute string
+
+const (
+	// DeliveredMidTurn: the turn in flight accepted the message and will read
+	// it before its next API call.
+	DeliveredMidTurn DeliveryRoute = "mid-turn"
+	// DeliveredNextTurn: the message is queued and will be prepended to the
+	// input of the session's next turn.
+	DeliveredNextTurn DeliveryRoute = "next-turn"
+)
+
 // queuePending adds a message to be delivered on the next turn.
 func (s *Session) queuePending(msg string) {
 	s.mu.Lock()
@@ -191,17 +205,60 @@ func (s *Session) queuePending(msg string) {
 	s.pendingMessages = append(s.pendingMessages, msg)
 }
 
-// inject sends a message into the session (for mid-run injection).
-func (s *Session) inject(message string) {
-	if s.injections != nil {
-		select {
-		case s.injections <- message:
-		default:
-			logger.WithComponent("session").Warn("injection buffer full, dropping message", map[string]interface{}{
-				"session_key": s.Key,
-			})
-		}
+// offerToTurnInFlightLocked offers the message to the turn currently running on
+// this session, and reports whether that turn took it. s.mu must be held.
+//
+// The status test and the send have to happen under one hold of the lock,
+// because they used to happen under two and the gap between them lost
+// messages. Session.turn's deferred func sets Status = Idle under this same
+// lock, so a caller that read Running, unlocked, and then sent was sending
+// into a channel nothing would ever drain: s.injections is read only by
+// Agent.Run, via Engine.buildInjectCheck, and only from its second API call
+// onward. With no turn running there is no reader, and the message sat
+// buffered until some unrelated later turn happened to make a second API call.
+//
+// Holding s.mu across the send is safe, and that is worth stating because the
+// fear of it is why the lock was dropped: the send cannot block. It is a
+// select with a default, and the drain side is a non-blocking receive in a
+// package that holds no reference to this lock.
+func (s *Session) offerToTurnInFlightLocked(message string) bool {
+	if s.Status != Running || s.injections == nil {
+		return false
 	}
+	select {
+	case s.injections <- message:
+		return true
+	default:
+		logger.WithComponent("session").Warn("injection buffer full, the turn in flight will not see this message", map[string]interface{}{
+			"session_key": s.Key,
+			"capacity":    cap(s.injections),
+		})
+		return false
+	}
+}
+
+// injectIfRunning hands a message to the turn in flight and reports whether
+// that turn took it. A false return means the message was NOT delivered and
+// the caller still owns it — that is the whole point of the return value, and
+// callers must not treat it as advisory.
+func (s *Session) injectIfRunning(message string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.offerToTurnInFlightLocked(message)
+}
+
+// deliver hands a message to the session by whichever route is open, and
+// names the route it used. It never drops the message: a session that is not
+// running, and one whose injection buffer is full, both fall back to the
+// pending queue that Session.turn drains at the start of its next turn.
+func (s *Session) deliver(message string) DeliveryRoute {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.offerToTurnInFlightLocked(message) {
+		return DeliveredMidTurn
+	}
+	s.pendingMessages = append(s.pendingMessages, message)
+	return DeliveredNextTurn
 }
 
 // interrupt cancels the current turn but keeps the session alive for future turns.

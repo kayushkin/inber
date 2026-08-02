@@ -40,25 +40,20 @@ func (g *Server) SteerAgentTool() agent.Tool {
 				return "", err
 			}
 
-			err := g.Inject(in.SessionKey, in.Message)
+			// The route comes back from the delivery itself. Re-reading Status
+			// afterwards to work it out, which is what this did, describes the
+			// session as it is a moment later rather than the message as it
+			// was routed — and it reported "injected, the agent will see it
+			// between tool calls" for a message the pending queue had taken.
+			route, err := g.Inject(in.SessionKey, in.Message)
 			if err != nil {
 				return "", err
 			}
 
-			// Check if it was injected live or queued.
-			val, ok := g.sessions.Load(in.SessionKey)
-			if !ok {
-				return "Message sent (session not found in memory, may have been queued to DB).", nil
+			if route == DeliveredMidTurn {
+				return fmt.Sprintf("Message injected into %s mid-turn. The agent will see it between tool calls.", in.SessionKey), nil
 			}
-			sess := val.(*Session)
-			sess.mu.Lock()
-			status := sess.Status
-			sess.mu.Unlock()
-
-			if status == Running {
-				return fmt.Sprintf("Message injected into %s (currently running). Agent will see it between tool calls.", in.SessionKey), nil
-			}
-			return fmt.Sprintf("Message queued for %s (currently %s). Will be delivered on next turn.", in.SessionKey, status), nil
+			return fmt.Sprintf("Message queued for %s. It will be delivered at the start of that session's next turn.", in.SessionKey), nil
 		},
 	}
 }

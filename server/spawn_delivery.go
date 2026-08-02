@@ -39,15 +39,7 @@ func (g *Server) deliverProgress(parentKey, childKey, agentName, message string)
 	}
 	parent := val.(*Session)
 
-	parent.mu.Lock()
-	isRunning := parent.Status == Running
-	parent.mu.Unlock()
-
-	if isRunning {
-		parent.inject(message)
-	} else {
-		parent.queuePending(message)
-	}
+	parent.deliver(message)
 }
 
 // deliverResult injects the child's result into the parent session.
@@ -92,20 +84,22 @@ func (g *Server) deliverResult(parentKey string, result SpawnResult) {
 		result.ChildKey, parentKey, result.Status,
 		result.Duration.Round(time.Second), truncate(result.Summary, 60))
 
-	parent.mu.Lock()
-	isRunning := parent.Status == Running
-	parent.mu.Unlock()
+	// A sub-agent finished, and that is true however its parent happens to be
+	// occupied — so the notification goes out before the routing, not inside
+	// one branch of it. It used to sit in the idle branch alone, which meant
+	// the busy branch surfaced a completed child's work to nobody: the result
+	// went into an injection channel and no dashboard, no chat and no operator
+	// was told the spawn had ended.
+	if g.events != nil {
+		summary := fmt.Sprintf("🔔 **Sub-agent %s completed** (%s)\n%s", result.Agent, result.Status, result.Summary)
+		g.events.PublishOutbound(parent.AgentName, "main", summary)
+	}
 
-	if isRunning {
-		parent.inject(msg)
-	} else {
+	// injectIfRunning, not a Status read followed by a send: a parent whose
+	// turn ends in between, or whose injection buffer is full, takes the turn
+	// path below instead of losing the result into an unread channel.
+	if !parent.injectIfRunning(msg) {
 		log.Printf("[server] delivering spawn result to idle parent %s", parentKey)
-
-		// Publish completed spawn result to chat.outbound for dashboard
-		if g.events != nil {
-			summary := fmt.Sprintf("🔔 **Sub-agent %s completed** (%s)\n%s", result.Agent, result.Status, result.Summary)
-			g.events.PublishOutbound(parent.AgentName, "main", summary)
-		}
 
 		// Trigger a turn on the parent session with the spawn result
 		go func() {

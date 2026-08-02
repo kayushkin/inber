@@ -78,11 +78,19 @@ func (g *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 			Message string `json:"message"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		if err := g.Inject(key, body.Message); err != nil {
+		route, err := g.Inject(key, body.Message)
+		if err != nil {
 			jsonError(w, err.Error(), http.StatusNotFound)
 			return
 		}
-		jsonResponse(w, map[string]string{"status": "injected"})
+		// status used to read "injected" whatever happened to the message.
+		// It now says which of the two things happened, and route carries the
+		// same answer in the vocabulary the server uses internally.
+		status := "injected"
+		if route == DeliveredNextTurn {
+			status = "queued"
+		}
+		jsonResponse(w, map[string]string{"status": status, "route": string(route)})
 		return
 	}
 

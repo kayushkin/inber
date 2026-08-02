@@ -24,10 +24,13 @@ func TestSessionPendingMessages(t *testing.T) {
 func TestSessionInjectMidRun(t *testing.T) {
 	s := &Session{
 		Key:        "test",
+		Status:     Running,
 		injections: make(chan string, 10),
 	}
 
-	s.inject("hello")
+	if route := s.deliver("hello"); route != DeliveredMidTurn {
+		t.Errorf("route = %q, want %q", route, DeliveredMidTurn)
+	}
 
 	select {
 	case msg := <-s.injections:
@@ -37,19 +40,6 @@ func TestSessionInjectMidRun(t *testing.T) {
 	default:
 		t.Error("expected message on injections channel")
 	}
-}
-
-func TestSessionInjectBufferFull(t *testing.T) {
-	s := &Session{
-		Key:        "test",
-		injections: make(chan string, 2),
-	}
-
-	// Fill buffer.
-	s.inject("a")
-	s.inject("b")
-	// Third should be dropped (not block).
-	s.inject("c") // should not panic or block
 }
 
 func TestSessionKeyForChild(t *testing.T) {

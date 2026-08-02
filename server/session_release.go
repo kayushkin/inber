@@ -75,17 +75,18 @@ func (g *Server) injectIfBusy(sessionKey, input string, req RunRequest) (*RunRes
 	}
 	sess := val.(*Session)
 
-	sess.mu.Lock()
-	isRunning := sess.Status == Running
-	sess.mu.Unlock()
-	if !isRunning {
+	// One act, not a test followed by a send. A session that reads Running and
+	// is idle by the time the message is sent has no reader for it, and a full
+	// buffer has no room for it; in both cases this returns false and the
+	// message goes back down the ordinary path, where the queue serializes it
+	// behind whatever turn is running and then runs it as a turn of its own.
+	if !sess.injectIfRunning(input) {
 		return nil, false
 	}
 
-	logger.WithComponent("server").Debug("session busy, injecting message mid-turn", map[string]interface{}{
+	logger.WithComponent("server").Debug("session busy, message injected mid-turn", map[string]interface{}{
 		"session_key": sessionKey,
 	})
-	sess.inject(input)
 	return &RunResponse{
 		Text:       "[Message injected into running session — agent will see it during current work]",
 		SessionKey: sessionKey,

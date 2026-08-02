@@ -99,26 +99,21 @@ func (g *Server) StopSession(key string) error {
 	return nil
 }
 
-// Inject sends a message into a session.
-// If the session is running, injects mid-turn (agent sees it between tool calls).
-// If idle, queues as pending (delivered as prefix on next turn).
-func (g *Server) Inject(sessionKey, message string) error {
+// Inject sends a message into a session and reports which route delivered it:
+// mid-turn, where the agent sees it between tool calls, or the pending queue,
+// where it is prepended to the input of the session's next turn.
+//
+// The route is returned rather than left for the caller to infer, because the
+// two callers here both describe the delivery to somebody — one to a model, one
+// over HTTP — and both used to describe it by re-reading Status afterwards,
+// which is a second race on top of the one inside the delivery.
+func (g *Server) Inject(sessionKey, message string) (DeliveryRoute, error) {
 	val, ok := g.sessions.Load(sessionKey)
 	if !ok {
-		return fmt.Errorf("session not found: %s", sessionKey)
+		return "", fmt.Errorf("session not found: %s", sessionKey)
 	}
 	s := val.(*Session)
-
-	s.mu.Lock()
-	isRunning := s.Status == Running
-	s.mu.Unlock()
-
-	if isRunning {
-		s.inject(message)
-	} else {
-		s.queuePending(message)
-	}
-	return nil
+	return s.deliver(message), nil
 }
 
 // ---------------------------------------------------------------------------
