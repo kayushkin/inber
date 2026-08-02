@@ -1776,6 +1776,39 @@ distinct block type, or at minimum a sentinel the harness owns, restores the dis
 
 ### 2. The approver must see the bytes that will execute — and normalizing an empty allowlist to "unset" fails open
 
+> **AUDIT RUN 2026-08-03 — the cline half was the live one, and it was live three repos wide.**
+> This entry asked for one thing: *audit every place inber collapses an empty collection into a
+> nil or absent value on a permission path.* Done, and it found two, in opposite directions.
+>
+> 🔴 **`disabled_tools` — shipped.** The nil/empty distinction on this field is documented as
+> load-bearing at *both* ends (llm-bridge-jig's `handleConfig`, inber's `handleBridgeConfig`,
+> each testing for nil rather than length, each with a comment saying why), and the layer between
+> them could not express it: `msg.ConfigSessionRequest.DisabledTools` carried `omitempty`, and
+> bridge-server's `handleConfigSession` does not forward the caller's bytes — it decodes into
+> that struct and **re-marshals**. So `{"disabled_tools":[]}`, the request that re-enables every
+> tool, went out as `{}`. jig answered *"config: payload sets nothing"*; inber answered
+> *"updated"* and changed nothing. A second copy of the same conflation sat in the budget-only
+> fast path (`len(req.DisabledTools) == 0`), which would have dropped a tool change on exactly
+> the halted sessions that path exists to revive. This is cline #12669's shape precisely, and
+> P185's "two locks on one door" — both gates were already correct; the wire in front of them
+> was not. Fixed in llm-bridge, llm-bridge-server, llm-bridge-jig and inber.
+>
+> 🔴 **`AgentConfig.Tools` — a genuine `[]`-means-everything, and NOT decision-free. Filed.**
+> `engine/build_tools.go:17` reads `len(e.AgentConfig.Tools) > 0` and otherwise returns
+> `buildDefaultTools()` — every tool inber has. The comment on the field records it as the
+> design: `// tool allowlist (empty = all)`. That is the deny-everything configuration enabling
+> everything. **It cannot simply be flipped to a nil test**, and the reason is the second half of
+> the same lesson: agent-store already destroyed the distinction upstream —
+> `agent-store/store.go:547` does `if tools == nil { tools = []string{} }` — and
+> `agent_harness_tools` holds **zero rows**, so all 22 agents on this host arrive with a non-nil
+> empty slice. A nil test today would hand every agent an empty tool set. See the child todo.
+>
+> ✅ **Checked and correct, so nobody re-audits them:** `SetDisabledTools`/`applyDisabledTools`
+> is a *deny* list, where empty means deny nothing — the fail-safe direction, and documented.
+> `guard.CheckTool` under Observe refuses any tool it has not classified. The remaining known
+> asymmetry — Assist *allows* an unclassified tool, because `isDangerous` is a denylist — is
+> already the open todo `27dd7892`, not a new finding.
+
 [goose #10529](https://github.com/aaif-goose/goose/pull/10529) is filed as a security fix and
 is the cleanest statement of the rule: the adversary/reviewer pass was shown a shorthand
 `command` summary of a tool call rather than the full argument object, so **sibling arguments
@@ -2272,6 +2305,33 @@ record with a reason, produced locally, separate from `isError`. Note `guard.Rec
 
 ### 1. Freezing the rendered string is not enough — freeze the inputs that decide the prefix's contents and order
 
+> **TRUE in code, LATENT on this host's corpus, and the fix is an owner's call — filed, not
+> shipped. Verified 2026-08-03.** Every link of the chain reads as described: `turn_prompt.go:81`
+> derives `messageTags` from the current user message, `:82` derives the budget from the turn
+> counter (4000 turn 0 · 6000 · 8000 from turn 16 · the 20k/35k/50k error ladder) and from the
+> message's own size (>300 → 10000, >1000 → 15000), and memory-store's `calculateScore` adds
+> `+0.3` per matching tag plus a wall-clock recency bonus, so score decides both order and — via
+> the budget cut — membership of the whole `system` array that carries BP2.
+>
+> **But measure before pricing it.** On `~/.inber/memory.db` the automatic context is *three*
+> memories: 10 rows exist, 7 are `session-summary`, and `TagsExcludedFromAutomaticContext`
+> keeps every one of those out. The three survivors are all `AlwaysLoad`, whose membership is
+> unconditional — `builder.go`'s budget cut appends an always-load row whatever the budget — so
+> nothing this entry describes can currently change *which* memories are sent. Only their order
+> is at risk, and on these three the scores do not cross. The mechanism is armed, not firing: it
+> starts costing the moment the store holds non-excluded, non-always-load rows worth more than a
+> budget. Note also that always-load order cannot affect membership of anything, so when it does
+> move it is pure cache cost — that half is decision-free whenever someone wants it.
+>
+> ⛔ **The passage's own diagnostic caveat is SPENT — do not repeat it.** It warns that
+> `prompt_blueprint.go` keys system blocks on a description embedding `importance` at `%.1f`.
+> That is fixed: `DiffBlueprints` matches blocks **by position, never by ID**, and hashes
+> `nb.Text`, with a comment naming this exact importance-drift failure. The blueprint diff is now
+> the right instrument, not the wrong one.
+>
+> The remaining question — whether tag-matched memories belong in the cached prefix at all, or
+> after BP3 with the volatile context — is a real recall-versus-cache trade and is **filed**.
+
 goose [#10734](https://github.com/block/goose/pull/10734) is already written up in `goose.md`
 (2026-07-30 §1) and its inber verdict there was *"inber already holds this shape structurally, and
 has no timestamp in the prompt at all."* The first clause is right — `BuildSystemPrompt` runs once
@@ -2313,6 +2373,16 @@ content hash, not with that diagnostic.
 
 ### 2. An error's author decides what you may conclude from it — and inber *routes* on the answer
 
+> **SPENT — verified 2026-08-03. Every line of this entry describes code that no longer
+> exists.** The claim was accurate when this sweep ran at 04:12 and was fixed later the same
+> day. `engine/failover.go` no longer maps any non-nil `err` to `RecordError`:
+> `errorIsEvidenceAboutTheModel` (`1dff00b`, asserted by `0849ad6`, extended by `4f50869`)
+> excludes `context.Canceled` and `agent.ErrMaxAPICallsExceeded` outright and asks whose clock
+> fired on `context.DeadlineExceeded`, and `recordModelHealth` writes *nothing* for an outcome
+> carrying no evidence rather than a fabricated success. Its comment names the three classes
+> this entry asked for. `unexpected stop reason` is deliberately still recorded and is the open
+> question on `6b4a9ab5` — deciding it here would settle it by accident. Do not re-file.
+
 cline [#12820](https://github.com/cline/cline/pull/12820) stopped calling `captureProviderApiError()`
 for every error event. Recoverable in-run tool-use mistake notices — the model emitting a malformed
 call — were being counted as provider API failures, inflating the SDK bundle's measured error rate
@@ -2336,6 +2406,16 @@ bit is not enough here; inber needs at least three classes (provider/infrastruct
 behaviour, local policy or cancel), because only the first is evidence about a *model*.
 
 ### 3. "Sent" is not "accepted" — a submission is admitted when some turn takes ownership of it
+
+> **SPENT — verified 2026-08-03. All three named sites were fixed the same day this sweep ran.**
+> `Session.inject` is gone; `injectIfRunning` (`4b24b11`) returns a bool as one act rather than a
+> status read followed by a send, and `injectIfBusy` falls back to the queue path when it answers
+> false, so `session_release.go` no longer promises delivery it cannot make. `Server.Inject`
+> (`session_management.go`) returns a typed `DeliveryRoute` — `mid-turn` or `next-turn`, with
+> deliberately no route meaning "lost" — which is #36385's shape. `deliverResult`'s
+> "🔔 Sub-agent completed" event was moved *above* the routing (`4b24b11`), so the busy branch no
+> longer buries a finished child's result, and `requeueInjectionsTheTurnNeverReadLocked`
+> (`1018979`) hands back a message the turn ended without reading. Do not re-file.
 
 codex [#36385](https://github.com/openai/codex/pull/36385) adds
 `submit_user_input_and_wait_for_admission`, which does not resolve until the message either starts a
