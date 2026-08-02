@@ -815,3 +815,42 @@ buffer exists) and [#10409](https://github.com/block/goose/pull/10409) (`to_stri
 The principle in #10409 is still worth stating: **model-facing serialization has no human reader, so
 pretty-printing there is a pure token tax**, and the regression test should pin losslessness rather
 than a byte count.
+
+## Harness-watch — 2026-08-02
+
+**⚠️ The 2026-07-30 §1 entry above is STALE — both defects it names are fixed.** Verified against
+the current tree, not inherited: `engine/lifecycle.go:169` now calls `e.queueVolatileNote(note)`
+instead of `+=`-ing onto `e.Turn.VolatileContext`, and `engine/volatile_context.go:33-48` folds the
+queue in *after* the prompt build (`engine/turn_prepare.go:107-108`), so the cross-zone note is no
+longer clobbered; `engine/build.go:40` `takeVolatileContext()` clears the engine's copy
+(`volatile_context.go:58-60`), so the thinking-signature retry at `engine/turn_execute.go:47-49`
+cannot double-inject.
+
+**That entry's clean bill of health, however, was half wrong**, and the correction is the substantive
+find of this window. "inber has no timestamp in the prompt at all" is true of the *rendered* prompt
+and false of the *inputs to prefix assembly* — a wall clock in memory-store's scorer
+(`builder.go:368-374`), the turn counter (`engine/turn_context.go:8-39`) and the user's own message
+text (`engine/turn_prompt.go:81`) jointly decide the order and membership of the memories that make
+up inber's BP2-cached system prefix. Written up in full in `agentic-design-patterns.md` (2026-08-02
+§1), because it generalizes past goose.
+
+Two more from this window, both dismissed for inber but recorded so the next sweep does not
+re-derive them:
+
+- **[#10409](https://github.com/block/goose/pull/10409)** — already dismissed in the 2026-08-01 entry
+  above, and the dismissal is confirmed at source: the change is one line in
+  `crates/goose/src/providers/toolshim.rs:882` (`to_string_pretty` → `to_string`) on the path that
+  renders schemas **into prompt text** for models lacking native tool calling. inber has no toolshim
+  and stringifies no schema into prompt text; both wire paths marshal compactly via SDKs. The tree's
+  only `json.MarshalIndent` of a schema is `session/prompts_write.go:145`, which writes a debug
+  artifact on turn 1 and never reaches the wire.
+- **[#10577](https://github.com/block/goose/pull/10577)** — fully covered by the 2026-07-30 §2 entry
+  above (the 9× figure, the guardrail, and the correct prescription). Do not re-file.
+
+What auditing #10409's question in inber *did* find is an inber-authored bloat about ten times
+larger than the one goose fixed: `AddChainAndSidebandFields` grows the 9-tool registry block from
+**6,566 B to 17,834 B (+172%)**, exactly 1,252 B × 9 of byte-identical boilerplate. Detail and the
+caching caveat are in `agentic-design-patterns.md` (2026-08-02, "Also in-window"). goose's placement
+lesson applies one layer higher than the 07-30 entry recommends: `AddChainAndSidebandFields` rebuilds
+the same maps on **every request**, from both `agent/agent_run.go:26` and `engine/turn_openai.go:32`,
+where goose normalizes once at registration.

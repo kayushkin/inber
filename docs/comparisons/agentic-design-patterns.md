@@ -2267,3 +2267,151 @@ record with a reason, produced locally, separate from `isError`. Note `guard.Rec
 - **cline [#12800](https://github.com/cline/cline/pull/12800)** — a wrapper's own message is not the
   error. An error-extraction chain must be ordered by proximity to the origin, and every rung needs
   a fallback that is still actionable.
+
+## Harness-watch — 2026-08-02: a cached prefix is defined by its *inputs*, an error's *author* decides what you may conclude from it, and "sent" is not "accepted"
+
+### 1. Freezing the rendered string is not enough — freeze the inputs that decide the prefix's contents and order
+
+goose [#10734](https://github.com/block/goose/pull/10734) is already written up in `goose.md`
+(2026-07-30 §1) and its inber verdict there was *"inber already holds this shape structurally, and
+has no timestamp in the prompt at all."* The first clause is right — `BuildSystemPrompt` runs once
+per turn, so inber cannot have goose's *intra*-turn drift. The second clause is where the audit
+stopped one layer too early. inber renders no clock into the prompt, but a clock, a turn counter and
+the user's own message text all feed the function that decides **which memories land in the cached
+system prefix and in what order**.
+
+The chain, read end to end: `engine/turn_prompt.go:81` derives `messageTags` from the *current user
+message* (`memory.AutoTag`), `:82` derives `tokenBudget` from the *turn counter*
+(`engine/turn_context.go:8-39` — 4000 on turn 0, 6000 on turns 1-15, 8000 from turn 16, and the
+20k/35k/50k error ladder), and `:86` passes both to `MemStore.BuildContext`. Inside memory-store,
+`builder.go:112` scores every candidate — `+0.3` per matching tag and a **wall-clock recency bonus**
+at `builder.go:368-374` (`time.Since(m.LastAccessed)`, `+0.2` under a day, `+0.1` under a week) —
+then `:116-127` sorts on that score and `:149` cuts on the budget. So score decides both **order and
+membership**. The result comes back to `engine/turn_prompt.go:114`, is split into stable and
+volatile by `isVolatileMemoryID` — **on the memory's ID, not on whether its content varies per
+turn** — and the stable half becomes the whole `system` array (`:193`) carrying BP2 at `:198`
+(`cacheIdx := len(systemBlocks) - 1`) and `:217`/`:223`.
+
+The comment at `engine/turn_prompt.go:123-125` states the invariant the code breaks: *"Assemble
+system blocks: ONLY stable content (cached via BP2). Volatile content goes into
+e.Turn.VolatileContext … preventing cache busting."* Every input above is volatile; none is an ID
+the split at `:114` recognizes.
+
+**What inber should consider:** goose's rule generalizes one step further than the 07-30 entry took
+it — **freeze the inputs to prefix assembly, not just the rendered strings**. Anthropic hashes
+`tools → system → messages` in order, so a reshuffled system block invalidates BP2 *and cascades*
+to BP3 and BP4, re-charging the whole conversation at the 1.25× write rate instead of the 0.10×
+read rate. Against `docs/cache-optimization.md`'s own measured layout that is roughly 23k
+write-equivalent tokens per turn, every turn it fires — and 2607.12161 (2026-08-01 sweep) puts cache
+traffic at ~87% of the bill, so this is the dollar-dominant path, not a micro-optimization. Note the
+constraint any fix inherits: all four Anthropic `cache_control` slots are already spent (BP1 tools
+`agent/agent_run.go:35-37`, BP2 system, BP3+BP4 `agent/agent_run.go:129`), so "add a breakpoint for
+the always-load head" costs one of the existing four. Note also that `engine/prompt_blueprint.go:142-148`
+keys system blocks on a description string embedding `importance` at `%.1f` and the tag list, so the
+blueprint diff reports a miss when the block *text* is byte-identical — verify this defect with a
+content hash, not with that diagnostic.
+
+### 2. An error's author decides what you may conclude from it — and inber *routes* on the answer
+
+cline [#12820](https://github.com/cline/cline/pull/12820) stopped calling `captureProviderApiError()`
+for every error event. Recoverable in-run tool-use mistake notices — the model emitting a malformed
+call — were being counted as provider API failures, inflating the SDK bundle's measured error rate
+**~9× versus legacy** in a live A/B rollout dashboard. The misclassification corrupted a decision,
+not just a chart. The fix keys on one bit: *"Only terminal failures are provider failures.
+`recoverable: true` error events are in-run notices."*
+
+**What inber should consider, and inber's version is worse than cline's because it routes rather
+than charts.** `engine/turn_execute.go:54` calls `recordModelHealth(modelUsed, …, err)` — its
+comment says "regardless of success/failure" — and `engine/failover.go:97-98` maps *any* non-nil
+`err` to `modelStore.RecordError`. Three of the errors reaching it are not provider failures:
+`agent/agent.go:284` returns `ctx.Err()` on **user cancellation**, `:293` returns inber's own local
+`exceeded max API calls (50)` cap, and `:393` returns `unexpected stop reason` (model/protocol
+behaviour — `refusal`, `pause_turn`, `stop_sequence` all land there). model-store marks a model
+unhealthy the moment `LastErrorAt` is after `LastSuccessAt` — a single error flips it, no threshold
+— and `engine/failover.go:41-53` then fails over. Because model-store is a **host-shared SQLite
+store**, one user pressing stop in dash degrades model selection for every other inber session on
+the box until some session records a success, and the log line reads `model X is unhealthy (last
+error: context canceled)` — a provider outage report naming a user action. cline's one `recoverable`
+bit is not enough here; inber needs at least three classes (provider/infrastructure, model
+behaviour, local policy or cancel), because only the first is evidence about a *model*.
+
+### 3. "Sent" is not "accepted" — a submission is admitted when some turn takes ownership of it
+
+codex [#36385](https://github.com/openai/codex/pull/36385) adds
+`submit_user_input_and_wait_for_admission`, which does not resolve until the message either starts a
+new turn or steers the active one, and returns a `UserMessageAdmission` **naming the accepting turn
+id**, with explicit errors for rejection and session termination. Its sibling
+[#36410](https://github.com/openai/codex/pull/36410) makes `isBlocking` a required protocol field
+instead of overloading `autoResolutionMs` as both "does this block" and "how long until timeout" —
+and legacy payloads missing it **default to blocking**, the fail-safe direction.
+
+**What inber should consider:** `server/session_release.go:88` calls `sess.inject(input)` and then
+unconditionally returns `"[Message injected into running session — agent will see it during current
+work]"`. `Session.inject` (`server/session.go:195-205`) returns **nothing**: it is a `select`/`default`
+on a capacity-10 channel that logs a warn and drops the message when full. The promise is also racy
+— `session_release.go:80` releases `s.mu` before the `:88` call, and `Session.turn`'s deferred func
+sets `Status = Idle` under that same lock, so the turn can end in between; the message then lands in
+a channel drained only by `InjectCheck`, which `agent/agent.go:297` calls only when `apiCalls > 1`.
+No turn is running, so the user's prompt is neither answered nor queued until some later turn happens
+to make a second API call. The same read-then-release-then-act shape repeats at
+`server/session_management.go:112-120` (which `return nil` — success — regardless) and
+`server/spawn_delivery.go:42-50` and `:95-108`; the last is the most damaging, because its idle
+branch publishes the user-visible "🔔 Sub-agent completed" event that the racing inject branch skips,
+so a finished sub-agent's result is buried with no notification to anyone. Adopt #36385's shape: give
+`inject` a return value, and resolve a submission only once a turn owns it.
+
+### Also in-window, worth a line each
+
+- **A schema that names a value its own enum cannot contain.** `agent/chain.go:20` and `:24-25` both
+  tell the model *"use `end_turn` when no follow-up is needed"*, but `:24` builds the enum from the
+  live tool names, and `tools.EndTurn()` (`tools/tools.go:56`) has **zero non-test callers** — it is
+  absent from the `init()` registry and from `tools.All()`. `agent/chain.go:101` still branches on
+  `t.Name != "end_turn"`, so the code assumes a membership that never holds. Against a strict
+  enum-validating backend (the Moonshot class `agent/openai_conversion.go:40-53` already defends
+  against) that is a rejected argument; against a lenient one it is a silently dropped chain plus
+  dead instruction tokens in every tool on every request. Related to but distinct from the open
+  "no tool name is reserved" item, which names the same `if` for the opposite reason.
+- **The sideband/chain injection is the largest single item in inber's tool block.** Measured against
+  the real `AddChainAndSidebandFields`: `tools.AllFromRegistry()` (9 tools) goes **6,566 B → 17,834 B,
+  +172%**, and the delta is exactly **1,252 B × 9** — the same `then` schema (full tool-name enum plus
+  a ~250-char description) and the same `done`/`note`/`split` block repeated in every tool. Honest
+  caveat, since goose #10409's thesis is about tokens: this sits inside BP1, so steady-state reads
+  cost 0.1×. The real bills are cache **writes** at 1.25× on every new session and TTL expiry, and the
+  OpenAI path (`engine/turn_openai.go:32,76`), which sets no cache control at all. Also: `then.tool.enum`
+  grows linearly with tool count, so an MCP registry of hundreds inflates *every* tool's schema by the
+  full enum — borrow codex [#36507](https://github.com/openai/codex/pull/36507)'s bounding discipline
+  (a cap that is recency-prioritized **and reports what it dropped**) rather than its feature.
+- **cline [#12831](https://github.com/cline/cline/pull/12831)** — restore must rewind untracked files
+  too, or "undo" leaves a workspace state that never existed; see `cline.md` for inber's version.
+- **Rejected this window, so the next sweep does not re-triage:** codex #36544/#36409/#36402/#36485
+  (plugin packaging and search — explicitly no trust model attached), #36411 (test-infra markers),
+  #36374 (sandboxed V8 build config), #36380/#36384 (thread-section CRUD, explicitly not context or
+  compaction), #36339/#36364/#36327/#36311 (skill *rendering* moves; inber has no skill catalog),
+  #36355/#36360 (same one-owner thesis as #36367/#36357, covered 2026-08-01; `tools/mcp` still has
+  zero importers), #36329 (its sharp half — reserve the unnamespaced name — is already at
+  `agentic-design-patterns.md:2037-2048`), #36534 (MCP catalog cap; inert with no MCP importers).
+  cline #12836 (inber never parks an approval — `engine/build_hooks.go:97-99` refuses inline),
+  #12658 (VSCode shell-integration specific), opencode #39697 (inber's MCP is stdio-only, no SSE).
+
+**Held back from the queue this pass, and why.** codex
+[#36373](https://github.com/openai/codex/pull/36373) (`--approve-for-me`) makes the approver a
+*configured identity* — it expands one flag into `approvals_reviewer="auto_review"`,
+`approval_policy="on-request"` and `sandbox_mode="workspace-write"`, then consumes itself so no
+fourth mode reaches downstream code, and enforces the permission-affecting flags as a mutually
+exclusive set **at parse time** (`conflicts_with_all`), so an incoherent trust envelope cannot be
+assembled by accident. Two inber consequences. First, `guard.Config.ApprovalFunc` has **zero
+producers repo-wide**, so Assist can only ever reach `NeedsApproval` → refuse
+(`engine/build_hooks.go:97-98`, whose comment concedes "there is nowhere yet"); `auto_review` is the
+shape that unblocks it without inventing an approval event. Second, and this is a live defect not
+filed only because the open todo `9e31d359` already names the same lines: `server/spawn.go:224` and
+`server/session_forking.go:47` pass a **zero** `RunRequest`, `applyRequestOverrides`
+(`server/session_creation.go:57-95`) is entirely `if field != zero` guarded so nothing is set,
+`guard.ParseMode("")` yields `Unset` — documented at `guard/guard.go:38-44` as *full access*, with
+`guard/guard.go:154-156` returning `Allowed` from the `default:` branch — and `spawn_agent` is in
+every session's tool set (`server/agent_tools.go:10-13`) while appearing in neither `isReadOnly`
+(`guard/guard.go:249-256`) nor `isDangerous` (`:258-264`), so `guard/guard.go:146-153` allows it in
+Assist **with no approval**. That todo covers the caps half and the resume path (shipped as
+`88780d7`); the **mode** half, and its reachability through the Assist gate by the one tool nobody
+classified, belongs on it and is not yet written there. Related: `guard/classification_test.go:56-88`
+asserts only that every *classified* name exists, never that every *registered* tool is classified —
+which is the asymmetry that left `spawn_agent` unclassified in the first place.

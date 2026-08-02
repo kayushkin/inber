@@ -217,3 +217,205 @@ rank-then-threshold rule everyone uses is provably wrong once candidates have un
 The shared lesson is that the cheapest next step for inber is **not a new mechanism** — it
 is to log the four Anthropic cache usage counters per turn, so the next proposal in this
 doc set can be argued in dollars instead of tokens.
+
+# 2026-08-02 sweep
+
+Dedupe base widened: **135 distinct arXiv ids** machine-extracted from the 04/05/06/07/08 research
+docs plus `agentic-design-patterns.md`. The 08-01 sweep's own count of 108 was short because its
+extraction pattern (`arXiv:` / `arxiv.org/abs/`) misses that sweep's "Checked and rejected" list,
+which writes bare bolded ids (`**2607.23586**`). Use `\b(25|26)[0-9]{2}\.[0-9]{4,5}\b`.
+
+**Window reality check, stated up front:** arXiv has **zero** cs.AI submissions indexed after
+2026-07-30 (`submittedDate:[202607310000 TO 202608030000]` → `totalResults 0`; weekend plus
+announcement lag), and Anthropic's engineering index has published nothing in July or August 2026.
+So nothing here is newer than yesterday's sweep — all four keepers are mid-to-late-July work that
+the 07-31 and 08-01 passes did not triage.
+
+## ⚠️ Correction to the 2026-08-01 sweep: inber already logs the cache counters
+
+The 08-01 entry closed with *"the cheapest next step for inber is not a new mechanism — it is to log
+the four Anthropic cache usage counters per turn"*, and its 2607.12161 write-up asserted **"inber
+currently cannot tell whether its compactor saves money."** That is wrong, and it was wrong when
+written. Verified against the tree on 2026-08-02: `agent/agent_run.go:249-253` accumulates
+`CacheCreationInputTokens` and `CacheReadInputTokens` off every response;
+`session/session_logging.go:30-31,44-45` folds them into per-turn and cumulative session totals;
+and both `session/session.go:285` and `session/timeline_jsonl.go:144` price them through
+`CalcCostWithCache`. The counters are there and the dollars are computed.
+
+What is *actually* missing is narrower and is already owned by open todo `71963446`: the **`trace`**
+package declares `CacheRead`/`CacheWrite`/`Cost` at `trace/trace.go:49-50` and the single site that
+builds a `trace.Turn` sets none of them. So the session path knows the numbers and the trace path
+does not. Do not re-file the general claim; it is retired.
+
+## Where Is the Cost of Third-Party API Routers in Agentic Software Development?
+
+[arXiv:2607.23624](https://arxiv.org/abs/2607.23624) — v1 2026-07-26, v2 2026-07-29 (Atom-confirmed).
+Fu, Li, Jiang, Dong. Code at `github.com/Riyasushin/SIDEL`.
+
+Attacks the position between agent and provider — a third-party API router on the trusted path that
+can rewrite responses. They build SIDEL (trace record / replay / inject / defend), curate **400
+samples**, and run **four escalating intervention levels** (Response Substitution, Response Append,
+LLM-Polished, LLM-Polished with Distribution Alignment) against **four representative coding
+agents**. Headline: **all four agents achieved a 0% defense success rate at every injection level**
+with no extra mitigations. Whitelist-based execution control and LLM review both improve resistance
+but "do not fully restore end-to-end control." The framing claim is that client-side permission
+mechanisms stop working once the router shapes what the model asks for.
+
+**What inber should consider:** `guard/guard.go` gates on `CheckTool(name, input)` — a client-side
+check on the call the model emitted — which is precisely the mitigation class the paper measures as
+non-zero but insufficient. The concrete implication is that a whitelist surviving router injection
+has to key on **repository effect, not tool name plus arguments**. Cross-file this against the open
+permission-store gate item in memory: that note already records the store blocking ~nothing for
+autoworkers, and 23624 says even a *working* client-side gate is bypassable from upstream. It is
+also a direct warning about llm-bridge-as-gateway — every inber session routes through a bridge
+sitting exactly where the paper attacks.
+
+*Scope: the 0% is pre-mitigation and Atom-confirmed from the abstract; the post-mitigation numbers
+are not in the abstract and the PDF was not read, so "whitelist + LLM review help but don't close
+it" is the paper's claim, not a verified figure. The threat model needs a malicious or compromised
+router — hygiene rather than active exposure if you only ever hit `api.anthropic.com` directly.*
+
+## Retain or Consolidate? Budget-Dependent Operator Selection for Language Agent Memory
+
+[arXiv:2607.17545](https://arxiv.org/abs/2607.17545) — v1 2026-07-20, v2 2026-07-21 (Atom-confirmed).
+Kang, Liu, Kai, Liang, Tang, Cui, Zhong, Yuan.
+
+**This is the agent-memory paper three consecutive sweeps recorded as missing** — not a benchmark
+release, not another entry in the memory-transaction thread. It decomposes each memory operator's
+utility into a **coverage effect** (on evidence retention would have omitted) and a **signed
+replacement effect** (on raw evidence that already fits), then picks among Merge, Abstract and
+Rewrite with a lightweight learner (OAS) using pre-generation features and held-out harm
+calibration. On LongMemEval and LoCoMo: **consolidation improves absolute accuracy by up to 48%
+under tight budgets, while retention is preferable under loose budgets**, with LoCoMo replicating
+the crossover at a smaller budget. Secondary: **cross-note abstraction and merging generally beat
+local rewriting** when compression is required.
+
+**What inber should consider:** the finding maps onto a defect inber has already measured on itself.
+The comment block atop `memory/auto_context.go` records that **12 of 13 assembled memories and 99%
+of assembled tokens were compaction-archive fragments the reader never asked for**, drawn from ten
+other sessions — that is the replacement effect going negative under a loose budget, observed in
+production. Two moves. **(a)** `conversation/summarize.go:14` fires on
+`len(messages) > cfg.TriggerMessages` (80/60/40 by profile in `summarize_config.go`) — an
+unconditional *consolidate*. The paper says the operator choice is budget-dependent and that
+consolidating under a loose budget loses accuracy, so make the trigger two-sided: consolidate only
+when residual budget is genuinely tight, otherwise retain. **(b)** inber's compaction archive plus
+the `memory_expand(id=…)` pointer is closer to Merge than to Rewrite, which is the side the paper
+favors — worth keeping, and worth *not* replacing with a local-rewrite scheme.
+
+*Scope: LongMemEval and LoCoMo are conversational-QA benchmarks, **not coding sessions**. A SWE
+trajectory's evidence (verbatim edit anchors, file contents) is structurally different, and
+2607.12161 already showed compression corrupts exactly those anchors. Take the shape — operator
+choice is budget-dependent, abstraction beats local rewrite — and treat the magnitudes as
+out-of-domain. OAS needs a trained utility estimator; the config-table version is the cheap
+adoption.*
+
+## Inference Economics of Enterprise Coding Agents: Cloud vs On-Premise
+
+[arXiv:2607.13080](https://arxiv.org/abs/2607.13080) — v1 2026-07-13 (Atom-confirmed). Peng, Lin, Lee.
+
+Two contiguous 28-day periods on a production monorepo, comparing API Claude Opus 4.7/4.8 on Claude
+Code against on-premise GLM-5.1/5.2 on Opencode (NVFP4 on Blackwell), from LLM telemetry plus Git
+history. **Prompt-cache hit rate 99.3%, cutting realized API cost by 88.6% to an effective $0.57 per
+million tokens** — below the $2.83 amortized unit cost of the shared on-premise slice. On quality,
+at comparable gross churn the local config had a **Fix Commit Ratio of 74.9% vs 45.9%**, with
+commit-is-a-repair odds 2.6–4.9× higher within every difficulty tier (Mantel-Haenszel OR = 3.61).
+TCO flips with allocation: on-premise saves 40.1% on a shared GPU, costs 43.8% more on a dedicated
+reservation.
+
+**What inber should consider:** this is the positive companion to yesterday's headline. 2607.12161
+said token reduction decorrelates from cost because caching is ~87% of the bill; **13080 supplies
+the other side — a well-placed cache boundary is an 88.6% cost cut, and a 99.3% hit rate is
+achievable in a real workflow.** Given the correction above (inber already has the counters), the
+next step is not to add logging but to **report realized cache hit rate per session and alarm when
+it drops**. A hit rate sliding from ~99% to ~60% is the single observable that catches a
+prefix-invalidating regression — including the `engine/turn_prompt.go` BP2 reshaping filed as a
+defect this pass, which no existing test would catch. Second, the FCR result is a counterweight to
+the cheap-local-model thread: the penalty appeared as repair burden, not as a lower pass rate.
+
+*Scope, bluntly: **n = 1 developer, non-randomized, and the arms differ in model AND harness
+simultaneously** (Opus/Claude Code vs GLM/Opencode), so the 74.9%/45.9% gap cannot be attributed to
+model, quantization or harness separately. The 99.3%/88.6% caching figures are the robust part —
+direct telemetry from one arm, not a between-arm contrast — and are what to carry forward. TCO is
+Taiwan-market-parameterized.*
+
+## SPORE: Persistence-Based Memory Extraction Against Per-User-Isolated Agents
+
+[arXiv:2607.23444](https://arxiv.org/abs/2607.23444) — v1 2026-07-26 (Atom-confirmed). Gao, Chen,
+Meng, Wang, Zang, Wang, Li, Guo.
+
+Extracts private long-term memory through the **tool interface** rather than shared storage, so
+user-level isolation is never violated. The observation: agents routinely embed LTM-retrieved data
+into tool-invocation *parameters*, so a malicious tool exfiltrates memory as a side effect of being
+called. SPORE beats two obstacles — adversarial-command semantics degrade retrieval precision (fixed
+by persisting the command in short-term memory and emitting semantically *pure* anchors in tool
+responses), and platform tool-call limits cap the per-trigger budget (fixed by persisting
+**reactivation payloads** that resume the attack within and across sessions with no further user
+trigger). **80.0% record extraction with unlimited triggers, 47.0% with only 20**, plus cross-user
+identity linkage in multi-user deployments.
+
+**What inber should consider:** `memory/auto_context.go` injects memory into the prompt without
+anybody asking, and `memory/tools.go`'s `memory_expand(id=…)` adds a pull path; `tools/mcp` will
+mount third-party servers resolved through tool-store (:8302), which is exactly the untrusted-tool
+position SPORE assumes. The ask: **treat memory-derived text as tainted when it flows into a tool
+argument**, enforced at `tools/adapter.go` / `guard.CheckTool` rather than at retrieval time — the
+paper's point is that retrieval-side isolation stays intact and the leak is downstream. The
+cross-session **reactivation payload** is the sharper half: a memory row written in session A that
+re-arms in session B is a persistence primitive inber's store has no notion of, and `memory.db` is a
+single shared store. Composes with Twin Agent (2607.19595, on file): the privilege-separated child
+is the right shape, but SPORE shows the leak channel is the *parameters crossing outward*, not the
+content coming back.
+
+*Scope: numbers from the abstract, Atom-confirmed; PDF unread, so what "record extraction rate" is
+measured against is unverified. Requires the attacker to control a tool the agent may call —
+realistic for MCP-from-a-registry, not for inber's in-process `agent.Tool` set. Attack-side rates
+are upper bounds under favorable conditions.*
+
+## Below the measurement bar, but too actionable to lose
+
+**[arXiv:2607.13071](https://arxiv.org/abs/2607.13071)** — *Compaction as Epistemic Failure* (v1
+2026-07-11, Tamba). Documents a specific Claude Code failure: **partial stdout from timed-out
+commands (exit 143) is recorded in compaction summaries as a confirmed result**, propagating false
+positives across sessions and model versions with no re-verification. Root cause named as conflating
+*observation* with *persistence*. Not a keeper — single-author case report, no n, no controls, no
+ablation. Kept because it is the most directly actionable item in the window:
+`conversation/manage_tool_pruning.go:63` already says "the field that matters is is_error," yet
+nothing in `conversation/summarize.go` or `summary_generation.go` mentions exit codes or error
+status. There is a `prune_preserves_is_error_test.go`; the equivalent assertion for the *summarize*
+path does not exist. One session's work to check.
+
+## Checked and rejected
+
+- **2607.15593** *Scalable LLM Agent Tool Access in the Cloud* (07-17) — 98% Top-15 recall over
+  3,000+ tools, 8.9× faster selection, 23.8% less token usage. Genuinely relevant to `tools/mcp` and
+  the MCP-descoping OOM, rejected only as a **vendor systems paper** whose numbers are self-reported
+  ratios against its own prior deployment. Best candidate if a future sweep wants a fifth.
+- **2607.26117** *Try Again, Don't Look Back* (07-28) — cleanest negative in the window
+  (placebo-controlled; blind resampling beats self-repair below 7B at 2.5–5.5× fewer tokens;
+  anchoring reproduces a near-identical program 33–68% vs 2–14%, r=0.96). Rejected on **scope**:
+  1.5B/3B/7B on MBPP+, and statistically tied at 7B — plausibly gone at the only scale inber runs.
+- **2607.13083** *Phantom Guardrails* (07-13) — self-improving harnesses fabricate failures (15/60 vs
+  0/60). Synthetic micro-lab, and inber does no automated harness self-optimization.
+- **2607.14004** *Do Agent Optimizers Compound?* (07-15) — GEPA transfers *below* baseline; but the
+  winner is the authors' own product. Vendor paper.
+- **2607.17044** *Where Does Agent Reliability Come From?* (07-19) — verification loop contributes
+  only +1.5 of +11 points, adversarial to its own headline; single-author, compares Leni to its own
+  base model.
+- **2607.21672** *Pixels for Programs?* (07-23) — 75–86% input-token reduction rendering code as
+  images, but explicitly disclaims measuring cost, accuracy or agent efficiency. Pure token
+  reduction is the unit 2607.12161 just invalidated.
+- **2607.22807** *The Best Programming Language for Tokenmaxxing* (07-24) — real trajectory analysis,
+  but Python/Java/Rust/OCaml and **no Go**, so the one number inber would want doesn't exist.
+- **2607.05378** *CompactionRL*, **2607.22690** *LazyMem* — training-side; inber cannot train a model.
+- **2607.18161** *TRIM* (07-20) — post-hoc patch minimizer, not a hot-path component.
+- **2607.19338** *CodeRescue* (07-21) — overlaps the CAM-DF cost-aware-stopping slot from 08-01.
+- **2607.09175** *GRACE* (07-10) — optimizes a persistent system-instruction graph inber does not have.
+- **2607.20764**, **2607.16961**, **2607.11423**, **2607.14159**, **2607.26520**, **2607.17751**,
+  **2607.11138**, **2607.25032**, **2607.08740**, **2607.14336**, **2607.17641**, **2607.24604**,
+  **2607.26587**, **2607.10441** — benchmark-, framing- or training-only, or duplicating threads on
+  file.
+
+**Still absent, third sweep running: session resumption.** `all:"session state"`, `all:"agent
+session"`, `all:"long-running agent"` and `all:"resume"` over the window return physics resummation
+papers or already-triaged memory work. Nearest miss is 2607.08740, which describes resumable
+workflow objects but leaves transition semantics as future work. **The agent-memory gap is now
+closed** by 2607.17545.

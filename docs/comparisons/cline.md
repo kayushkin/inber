@@ -341,3 +341,59 @@ wire. What a fix has to decide is genuinely open: abort compaction on a `max_tok
 a session that consistently overruns then never compacts and hits the emergency flush at
 `engine/lifecycle.go:174` instead), retry with a raised ceiling or a smaller slice (needs a retry
 bound and a cost policy), or accept-but-mark so the injected block states its own incompleteness.
+
+## Harness-watch — 2026-08-02: a restore that rewinds history but not files leaves a state that never existed
+
+[cline #12831](https://github.com/cline/cline/pull/12831) fixes two independent checkpoint bugs. The
+transferable one: **restore only rewound tracked files**, so untracked files the agent created after
+the checkpoint stayed on disk and "undo" produced a workspace that had never existed at any point in
+the session. The fix captures untracked state as a **third parent** commit
+(`createUntrackedParentCommit()`, `${ref}^3`); restore detects `^3` and runs `git clean -fd` before
+applying the stash, and legacy two-parent snapshots deliberately leave untracked files alone "to
+avoid unrecoverable data loss" — the fallback is asymmetric on purpose. The second bug is a
+two-clocks error of the kind inber has shipped before: run numbering counted raw `role === "user"`
+messages, but tool-result messages also carry `role: "user"`, so the picker offered run numbers the
+core could not resolve and restore aborted. Fixed with span-aware counting — *a run warrants a
+checkpoint when it **introduces** a new user turn*.
+
+**What inber should consider.** inber has this asymmetry in its most extreme form, and the two halves
+do not know about each other. `session/checkpoint.go` is real and writes *conversation* state
+(`SaveCheckpoint`, `:65-112`, called from `engine/lifecycle.go:227`). The *file* half, the
+`checkpoint/` package, is a 98-line stub in which every method is a TODO: `Take` (`:57-63`) returns
+`nil, nil` and **`Restore` (`:91-97`) returns `nil` without touching a file** — while
+`engine/engine.go:217` constructs it and `engine/engine.go:304` calls `Take()` on every `RunTurn`.
+A `Restore` that reports success without doing anything is the most dangerous shape a safety feature
+can take, and it corroborates `docs/harness-control-matrix.md:42-44` rather than contradicting it.
+Note the conversation half is not restorable either — `session/checkpoint.go:41` says in its own doc
+comment that `LoadCheckpoint` has no callers, which the open todo `cf57e818` already owns. So both
+halves are write-only today. Three things a fix must decide, none of them mechanical: whether
+"checkpoint" means conversation rewind, workspace rewind, or **the atomic pair** (`cline.md:56-61`
+above assumes the third without saying so); whether checkpoints are per-turn or per-*user*-turn,
+since inber's gate is `e.Turn.Counter % 20` (`session/checkpoint.go:137-142`) and a 50-round-trip
+turn would otherwise produce 50 commits — the exact span-awareness #12831 had to add; and whether
+untracked files are captured at all, since `git stash` semantics miss precisely the files an agent
+most often creates.
+
+[#12820](https://github.com/cline/cline/pull/12820) (a recoverable in-run notice is not a provider
+API error — it inflated cline's measured error rate ~9× in a live A/B dashboard) is written up in
+`agentic-design-patterns.md` (2026-08-02 §2), because inber's version *routes* on the answer:
+`engine/turn_execute.go:54` records a **user cancellation** as a model error in a host-shared
+model-store. Note the double-count half of that entry's 2026-08-01 predecessor is now **fixed** —
+`agent/chain.go:330` passes `!isError` — so `agentic-design-patterns.md:2206` is stale on that point.
+
+**Held back from the queue this pass (cap is 3/run), recorded so it is not lost.**
+[#12839](https://github.com/cline/cline/pull/12839) raised cline's Ollama *response-start* timeout
+default to 5 minutes because cold model loads exceed anything shorter, and [#12845](https://github.com/cline/cline/pull/12845)
+retries empty Ollama responses at the model boundary. inber's version: `agent/openai.go:34` hardcodes
+`Timeout: 120 * time.Second` on the `http.Client`, and `agent/clients.go:92` routes **ollama** through
+that client — so inber is at 120s where cline needed 300s, and worse, `http.Client.Timeout` is a
+**total-request** deadline, not a response-start one, so it kills a legitimately long generation as
+readily as a hung connection. When it fires it surfaces as an `apiErr`, which then feeds the
+model-health misclassification above. Meanwhile inber already computes a per-model timeout and throws
+it away: `engine/turn_execute.go:18` reads `selected, _ := e.selectModel()`, discarding the second
+return, which is `timeoutHint` — computed at all three `selectModel` exits (`engine/failover.go:30,37,51`)
+by `timeoutFromHealth` (`:78-89`, 3× observed average, clamped 30s–5min) and consumed by **nothing**;
+`selectModel` has exactly one non-test caller. A fix must decide whether to split response-start from
+total-response deadline (cline's shape — only the former was raised), and whether the health-derived
+hint should drive the timeout or be deleted, since its 5-minute ceiling and the flat 120s currently
+disagree about what was intended.
