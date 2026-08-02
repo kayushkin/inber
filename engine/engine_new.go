@@ -318,10 +318,28 @@ func setupAgentRegistry(agentConfig *registry.AgentConfig, client *anthropic.Cli
 	return reg, nil
 }
 
-// needsSpawnTools checks if the agent configuration requires spawn tools.
+// spawnToolName is the one name that makes an agent registry worth building.
+// Engine.buildSpecialTool answers to it and to nothing else, and the registry
+// this gate creates is read at exactly one place: the "spawn_agent" case there.
+const spawnToolName = "spawn_agent"
+
+// needsSpawnTools reports whether an agent's configured tool list contains a
+// name that buildSpecialTool can actually turn into a spawn tool.
+//
+// It used to admit "spawn_*" as well. Nothing in this repository expands a
+// wildcard — "spawn_*" appeared in this one condition and nowhere else — so a
+// config listing it built a registry (which dials agent-store and model-store
+// and creates a logs directory) that no later code could read, and then handed
+// the model no spawn tool. The gate and the builder now answer to the same
+// name, which is what TestSpawnGateAdmitsOnlyBuildableNames pins.
+//
+// This deliberately does not add wildcard support. Deciding that some pattern
+// selects a set of tools is a feature, and it belongs with the reserved-names
+// question in todo 87399239, not in a gate that was quietly admitting a name
+// nothing honoured.
 func needsSpawnTools(tools []string) bool {
 	for _, tool := range tools {
-		if tool == "spawn_agent" || tool == "spawn_*" {
+		if tool == spawnToolName {
 			return true
 		}
 	}

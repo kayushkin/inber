@@ -80,7 +80,7 @@ func (e *Engine) buildSpecialTool(toolName string) *agent.Tool {
 	case "deploy":
 		tool := tools.Deploy()
 		return &tool
-	case "spawn_agent":
+	case spawnToolName:
 		if e.agentRegistry != nil {
 			tool := e.agentRegistry.SpawnAgentTool()
 			return &tool
@@ -131,14 +131,4 @@ func (e *Engine) buildMemoryTools() []agent.Tool {
 		}
 	}
 	return result
-}
-
-// needsSpawnTools checks if the tool list includes spawn_agent.
-func (e *Engine) needsSpawnTools(tools []string) bool {
-	for _, t := range tools {
-		if t == "spawn_agent" {
-			return true
-		}
-	}
-	return false
 }
