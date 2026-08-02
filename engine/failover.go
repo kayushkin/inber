@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"time"
 
+	"github.com/kayushkin/inber/agent"
 	modelstore "github.com/kayushkin/model-store"
 )
 
@@ -89,14 +92,66 @@ func timeoutFromHealth(h *modelstore.ModelHealth, defaultTimeout time.Duration) 
 	return timeout
 }
 
-// recordModelHealth updates health tracking after an API call.
+// recordModelHealth updates health tracking after an API call, for those
+// outcomes that are evidence about the model.
+//
+// The filter is load-bearing, not tidiness. model-store's health table is
+// host-shared, persistent and read across processes, and a single error flips a
+// model to unhealthy — model-store/health.go marks it down the moment
+// LastErrorAt is after LastSuccessAt, with no threshold and no decay. selectModel
+// then fails over on that. So an error inber raised about itself, written here,
+// degrades model selection for every session on the machine until some other
+// session happens to record a success against the same model.
+//
+// An outcome carrying no evidence writes nothing at all rather than a success.
+// There is no honest success available: durationMs is the wall clock from the
+// start of the API work to the moment inber gave up, which for a cancelled or
+// capped turn is when the user pressed stop or a policy clock expired, not a
+// response time. AvgResponseMs is a timeout estimator (timeoutFromHealth), so
+// handing it a fabricated duration is worse than handing it nothing.
 func (e *Engine) recordModelHealth(model string, durationMs int64, err error) {
 	if e.modelStore == nil {
 		return
 	}
 	if err != nil {
+		if !errorIsEvidenceAboutTheModel(err) {
+			Log.Info("model health: leaving %s unchanged — %q is inber reporting on inber, not on the provider", model, err)
+			return
+		}
 		e.modelStore.RecordError(model, err.Error())
-	} else {
-		e.modelStore.RecordSuccess(model, durationMs)
+		return
 	}
+	e.modelStore.RecordSuccess(model, durationMs)
+}
+
+// errorIsEvidenceAboutTheModel reports whether a failed turn says anything at
+// all about the model that ran it or the provider serving it.
+//
+// Three of the errors that reach recordModelHealth are raised by inber about
+// inber, and the provider may have been answering perfectly throughout:
+//
+//   - context.Canceled — the user pressed stop. It arrives from Agent.Run's
+//     cancellation check, which sees it because InterruptSession calls
+//     Session.cancel; that is what the stop button in dash and llm-bridge does.
+//   - context.DeadlineExceeded — a policy clock ran out. Every deadline a turn
+//     runs under is inber's own: a sub-agent spawn timeout, a session's
+//     max_duration, the bus handler's cap. The one deadline that would have been
+//     evidence about a model, selectModel's timeoutHint derived from
+//     AvgResponseMs, is discarded by executeAgent and never applied to a
+//     context — so there is no provider-response timeout to confuse this with.
+//   - agent.ErrMaxAPICallsExceeded — inber's own runaway cap. Hitting it means
+//     the provider answered every one of those calls.
+//
+// Everything else is deliberately left to record an error, including "unexpected
+// stop reason". Whether a refusal, or a pause_turn inber has no branch for, is a
+// provider fault, a model fault or a gap in inber is an open question on todo
+// 4c511c8f; deciding it here would settle it by accident.
+func errorIsEvidenceAboutTheModel(err error) bool {
+	switch {
+	case errors.Is(err, context.Canceled),
+		errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, agent.ErrMaxAPICallsExceeded):
+		return false
+	}
+	return true
 }

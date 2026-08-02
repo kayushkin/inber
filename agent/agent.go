@@ -4,11 +4,20 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
+
+// ErrMaxAPICallsExceeded ends a turn that hit inber's own cap on API
+// round-trips. It is a sentinel rather than a bare fmt.Errorf because callers
+// have to tell it apart from a provider failure: reaching the cap means the
+// provider answered every one of those calls, so the error is inber reporting
+// on inber and says nothing about the model. engine.recordModelHealth reads it
+// for exactly that reason.
+var ErrMaxAPICallsExceeded = errors.New("exceeded max API calls")
 
 // isContextLengthError checks if an API error is due to exceeding the model's context window.
 func isContextLengthError(err error) bool {
@@ -290,7 +299,7 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 			if result.Text == "" {
 				result.Text = fmt.Sprintf("[Agent stopped: exceeded %d API calls in one turn]", maxAPICalls)
 			}
-			return result, fmt.Errorf("exceeded max API calls (%d)", maxAPICalls)
+			return result, fmt.Errorf("%w (%d)", ErrMaxAPICallsExceeded, maxAPICalls)
 		}
 
 		// Check for mid-run injected messages from the user

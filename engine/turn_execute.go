@@ -50,7 +50,9 @@ func (e *Engine) executeAgent(ctx context.Context, systemBlocks []sessionMod.Nam
 		}
 	}
 
-	// Record health regardless of success/failure
+	// Record health for outcomes that are evidence about the model. A turn that
+	// inber itself stopped — a cancel, a policy deadline, its own API-call cap —
+	// leaves the record alone; see recordModelHealth.
 	e.recordModelHealth(modelUsed, time.Since(apiStart).Milliseconds(), err)
 
 	return result, err
