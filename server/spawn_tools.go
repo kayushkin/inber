@@ -61,11 +61,14 @@ func (g *Server) SteerAgentTool() agent.Tool {
 // SpawnAgentTool creates the spawn_agent tool that calls server.Spawn directly.
 // This replaces the old stderr-based INBER_SPAWN protocol.
 func (g *Server) SpawnAgentTool(parentSessionKey string) agent.Tool {
-	// Build available agents description.
-	agentNames := make([]string, 0, len(g.config.Agents))
-	for name := range g.config.Agents {
-		agentNames = append(agentNames, name)
-	}
+	// Build available agents description. The sort is load-bearing, not tidiness:
+	// this string is a tool description, and agent/agent_run.go anchors the
+	// cache_control breakpoint on the last tool definition — so the whole tools
+	// block, and every cached segment after it, is keyed on these bytes. Ranging
+	// a Go map gives a fresh permutation on every call, so two sessions of the
+	// same agent, a fork and its parent, and a session and its resume would each
+	// hash a different prefix and share no cache entry.
+	agentNames := sortedAgentNames(g.config.Agents)
 	agentDesc := fmt.Sprintf("Agent name to spawn. Available: %s", fmt.Sprintf("%v", agentNames))
 
 	return agent.Tool{

@@ -5,6 +5,7 @@ package tools
 
 import (
 	"context"
+	"sort"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -50,21 +51,27 @@ func (r *Registry) Get(name string) Tool {
 	return r.tools[name]
 }
 
-// List returns all registered tools as a slice.
+// List returns all registered tools as a slice, ordered by name.
+//
+// The order is part of the contract. A tool set goes on the wire as an ordered
+// block and agent/agent_run.go anchors the cache_control breakpoint on its last
+// entry, so a registry that handed back a fresh permutation each call would move
+// the breakpoint and re-key the cached prefix for nothing.
 func (r *Registry) List() []Tool {
 	result := make([]Tool, 0, len(r.tools))
-	for _, tool := range r.tools {
-		result = append(result, tool)
+	for _, name := range r.Names() {
+		result = append(result, r.tools[name])
 	}
 	return result
 }
 
-// Names returns the names of all registered tools.
+// Names returns the names of all registered tools, sorted.
 func (r *Registry) Names() []string {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 

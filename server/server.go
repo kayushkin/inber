@@ -78,12 +78,11 @@ func New(cfg Config) (*Server, error) {
 			cfg.DataDir = filepath.Join(home, ".inber", "server")
 		}
 	}
-	if cfg.DefaultAgent == "" && len(cfg.Agents) > 0 {
-		// Pick first agent as default.
-		for name := range cfg.Agents {
-			cfg.DefaultAgent = name
-			break
-		}
+	if resolveDefaultAgent(&cfg) {
+		logger.WithComponent("server").Warn("no default agent configured, falling back to the first by name", map[string]interface{}{
+			"default_agent": cfg.DefaultAgent,
+			"agent_count":   len(cfg.Agents),
+		})
 	}
 
 	os.MkdirAll(cfg.DataDir, 0755)

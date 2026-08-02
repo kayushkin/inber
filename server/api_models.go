@@ -39,8 +39,11 @@ func (g *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 
 	var agents []registryAgent
 
-	// Inber agents from config — these are reachable via bus.
-	for name := range g.config.Agents {
+	// Inber agents from config — these are reachable via bus. Sorted, because
+	// agent/registry/spawn_tool.go reads this body and renders it into a tool
+	// description; a response whose order changes per request costs the CLI a
+	// prompt-cache miss on every tool build.
+	for _, name := range sortedAgentNames(g.config.Agents) {
 		agents = append(agents, registryAgent{
 			Name:         name,
 			Orchestrator: "inber",
