@@ -21,6 +21,14 @@ func mergeExtraTools(base []agent.Tool, extras []agent.Tool) []agent.Tool {
 		replaced := false
 		for i, existing := range base {
 			if existing.Name == extra.Name {
+				// Say what is being thrown away. Replacement is the documented
+				// contract of this function, but a built tool leaving without a
+				// word is how two differently-shaped implementations of
+				// spawn_agent lived side by side unnoticed: one was constructed
+				// on every server session and discarded here in silence, and
+				// nothing in a log or a test ever said so.
+				Log.Warn("tool %q built for this session was replaced by an injected tool of the same name; the built one is discarded (built: %q, injected: %q)",
+					extra.Name, existing.Description, extra.Description)
 				base[i] = extra
 				replaced = true
 				break

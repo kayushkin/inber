@@ -292,8 +292,11 @@ func createModelClient(model string, store *modelstore.Store, auth *aiauth.Store
 }
 
 // setupAgentRegistry creates agent registry if spawn tools are needed.
-func setupAgentRegistry(agentConfig *registry.AgentConfig, client *anthropic.Client, repoRoot string, modelClient *agent.ModelClient, modelStore *modelstore.Store, memStore memory.MemoryStore) (*registry.Registry, error) {
-	if agentConfig == nil || !needsSpawnTools(agentConfig.Tools) {
+//
+// extraTools is the caller's injected set. It is a gate input and not just a
+// merge input: see needsAgentRegistry.
+func setupAgentRegistry(agentConfig *registry.AgentConfig, extraTools []agent.Tool, client *anthropic.Client, repoRoot string, modelClient *agent.ModelClient, modelStore *modelstore.Store, memStore memory.MemoryStore) (*registry.Registry, error) {
+	if !needsAgentRegistry(agentConfig, extraTools) {
 		return nil, nil
 	}
 
@@ -344,6 +347,42 @@ func needsSpawnTools(tools []string) bool {
 		}
 	}
 	return false
+}
+
+// needsAgentRegistry is the whole gate: an agent registry is worth building
+// only when the model will actually be shown the tool it produces.
+//
+// The configured-name half is needsSpawnTools. The other half is the caller's
+// injected set, and leaving it out is what made the registry's spawn tool
+// "silently discarded". A server session supplies its own spawn_agent through
+// EngineConfig.ExtraTools, and mergeExtraTools replaces the first base entry of
+// that name — deterministically, not by loop order. So in every server session
+// for an agent whose config lists spawn_agent, the engine loaded agent-store,
+// dialled model-store, created a logs directory and built a whole second
+// spawn_agent, and then threw that tool away unused. Measured on this host, for
+// claxon, the default agent and the one agent whose config lists the name:
+// LoadFromAgentStore 7.7ms off a 205MB database, plus four HTTP round trips to
+// build the tool's description twice over.
+//
+// The two implementations are shaped differently (the registry's takes agent,
+// orchestrator, task; the server's takes agent, task, model, fork,
+// timeout_seconds), so this is not a merge of equals — one is discarded whole.
+// Which of the two should be canonical, and whether the loser is deleted or the
+// two are reconciled, is noteboard todo 7e9a9ab4 and is deliberately NOT
+// decided here. This only stops paying to build the copy that never reaches the
+// model. TestInjectedSpawnToolReplacesTheRegistryBuiltOne is the control that
+// makes that safe: it pins that the injected tool wins, so nothing the model
+// would have seen is dropped.
+func needsAgentRegistry(agentConfig *registry.AgentConfig, extraTools []agent.Tool) bool {
+	if agentConfig == nil || !needsSpawnTools(agentConfig.Tools) {
+		return false
+	}
+	for _, tool := range extraTools {
+		if tool.Name == spawnToolName {
+			return false
+		}
+	}
+	return true
 }
 
 // setupForgeHook initializes forge project detection and hooks.
@@ -574,7 +613,7 @@ func (e *Engine) initWorkflow(cfg EngineConfig) {
 		e.forgeHook = forgeHook
 	}
 
-	agentRegistry, err := setupAgentRegistry(e.AgentConfig, e.Client, e.repoRoot, e.modelClient, e.modelStore, e.MemStore)
+	agentRegistry, err := setupAgentRegistry(e.AgentConfig, cfg.ExtraTools, e.Client, e.repoRoot, e.modelClient, e.modelStore, e.MemStore)
 	if err == nil {
 		e.agentRegistry = agentRegistry
 	}

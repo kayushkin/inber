@@ -154,7 +154,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 
 	// Phase 8: Setup agent registry
 	phaseStart = time.Now()
-	agentRegistry, err := setupAgentRegistry(e.AgentConfig, e.Client, repoRoot, modelClient, e.modelStore, e.MemStore)
+	agentRegistry, err := setupAgentRegistry(e.AgentConfig, cfg.ExtraTools, e.Client, repoRoot, modelClient, e.modelStore, e.MemStore)
 	if err != nil {
 		return nil, timing, err
 	}

@@ -3,6 +3,8 @@ package engine
 import (
 	"testing"
 
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 )
 
@@ -73,6 +75,107 @@ func TestNoRegistryIsBuiltForAnUnbuildableName(t *testing.T) {
 	} {
 		if needsSpawnTools(tools) {
 			t.Errorf("needsSpawnTools(%v) is true, so setupAgentRegistry would build a registry; none of these names reaches the builder's spawn case", tools)
+		}
+	}
+}
+
+// TestInjectedSpawnToolReplacesTheRegistryBuiltOne is the control for the gate
+// below, and it is what makes not building the registry's copy safe.
+//
+// Two differently-shaped tools are declared under the one name spawn_agent:
+// the registry's (agent, orchestrator, task) and the server's (agent, task,
+// model, fork, timeout_seconds). In a server session both are produced — the
+// registry's by buildSpecialTool, the server's through EngineConfig.ExtraTools
+// — and mergeExtraTools resolves the collision. The outcome is not a race: an
+// extra replaces the first base entry of its name, so the server's always wins
+// and the registry's is thrown away after being fully constructed.
+//
+// This states that determinism directly. If it ever fails, the gate below is
+// dropping a tool the model would otherwise have got.
+func TestInjectedSpawnToolReplacesTheRegistryBuiltOne(t *testing.T) {
+	registryShaped := agent.Tool{
+		Name:        spawnToolName,
+		Description: "Delegate a task to another agent.",
+		InputSchema: anthropic.ToolInputSchemaParam{
+			Required: []string{"agent", "task"},
+			Properties: map[string]any{
+				"agent": map[string]any{"type": "string"}, "orchestrator": map[string]any{"type": "string"}, "task": map[string]any{"type": "string"},
+			},
+		},
+	}
+	serverShaped := agent.Tool{
+		Name:        spawnToolName,
+		Description: "Spawn a sub-agent to work on a task.",
+		InputSchema: anthropic.ToolInputSchemaParam{
+			Required: []string{"agent", "task"},
+			Properties: map[string]any{
+				"agent": map[string]any{"type": "string"}, "task": map[string]any{"type": "string"},
+				"model": map[string]any{"type": "string"}, "fork": map[string]any{"type": "boolean"},
+				"timeout_seconds": map[string]any{"type": "integer"},
+			},
+		},
+	}
+
+	got := mergeExtraTools([]agent.Tool{{Name: "read_files"}, registryShaped, {Name: "write_files"}}, []agent.Tool{serverShaped})
+
+	var spawns []agent.Tool
+	for _, tool := range got {
+		if tool.Name == spawnToolName {
+			spawns = append(spawns, tool)
+		}
+	}
+	if len(spawns) != 1 {
+		t.Fatalf("got %d tools named %q on the wire, want 1 — the model cannot be shown two schemas for one name", len(spawns), spawnToolName)
+	}
+	props, _ := spawns[0].InputSchema.Properties.(map[string]any)
+	if _, ok := props["timeout_seconds"]; !ok {
+		t.Errorf("the surviving %q has no timeout_seconds, so it is the registry's copy; the server's injection is supposed to win", spawnToolName)
+	}
+	if _, ok := props["orchestrator"]; ok {
+		t.Errorf("the surviving %q still carries orchestrator, so the registry's schema leaked through the merge", spawnToolName)
+	}
+}
+
+// TestNoRegistryIsBuiltWhenTheCallerInjectsSpawn is the cost half of the gate,
+// stated on the other input the gate was ignoring.
+//
+// needsSpawnTools reads the agent's configured tool list and nothing else, so a
+// server session for an agent that lists spawn_agent built a registry — an
+// agent-store load, a model-store dial, a logs directory, and a fully
+// constructed spawn tool including two HTTP round trips for its description —
+// and then mergeExtraTools threw that tool away, because the server injects its
+// own spawn_agent. The registry has exactly one reader, the spawn case in
+// buildSpecialTool, so once its tool is discarded nothing else can read it.
+//
+// The control above pins that the injected tool wins, which is what makes
+// declining to build the other one lossless.
+func TestNoRegistryIsBuiltWhenTheCallerInjectsSpawn(t *testing.T) {
+	listsSpawn := &registry.AgentConfig{Tools: []string{"read_files", spawnToolName, "write_files"}}
+
+	if !needsAgentRegistry(listsSpawn, nil) {
+		t.Errorf("needsAgentRegistry is false with no injected tools; the config lists %q and nothing else would build it, so the model would get no spawn tool at all", spawnToolName)
+	}
+
+	serverInjection := []agent.Tool{
+		{Name: spawnToolName}, {Name: "steer_agent"}, {Name: "agents_status"},
+	}
+	if needsAgentRegistry(listsSpawn, serverInjection) {
+		t.Errorf("needsAgentRegistry is true although the caller injects %q; the registry's tool would be built and then discarded by mergeExtraTools, and nothing else reads the registry", spawnToolName)
+	}
+
+	// An injected set that does not carry the name leaves the gate alone.
+	if !needsAgentRegistry(listsSpawn, []agent.Tool{{Name: "steer_agent"}, {Name: "merge_workspace"}}) {
+		t.Errorf("needsAgentRegistry is false for an injected set with no %q in it; those tools collide with nothing and must not suppress the registry", spawnToolName)
+	}
+
+	// A config that never asked for it is still refused, injection or not.
+	noSpawn := &registry.AgentConfig{Tools: []string{"read_files"}}
+	for _, extras := range [][]agent.Tool{nil, serverInjection} {
+		if needsAgentRegistry(noSpawn, extras) {
+			t.Errorf("needsAgentRegistry is true for a config that does not list %q", spawnToolName)
+		}
+		if needsAgentRegistry(nil, extras) {
+			t.Errorf("needsAgentRegistry is true for a nil agent config")
 		}
 	}
 }
