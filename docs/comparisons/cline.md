@@ -382,6 +382,13 @@ model-store. Note the double-count half of that entry's 2026-08-01 predecessor i
 `agent/chain.go:330` passes `!isError` — so `agentic-design-patterns.md:2206` is stale on that point.
 
 **Held back from the queue this pass (cap is 3/run), recorded so it is not lost.**
+**FILED 2026-08-02 as todo `69f05f89` — do not re-file.** The passage is accurate; what it
+missed is that the misclassification it hands off to §2 was already live and one-directional.
+A `Client.Timeout` error satisfies `errors.Is(err, context.DeadlineExceeded)`, which
+`errorIsEvidenceAboutTheModel` excluded outright, so a hung provider on this path recorded
+**nothing** — the model never went unhealthy and failover never fired, the opposite of the
+inflated-error-rate direction #12820 describes. Fixed in `4f50869`; the timeout's shape and
+the discarded `timeoutHint` are the open half and live on the todo.
 [#12839](https://github.com/cline/cline/pull/12839) raised cline's Ollama *response-start* timeout
 default to 5 minutes because cold model loads exceed anything shorter, and [#12845](https://github.com/cline/cline/pull/12845)
 retries empty Ollama responses at the model boundary. inber's version: `agent/openai.go:34` hardcodes
