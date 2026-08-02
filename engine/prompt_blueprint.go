@@ -44,7 +44,7 @@ func LoadBlueprintFromWorkspace(ws *sessionMod.Workspace) (*PromptBlueprint, err
 // Compare blueprints across turns to see exactly what changed and what
 // will hit/miss cache.
 type PromptBlueprint struct {
-	Turn     int              `json:"turn"`
+	Turn     int                `json:"turn"`
 	Sections []BlueprintSection `json:"sections"`
 }
 
@@ -56,20 +56,27 @@ type BlueprintSection struct {
 
 // BlueprintBlock represents one content block in the prompt with its hash
 // and cache metadata.
+//
+// A block's identity is its POSITION in the request, not its ID. Anthropic
+// hashes tools -> system -> messages as one ordered byte sequence, so two turns
+// carry the same block only when the same bytes sit at the same offset. The ID
+// is a label for the reader: a memory's label embeds its importance, which
+// drifts on every read, and two memories can swap places without either label
+// changing. DiffBlueprints compares by position for exactly that reason.
 type BlueprintBlock struct {
-	ID       string `json:"id"`                  // block identifier (tool name, memory ID, msg role+index)
-	Hash     string `json:"hash"`                // first 8 chars of SHA-256
-	Tokens   int    `json:"tokens"`              // estimated token count
-	Cache    string `json:"cache,omitempty"`      // "BP1"/"BP2"/"BP3" if breakpoint, empty otherwise
-	Status   string `json:"status,omitempty"`     // "HIT"/"MISS"/"WRITE"/"UNCACHED" (set by diff)
+	ID     string `json:"id"`               // display label (tool name, memory description, msg role+index)
+	Hash   string `json:"hash"`             // first 8 chars of SHA-256
+	Tokens int    `json:"tokens"`           // estimated token count
+	Cache  string `json:"cache,omitempty"`  // "BP1"/"BP2"/"BP3" if breakpoint, empty otherwise
+	Status string `json:"status,omitempty"` // "HIT"/"MISS"/"WRITE"/"UNCACHED" (set by diff)
 }
 
 // BlueprintDiff compares two blueprints and annotates cache behavior.
 type BlueprintDiff struct {
-	Turn         int    `json:"turn"`
-	PrevTurn     int    `json:"prev_turn"`
-	Sections     []DiffSection `json:"sections"`
-	Summary      DiffSummary   `json:"summary"`
+	Turn     int           `json:"turn"`
+	PrevTurn int           `json:"prev_turn"`
+	Sections []DiffSection `json:"sections"`
+	Summary  DiffSummary   `json:"summary"`
 }
 
 type DiffSection struct {
@@ -82,17 +89,17 @@ type DiffBlock struct {
 	Hash     string `json:"hash"`
 	Tokens   int    `json:"tokens"`
 	Cache    string `json:"cache,omitempty"`
-	Status   string `json:"status"`  // HIT, MISS, WRITE, NEW, REMOVED, UNCACHED
+	Status   string `json:"status"`              // HIT, MISS, WRITE, NEW, REMOVED, UNCACHED
 	PrevHash string `json:"prev_hash,omitempty"` // if changed
 }
 
 type DiffSummary struct {
-	TotalTokens    int `json:"total_tokens"`
-	CachedRead     int `json:"cached_read"`     // tokens predicted to hit cache
-	CachedWrite    int `json:"cached_write"`    // tokens predicted to be written to cache
-	Uncached       int `json:"uncached"`        // tokens with no cache control
-	BlocksChanged  int `json:"blocks_changed"`
-	BlocksStable   int `json:"blocks_stable"`
+	TotalTokens   int `json:"total_tokens"`
+	CachedRead    int `json:"cached_read"`  // tokens predicted to hit cache
+	CachedWrite   int `json:"cached_write"` // tokens predicted to be written to cache
+	Uncached      int `json:"uncached"`     // tokens with no cache control
+	BlocksChanged int `json:"blocks_changed"`
+	BlocksStable  int `json:"blocks_stable"`
 }
 
 // BuildBlueprint creates a structural manifest of the current prompt.
@@ -190,30 +197,44 @@ func BuildBlueprint(
 // - Prefix match: everything up to a breakpoint must be byte-identical
 // - If any block before a BP changes, that BP and all downstream BPs miss
 // - Blocks after the last BP are always uncached
+//
+// Blocks are matched BY POSITION within their section, never by ID. A prefix
+// cache is a comparison of ordered bytes, so the only question this can ask is
+// "does the same content still sit at the same offset". Matching on ID answered
+// a different question and got both directions wrong: two memories swapping
+// places, or one dropping out, kept every ID matched and reported a hit the
+// request never got, while a memory whose importance drifted into a new label
+// reported its unchanged text as a brand-new block.
 func DiffBlueprints(prev, curr *PromptBlueprint) *BlueprintDiff {
 	diff := &BlueprintDiff{
 		Turn:     curr.Turn,
 		PrevTurn: prev.Turn,
 	}
 
-	// Build lookup of previous blocks by section+id
-	prevMap := make(map[string]string) // section:id -> hash
+	prevSections := make(map[string][]BlueprintBlock, len(prev.Sections))
 	for _, s := range prev.Sections {
-		for _, b := range s.Blocks {
-			key := s.Name + ":" + b.ID
-			prevMap[key] = b.Hash
+		prevSections[s.Name] = s.Blocks
+	}
+
+	// Offset, in the flattened request, of the first block whose bytes differ
+	// from last turn's. Everything from there on is outside the cached prefix,
+	// whatever its own content says. Negative until something diverges.
+	divergence := -1
+	noteDivergence := func(at int) {
+		if divergence < 0 {
+			divergence = at
 		}
 	}
 
-	// Track if prefix has been invalidated (cascade)
-	prefixInvalidated := false
+	flat := 0
+	seen := make(map[string]bool, len(curr.Sections))
 
 	for _, cs := range curr.Sections {
+		seen[cs.Name] = true
 		ds := DiffSection{Name: cs.Name}
-		for _, cb := range cs.Blocks {
-			key := cs.Name + ":" + cb.ID
-			prevHash, existed := prevMap[key]
+		prevBlocks := prevSections[cs.Name]
 
+		for i, cb := range cs.Blocks {
 			db := DiffBlock{
 				ID:     cb.ID,
 				Hash:   cb.Hash,
@@ -221,61 +242,137 @@ func DiffBlueprints(prev, curr *PromptBlueprint) *BlueprintDiff {
 				Cache:  cb.Cache,
 			}
 
-			if !existed {
+			switch {
+			case i >= len(prevBlocks):
 				db.Status = "NEW"
-				prefixInvalidated = true
-			} else if prevHash != cb.Hash {
+				noteDivergence(flat)
+			case prevBlocks[i].Hash != cb.Hash:
 				db.Status = "CHANGED"
-				db.PrevHash = prevHash
-				prefixInvalidated = true
-			} else if prefixInvalidated {
+				db.PrevHash = prevBlocks[i].Hash
+				noteDivergence(flat)
+			case divergence >= 0:
 				db.Status = "CASCADE" // content same but prefix changed upstream
-			} else {
+			default:
 				db.Status = "STABLE"
 			}
 
-			// Determine cache prediction
-			if cb.Cache != "" {
-				if prefixInvalidated {
-					db.Status = "WRITE" // breakpoint will be rewritten
-					diff.Summary.CachedWrite += cb.Tokens
-				} else {
-					db.Status = "HIT"
-					diff.Summary.CachedRead += cb.Tokens
-				}
-			} else if cb.Cache == "" && !prefixInvalidated {
-				// Between a hit BP and the next section — still in cached prefix
-				// (handled by cumulative prefix logic below)
-			}
-
 			ds.Blocks = append(ds.Blocks, db)
+			flat++
+		}
+
+		// Blocks last turn sent that this one does not. They carry no tokens in
+		// this request, but the prefix broke where the first of them used to
+		// sit — which is the offset the next section now starts at, so nothing
+		// downstream would notice on its own.
+		if len(prevBlocks) > len(cs.Blocks) {
+			noteDivergence(flat)
+			for _, pb := range prevBlocks[len(cs.Blocks):] {
+				// No Cache: whatever breakpoint this block carried belongs to
+				// last turn's request, and printing it here would advertise a
+				// breakpoint this one does not have.
+				ds.Blocks = append(ds.Blocks, DiffBlock{
+					ID:       pb.ID,
+					PrevHash: pb.Hash,
+					Status:   "REMOVED",
+				})
+			}
+		}
+
+		diff.Sections = append(diff.Sections, ds)
+	}
+
+	// A whole section disappearing is not a shape BuildBlueprint produces — it
+	// always emits tools, system and messages. If one ever does, say the prefix
+	// is gone rather than quietly reporting a hit on the sections that remain.
+	for _, s := range prev.Sections {
+		if seen[s.Name] {
+			continue
+		}
+		noteDivergence(0)
+		ds := DiffSection{Name: s.Name}
+		for _, pb := range s.Blocks {
+			ds.Blocks = append(ds.Blocks, DiffBlock{
+				ID:       pb.ID,
+				PrevHash: pb.Hash,
+				Status:   "REMOVED",
+			})
 		}
 		diff.Sections = append(diff.Sections, ds)
 	}
 
-	// Second pass: compute summary with proper prefix accounting
-	computeDiffSummary(diff)
+	computeDiffSummary(diff, divergence)
 
 	return diff
 }
 
-// computeDiffSummary fills in the summary with token counts.
-func computeDiffSummary(diff *BlueprintDiff) {
-	for _, s := range diff.Sections {
-		for _, b := range s.Blocks {
-			diff.Summary.TotalTokens += b.Tokens
-			switch b.Status {
-			case "STABLE", "HIT":
-				diff.Summary.BlocksStable++
-				diff.Summary.CachedRead += b.Tokens
-			case "CHANGED", "NEW", "CASCADE", "WRITE":
-				diff.Summary.BlocksChanged++
-				if b.Cache != "" {
-					diff.Summary.CachedWrite += b.Tokens
-				} else {
-					diff.Summary.Uncached += b.Tokens
-				}
+// computeDiffSummary settles each block's cache prediction and totals the
+// tokens. divergence is the flattened offset of the first block that broke the
+// prefix, or negative if nothing did.
+//
+// Every token in the request is read from cache, written to cache, or uncached
+// — exactly one of the three — so the three add up to the total. They did not
+// before: DiffBlueprints had already banked a breakpoint's tokens before this
+// ran, and this counted them a second time.
+func computeDiffSummary(diff *BlueprintDiff, divergence int) {
+	// The blocks this request actually carries, in request order. A REMOVED
+	// block is last turn's and is not sent, so it owes no tokens.
+	var blocks []*DiffBlock
+	for si := range diff.Sections {
+		for bi := range diff.Sections[si].Blocks {
+			b := &diff.Sections[si].Blocks[bi]
+			if b.Status == "REMOVED" {
+				continue
 			}
+			blocks = append(blocks, b)
+		}
+	}
+
+	if divergence < 0 {
+		divergence = len(blocks)
+	}
+
+	// The read comes back from the last breakpoint whose whole prefix survived;
+	// the write runs from there to the last breakpoint in the request; anything
+	// past that last breakpoint is never cached at all.
+	lastBreakpoint, lastSurvivingBreakpoint := -1, -1
+	for i, b := range blocks {
+		if b.Cache == "" {
+			continue
+		}
+		lastBreakpoint = i
+		if i < divergence {
+			lastSurvivingBreakpoint = i
+		}
+	}
+
+	for i, b := range blocks {
+		diff.Summary.TotalTokens += b.Tokens
+
+		switch {
+		case i > lastBreakpoint:
+			diff.Summary.Uncached += b.Tokens
+		case i <= lastSurvivingBreakpoint:
+			diff.Summary.CachedRead += b.Tokens
+		default:
+			diff.Summary.CachedWrite += b.Tokens
+		}
+
+		if b.Cache != "" {
+			if i <= lastSurvivingBreakpoint {
+				b.Status = "HIT"
+			} else {
+				b.Status = "WRITE" // breakpoint will be rewritten
+			}
+		}
+
+		// Stable means the bytes are unchanged AND still inside the surviving
+		// prefix. A CASCADE block is byte-identical and still has to be re-sent,
+		// which is the thing worth counting.
+		switch b.Status {
+		case "STABLE", "HIT":
+			diff.Summary.BlocksStable++
+		default:
+			diff.Summary.BlocksChanged++
 		}
 	}
 }
@@ -319,8 +416,14 @@ func FormatDiff(d *BlueprintDiff) string {
 			if bl.PrevHash != "" {
 				prev = fmt.Sprintf(" (was %s)", bl.PrevHash)
 			}
-			fmt.Fprintf(&b, "│ %s %s  %s  ~%d tok%s%s\n",
-				icon, bl.Hash, bl.ID, bl.Tokens, cache, prev)
+			// A removed block is not in this request, so it has no size here.
+			// "~0 tok" would read as an empty block rather than an absent one.
+			size := fmt.Sprintf("~%d tok", bl.Tokens)
+			if bl.Status == "REMOVED" {
+				size = "gone"
+			}
+			fmt.Fprintf(&b, "│ %s %s  %s  %s%s%s\n",
+				icon, bl.Hash, bl.ID, size, cache, prev)
 		}
 		b.WriteString("└\n")
 	}
