@@ -235,9 +235,17 @@ func formatTranscriptHighlights(msgs []anthropic.MessageParam) string {
 			}
 		}
 	}
-	if len(highlights) > 10 {
-		highlights = highlights[:10]
-		highlights = append(highlights, fmt.Sprintf("- ... and %d more", len(highlights)-10))
+	// Count the omission before truncating, not after. Reading the length back
+	// off the already-cut slice asked how many entries were left over from ten
+	// out of ten, so every transcript longer than the cap ended "... and 0
+	// more" — a line whose whole job is to say how much is missing, reporting
+	// that nothing is. This text is saved as the spawn's memory and read back
+	// by the parent deciding whether to spawn again.
+	const maxHighlights = 10
+	if len(highlights) > maxHighlights {
+		omitted := len(highlights) - maxHighlights
+		highlights = append(highlights[:maxHighlights:maxHighlights],
+			fmt.Sprintf("- ... and %d more", omitted))
 	}
 	return strings.Join(highlights, "\n")
 }
