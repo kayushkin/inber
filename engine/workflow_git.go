@@ -100,8 +100,22 @@ func (h *WorkflowHooks) finishSessionGit() []string {
 			return append(parts, fmt.Sprintf("❌ git add failed, nothing committed or pushed:\n%s", strings.TrimSpace(out)))
 		}
 		out, err := h.git("commit", "-m", "auto: session work")
-		if err == nil && !strings.Contains(out, "nothing to commit") {
+		switch {
+		case err == nil:
 			parts = append(parts, "✅ Committed uncommitted changes")
+		case strings.Contains(out, "nothing to commit"):
+			// Not a failure. `git commit` also exits non-zero when the index
+			// holds nothing, which a second agent in a shared checkout produces
+			// by committing in the window between the stage above and this
+			// line. The work is recorded, so there is nothing to say and
+			// nothing to hold back.
+		default:
+			// The stage succeeded and this did not, so the whole work tree is
+			// sitting in the index and none of it is in a commit. Pushing on
+			// would report "✅ Pushed" over a remote carrying earlier commits
+			// and none of the session's work. The staged tree is left exactly
+			// as it is — refusing to publish is not refusing to keep.
+			return append(parts, fmt.Sprintf("❌ git commit failed, nothing pushed:\n%s", out))
 		}
 	}
 

@@ -203,6 +203,89 @@ func TestAFailedStageStopsTheCommitAndThePush(t *testing.T) {
 	}
 }
 
+// rejectingPreCommitHook makes `git commit` fail while leaving `git add`
+// working, which is the split these two tests turn on. A hook that refuses is
+// how a commit fails in the wild; unset user identity, a missing signing key
+// and an index lock taken after the stage all arrive at the same place.
+func rejectingPreCommitHook(t *testing.T, repo string) {
+	t.Helper()
+	hook := filepath.Join(repo, ".git", "hooks", "pre-commit")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A failed stage is reported and stops the push; a failed COMMIT was neither.
+// The stage having succeeded is what makes it dangerous: the whole work tree is
+// in the index, none of it is in a commit, and the push still ran and still
+// reported "✅ Pushed" — over a remote carrying earlier commits and none of the
+// session's work.
+func TestAFailedCommitIsReportedAndStopsThePush(t *testing.T) {
+	repo, remote := newRepoWithRemote(t)
+	runGit(t, repo, "checkout", "-b", "feature/work")
+	runGit(t, repo, "push", "--set-upstream", "origin", "feature/work")
+	// An unpushed commit, so the push would otherwise run and this test can
+	// tell "held back" apart from "there was nothing to push".
+	dirtyWorkTree(t, repo, "earlier.txt")
+	runGit(t, repo, "add", "-A")
+	runGit(t, repo, "commit", "-m", "earlier work")
+	before := remoteTip(t, remote, "feature/work")
+
+	dirtyWorkTree(t, repo, "session.txt")
+	rejectingPreCommitHook(t, repo)
+
+	h := &WorkflowHooks{repoRoot: repo, autoCommit: true}
+	summary := strings.Join(h.finishSessionGit(), "\n")
+
+	if !strings.Contains(summary, "git commit failed") {
+		t.Fatalf("the commit failed and the session said nothing about it; summary was:\n%s", summary)
+	}
+	if strings.Contains(summary, "Pushed") {
+		t.Fatalf("reported a push that does not carry the session's work:\n%s", summary)
+	}
+	if remoteTip(t, remote, "feature/work") != before {
+		t.Fatal("pushed after the commit failed, so origin moved without the session's work")
+	}
+	// Refusing to publish is not refusing to keep: the work stays staged.
+	if out := runGit(t, repo, "status", "--porcelain"); !strings.Contains(out, "session.txt") {
+		t.Fatalf("the session's work was dropped rather than left in place:\n%s", out)
+	}
+}
+
+// The complement, and the one that decides the shape of the fix: treating every
+// non-zero `git commit` as a failure would pass the test above and shout on a
+// case where nothing is wrong. `git commit` also exits non-zero when there is
+// nothing to commit — which a second agent in a shared checkout produces by
+// committing in the window between this session's stage and its commit. The
+// work is recorded, so there is nothing to report and nothing to hold back.
+func TestWorkCommittedByAnotherProcessIsNotReportedAsAFailure(t *testing.T) {
+	repo, remote := newRepoWithRemote(t)
+	runGit(t, repo, "checkout", "-b", "feature/work")
+	runGit(t, repo, "push", "--set-upstream", "origin", "feature/work")
+	before := remoteTip(t, remote, "feature/work")
+	dirtyWorkTree(t, repo, "session.txt")
+
+	// The concurrent agent, made deterministic: it commits from the pre-commit
+	// hook, i.e. after this session staged and before this session committed.
+	hook := filepath.Join(repo, ".git", "hooks", "pre-commit")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\ngit commit -q --no-verify -m 'the other agent'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &WorkflowHooks{repoRoot: repo, autoCommit: true}
+	summary := strings.Join(h.finishSessionGit(), "\n")
+
+	if strings.Contains(summary, "git commit failed") {
+		t.Fatalf("nothing was lost — the other agent committed this work — and the session reported a failure:\n%s", summary)
+	}
+	if remoteTip(t, remote, "feature/work") == before {
+		t.Fatalf("the push was held back over a benign empty commit; summary was:\n%s", summary)
+	}
+	if out := runGit(t, repo, "status", "--porcelain"); out != "" {
+		t.Fatalf("work was left uncommitted:\n%s", out)
+	}
+}
+
 // autoCommit is the authority to write git history. finishSessionGit used to
 // ignore it, so switching auto-commit off left the larger commit still armed.
 func TestAutoCommitOffLeavesGitHistoryAlone(t *testing.T) {
