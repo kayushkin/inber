@@ -13,10 +13,20 @@ import (
 // The scope is the turn, not the session: engine.buildAgent constructs a fresh
 // Agent — and so a fresh ReadCache — before every Agent.Run, so nothing here
 // outlives the turn that filled it. That is why the stub says "earlier this
-// turn" and why the cache can get away with invalidating only on the file tools
-// it can see: a shell `sed -i`, a `git checkout` or a human editing a file
-// between turns all happen while the cache is empty. Widening the scope means
-// widening the invalidation set first.
+// turn".
+//
+// The scope does NOT make the invalidation set safe to narrow to the file
+// tools, and this comment used to say it did — the claim was that "a shell
+// `sed -i`, a `git checkout` or a human editing a file between turns all happen
+// while the cache is empty". Two of those three are `shell_commands`, which is
+// a tool, so it runs *inside* a turn with the cache full: read a file, run
+// `sed -i` on it, read it again, and the second read was answered with
+// "already in context ... No need to re-read." over content the shell had
+// already replaced. Only the human-between-turns case was ever covered by the
+// turn scope.
+//
+// So invalidation splits by what a call's own input can name, not by whether
+// the tool is a "file tool" — see invalidatesEverything.
 type ReadCache struct {
 	mu    sync.Mutex
 	root  string               // the root tool paths resolve against; "" = the process working directory
@@ -73,6 +83,20 @@ func (rc *ReadCache) Invalidate(path string) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	delete(rc.files, rc.keyFor(path))
+}
+
+// InvalidateAll forgets every entry. It is what a call whose input cannot name
+// the files it writes leaves behind: the cache's promise is "read earlier this
+// turn and not modified since", and after `shell_commands` ran there is no file
+// that promise still holds for.
+//
+// Forgetting too much costs a re-read. Forgetting too little hands the model
+// stale bytes under a stub that tells it not to look again. Those are not
+// comparable, so this is deliberately the blunt instrument.
+func (rc *ReadCache) InvalidateAll() {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	clear(rc.files)
 }
 
 // Check returns a stub message if the file is already fully in context.
@@ -177,11 +201,87 @@ func extractCompleteFileLines(output string) int {
 	return 0
 }
 
-// isFileWrite checks if a tool call is a write/edit that should invalidate the cache.
-func isFileWrite(toolName, rawInput string) []string {
+// invalidatesEverything reports whether a call can modify files that its own
+// input does not name. Such a call tells us that something changed and refuses
+// to say what, so the only sound answer is to stop trusting the whole cache.
+//
+// The split is by what the input can name, NOT by whether the tool is a "file
+// tool" — that was the mistake this function exists to correct. Measured
+// against the real implementations, 2026-08-03:
+//
+//   - shell_commands (tool-store tools/shell.go) runs an arbitrary command.
+//     `sed -i`, `git checkout`, `gofmt -w`, `make` and `patch` are all one call
+//     and none of them appears in the input as a path this cache could parse.
+//   - deploy (tools/deploy.go) posts to /api/forge/deploy, whose own
+//     description says it "Commits any uncommitted changes first" and which
+//     builds the slot. That work happens in another process against this
+//     working tree, so what it rewrites is not knowable from here.
+//   - task_plan and scratchpad (tool-store tools/task_plan.go:205,
+//     tools/scratchpad.go:129) each os.WriteFile a path derived from repoRoot
+//     rather than from the call, and task_plan additionally reaches
+//     RunBuildCheck -> a subprocess when the plan empties.
+//
+// Every other registered tool either names its paths (write_files, edit_files
+// — handled by isFileWrite) or writes nothing at all.
+// TestEveryToolIsNamedByTheReadCacheInvalidationRules pins that partition, so
+// adding a tool to the registry without classifying it reddens the suite.
+func invalidatesEverything(toolName string) bool {
+	switch toolName {
+	case "shell_commands", "deploy", "task_plan", "scratchpad":
+		return true
+	}
+	return false
+}
+
+// writesNamedPaths reports whether a call writes exactly the paths its own
+// input names, which is what lets isFileWrite invalidate precisely.
+//
+// write_file and edit_file are the pre-tool-store spellings. They are kept
+// because a stale entry is the failure this file is about, and the cost of
+// carrying two dead names is nothing; see guard.isDangerous, which lost the
+// live ones to that same rename and failed open.
+func writesNamedPaths(toolName string) bool {
 	switch toolName {
 	case "write_file", "write_files", "edit_file", "edit_files":
+		return true
+	}
+	return false
+}
+
+// Read-cache effects, as returned by ReadCacheEffect.
+const (
+	// ReadCacheUnaffected — the call writes no file this cache could hold.
+	ReadCacheUnaffected = "none"
+	// ReadCacheNamedPaths — the call writes the paths its input names, and
+	// only those.
+	ReadCacheNamedPaths = "named-paths"
+	// ReadCacheEverything — the call can write files its input does not name,
+	// so no entry survives it.
+	ReadCacheEverything = "everything"
+)
+
+// ReadCacheEffect names what a tool call does to the read cache, from the tool
+// name alone.
+//
+// It is exported so the partition can be pinned against the real tool set. The
+// agent package cannot import inber's tools package — tools imports agent — so
+// the completeness test lives over there and reaches back through this, the
+// same shape as server/tool_classification_test.go, which exists because guard
+// cannot import server.
+func ReadCacheEffect(toolName string) string {
+	switch {
+	case invalidatesEverything(toolName):
+		return ReadCacheEverything
+	case writesNamedPaths(toolName):
+		return ReadCacheNamedPaths
 	default:
+		return ReadCacheUnaffected
+	}
+}
+
+// isFileWrite checks if a tool call is a write/edit that should invalidate the cache.
+func isFileWrite(toolName, rawInput string) []string {
+	if !writesNamedPaths(toolName) {
 		return nil
 	}
 	var inp map[string]interface{}

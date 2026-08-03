@@ -342,6 +342,13 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 					a.readCache.Invalidate(p)
 				}
 			}
+			// A call that can write files its input does not name takes the
+			// whole cache with it. This runs before the tool does, so a shell
+			// command that fails still costs a re-read rather than leaving an
+			// entry whose freshness nobody checked.
+			if invalidatesEverything(block.Name) {
+				a.readCache.InvalidateAll()
+			}
 		}
 
 		// Execute tool with optional chain ("then" field).
@@ -385,6 +392,13 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 			if outcome.chainTool != "" {
 				for _, p := range isFileWrite(outcome.chainTool, outcome.chainInput) {
 					a.readCache.Invalidate(p)
+				}
+				// Same rule for the chained call, and it has to run after the
+				// primary's RecordFullRead above: `read_files(x) then
+				// shell_commands(...)` records x and then the shell rewrites
+				// it, so the flush must be the last word on this block.
+				if invalidatesEverything(outcome.chainTool) {
+					a.readCache.InvalidateAll()
 				}
 				if !outcome.chainFailed {
 					if path, isFull := isFullRead(outcome.chainTool, outcome.chainInput); isFull {
