@@ -33,6 +33,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -397,6 +398,27 @@ func (e *Engine) EnabledToolNames() []string {
 	for i, t := range e.agentTools {
 		names[i] = t.Name
 	}
+	return names
+}
+
+// DisabledToolNames returns the set SetDisabledTools last installed, sorted.
+//
+// This is the answer EnabledToolNames cannot give. A tool is absent from the
+// wire set for two different reasons — the agent config never asked for it, or
+// a caller took it away — and only the second is a decision this session made
+// and can hand to anything that outlives the process. Subtracting one list from
+// the other would not recover it either: a name disabled that this agent never
+// had is kept deliberately (see SetDisabledTools), and appears in neither list.
+//
+// Sorted rather than in call order because the caller that needs it writes it
+// to disk, and a set whose file contents changed with the order the names
+// arrived in would show a diff on every save that disabled nothing new.
+func (e *Engine) DisabledToolNames() []string {
+	names := make([]string, 0, len(e.disabledToolNames))
+	for name := range e.disabledToolNames {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	return names
 }
 

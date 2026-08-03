@@ -182,6 +182,12 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 	// answered; see child todo b5a75454.
 	g.restoreGuardState(key, eng.Guard)
 
+	// The tools this session had taken off the wire are restored on the same
+	// terms and for the same reason. It has to happen after NewEngine, because
+	// the set is a filter over the tools the engine was built with and there is
+	// nothing to filter until they exist.
+	g.restoreDisabledTools(key, eng)
+
 	lineage := g.lineageForSession(key)
 
 	return &Session{
@@ -339,6 +345,51 @@ func (g *Server) restoreGuardState(key string, sessionGuard *guard.Guard) {
 	log.Printf("[server] restored safety limits for %s (mode %q, max turns %d, max input tokens %d, max cost $%.2f, max duration %ds; already spent %d turns, %d input tokens, $%.4f, %ds)",
 		key, restored.Mode, restored.MaxTurns, restored.MaxInputTokens, restored.MaxCost, restored.MaxDuration,
 		restored.Turns, restored.InputTokens, restored.Cost, restored.ElapsedSeconds)
+}
+
+// restoreDisabledTools puts back the tools a session had taken off the wire
+// before this process was the one running it.
+//
+// `disabled_tools` reaches an engine through one door — POST
+// /sessions/{id}/config — and lived in engine memory only, on no config struct
+// and serialized by nothing. So it had exactly one session's lifetime in one
+// process: a session whose `shell` had been taken away came back from a rebuild
+// with `shell` on the wire, no log line and no error, while the caller that
+// took it away had been told "updated" and had no way to learn otherwise. That
+// is the guard's own defect one layer over — see restoreGuardState above — and
+// it is closed the same way.
+//
+// Restored for a fresh session too, and deliberately, on the same reasoning
+// restoreGuardState records: the set is recorded against the key, and dropping
+// it would make `new_session` a way to ask for a withheld tool back.
+//
+// This restores a session's OWN set under its OWN key. It says nothing about
+// whether a fork or a spawn should inherit its parent's — that is a different
+// question, it turns on whether `disabled_tools` is a containment boundary or a
+// behaviour knob, and it is open in noteboard todo 65301d09. A child is built
+// under a key of its own and has no record there, so it comes out of this
+// exactly as it was configured.
+func (g *Server) restoreDisabledTools(key string, eng *engine.Engine) {
+	if eng == nil {
+		return
+	}
+	dir := filepath.Join(g.config.DataDir, "sessions", key)
+	names, err := sessionMod.LoadDisabledTools(dir)
+	if err != nil {
+		log.Printf("[server] disabled tools unreadable for %s, running with every tool this rebuild configured: %v", key, err)
+		return
+	}
+	// Nothing was recorded — a session being created rather than rebuilt, or one
+	// last persisted before this sidecar existed. Calling SetDisabledTools with
+	// no names would be a re-enable-everything request, which is the same wire
+	// set this engine already has, so it would change nothing and say so; stay
+	// quiet instead.
+	if len(names) == 0 {
+		return
+	}
+
+	eng.SetDisabledTools(names)
+	log.Printf("[server] restored disabled tools for %s (%v off the wire, %d tools left)", key, names, len(eng.EnabledToolNames()))
 }
 
 // transcriptToStartSessionFrom answers which conversation a session being built
