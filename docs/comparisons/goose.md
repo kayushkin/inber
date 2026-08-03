@@ -984,3 +984,47 @@ are dropped; this is a setting that has no field to drop.
   `sideband:done` → `engine/build_sideband.go:44` `RunBuildCheck` → `bash -c`, the second while
   `agent/sideband.go:191-199` explicitly justifies gating the sideband *because* it reaches `bash -c`.
   That belongs on the existing todo as a count correction, not as a new one.
+
+### Held back from the queue this pass, and why
+
+The cache-stability audit run against [#10734](https://github.com/block/goose/pull/10734) turned up
+seven findings; three slots were spent, so these are recorded here instead. **Findings 1–4 are one
+defect and it is already filed** — the open todo "the BP2-cached system prefix is rebuilt from a
+clock, a turn counter and the user's message text". What is new is that it was *measured* rather
+than argued: a probe against a real memory-store DB varied only the user message across six turns
+and the prefix hash changed **every time**, including one pair (turns 1 and 2) holding the identical
+eleven memories at the identical token count and differing only in **order**. Three distinct inputs
+drive it — `AutoTag(userMessage)` scoring at `memory-store/builder.go:397` (`+0.3` per matched tag,
+larger than most importance spreads), the 4000–50000 budget ladder at `engine/turn_context.go:8-37`
+feeding the cut-off at `builder.go:180`, and a wall clock at `builder.go:400-405` with 24h/7d cliffs,
+which is goose #10734's own bug one layer up. Two feedback loops make it self-sustaining: memory
+extraction after every turn (`engine/turn_postprocess.go:34-45`) writes a row with `last_accessed =
+now` that takes the `+0.2` recency bonus and lands near the front, and `memory_expand` *reading* a
+memory writes `importance*1.01` and `last_accessed = now` (`memory-store/access.go:8-13`), so the
+model reorders its own cached prefix by reading.
+
+Two more, verified and unfiled:
+
+- **`LastStablePrefix` reuse cannot prevent a cache miss, and its comment says otherwise.**
+  `engine/turn_prompt.go:200-220` hashes `stableTexts`, which at `:194` is built from *every* block,
+  while `cacheIdx` is always `len-1` — so the hash covers 100% of the system content and the reuse
+  branch fires only when the blocks are already byte-identical, which is exactly when rebuilding
+  them would produce the same bytes anyway. The guard at `:208`
+  (`cacheIdx+1 < len(systemBlocks)`) is unreachable for the same reason. The comment at `:200-201`
+  claims it "guarantee[s] byte-identical prefix"; it guarantees nothing the code did not already
+  have. Left unfiled because deleting it is decision-free only if nobody intends to fix finding 1 by
+  narrowing `cacheIdx` — which is the obvious fix, and would make this mechanism start working.
+- **`server/api_oneshot.go:82-112` sets no `cache_control` at all** and reports the counters at
+  `:130-134`, where they are structurally always 0/0. Every one-shot call pays full price, including
+  repeated classifier calls that share a system prompt and schema.
+
+And one **ruled out**, recorded so it is not re-derived: tool definitions are *not* emitted from an
+unsorted Go map on any live path — `tools/interface.go:60-76` sorts by name and says why,
+`tools/tools.go:83-91` and `memory/tools.go:210-217` return fixed slices, and
+`server/spawn_tools.go:61-73` uses `sortedAgentNames`. The unsorted-map pattern does exist at
+`tools/mcp/adapter.go:75-86` and `tools/mcp/client.go:433-439`, but `MCPToolRegistry` still has no
+caller outside `tools/mcp/`, so it is a trap for whoever wires MCP, not a cost today. Likewise
+**no timestamp reaches a system block**: `sourceRef` is `sync.Once`-cached
+(`engine/turn_prompt.go:22-51`) and fleet status, context injectors and volatile memories all route
+to `e.Turn.VolatileContext` (`:128-152`), which is injected after BP2 and — checked against the
+2026-08-02 correction — is written into the message array once, not recomputed on replay.
