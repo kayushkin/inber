@@ -4,6 +4,41 @@ Notes from the harness-watch sweep on 2026-06-02. Five arXiv papers from the
 last ~30 days that passed the not-already-covered check against
 `2026-05-harness-research.md` (no overlap with the May IDs).
 
+> **Mined 2026-08-03 (nightly worker). Do not re-mine this file expecting
+> defects.** Every one of its 25 "What inber should consider" entries is a
+> design proposal — "import this idea" — and not one of them reports a defect
+> in inber's code. That is a property of the file, not of the pass: the
+> comparison docs read upstream harnesses and catch inber doing something
+> wrong, while the paper files read papers and propose things inber does not do
+> yet. The shelf note lists this file under "unwalked, 25 findings", which
+> invites the next worker to read that as 25 candidate todos. It is zero.
+>
+> Three of its factual claims about inber's code were checked and two were
+> wrong:
+>
+> - 🔴 **`engine/turn_summary.go` does not exist and never has** —
+>   `git log --all` on that path returns nothing. It was cited four times in
+>   this file and twice more in `2026-05-harness-research.md` and
+>   `agentic-design-patterns.md`. All six now name the real path:
+>   `conversation/summarize.go` (`SummarizeConversation`), driven from
+>   `engine/turn_prepare.go` (`summarizeIfNeeded`).
+> - 🔴 **"inber's own Workflow shared token pool"** (2606.04056, 06-19) is not
+>   inber's code. `budget.spent()` is the Claude Code Workflow tool's pool.
+>   The nearest real inber question — does a spawned child get its own full
+>   allowance — is already filed as `9e31d359`: a spawned child is created
+>   with `RunRequest{}`, so it gets no cap at all rather than a cloned one.
+> - 🟡 **"inber's `memory-store` has no notion of where a candidate memory came
+>   from"** (2606.04329, 06-09) is wrong in the letter and right in the spirit.
+>   `Memory.Source` exists. What it cannot express is the one class the paper
+>   is about — external tool output — and its absent case was being recorded as
+>   `"user"`. Half fixed this pass (see below); the rest is filed.
+>
+> The one live defect this file produced: two HTTP save paths turned an omitted
+> provenance into `"user"`, the most trusted value the field carries. Fixed in
+> memory-store and inber, sabotage-verified. Everything else here is a proposal
+> awaiting a decision, so the honest yield of a paper file is corrections and
+> one fallback, not a queue of todos.
+
 ## Code as Agent Harness: Toward Executable, Verifiable, and Stateful Agent Systems
 
 [arXiv:2605.18747](https://arxiv.org/abs/2605.18747) — submitted 2026-05-18.
@@ -92,7 +127,7 @@ accuracy and -39.7% end-to-end latency vs synchronous compaction on SWE-bench
 Verified + BrowseComp.
 
 **What inber should consider:** Inber's compaction is server-side and
-synchronous in `engine/turn_summary.go` — the agent waits, and the summary is
+synchronous in `conversation/summarize.go` — the agent waits, and the summary is
 committed with no check it preserved what later turns rely on. Two
 independently-adoptable wins: (1) kick compaction off asynchronously (the
 scheduler/background-job substrate makes this tractable) and keep the agent
@@ -131,7 +166,7 @@ This cycle clusters hard around **compaction as a first-class, asynchronous,
 validated subsystem** (Slipstream + Parallel Compaction) and **durable,
 inspectable control state** (Code-as-Harness plan files + Coordination-as-layer).
 Both reinforce the engine-owns-control-flow direction inber is already on. The
-single most actionable item is the compaction pair: inber's `turn_summary.go` is
+single most actionable item is the compaction pair: inber's `conversation/summarize.go` is
 synchronous and monolithic today, and the two papers give an orthogonal
 async-off-hot-path × parallel-per-block × validate-before-commit design that is
 implementable on inber's existing background-job substrate. AgentTrust is the
@@ -347,6 +382,31 @@ noise, and it dovetails with the tool-schema-compression principle that the
 
 ### From Untrusted Input to Trusted Memory: A Systematic Study of Memory Poisoning Attacks in LLM Agents
 
+> **Checked against the code 2026-08-03. The premise below is wrong; the
+> conclusion is right for a different reason.** memory-store *does* have a
+> provenance field — `Memory.Source` (`memory.go`) — written by ten call sites.
+> Three separate things are actually broken, all measured:
+>
+> 1. **The absent case was the most trusted case.** `memory-store/server.go`
+>    and `inber/server/api_memory.go` both turned an omitted `source` into
+>    `"user"`. **Fixed this pass**; an absent source now stays absent.
+> 2. **The model picks its own provenance.** `memory/tools.go`'s `memory_save`
+>    takes `source` as a model-supplied argument, advertises `'user', 'agent',
+>    'system'`, and validates nothing — so an agent that has just read a
+>    poisoned page can stamp its memory `"user"`. This is the paper's exact
+>    vector and it is **not fixed**: who may claim what is a policy call.
+> 3. **`Source` has zero readers.** No query filters on it, no code branches on
+>    it. (`tagger.go`'s `Tag(text, source)` is a same-named, unrelated
+>    parameter — it tags a *message role* for relevance and is called once, from
+>    `engine/turn_prompt.go`, with a hardcoded `"user"`. It never sees
+>    `Memory.Source`.) So provenance today is a label with no consumer, which is
+>    why 2 and 3 are filed rather than shipped.
+>
+> Live values, counted across the four real stores: `system` 36,169, `user` 13,
+> `summarization` 28, `extraction` 16, `auto-reference` 7, `agent` 6. The
+> `memory.go` comment used to name a five-value set matching neither the writers
+> nor any reader; it now says what is written and that nothing reads it.
+
 [arXiv:2606.04329](https://arxiv.org/abs/2606.04329) — submitted 2026-06-04.
 
 Systematizes the core failure of agent long-term memory: entries are *constructed*
@@ -439,7 +499,7 @@ mechanism behind the memory-graph thread (GEM 2605.26252, 06-05 sweep) and compl
 structured eviction (06-09).
 
 **What inber should consider:** the session-resume use case maps onto inber's compaction/resume
-path (`engine/turn_summary.go` + `memory-store`): emit a typed-graph "resume block"
+path (`conversation/summarize.go` + `memory-store`): emit a typed-graph "resume block"
 (decision / file-history / task-transition nodes) as the durable session checkpoint rather than
 a flat prose summary — recall of decisions survives a window overflow, and it composes with the
 durable-plan-file (Code-as-Harness) idea and structured eviction (CWL).
@@ -479,7 +539,7 @@ offloads only on a *conservative batch-turn schedule* so evictions don't constan
 prefix. Reports 61% / 56% cost reductions on PinchBench and Claw-Eval.
 
 **What inber should consider:** this is the missing constraint on inber's compaction/eviction
-path (`engine/turn_summary.go`, structured eviction per CWL 2606.11213). inber leans hard on
+path (`conversation/summarize.go`, structured eviction per CWL 2606.11213). inber leans hard on
 prompt caching (the ScheduleWakeup cache-TTL economics are the same), so any mid-prefix edit —
 dropping a stale tool result, rewriting an early summary — silently invalidates the cached
 prefix from that point on, and the cache-miss cost can exceed the token saving. Two rules to
@@ -512,6 +572,18 @@ default.
 ## 2026-06-19 sweep — ownership-typed token budgets as a defense against multi-agent overrun
 
 ### Token Budgets: An Empirical Catalog of 63 LLM-Agent Budget-Overrun Incidents, with an Affine-Typed Rust Mitigation
+
+> **Checked 2026-08-03: the inber hook below is not inber's code.** "inber's own
+> Workflow shared token pool (`budget.spent()`)" is the Claude Code Workflow
+> tool's budget, not anything in this repo — the same class of error the
+> 2026-08-01 goose pass catalogued, where a passage names a surface that lives
+> somewhere else entirely. The real inber question the paper suggests — whether
+> a fanned-out child debits the parent's allowance or gets its own — was read
+> first-hand: `server/spawn.go` calls `createSession` with `RunRequest{}`, and
+> `applyRequestOverrides` only copies non-zero fields, so a spawned child's
+> `MaxCost` is 0, which `guard.CheckLimits` reads as **unlimited**. So the
+> failure is not the paper's cloned budget, it is no budget, and it is already
+> filed as `9e31d359` — add detail there, do not file it again.
 
 [arXiv:2606.04056](https://arxiv.org/abs/2606.04056)
 

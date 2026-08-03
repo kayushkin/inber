@@ -803,7 +803,7 @@ an explicit flag to expose it, so subagent model choice is an isolation boundary
 not an accident. (b) Track that a *finished* subagent still occupies a concurrency
 slot until explicitly reaped — relevant to the kanban task-completion-loop, where
 "done" sessions that aren't closed silently starve the pool. (c) When inber's
-`turn_summary.go` compacts, prefer **shrinking** large tool results (head/tail +
+`conversation/summarize.go` compacts, prefer **shrinking** large tool results (head/tail +
 elision marker) over dropping them, so the tool-call→result link survives
 compaction — a cheaper variant of the parallel-per-block compaction in the
 papers doc.

@@ -164,9 +164,12 @@ func (g *Server) handleMemorySave(w http.ResponseWriter, r *http.Request) {
 	}
 	defer store.Close()
 
-	if req.Source == "" {
-		req.Source = "user"
-	}
+	// An absent source stays absent. This used to become "user", so an HTTP
+	// caller that said nothing about provenance had its memory recorded as
+	// something the user had said — the most trusted value the field carries.
+	// memory-store's own handler had the identical guess and dropped it for the
+	// same reason; the two must not disagree about what an empty source means,
+	// because they write into the same store.
 	if req.Importance == 0 {
 		req.Importance = 0.5
 	}

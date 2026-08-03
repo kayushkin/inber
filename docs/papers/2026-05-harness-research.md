@@ -449,7 +449,7 @@ unevenly:
 - **Skip / Snippet / Delete** are partial subsets of what
   smart-truncation already does at compaction time, but the agent
   doesn't *call* them — they happen to it.
-- **Compress** is what `engine/turn_summary.go` does, also implicit.
+- **Compress** is what `conversation/summarize.go` does, also implicit.
 - **Rollback** has no inber equivalent. When an inber agent goes down a
   research branch and concludes it was wrong, the dead-end content stays
   in the working context (and in the cache prefix) until the next
