@@ -46,14 +46,19 @@ func (g *Server) getOrCreateSession(ctx context.Context, key, agentName string, 
 // applyRequestOverrides copies the per-request overrides a caller sent with a
 // RunRequest onto the engine config the session will be built from.
 //
-// Every field the API advertises has to be copied here, and two were not.
+// Every field the API advertises has to be copied here, and three were not.
 // max_cost was declared on RunRequest, documented as a safety limit, and never
 // read by any code in this package, so a caller who asked for a spending cap
 // got a session with no cap at all and no error saying so. mode was the same
 // omission with a sharper edge: it is documented as "observe, assist,
 // autonomous", and a caller who asked to observe got a fully autonomous session
-// that could run shell commands. This lives in its own function, apart from
-// engine construction, so that the copying can be tested field by field.
+// that could run shell commands. new_session was the third: it is documented as
+// "start fresh session", and the engine already knows how to do that — with it
+// set, setupSession clears the workspace transcript instead of loading it,
+// which is what the CLI's --new has always done. Dropped here, a fresh session
+// was built on top of the conversation it was asked to replace. This lives in
+// its own function, apart from engine construction, so that the copying can be
+// tested field by field.
 func applyRequestOverrides(cfg *engine.EngineConfig, req RunRequest) {
 	if req.Model != "" {
 		cfg.Model = req.Model
@@ -76,6 +81,9 @@ func applyRequestOverrides(cfg *engine.EngineConfig, req RunRequest) {
 	}
 	if req.Detach {
 		cfg.Detach = true
+	}
+	if req.NewSession {
+		cfg.NewSession = true
 	}
 	if req.Mode != "" {
 		cfg.Mode = req.Mode
@@ -131,7 +139,7 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 	// Don't set them at creation time — they'd become stale.
 
 	// Try to load existing messages and their turn count from persistence.
-	msgs, turnCounter, err := g.loadPersistedSession(key)
+	msgs, turnCounter, err := g.transcriptToStartSessionFrom(key, req)
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +172,14 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 		eng.RestoreSession(msgs, turnCounter)
 	}
 
+	// The safety limits and the totals already counted against them are restored
+	// even for a fresh session. Deliberately: the limits are recorded against
+	// the key, and dropping them would hand an uncapped session to any caller
+	// who passed new_session. The totals are the arguable half — a fresh
+	// conversation that opens at $4.80 of its $5 is odd, but resetting them
+	// would make new_session a way to ask for the budget back, which is the
+	// question noteboard todo 610e0f4a is about. Fail closed until it is
+	// answered; see child todo b5a75454.
 	g.restoreGuardState(key, eng.Guard)
 
 	lineage := g.lineageForSession(key)
@@ -323,6 +339,33 @@ func (g *Server) restoreGuardState(key string, sessionGuard *guard.Guard) {
 	log.Printf("[server] restored safety limits for %s (mode %q, max turns %d, max input tokens %d, max cost $%.2f, max duration %ds; already spent %d turns, %d input tokens, $%.4f, %ds)",
 		key, restored.Mode, restored.MaxTurns, restored.MaxInputTokens, restored.MaxCost, restored.MaxDuration,
 		restored.Turns, restored.InputTokens, restored.Cost, restored.ElapsedSeconds)
+}
+
+// transcriptToStartSessionFrom answers which conversation a session being built
+// under key opens with, and the turn count that goes with it.
+//
+// A request that asked for a fresh session opens with neither. `new_session` is
+// documented as "start fresh session" and the engine has always honoured it —
+// setupSession clears the workspace transcript rather than loading it, which is
+// what the CLI's --new does. The server, though, reuses the same main key for
+// the replacement session and then read that key's persisted transcript
+// straight back off disk, so the "fresh" session came up holding the entire
+// conversation it had just closed and summarized, at the turn count that
+// conversation had reached. It was fresh in memory only.
+//
+// The turn count travels with the transcript rather than being reset
+// separately, for the reason loadPersistedSession states below: a turn count
+// without its transcript describes messages that are not there.
+//
+// The old transcript is not deleted here. persistSessionState rewrites
+// messages.json at the end of the fresh session's first turn, and the lossless
+// copy is the append-only session.jsonl in the closed session's own log dir,
+// which nothing on this path touches.
+func (g *Server) transcriptToStartSessionFrom(key string, req RunRequest) ([]anthropic.MessageParam, int, error) {
+	if req.NewSession {
+		return nil, 0, nil
+	}
+	return g.loadPersistedSession(key)
 }
 
 // loadPersistedSession loads a session's messages and the turn count recorded
