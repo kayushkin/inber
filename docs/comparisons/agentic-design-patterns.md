@@ -1881,6 +1881,15 @@ kills orphans. Both leave exactly the mid-turn state cline lost.
 
 ### 1. Context assembly degrading to empty is indistinguishable from "there was no context"
 
+> **[Verified 2026-08-03 — SPENT. Both inber sites named below were fixed by other work before
+> anyone read this entry; do not re-file either.]**
+> `BuildSystemPrompt` now returns `([]NamedBlock, error)` and hands the memory failure back —
+> `engine/turn_prompt.go`'s doc comment states the rule this entry argues for ("a turn built without
+> them is not a degraded turn — it is a different agent answering") and `buildTurnContext` owns what
+> to do about it. The milder `session/workspace.go` shape is gone too: `WriteSystem` returns the
+> write error rather than `continue`ing past it. The *generalizable* audit in the last two sentences
+> is the part still worth running on paths this pass did not walk.
+
 [cline #12702](https://github.com/cline/cline/pull/12702) is the sharpest instance of this class in a
 long time, and the payload is one line of behaviour. A legacy single-file `.clinerules` at the
 workspace root — the format long-time users still have — sits where the unified config watcher
@@ -1996,6 +2005,11 @@ slice puts invalid UTF-8 in the prompt. Related defect found while checking:
 `Engine.SetDisabledTools` (`engine/engine.go:285-297`) reassigns `e.agentTools = filtered` while its
 comment claims it re-filters from the full set — the full set is gone after the first call, so
 disabling is monotonic, irreversible, and silently relocates the cache breakpoint.
+> **[Verified 2026-08-03 — the `SetDisabledTools` defect in the last sentence is FIXED; the rest of
+> §3 is unchecked.]** `Engine` now keeps `allTools` beside `agentTools` and `applyDisabledTools`
+> derives one from the other, so disabling is reversible. The MCP `waitForResponse` four-bound
+> recommendation and the unbounded tool descriptions are untouched — but note `tools/mcp` has zero
+> non-test importers, so the MCP half is latent (see the 06-15 opencode entry and todo `fb0dd7cc`).
 
 ### 4. The prompt and the tool schema are one co-designed contract — codex's environment work, and the isolation defect inber already has
 
@@ -2210,6 +2224,25 @@ Adopt #36350's placement (validate the whole block, riders included, before anyt
 #10612's lattice (deny dominates every sibling effect, not just sibling verdicts).
 
 ### 2. A durable conversation history is singly-owned — acquire at create *and* resume, release on failed init *and* clean shutdown
+
+> **[Verified 2026-08-03 — the headline half was already fixed; the "second-order question" at the
+> end was the live defect, and it is now fixed too. Both halves SPENT.]**
+> The bare `g.sessions.Delete` this entry is built on is gone: `server/server.go` releases the old
+> session inside the queue (`releaseSession`, whose doc comment records the leak and why the release
+> happens under the per-session lock), so `Engine.Close` and `SaveSessionSummary` do run. Do not
+> re-file the leak.
+> **The tail was real and nobody had opened it.** `new_session` did not merely reload the old
+> `messages.json` — it never reached the engine at all. `applyRequestOverrides` copied eleven fields
+> and not this one, so `engine.setupSession` took the `!newSession` branch and loaded the workspace
+> transcript rather than calling `ClearMessages`; and `createSession` then read the key's persisted
+> transcript back and `RestoreSession`d it at the persisted turn count. Two independent links, both
+> dead, either one enough on its own. Fixed with a `transcriptToStartSessionFrom` that names which
+> copy a session opens with, pinned by `server/new_session_request_test.go` (a resume control beside
+> each fresh case, three sabotage rounds red).
+> ⛔ Do **not** also reset the guard totals. `restoreGuardState` still restores the caps *and* the
+> spend to a fresh session, deliberately: resetting them makes `new_session` a way to ask for the
+> budget back, which is noteboard `610e0f4a` asked about forks. Filed as `b5a75454`, to be answered
+> with `610e0f4a` rather than separately.
 
 codex [#36389](https://github.com/openai/codex/pull/36389) makes writer-ownership uniform across
 thread-history modes. Its paginated store already had cross-process guards; the legacy mode had
