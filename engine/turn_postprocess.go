@@ -86,4 +86,34 @@ func (e *Engine) recordTurnUsage(result *agent.TurnResult) {
 	if e.Guard != nil {
 		e.Guard.RecordCost(turnCost)
 	}
+
+	e.reportCallsThatBoughtNoCache(result)
+}
+
+// reportCallsThatBoughtNoCache prices, on its own, any call in the turn that
+// went out without the tools block, and says so on stderr.
+//
+// The turn total above cannot show this. It sums every call, so one call that
+// re-bought the whole prompt at the 1.25x write rate is averaged in with the
+// cheap cached ones around it and disappears — which is why inber has been
+// unable to say how often this happens or what it costs, despite the counters
+// being right there.
+//
+// The line is a measurement, not a complaint: whether a guaranteed-prose
+// summary is worth buying with the tools block is an open question (todo
+// 8754300f), and it should be answered against numbers from this host rather
+// than an estimate. Priced with the same function as the turn, so the two
+// figures are comparable and the fraction is meaningful.
+func (e *Engine) reportCallsThatBoughtNoCache(result *agent.TurnResult) {
+	for i, call := range result.APICalls {
+		if !call.ToolsWithheld {
+			continue
+		}
+		cost := sessionMod.CalcCostWithCache(e.Model, call.InputTokens, call.OutputTokens,
+			call.CacheReadTokens, call.CacheCreationTokens, e.modelStore)
+		Log.Info("cache: API call %d of %d sent no tools block, so it matched no cached prefix — "+
+			"%d in / %d out, %d cache write, %d cache read, $%.4f",
+			i+1, len(result.APICalls), call.InputTokens, call.OutputTokens,
+			call.CacheCreationTokens, call.CacheReadTokens, cost)
+	}
 }

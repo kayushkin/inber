@@ -254,10 +254,49 @@ type TurnResult struct {
 	// Cache tokens (Anthropic prompt caching)
 	CacheCreationTokens int // tokens written to cache (first request)
 	CacheReadTokens     int // tokens read from cache (subsequent requests)
+	// APICalls holds what each API call of this turn reported, in the order the
+	// calls were made. The four counters above are the sum of these, and the sum
+	// is what every cost consumer reads; this is the same numbers before they
+	// were added up.
+	//
+	// A turn's calls do not cost the same. A call whose prompt prefix is
+	// byte-identical to a cached one is billed at the read rate; a call that
+	// diverges from it pays to write the whole prompt again, at 1.25x. Summing
+	// hides that difference completely, so one full-price call inside a turn of
+	// cheap ones is invisible in every total inber records.
+	APICalls []APICallUsage
 	// Incomplete is set when the turn ended on an error after the model had
 	// already written text. Text then holds what the user watched arrive, not
 	// a finished answer. Callers must still treat the turn as failed.
 	Incomplete bool
+}
+
+// APICallUsage is what one API call reported, and the one thing about the
+// request that decides which rate it was billed at.
+//
+// Recorded per call because the per-turn totals cannot answer "how often does
+// a call miss the cache entirely, and what does that cost" — the question a
+// force-summary call raises, since it is built without the tools block and so
+// matches no cached prefix at all.
+type APICallUsage struct {
+	InputTokens         int
+	OutputTokens        int
+	CacheCreationTokens int
+	CacheReadTokens     int
+	// ToolsWithheld records that this call went out with no tools block while
+	// the agent had tools to send.
+	//
+	// Anthropic hashes the prompt prefix in the order tools -> system ->
+	// messages, so dropping the tools array makes a request diverge from every
+	// cached prefix at offset 0: the tools breakpoint is gone, and because the
+	// divergence is before them, the system and message breakpoints are gone
+	// too. The whole prompt is billed as cache creation with zero cache read.
+	//
+	// An agent that never sends tools is not this case. Its requests all share
+	// the same (empty) prefix, so nothing diverges and nothing is re-bought,
+	// which is why this reads "had tools and did not send them" rather than
+	// "sent no tools".
+	ToolsWithheld bool
 }
 
 // incompleteResponseNotice marks a stored assistant message as cut off, so a
@@ -367,7 +406,7 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 		}
 
 		// Process response and update result stats
-		a.processResponse(resp, result)
+		a.processResponse(resp, result, toolsWereWithheld(params, tools))
 
 		// Append assistant message
 		*messages = append(*messages, resp.ToParam())

@@ -69,7 +69,12 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 	// OAuth identity injection removed (2026-04-04): Anthropic policy change
 	// blocks third-party OAuth usage. Using API key auth now.
 
-	// When force-summarizing, omit tools so the model must produce text
+	// When force-summarizing, omit tools so the model must produce text.
+	//
+	// This is the only place inber withholds tools from a request, and it is
+	// not free: see toolsWereWithheld below and APICallUsage.ToolsWithheld for
+	// what it costs. Whether to keep buying prose this way is an open question
+	// (todo 8754300f); the counters exist so it can be answered with a number.
 	if !forceSummary && len(tools.params) > 0 {
 		params.Tools = tools.params
 	}
@@ -133,6 +138,18 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 	}
 
 	return &params
+}
+
+// toolsWereWithheld reports that a built request carries no tools block while
+// the agent had tools to send.
+//
+// It reads the request that is about to go out rather than re-deriving the
+// condition from forceSummary. Those are two ways of asking the same question,
+// and the second would be a copy of buildRequest's `if` that nothing keeps in
+// step with it: change how tools are withheld and this would keep answering
+// about the old rule. Observing the outcome cannot drift from the decision.
+func toolsWereWithheld(params *anthropic.MessageNewParams, tools *toolInfo) bool {
+	return len(params.Tools) == 0 && len(tools.params) > 0
 }
 
 // executeAPICall handles streaming vs non-streaming API calls with retry logic.
@@ -238,19 +255,32 @@ func (a *Agent) announceMessageID(messageID string) {
 	}
 }
 
-// processResponse handles thinking blocks and text extraction, updates result stats
-func (a *Agent) processResponse(resp *anthropic.Message, result *TurnResult) {
+// processResponse handles thinking blocks and text extraction, updates result stats.
+//
+// toolsWithheld describes the request this response answered, not the response,
+// and it is carried here because this is where the call's usage is read. It is
+// what tells a full-price call apart from the cheap ones it is averaged in with.
+func (a *Agent) processResponse(resp *anthropic.Message, result *TurnResult, toolsWithheld bool) {
 	a.announceMessageID(resp.ID)
 
-	result.InputTokens += int(resp.Usage.InputTokens)
-	result.OutputTokens += int(resp.Usage.OutputTokens)
-	
-	// Cache tokens (prompt caching)
-	if resp.Usage.CacheCreationInputTokens > 0 {
-		result.CacheCreationTokens += int(resp.Usage.CacheCreationInputTokens)
+	call := APICallUsage{
+		InputTokens:         int(resp.Usage.InputTokens),
+		OutputTokens:        int(resp.Usage.OutputTokens),
+		CacheCreationTokens: int(resp.Usage.CacheCreationInputTokens),
+		CacheReadTokens:     int(resp.Usage.CacheReadInputTokens),
+		ToolsWithheld:       toolsWithheld,
 	}
-	if resp.Usage.CacheReadInputTokens > 0 {
-		result.CacheReadTokens += int(resp.Usage.CacheReadInputTokens)
+	result.APICalls = append(result.APICalls, call)
+
+	result.InputTokens += call.InputTokens
+	result.OutputTokens += call.OutputTokens
+
+	// Cache tokens (prompt caching)
+	if call.CacheCreationTokens > 0 {
+		result.CacheCreationTokens += call.CacheCreationTokens
+	}
+	if call.CacheReadTokens > 0 {
+		result.CacheReadTokens += call.CacheReadTokens
 	}
 
 	if a.hooks != nil && a.hooks.OnResponse != nil {
