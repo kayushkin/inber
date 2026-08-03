@@ -94,7 +94,7 @@ func TestAWorkspaceToolRefusesInsteadOfCrashingWhenThereIsNoForge(t *testing.T) 
 	for _, workspaceTool := range []agent.Tool{
 		server.MergeWorkspaceTool(),
 		server.RejectWorkspaceTool(),
-		server.FixWorkspaceTool(),
+		server.FixWorkspaceTool("session:caller"),
 	} {
 		_, err := workspaceTool.Run(context.Background(), string(input))
 		if err == nil {

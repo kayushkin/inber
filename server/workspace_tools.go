@@ -158,7 +158,18 @@ func (g *Server) RejectWorkspaceTool() agent.Tool {
 }
 
 // FixWorkspaceTool lets the orchestrator re-spawn an agent in the same workspace.
-func (g *Server) FixWorkspaceTool() agent.Tool {
+// FixWorkspaceTool re-spawns an agent into an existing workspace, charged to
+// the session that calls it — parentSessionKey, the same key SpawnAgentTool
+// takes, from the same place.
+//
+// The key is a parameter because the tool spawns, and a spawn is charged to a
+// parent: Spawn checks the depth cap and the children quota against it, derives
+// the child's key from it, and points the child's event forwarder and every
+// progress delivery at it. This used to range g.sessions for whichever session
+// was Running, which on a server holding more than one live session picked an
+// arbitrary one — sync.Map iteration order is unspecified — so a fix agent was
+// charged to, and reported to, a session that had not asked for it.
+func (g *Server) FixWorkspaceTool(parentSessionKey string) agent.Tool {
 	return agent.Tool{
 		Name: "fix_workspace",
 		Description: "Re-spawn an agent in an existing workspace to fix issues. " +
@@ -205,11 +216,6 @@ func (g *Server) FixWorkspaceTool() agent.Tool {
 				return "", fmt.Errorf("reopen workspace: %w", err)
 			}
 
-			// Find the parent session key (the orchestrator calling this tool).
-			// We'll use a synthetic parent key since this is a tool call, not a spawn request.
-			// The orchestrator session is whoever called this tool — we get that from context.
-			// For now, we need the parent key passed or inferred.
-
 			// Resolve agent config.
 			ac, agentOk := g.GetAgentConfig(in.Agent)
 			if !agentOk {
@@ -226,28 +232,12 @@ func (g *Server) FixWorkspaceTool() agent.Tool {
 				"You are working in an existing workspace with previous changes.\n"+
 				"Review what's already done, then fix the following:\n\n%s", ws.ID, in.Instructions)
 
-			// Find parent session for this tool call.
-			// The tool runs in the orchestrator's session context.
-			var parentKey string
-			g.sessions.Range(func(key, val any) bool {
-				s := val.(*Session)
-				s.mu.Lock()
-				running := s.Status == Running
-				s.mu.Unlock()
-				if running {
-					parentKey = key.(string)
-					return false
-				}
-				return true
-			})
-
-			if parentKey == "" {
-				return "", fmt.Errorf("no running parent session found")
-			}
-
-			// Spawn into the existing workspace.
+			// Spawn into the existing workspace, charged to the session that
+			// called the tool. Spawn validates the key, so a call from a
+			// session that has since gone is refused by name rather than
+			// silently handed to whichever session happens to be running.
 			resp, err := g.Spawn(ctx, SpawnRequest{
-				ParentKey: parentKey,
+				ParentKey: parentSessionKey,
 				Agent:     in.Agent,
 				Task:      task,
 			})

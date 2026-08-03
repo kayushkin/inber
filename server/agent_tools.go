@@ -25,7 +25,7 @@ func (g *Server) toolsForAgent(sessionKey, agentName string) []agent.Tool {
 		tools = append(tools,
 			g.MergeWorkspaceTool(),
 			g.RejectWorkspaceTool(),
-			g.FixWorkspaceTool(),
+			g.FixWorkspaceTool(sessionKey),
 			g.ListWorkspacesTool(),
 		)
 	}
