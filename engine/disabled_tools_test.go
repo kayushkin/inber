@@ -97,6 +97,48 @@ func TestDisablingANameNoToolHasChangesNothing(t *testing.T) {
 	}
 }
 
+// TestDisabledToolNamesReportsWhatWasTakenAway. EnabledToolNames cannot answer
+// this: a tool is off the wire either because the agent config never asked for
+// it or because a caller took it away, and only the second is a decision this
+// session made. Anything that has to carry that decision past this process —
+// the server's session sidecar — has to be able to read it back.
+func TestDisabledToolNamesReportsWhatWasTakenAway(t *testing.T) {
+	e := &Engine{}
+	e.setToolSet(namedTools("read_files", "write_files", "shell", "web_fetch", "ripgrep"))
+
+	if got := e.DisabledToolNames(); len(got) != 0 {
+		t.Fatalf("a session that has disabled nothing reports %v, want nothing", got)
+	}
+
+	// Given in an order that is neither sorted nor reverse-sorted, and four
+	// names deep, so an unsorted answer cannot pass by luck on a repeated run:
+	// the set is a Go map, whose iteration order is deliberately random.
+	e.SetDisabledTools([]string{"web_fetch", "shell", "ripgrep", "write_files"})
+	if got, want := e.DisabledToolNames(), []string{"ripgrep", "shell", "web_fetch", "write_files"}; !equal(got, want) {
+		t.Errorf("got %v, want %v — sorted, so a caller writing this to a file gets the same bytes for the same set", got, want)
+	}
+
+	e.SetDisabledTools(nil)
+	if got := e.DisabledToolNames(); len(got) != 0 {
+		t.Errorf("after re-enabling everything: got %v, want nothing", got)
+	}
+}
+
+// TestDisabledToolNamesKeepsANameNoToolHas. SetDisabledTools documents an
+// unknown name as not an error — the set is a filter, not a registry — so it
+// survives, and subtracting the wire set from the full set would therefore not
+// recover the set. That is why this reader exists rather than a derivation.
+func TestDisabledToolNamesKeepsANameNoToolHas(t *testing.T) {
+	e := &Engine{}
+	e.setToolSet(namedTools("read_files"))
+
+	e.SetDisabledTools([]string{"no_such_tool"})
+
+	if got, want := e.DisabledToolNames(), []string{"no_such_tool"}; !equal(got, want) {
+		t.Errorf("got %v, want %v — a name disabled before its tool was added must survive a rebuild that adds it", got, want)
+	}
+}
+
 // TestAnEngineHandedOnlyItsWireSetCanStillDisable covers the engines built by
 // hand rather than through initTools — the test helpers in this package, and
 // anything future that assigns the tool slice directly. Without the fallback

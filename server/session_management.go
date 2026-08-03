@@ -120,9 +120,9 @@ func (g *Server) Inject(sessionKey, message string) (DeliveryRoute, error) {
 // Session persistence
 // ---------------------------------------------------------------------------
 
-// persistSessionState saves a session's messages, turn count and safety limits
-// to disk — everything createSession reads back when it rebuilds the session
-// under that key.
+// persistSessionState saves a session's messages, turn count, safety limits and
+// disabled tools to disk — everything createSession reads back when it rebuilds
+// the session under that key.
 //
 // Taking s.mu here does NOT make the read safe against a turn: Session.turn
 // releases s.mu before calling Engine.RunTurn and holds nothing for the length
@@ -151,6 +151,7 @@ func (g *Server) persistSessionState(s *Session) {
 func (g *Server) persistSessionStateLocked(s *Session) {
 	msgs := s.Engine.Messages
 	turnCounter := s.Engine.Turn.Counter
+	disabledTools := s.Engine.DisabledToolNames()
 	var guardState guard.State
 	haveGuardState := s.Engine.Guard != nil
 	if haveGuardState {
@@ -175,5 +176,9 @@ func (g *Server) persistSessionStateLocked(s *Session) {
 		if err := sessionMod.SaveGuardState(dir, guardState); err != nil {
 			log.Printf("[server] safety limits not persisted for %s, next resume will rebuild it uncapped and unspent: %v", s.Key, err)
 		}
+	}
+
+	if err := sessionMod.SaveDisabledTools(dir, disabledTools); err != nil {
+		log.Printf("[server] disabled tools not persisted for %s, next resume will put them back on the wire: %v", s.Key, err)
 	}
 }
