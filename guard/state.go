@@ -45,7 +45,14 @@ type State struct {
 // Mode is not among them. It reads like wiring, and it was left out on the
 // grounds that a rebuild reconfigures it — but nothing here configures a mode
 // except the request that started the session, and a rebuild has no request.
+//
+// The whole record is read under one hold. It is persisted and installed back
+// on the next rebuild as the session's own history, so a caps-and-totals set
+// half of which predates a turn that the other half counted is a budget the
+// session never had.
 func (g *Guard) State() State {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	return State{
 		Mode:           g.cfg.Mode.String(),
 		MaxTurns:       g.cfg.MaxTurns,
@@ -55,7 +62,7 @@ func (g *Guard) State() State {
 		Turns:          g.turns,
 		InputTokens:    g.inputToks,
 		Cost:           g.cost,
-		ElapsedSeconds: g.ElapsedSeconds(),
+		ElapsedSeconds: g.elapsedSecondsLocked(),
 	}
 }
 
@@ -74,6 +81,8 @@ func (g *Guard) State() State {
 // thing in doubt is which, and the read-only one is the only answer that cannot
 // hand back more access than the session had.
 func (g *Guard) RestoreState(s State) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	var err error
 	if s.Mode != "" {
 		g.cfg.Mode, err = ParseMode(s.Mode)

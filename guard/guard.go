@@ -31,7 +31,10 @@
 //	if exceeded, reason := g.CheckLimits(); exceeded { ... }
 package guard
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // Mode controls the trust level for a session.
 type Mode int
@@ -97,7 +100,25 @@ const (
 )
 
 // Guard enforces safety controls for a single agent session.
+//
+// A guard is read and written by two goroutines that do not exclude each other,
+// so every field below it is under mu. The turn goroutine records against the
+// totals (RecordTurn, RecordCost) while holding no session lock — Session.turn
+// releases s.mu before Engine.RunTurn — and an HTTP goroutine reads the same
+// totals through State(), which is the record the spend ceiling is rebuilt
+// from: a session's cost is persisted from it and installed back on every
+// rebuild precisely so the session cannot get its budget back. A torn read
+// there writes a total the session never held, which is the one failure the
+// ceiling exists to prevent. The caps race the same way — SetMaxInputTokens is
+// called from an HTTP handler while CheckLimits reads the caps between turns.
+//
+// mu is never held across a call out of this package. CheckTool reads the mode
+// and the approver under the lock and then lets go before asking the approver,
+// so an ApprovalFunc that consults the guard, or blocks on a person, cannot
+// deadlock a turn.
 type Guard struct {
+	mu sync.Mutex
+
 	cfg Config
 
 	// Tracking
@@ -138,8 +159,16 @@ func New(cfg Config) *Guard {
 // answers NeedsApproval when there is no approver to ask. Autonomous — and
 // Unset, the mode nobody named — allow everything, which is what every session
 // here did before this check had a caller.
+// The approver is asked with the lock released — it is arbitrary caller code
+// that may block on a person or call back in here, and neither may hold up a
+// turn recording its cost.
 func (g *Guard) CheckTool(tool, input string) ToolVerdict {
-	switch g.cfg.Mode {
+	g.mu.Lock()
+	mode := g.cfg.Mode
+	approve := g.cfg.ApprovalFunc
+	g.mu.Unlock()
+
+	switch mode {
 	case Observe:
 		if isReadOnly(tool) {
 			return Allowed
@@ -147,7 +176,7 @@ func (g *Guard) CheckTool(tool, input string) ToolVerdict {
 		return Denied
 	case Assist:
 		if isDangerous(tool) {
-			if g.cfg.ApprovalFunc != nil && g.cfg.ApprovalFunc(tool, input) {
+			if approve != nil && approve(tool, input) {
 				return Allowed
 			}
 			return NeedsApproval
@@ -162,6 +191,8 @@ func (g *Guard) CheckTool(tool, input string) ToolVerdict {
 // call has to say under which mode it was refused, and the mode is otherwise
 // unreadable from outside the package.
 func (g *Guard) Mode() Mode {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	return g.cfg.Mode
 }
 
@@ -176,6 +207,8 @@ func (g *Guard) Mode() Mode {
 // nobody has decided, and building the write before naming that reader is how
 // this pair got here.
 func (g *Guard) RecordToolCall(tool, input, output string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if tool == g.lastTool && input == g.lastInput {
 		g.repeatCount++
 	} else {
@@ -187,12 +220,16 @@ func (g *Guard) RecordToolCall(tool, input, output string) {
 
 // RecordTurn increments the turn counter and adds token usage.
 func (g *Guard) RecordTurn(inputTokens int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.turns++
 	g.inputToks += inputTokens
 }
 
 // RecordCost adds to the cumulative cost.
 func (g *Guard) RecordCost(dollars float64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.cost += dollars
 }
 
@@ -201,6 +238,8 @@ func (g *Guard) RecordCost(dollars float64) {
 // read it from outside the package: a running total nothing can see is a total
 // nothing can check.
 func (g *Guard) CostSoFar() float64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	return g.cost
 }
 
@@ -212,7 +251,20 @@ func (g *Guard) CostSoFar() float64 {
 // dollar total is restored at all — a cap whose clock restarts every time the
 // session is rebuilt is a cap per rebuild, not per session. Time the session
 // spent not loaded is not counted, because nothing was running to count it.
+// Both fields it reads are rewritten by RestoreState, so a rebuild racing a
+// read is the same defect on the duration cap that a torn total is on the
+// dollar one.
 func (g *Guard) ElapsedSeconds() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.elapsedSecondsLocked()
+}
+
+// elapsedSecondsLocked is ElapsedSeconds for the methods in this package that
+// already hold mu and would deadlock on retaking it.
+//
+// mu must be held.
+func (g *Guard) elapsedSecondsLocked() int {
 	return g.secondsBeforeThisRun + int(time.Since(g.startedAt).Seconds())
 }
 
@@ -224,6 +276,8 @@ func (g *Guard) ElapsedSeconds() int {
 // not how long a single turn may take. MaxResponseTime is the per-turn bound
 // and lives in the engine's build hooks.
 func (g *Guard) CheckLimits() (exceeded bool, reason string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if g.cfg.MaxTurns > 0 && g.turns >= g.cfg.MaxTurns {
 		return true, "max turns exceeded"
 	}
@@ -233,7 +287,7 @@ func (g *Guard) CheckLimits() (exceeded bool, reason string) {
 	if g.cfg.MaxCost > 0 && g.cost >= g.cfg.MaxCost {
 		return true, "max cost exceeded"
 	}
-	if g.cfg.MaxDuration > 0 && g.ElapsedSeconds() >= g.cfg.MaxDuration {
+	if g.cfg.MaxDuration > 0 && g.elapsedSecondsLocked() >= g.cfg.MaxDuration {
 		return true, "max duration exceeded"
 	}
 	return false, ""
@@ -241,12 +295,16 @@ func (g *Guard) CheckLimits() (exceeded bool, reason string) {
 
 // SetMaxInputTokens updates the input token limit.
 func (g *Guard) SetMaxInputTokens(max int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.cfg.MaxInputTokens = max
 }
 
 // IsRepeating returns true if the agent is stuck calling the same tool. It has
 // no caller either, and cannot be true while RecordToolCall has none. See there.
 func (g *Guard) IsRepeating() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	return g.repeatCount >= g.cfg.RepetitionThreshold
 }
 
