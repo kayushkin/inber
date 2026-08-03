@@ -2570,3 +2570,28 @@ Assist **with no approval**. That todo covers the caps half and the resume path 
 classified, belongs on it and is not yet written there. Related: `guard/classification_test.go:56-88`
 asserts only that every *classified* name exists, never that every *registered* tool is classified —
 which is the asymmetry that left `spawn_agent` unclassified in the first place.
+
+## Harness-watch — 2026-08-03: taking the worst of N answers is an error-rate trade, not a free safety margin
+
+[goose #10870](https://github.com/block/goose/pull/10870) reverted
+[#10416](https://github.com/block/goose/pull/10416) sixteen days after merging it, because
+splitting a command into overlapping windows and **taking the maximum injection score** across them
+"significantly increased false positives for large commands". Written up against the 07-16
+prescription in `goose.md` (2026-08-03 §1); the part that generalizes past classifiers is the
+arithmetic.
+
+**Max-over-N is a monotone OR, so it multiplies the error it does not measure.** A detector with a
+per-unit false-positive rate p, run over N units and aggregated by max, false-positives at
+1−(1−p)^N. N is not a constant — it grows with the input — so the aggregate error rate is a
+function of input size, and it grows fastest on the largest inputs, which are usually the ones the
+fan-out was added for. The same shape appears everywhere this doc set already recommends a
+worst-case merge: the deny-dominates lattice of the 2026-08-01 §1 entry, N-verifier adversarial
+review, per-tool inspectors merged by "any inspector denies". Each is correct about *which* error it
+refuses to miss and silent about what it does to the other one.
+
+**What inber should consider:** whenever a design here says "take the worst of N", state N's range
+and the per-unit rate, and calibrate the per-unit threshold so the *aggregate* rate is what you
+meant — otherwise the threshold you tuned on one unit is not the threshold you shipped. Where the
+merge is over *verdicts from different sources* (goose #10612's inspector lattice) the OR is
+sound, because the sources are not independent draws from one noisy detector. Where it is over
+*repeated draws from the same detector on slices of one input*, it is not.

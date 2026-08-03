@@ -432,3 +432,58 @@ session"`, `all:"long-running agent"` and `all:"resume"` over the window return 
 papers or already-triaged memory work. Nearest miss is 2607.08740, which describes resumable
 workflow objects but leaves transition semantics as future work. **The agent-memory gap is now
 closed** by 2607.17545.
+
+# 2026-08-03 sweep
+
+One paper survived the not-already-covered check. Eight candidates were pulled;
+2607.15516 (CAPC, cache-aware compression), 2607.00692 (Self-GC), 2607.10569
+(`execute_code` ablation), 2607.05378 (CompactionRL), 2607.25656 (OrchBench) and
+2607.05690 (memory latency) are all already in `2026-07-harness-research.md`,
+`2026-08-harness-research.md` or `cache-optimization.md`, and the HuggingFace
+July-intrusion timeline is at `agentic-design-patterns.md:1994`.
+
+## CoACT: action-preserving observation compression
+
+[arXiv:2607.02911](https://arxiv.org/abs/2607.02911) — Chen, Zhu, Zhang, Li, 2026-07-03.
+
+Trains a small compressor for **tool observations** — file reads, test output, shell
+results — under a *next-action preservation* reward rather than a summary-fidelity or
+length reward. A teacher proposes candidate compressions of one observation; any
+candidate that changes the agent's next tool call is discarded; among the survivors the
+shortest wins. Length is the secondary objective, not the first. Reported: 33.0% total
+token reduction on SWE-bench Verified across three agentic models, with task success
+close to uncompressed.
+
+This is the direct answer to the failure the 2026-08-01 sweep recorded above.
+arXiv:2607.12161 measured an arm that removed 38% of raw tool-output tokens and
+**cost 6.8% more**, and cut successful patch application from 27/40 to 15/40 by
+corrupting the verbatim edit anchors the model was going to quote back. CoACT's
+criterion is exactly the test that arm did not have: an anchor the next action depends on
+is, by construction, an anchor whose removal changes the next action, so the candidate
+carrying it is rejected. And the *slot* matters as much as the criterion — an observation
+is append-only and sits after every cache breakpoint, so compressing it at the moment it
+is produced writes no byte that was already cached. That is the half 12161's
+cache-write-amplification mechanism punishes, and CoACT does not touch it.
+
+**What inber should consider:**
+
+- **Adopt the criterion, not the model.** Behavioural equivalence of the *next tool call*
+  is testable offline against recorded trajectories without training anything: replay a
+  stored session, apply the truncation, assert the next tool call is byte-identical.
+  inber already truncates tool results at `session/truncate.go:58`
+  (`TruncateToolResult`, head/tail with a per-strategy split at `:98`,`:134`) and has
+  never had a test that asserts anything about the *agent* after truncation — the
+  existing tests assert on the truncated string. A replay harness over
+  `~/.inber/server` sessions is the cheap version.
+- **Compress at production, not in history.** inber's live pruning path
+  (`conversation/manage_tool_pruning.go:30` `pruneToolResult`, reached from
+  `engine/build.go:123-125` → `conversation.PruneConversation` → `conversation/manage.go:102`,
+  and from the staging path at `conversation/staged.go:131`) rewrites results that are
+  *already in the message array*, i.e. already inside a cached prefix. That is the arm
+  12161 measured losing money. Truncating harder at `session/truncate.go:58`, before the
+  result is ever appended, costs the same tokens and invalidates nothing.
+  Whether inber should therefore *stop* pruning history is a real trade — pruning is what
+  keeps a long session under the context limit — and is not decided here.
+- Dead code found while checking this, recorded so nobody re-derives it:
+  `conversation/manage_tool_pruning.go:132` `truncateOldToolResults` is marked "(legacy)"
+  and has zero callers, test or otherwise.

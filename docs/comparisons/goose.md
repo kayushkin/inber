@@ -864,3 +864,123 @@ caching caveat are in `agentic-design-patterns.md` (2026-08-02, "Also in-window"
 lesson applies one layer higher than the 07-30 entry recommends: `AddChainAndSidebandFields` rebuilds
 the same maps on **every request**, from both `agent/agent_run.go:26` and `engine/turn_openai.go:32`,
 where goose normalizes once at registration.
+
+## Harness-watch — 2026-08-03: goose reverted the chunker this doc told inber to copy — a max over N windows is a false-positive multiplier; and a tool you disabled comes back when the session forks
+
+### 1. ⚠️ The 2026-07-16 entry's prescription is withdrawn upstream. The threat model stands; the aggregation does not.
+
+[goose #10870](https://github.com/block/goose/pull/10870) (merged 2026-08-01) is a clean
+`git revert` of [#10416](https://github.com/block/goose/pull/10416) — the overlapping-window
+command-classifier chunker written up at `goose.md:540` above and recommended there as a shape to
+"adopt directly". It deletes `command_chunker.rs` (156 lines) and restores
+`classification_client.rs`, `scanner.rs` and `security/mod.rs` to their pre-#10416 state. The
+stated reason, verbatim: *"The overlapping-window chunking of command-classifier input has
+significantly increased false positives for large commands, so we're reverting it while the
+approach is reconsidered."* A follow-up is promised that chunks "in a different way that's a
+little less disruptive".
+
+**What the 07-16 entry got right, and what it missed.** The evasion is real and unretracted — a
+512-token window can be padded past, and the measured SAFE 0.0006 → INJECTION 0.9997 flip stands.
+The general lesson stands too: a fixed-context safety check that sees only the first N bytes is a
+check an attacker pads around. What does not stand is **max-over-windows as the aggregation**.
+Taking the maximum score across N windows is a monotone OR over N noisy detectors: if one window
+false-positives with probability p, an N-window command false-positives with 1−(1−p)^N. The
+screen's false-positive rate therefore *rises with input length*, and overlap makes N larger than a
+naive split would for the same bytes — so the change widened the false-positive surface fastest on
+exactly the inputs (large commands) it was added to protect. The 07-16 entry recorded the
+true-positive demo and the three fail-closed details and never asked what the aggregation does to
+the other error. That is the whole of the correction.
+
+**What inber should consider:**
+
+- **Keep the threat model, drop the aggregation.** If inber ever adds a classifier or
+  LLM-screening gate ahead of shell, scanning the whole input is still required, but the
+  per-window threshold has to be calibrated for N — raised as N grows so the *whole-command*
+  false-positive rate stays fixed — or a single window's score must not be sufficient on its own.
+  A screen whose deny rate grows with command length is an availability failure, and in an
+  unattended session a false deny is a stalled job, not a prompt.
+- **A safety gate needs both error rates measured before it ships.** goose merged this on a
+  reproduced evasion and reverted it 16 days later on false positives; that sequence is what
+  measuring only the true-positive side produces.
+- **Correction to the 07-16 homework as well.** That entry asked inber to "confirm those matches
+  scan the *whole* argument, not a truncated head". There is nothing in this repo to confirm:
+  `guard/` contains no `regexp`, no `strings.Contains` and no `HasPrefix` on a command string, and
+  the classification is a switch over **tool names** — `isReadOnly` at `guard/guard.go:319-326`,
+  `isDangerous` at `:328-334`. inber's gate never looks at the command bytes at all, so it is
+  neither padding-bypassable nor length-sensitive; the pattern screen the 07-16 entry was aiming
+  at lives in bridge-server's `permission_store`, outside this repo. That makes this whole section
+  advice for a gate inber has not built, and the name-only classification is the more pressing
+  fact about the gate it has (see the open todo on the six unclassified tools).
+
+### 2. A disabled tool is a session-lifetime fact in inber, and a session's life is shorter than the operator thinks
+
+[goose #10223](https://github.com/block/goose/pull/10223) fixes a user disabling the **Developer**
+extension — toggle off in settings, `enabled: false` in `config.yaml` — and still getting `shell`,
+`edit`, `write`, `tree` and `read_image` loaded into every new chat, with shell commands executing.
+The fix is three lines: skip a builtin when the config explicitly disables it. The sentence in the
+PR body is the reusable part — *"Any mitigation built on disabling Developer is silently void."*
+
+inber's version of the question is not "does config-load honour the flag", because **inber has no
+config field for it at all**. `disabled_tools` reaches an engine through exactly one door:
+`POST /sessions/{id}/config` (`server/api_bridge.go:671`, handled at `:721-722`) calls
+`Engine.SetDisabledTools` (`engine/engine.go:363-370`), which stores the set in
+`engine.disabledToolNames` (`engine/engine.go:94`) and re-derives the wire set at
+`applyDisabledTools` (`engine/engine.go:427`). Those five lines are the complete set of references
+to that field in the tree. It is not on `EngineConfig`, not on `RunRequest`, not on the stored
+agent config, and nothing serializes it. So the set is engine-memory state with a session's
+lifetime, and two ordinary events end that lifetime while the operator believes the tool is still
+off:
+
+- **A fork or a spawn.** `server/session_forking.go:47` and `server/spawn.go:224` both build the
+  child through `createSession(..., RunRequest{}, ...)`, so the child engine starts with an empty
+  `disabledToolNames` and gets the parent's full tool set. `spawn_agent` is in every session's tool
+  set (`server/agent_tools.go:10-13`), which means a session that has had a tool taken away can
+  reach it again by spawning a child.
+- **A restart.** Nothing persists the set, so a revived session comes back with everything enabled.
+
+**What a fix would have to decide, and this entry does not.** Whether `disabled_tools` is a *safety
+boundary* or a *context/behaviour knob*. The `ConfigRequest` doc comment (`server/api_bridge.go:656-667`)
+argues only about nil-versus-empty and never claims the former; if it is only a knob, losing it on
+fork is a UX bug and persisting it is enough. If it is a boundary, then inheritance has to be
+decided too — a child that inherits the parent's denials is the safe default and also the one that
+makes a delegate less capable than its parent for reasons the delegate cannot see — and it has to
+be reconciled with the `mode`/guard path rather than bolted beside it. Related but distinct: the
+open todo on the three zero-`RunRequest` call sites covers fields that *exist* on `RunRequest` and
+are dropped; this is a setting that has no field to drop.
+
+### Also in-window, worth a line each
+
+- **codex [#36641](https://github.com/openai/codex/pull/36641)** parses a provider-only usage field
+  (`codex_rollout_budget_units`) into `TokenUsage` and deliberately keeps it out of the serialized
+  protocol, JSON schema and TypeScript types — a provider's private accounting is recorded where the
+  cost model can read it and never promoted to a contract other code may depend on. Nothing to do in
+  inber: the four Anthropic counters are already logged and priced (`session/timeline_cost.go`), and
+  the arithmetic bug under them was closed by `09848b9`/`961f6dd`.
+- **Negative results from this window's permission audit, so the next sweep does not re-derive them.**
+  goose #10612's "allow beat deny" has **no analogue in inber**: there is no allow-list/deny-list pair
+  to order, `CheckTool` (`guard/guard.go:165-188`) is one `switch` over the mode calling exactly one
+  classifier per branch, and the classifiers are `switch`es over string literals
+  (`guard/guard.go:319-334`) — no map iteration, nothing order-dependent. There is likewise **no deny
+  cache to poison**: `CheckTool` is stateless w.r.t. verdicts, so there is no "always allow" entry a
+  denial could be overwritten by. The one place two lists meet, `applyDisabledTools`
+  (`engine/engine.go:427-444`), applies the deny filter after the allow list by code order, and a
+  disabled tool is absent from `toolMap` (`agent/agent_run.go:44`) so it cannot execute even if the
+  model emits it. Deny wins, structurally.
+- **`guard/` is no longer a stub, and any note saying otherwise is stale.** Live callers on the hot
+  path: `engine/build.go:105`, `engine/build_hooks.go:89-102`, `agent/chain.go:388` and `:437`,
+  `agent/sideband.go:228`. `harness-control-matrix.md:35` already records the correction. Still dead
+  *inside* the package: `RecordToolCall` (`guard/guard.go:209`) and `IsRepeating` (`:305`), which is
+  the standing "repetition detector has never run" todo. Still genuine stubs: `trace`
+  (`trace/trace.go:105,113`), `codeindex` (`codeindex/codeindex.go:50,58,68,77`), `checkpoint`
+  (every method returns `ErrNotImplemented`).
+- **Already filed, found again by this audit, recorded so it is not filed twice:** the Assist
+  denylist failing open — `isDangerous` (`guard/guard.go:328-334`) names four tools, so every
+  unclassified tool is allowed with no approval. The audit widened the count well past the six the
+  open todo names: `scheduler`, `web_fetch`, `browser`, `task_plan`, `scratchpad`, `memory_save`,
+  `memory_forget`, `end_turn` (`tools/tools.go:33-45`), plus `spawn_agent`, `steer_agent`,
+  `agents_status` and the workspace tools injected into **every** server session
+  (`server/agent_tools.go:10-31`), plus `sideband:done|note|split` (`agent/sideband.go:27-30`). Two
+  of those reach a shell in Assist: `scheduler` (jobs the scheduler runs as `sh -c`) and
+  `sideband:done` → `engine/build_sideband.go:44` `RunBuildCheck` → `bash -c`, the second while
+  `agent/sideband.go:191-199` explicitly justifies gating the sideband *because* it reaches `bash -c`.
+  That belongs on the existing todo as a count correction, not as a new one.
