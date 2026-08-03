@@ -1,22 +1,38 @@
-// Package checkpoint manages workspace state snapshots for agent sessions.
+// Package checkpoint is a design sketch for workspace state snapshots. Nothing
+// in it is implemented.
 //
-// Before an agent modifies files, a checkpoint captures the workspace state.
-// After each turn, if files changed, a new checkpoint is created. Users can
-// diff any two checkpoints or restore to a prior state.
+// Every method returns ErrNotImplemented. That is the point of this file in its
+// current state: before it, each one returned a zero value and a nil error, so
+// Take reported a snapshot it had not taken and Restore reported a workspace
+// rollback without touching a file. A safety feature that reports success while
+// doing nothing is worse than an absent one, because the absent one cannot be
+// planned on.
 //
-// Implementation uses git commits on a detached checkpoint branch:
+// The design below is intent, not behaviour. Building it needs three answers
+// that are not mechanical, and they are the reason this is a sketch rather than
+// an implementation:
+//
+//   - Does "checkpoint" mean rewinding the conversation, rewinding the
+//     workspace, or the atomic pair? session/checkpoint.go already writes the
+//     conversation half, and the two do not know about each other.
+//   - Per turn, or per user turn? A turn that runs fifty tool round-trips would
+//     otherwise produce fifty commits.
+//   - Are untracked files captured? git stash semantics miss exactly the files
+//     an agent most often creates, so a restore that rewinds tracked files only
+//     leaves a workspace that never existed at any point in the session.
+//
+// The intended implementation is git commits on a detached checkpoint branch:
 //
 //	.inber/checkpoints/{session_id}/
 //	    checkpoint_001  → git commit hash
 //	    checkpoint_002  → git commit hash
 //	    ...
 //
-// Checkpoints are lightweight (git objects, not file copies) and enable:
-//   - Comparing workspace state before/after any turn
-//   - Restoring to any prior checkpoint
-//   - Viewing the diff of what an agent changed per turn
+// which would be lightweight (git objects, not file copies) and would enable
+// comparing workspace state before and after any turn, restoring to any prior
+// checkpoint, and viewing the diff of what an agent changed per turn.
 //
-// Usage:
+// The intended shape of a session, once it exists:
 //
 //	mgr, _ := checkpoint.New(repoRoot, sessionID)
 //	mgr.Take("before turn 3")  // snapshot current state
@@ -25,6 +41,13 @@
 //	diff := mgr.Diff(1, 2)     // compare checkpoints
 //	mgr.Restore(1)             // roll back to checkpoint 1
 package checkpoint
+
+import "errors"
+
+// ErrNotImplemented is returned by every function in this package. See the
+// package doc: this is a design sketch, and a caller must be able to tell that
+// from the return value rather than from reading the source.
+var ErrNotImplemented = errors.New("checkpoint: workspace snapshots are not implemented")
 
 // Checkpoint represents a single workspace state snapshot.
 type Checkpoint struct {
@@ -42,56 +65,46 @@ type Manager struct {
 	points    []Checkpoint
 }
 
-// New creates a checkpoint manager for the given repo and session.
-// Returns nil if the directory is not a git repository.
+// New would create a checkpoint manager for the given repo and session, and
+// verify that repoRoot is a git repository. It returns ErrNotImplemented.
 func New(repoRoot, sessionID string) (*Manager, error) {
-	// TODO: verify git repo, create checkpoint branch if needed
-	return &Manager{
-		repoRoot:  repoRoot,
-		sessionID: sessionID,
-	}, nil
+	return nil, ErrNotImplemented
 }
 
-// Take creates a checkpoint of the current workspace state.
-// Label is a human-readable description (e.g., "before turn 3").
+// Take would create a checkpoint of the current workspace state, labelled with
+// a human-readable description (e.g., "before turn 3"). It returns
+// ErrNotImplemented.
 func (m *Manager) Take(label string, turnNum int) (*Checkpoint, error) {
-	if m == nil {
-		return nil, nil
-	}
-	// TODO: git add -A && git commit on checkpoint branch
-	return nil, nil
+	return nil, ErrNotImplemented
 }
 
-// List returns all checkpoints for this session.
-func (m *Manager) List() []Checkpoint {
-	if m == nil {
-		return nil
-	}
-	return m.points
+// List would return all checkpoints for this session. It returns
+// ErrNotImplemented.
+//
+// The error is new: this used to return a nil slice, which a caller reads as
+// "this session has no checkpoints" rather than "checkpoints do not exist".
+func (m *Manager) List() ([]Checkpoint, error) {
+	return nil, ErrNotImplemented
 }
 
-// Diff returns the file changes between two checkpoints.
+// Diff would return the file changes between two checkpoints. It returns
+// ErrNotImplemented.
 func (m *Manager) Diff(from, to int) (string, error) {
-	if m == nil {
-		return "", nil
-	}
-	// TODO: git diff between two checkpoint commits
-	return "", nil
+	return "", ErrNotImplemented
 }
 
-// DiffFromPrevious returns changes since the previous checkpoint.
+// DiffFromPrevious would return changes since the previous checkpoint. It
+// returns ErrNotImplemented.
 func (m *Manager) DiffFromPrevious(num int) (string, error) {
-	if num <= 1 {
-		return "", nil
-	}
-	return m.Diff(num-1, num)
+	return "", ErrNotImplemented
 }
 
-// Restore rolls the workspace back to a specific checkpoint.
+// Restore would roll the workspace back to a specific checkpoint. It returns
+// ErrNotImplemented.
+//
+// This is the method the rest of the package exists for, and the one whose old
+// nil return was most dangerous: a caller asking to undo an agent's file
+// changes was told the rollback had happened.
 func (m *Manager) Restore(num int) error {
-	if m == nil {
-		return nil
-	}
-	// TODO: git checkout checkpoint commit, apply to working tree
-	return nil
+	return ErrNotImplemented
 }

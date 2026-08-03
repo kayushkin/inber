@@ -26,7 +26,7 @@
 //	guard/       Safety controls: execution modes, cost/token limits, repetition detection
 //	trace/       Structured execution logging for analysis and optimization
 //	codeindex/   AST-based codebase analysis for intelligent context building
-//	checkpoint/  Workspace state snapshots with diff and restore
+//	checkpoint/  Workspace state snapshots — a design sketch, not built, not called
 package engine
 
 import (
@@ -41,7 +41,6 @@ import (
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
-	"github.com/kayushkin/inber/checkpoint"
 	"github.com/kayushkin/inber/codeindex"
 	"github.com/kayushkin/inber/conversation"
 	"github.com/kayushkin/inber/guard"
@@ -78,7 +77,6 @@ type Engine struct {
 	Guard            *guard.Guard        // execution modes, limits, repetition detection
 	Trace            *trace.Recorder     // structured execution logging
 	CodeIndex        *codeindex.Index    // AST-based codebase symbol index
-	Checkpoint       *checkpoint.Manager // workspace state snapshots
 	IdentityOverride string              // system prompt for raw/override modes
 
 	// --- Internal state ---
@@ -212,10 +210,13 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	// 10. Code index — AST-based codebase analysis (nil-safe, no-op if empty)
 	e.CodeIndex, _ = codeindex.Open(e.repoRoot)
 
-	// 11. Checkpoint — workspace state snapshots (nil-safe)
-	if e.Session != nil {
-		e.Checkpoint, _ = checkpoint.New(e.repoRoot, e.Session.SessionID())
-	}
+	// 11. Workspace checkpoints are not wired here, because the checkpoint
+	// package is a design sketch and every method returns
+	// checkpoint.ErrNotImplemented. It used to be constructed at this line and
+	// Take() was called on every turn, which cost nothing and bought nothing but
+	// made the feature read as live to anyone auditing RunTurn. Wire it back in
+	// when the package is built — the three questions that have to be answered
+	// first are in its package doc.
 
 	return e, nil
 }
@@ -300,10 +301,6 @@ func (e *Engine) RunTurn(ctx context.Context, input string) (*agent.TurnResult, 
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
 	})
-	if e.Checkpoint != nil {
-		e.Checkpoint.Take(fmt.Sprintf("turn %d", e.Turn.Counter), e.Turn.Counter)
-	}
-
 	if e.memoryProfiler != nil {
 		e.memoryProfiler.TakeSnapshot(e.Turn.Counter)
 	}

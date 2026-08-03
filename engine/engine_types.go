@@ -63,10 +63,17 @@ type EngineConfig struct {
 	// Diagnostics
 	MemoryProfiling bool
 	MemoryLogPath   string
-	Blueprint       bool   // emit prompt blueprint diffs per turn
-	EnableTrace     bool   // enable structured execution tracing
-	EnableCodeIndex bool   // enable AST-based codebase indexing
-	EnableCheckpoint bool  // enable workspace state checkpointing
+	Blueprint       bool // emit prompt blueprint diffs per turn
+
+	// The three below are read by nothing. Each has exactly one occurrence in
+	// the tree — its own declaration here — so setting any of them turns on
+	// nothing at all, and the subsystems they name are TODO stubs rather than
+	// features waiting on a flag. They are documented rather than deleted
+	// because whether inber grows these three subsystems is a product question;
+	// what is not a question is that a caller must not read them as switches.
+	EnableTrace      bool // no reader; trace.NewRecorder("", …) returns nil and its methods are no-ops
+	EnableCodeIndex  bool // no reader; codeindex.Open returns an empty index and Search/RepoMap are TODO
+	EnableCheckpoint bool // no reader; every checkpoint package method returns checkpoint.ErrNotImplemented
 }
 
 // ContextInjector provides additional system prompt blocks at turn time.
