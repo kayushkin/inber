@@ -139,6 +139,29 @@ two distinct durable queues on inber sessions (over the NATS bus / si adapters)
 instead of one undifferentiated inbound stream, so a user can redirect an
 in-flight agent without conflating it with the next request.
 
+> **Verified 2026-08-03 (nightly worker): the premise "one undifferentiated
+> inbound stream" is FALSE. Do not re-derive.** inber already has both queues and
+> they map 1:1 onto dexto's: `Session.injections` (buffered chan, cap 10,
+> `server/session_creation.go`) is the steer queue, written by
+> `offerToTurnInFlightLocked` and drained by `Engine.buildInjectCheck`;
+> `Session.pendingMessages` is the follow-up queue, prepended to the next turn's
+> input in `Session.turn`. The split is even a public type — `DeliveryRoute` =
+> `DeliveredMidTurn`/`DeliveredNextTurn`, surfaced over HTTP as
+> `{"status":"queued","route":"next-turn"}`.
+>
+> The 2026-06-13 refinement below is satisfied too: `agent/agent.go` gates the
+> inject check on `apiCalls > 1`, so a steer is never folded into the opening
+> request, and `requeueInjectionsTheTurnNeverReadLocked` demotes an unread steer
+> to the follow-up queue at turn end.
+>
+> **Two things are genuinely missing, and they are what this entry should have
+> said.** (1) Neither queue is *durable* — `persistSessionStateLocked` writes
+> `messages.json`, the turn counter and the guard-state sidecar, and nothing
+> else, so a restart drops both queues including a completed sub-agent's result.
+> (2) The caller cannot *choose* the queue: every external entry point calls
+> `deliver()`, which auto-routes on session status. `steer()`-vs-`followUp()` is
+> not expressible. Filed as a child of the harness-watch shelf.
+
 **Refinement (2026-06-13, [PR 839](https://github.com/truffle-ai/dexto/pull/839)):** steer
 messages drained from the queue *before the first model request* are now held until the
 **next model boundary** rather than folded into the opening request. The takeaway for
@@ -158,6 +181,33 @@ where a user approves a diff but the on-disk file has since changed.
 hash of what the user actually approved for write/edit tools and re-verify it at
 execution time, denying if the target changed since approval — a concrete TOCTOU
 defense for the permission gate.
+
+> **Walked 2026-08-03 (nightly worker). The recommendation as written is LATENT;
+> the same gap one layer over was LIVE and is now fixed — inber `bb53ef1`.**
+>
+> Latent because inber has no approval boundary to hang a hash off: no session
+> sets an `ApprovalFunc`, so `guard.NeedsApproval` is downgraded to a refusal at
+> `engine/build_hooks.go:82-87`. There is no "what the user approved" to compare
+> against. Do not re-file this half until an approver exists.
+>
+> But the *shape* — trusting a snapshot of a file after something else has moved
+> it — was live in `agent/read_cache.go`. That cache answers a repeat read with
+> "already in context ... No need to re-read." Its invalidation set was the file
+> tools only, and its type comment justified that with "a shell `sed -i`, a `git
+> checkout` or a human editing a file between turns all happen while the cache is
+> empty". Two of those three are `shell_commands`, which is a **tool**: it runs
+> inside the turn with the cache full. `read_files(x)` → `shell_commands(sed -i
+> … x)` → `read_files(x)` returned the stub over content the shell had already
+> replaced, and the model went on reasoning about a file that no longer existed.
+>
+> Fixed by splitting invalidation on **what a call's input can name** rather than
+> on whether the tool is a "file tool": `shell_commands`, `deploy`, `task_plan`
+> and `scratchpad` now drop the whole cache. `tools/read_cache_classification_test.go`
+> pins the partition against the real tool set, so a newly registered tool that
+> nobody classified reddens the suite instead of silently inheriting "writes
+> nothing". Note this is the *second* time this cache has served a stale stub —
+> `agent/read_cache_contract_test.go` records the first, where a truncated read
+> was recorded as complete.
 
 ### 5. Core-provided ToolPresentation snapshots (note the edge-presentation tension)
 
@@ -195,7 +245,49 @@ subscribers (bridge-ui TurnsView, kanban curators reading session state) then ne
 have to guess whether a message came from the permission prehook or the model —
 removing the render-time dedup entirely instead of patching it.
 
+> **Verified 2026-08-03 (nightly worker): this entry is WRONG as written, and it
+> names the wrong repo. Do not re-derive.**
+>
+> The `user_message` dual-emit / `TurnsView` dedup is **llm-bridge-server's**, not
+> inber's — stream-json plus OTel, and it is by design (PTY mode has only the OTel
+> copy). inber emits no `user_message` at all and has no render-time dedup. The
+> entry welds an inber-shaped recommendation onto a bug in a different repo.
+>
+> The "policy-block synthetics ride the same stream" half is also wrong about
+> which stream. A guard denial never becomes an assistant/response event:
+> `buildToolRefusal` turns the verdict into a string, `RefuseToolCall` formats it
+> as `"refused: <tool> was not run — <reason>"`, and it is reported through
+> `hooks.OnToolResult(..., isError=true)`. It lands as a **`tool_result`**.
+>
+> **The real defect sits next to the claim, and is sharper.** `server/session.go`
+> declares `OnToolResult: func(name, output string, isError bool)` and never reads
+> `isError`; `StreamEvent` has no error or refusal field, and neither does the
+> `msg.ToolResultEvent` it becomes in `api_bridge.go`. So a policy-denied tool
+> call is indistinguishable on the wire from a successful one except by
+> string-matching the `"refused: "` prefix. Filed as a child of the harness-watch
+> shelf. (While there: `StreamEvent`'s own doc comment lists 5 of the 10 live
+> `Kind` values.)
+>
+> inber has no pre-LLM interaction gate at all — `guard.CheckTool` is per-tool-call
+> — so dexto's `interaction:blocked`-before-the-call has no counterpart here.
+
 ## Harness-watch — 2026-06-17: media as a first-class retention class + provider-edge attachment projection
+
+> **Walked 2026-08-03 (nightly worker): both media entries below (06-17 and
+> 07-15) are LATENT in inber, for a blunter reason than either assumes — inber
+> has no media path at all.** `grep -rc image` and `grep -rn base64` over every
+> `.go` file in the repo return **zero**. There is no attachment type, no image
+> block, and nothing that could base64-expand a blob into the heap. The
+> recommendations are about `llm-bridge-server`'s `msg.Conversation` assembly and
+> the provider bridges, which are other repos; nothing in inber can be audited
+> against them today.
+>
+> The one place inber *could* grow the defect is `tools/mcp`: `Client.CallTool`
+> keeps only `content.Type == "text"` and silently discards every `image`,
+> `audio` and `resource` block, so a tool returning only an image hands the model
+> `""` as a **success**. That package still has **zero non-test importers**
+> (verified 2026-08-03), so it is unreachable — but it is where to look first when
+> it gains one. Do not re-walk these entries until then.
 
 Two context/attachment fixes that each carry a transferable design point for inber's
 text-centric truncation + transparent-bridge model.
