@@ -2099,6 +2099,14 @@ disabling is monotonic, irreversible, and silently relocates the cache breakpoin
 > derives one from the other, so disabling is reversible. The MCP `waitForResponse` four-bound
 > recommendation and the unbounded tool descriptions are untouched — but note `tools/mcp` has zero
 > non-test importers, so the MCP half is latent (see the 06-15 opencode entry and todo `fb0dd7cc`).
+>
+> **[Walked 2026-08-03 — §3 is SPENT; nothing filable is left in it.]** Both remaining halves are
+> latent rather than live, so neither is a defect to fix today. `tools/mcp` still has zero non-test
+> importers, so the four-bound recipe has no caller to protect. The unbounded tool description has
+> no untrusted producer: `ExtraTools`' only in-tree producer is `Server.toolsForAgent`, in-process
+> server code, so no third-party bytes reach the tools block or the `cache_control` breakpoint
+> anchored on its last entry. Both go live the day inber wires a real MCP client, and the read
+> bounds are already parked in `fb0dd7cc`. Do not re-walk until `tools/mcp` gains an importer.
 
 ### 4. The prompt and the tool schema are one co-designed contract — codex's environment work, and the isolation defect inber already has
 
@@ -2139,6 +2147,29 @@ changes" without naming a single path. Render all roots and mark the primary. Th
 already exists and is nearly empty: `e.Turn.VolatileContext` is the structural twin of codex's
 user-role `<environment_context>` fragment — same role, same once-per-turn placement, same
 post-cache-boundary position — and it currently carries only fleet status and injectors.
+
+> **[Walked 2026-08-03 — §4 is SPENT. Both halves shipped, and the entry is stale in its
+> specifics.]** The isolation defect is closed: `ShellInDir` no longer exists, and `tools/root.go`'s
+> `ScopeToRoot` replaced it with a closed table of filesystem tools plus a completeness test
+> (`TestEveryFilesystemToolDeclaresItsPathArguments`) — the "one function every tool passes through"
+> chokepoint this entry asked for. Whether a rooted session *confines* its file tools or only
+> defaults them is the remaining question and it is parked in todo `d967400a`; it is a policy call,
+> not this entry's defect. The primary-marker half also shipped: `server/workspace_roots.go` turns a
+> workspace into every repository with the primary one marked, both `useWorkspace` callers set the
+> path and the root set from one reading so they cannot disagree, and `engine/workspace_roots.go`'s
+> `renderWorkspaceRoots` queues all of them into `Turn.VolatileContext` at
+> `engine/turn_prepare.go:107` — which is exactly the delivery channel the last sentence named. A
+> workspace whose `Primary` names no repository is now an error rather than an empty string, because
+> "" reached the engine as "no root is known" and sent relative paths back to the server's own cwd.
+>
+> **Found while walking this entry, and in no document: `fix_workspace` picked its parent session by
+> ranging `g.sessions` for whichever session was Running.** The entry is about environment
+> resolution; the same "infer it rather than pass it" shape had a live instance one layer over, in
+> *session* resolution. `sync.Map` order is unspecified and inber-server holds many sessions, so the
+> fix agent was charged to an arbitrary one — wrong depth cap, wrong children quota, wrong budget
+> lineage via `mintChildSessionKey`, and its events and results delivered to a session that had not
+> asked for it. `toolsForAgent` already had the key and already passed it to `SpawnAgentTool` one
+> line above. Fixed in `954c794`, with the tool taking the key like its sibling.
 
 ## Harness-watch — 2026-07-31: a tool registry needs *two* registration policies (host strict, external first-wins), an in-flight delegation is its own retention class, and a call nested inside another call's arguments still needs a typed record
 
@@ -2225,6 +2256,28 @@ a map has nondeterministic key order, so the same call summarizes differently ac
 half has no inber equivalent yet, but it is the rule to adopt if `server/session_forking.go` ever
 hands a child the parent's messages.
 
+> **[Walked 2026-08-03 — both "incidental defects" in this paragraph are already FIXED; the headline
+> recommendation is a policy call and is now filed.]** The two asides this entry closes with have
+> both been fixed by intervening work, and the entry's line references no longer hold:
+> `truncateToOneLine` (`conversation/manage_text_utils.go`) now cuts through
+> `textutil.TruncateWith`, on a rune boundary, with a comment saying why — no byte slice, no invalid
+> UTF-8 in the prompt; and `fmt.Sprintf("%v", toolUse.Input)` is gone, replaced by `ToolInputText`,
+> which returns a `json.RawMessage` verbatim and otherwise marshals (Go sorts map keys, so the
+> nondeterministic-ordering half is closed too). Note the second aside as filed was also
+> *understated* rather than overstated: `%v` on a `json.RawMessage` printed decimal byte codes, not
+> merely a shuffled map — that was child `4e1f78af`.
+>
+> The headline recommendation — give `manage.go`'s loop a retention *class* and make delegation its
+> first member, bounded by tokens rather than 60 bytes — is **untouched and is genuinely the
+> owner's**: which tools are exempt and what the bound is are both product calls, and the measured
+> asymmetry the entry describes still holds (`ToolCallKeepFull` is 5 in all four role configs, and
+> `spawn_agent` is fire-and-forget, so its tool_use input really is the only in-context record of an
+> outstanding delegation). Filed as a child of the harness-watch shelf.
+>
+> Verified while here, so nobody re-derives it: the fork half still has no inber equivalent —
+> `server/session_forking.go` hands the child `WorkspaceRoots` and the parent's engine state, and
+> there is no `AgentMessage`-equivalent class to strip.
+
 ### 3. A tool call nested inside another tool's arguments needs a typed attempted-call record — including the ones that were blocked, malformed, or never ran
 
 codex [#36181](https://github.com/openai/codex/pull/36181) added `core/src/tools/executed_tool_calls.rs`,
@@ -2263,6 +2316,26 @@ make `:148-151` return `isError=true`; bound the recorded arguments and emit a n
 rather than dropping. The 07-29 entry already covers typed truncation records in general — what is
 new here is the contract for **nested calls that have no tool-call item of their own**, plus the
 retry-cache idempotence, neither of which applies to the sites that entry named.
+
+> **[Walked 2026-08-03 — most of this SHIPPED; one recommendation is left and it is a real trade,
+> not an oversight.]** The typed record this entry asks for largely exists. `agent/chain.go` now
+> carries `toolCallOutcome`, which reports the primary and chained calls apart —
+> `chainTool`/`chainInput`/`chainOutput`/`chainFailed` — rather than only as concatenated text, and
+> the silent-drop path is now a *recorded* outcome: `extractChain` returns a `dropped` reason
+> ("it names no tool", "it is not an object with a tool and an input", "it arrived as text that does
+> not read as {tool, input}"), and `chainNotRunTool`/`chainNotRunReason`/`chainNotRunRefused` put a
+> chain that never ran on the tool result it rode in on. The entry's own line numbers are stale
+> throughout; read the file, not the citation.
+>
+> **Still open, and it is a decision rather than a fix:** an unknown chained tool still returns
+> `isError=false` (the `!ok` branch on `toolMap[chain.Tool]`). Making it `true` is not free — the
+> primary call succeeded, and engine's `OnToolResult` increments `Turn.ConsecutiveErrors`, which
+> drives the error-recovery context ladder in `Engine.contextBudget`: one error widens memory recall
+> from 6,000 tokens to 20,000, three to 35,000, five to 50,000, and each widening rewrites the
+> cached system-prompt prefix so the whole prompt is paid for again. That ladder is exactly what the
+> 07-30 `end_turn` work measured. So "a failed call the turn does not record as an error" trades
+> against "a succeeded call billed as a failure", and which way it should go is the owner's. Filed
+> as a child of the harness-watch shelf.
 
 ## Harness-watch — 2026-08-01: authority covers the *rider*, not just the call; a durable history is a *singly-owned* resource; and a denial is its own event class
 
