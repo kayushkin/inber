@@ -2057,10 +2057,12 @@ enforceability paper in `papers/2026-07-harness-research.md`, here).
 > present**. Five sabotages, each run, each caught by a different assertion — including "a new
 > eighth server tool appears", which is the property the promise rests on.
 >
-> **Classifying them is the owner's call and is filed, not taken.** See the child todo on the
-> harness-watch shelf: it decides whether spawn inherits its parent's mode (the same
-> inheritance question `65301d09` parks for `disabled_tools` and `9e31d359` parks for caps),
-> and how these nine names should be classified.
+> **Classifying them is the owner's call and is filed, not taken.** Child todo
+> `9eeba694-6fc0-4e1e-9958-a0a988c0dae1`: it decides whether spawn inherits its parent's mode
+> (the same inheritance question `65301d09` parks for `disabled_tools` and `9e31d359` parks
+> for caps — answer all three at once), and how these nine names should be classified. Note
+> `agents_status` and `list_workspaces` are the mirror defect: Observe *denies* them, so the
+> read-only mode is less useful than it should be.
 
 ### 3. A loop whose continuation an untrusted peer chooses needs four bounds, not one
 
