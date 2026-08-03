@@ -111,6 +111,14 @@ func (e *Engine) summarizeIfNeeded(ctx context.Context) error {
 		e.Messages = summarized
 		Log.Info("summarized %d turns → %d token summary (kept %d recent messages, memory: %s)",
 			result.SummarizedTurns, result.SummaryTokens, result.KeptMessages, result.MemoryID)
+		// The line above reads the same whether the model finished or ran out of
+		// output tokens mid-sentence, and the assignment above it is destructive:
+		// what is left is the session's transcript from here on. Say so loudly,
+		// and name the archive, which is the only remaining copy of the turns.
+		if result.SummaryWasCutOffAtTokenLimit {
+			Log.Warn("the summary those %d turns were exchanged for was cut off at the %d-token limit — the transcript now continues from a fragment (full text archived as %q)",
+				result.SummarizedTurns, cfg.MaxSummaryTokens, result.MemoryID)
+		}
 		if e.Session != nil {
 			e.Session.LogSummarize(result.SummarizedTurns, result.SummaryTokens, result.KeptMessages, result.MemoryID)
 		}

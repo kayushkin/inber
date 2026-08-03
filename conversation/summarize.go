@@ -60,10 +60,13 @@ func SummarizeConversation(
 		summaryModel = model
 	}
 
-	summary, err := generateSummary(ctx, client, oldText, summaryModel, cfg.MaxSummaryTokens)
+	summary, cutOffAtTokenLimit, err := generateSummary(ctx, client, oldText, summaryModel, cfg.MaxSummaryTokens)
 	if err != nil {
 		return messages, result, fmt.Errorf("summarizing %d earlier turns: %w", result.SummarizedTurns, err)
 	}
+	// Carried, not acted on. See SummaryWasCutOffAtTokenLimit for why the
+	// exchange still goes ahead and who is expected to decide otherwise.
+	result.SummaryWasCutOffAtTokenLimit = cutOffAtTokenLimit
 
 	// Save the full old conversation to memory. This runs only after the summary
 	// exists, because the row claims a compaction happened: writing it on the

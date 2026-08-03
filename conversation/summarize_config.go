@@ -62,4 +62,11 @@ type SummarizeResult struct {
 	SummaryTokens   int    // estimated tokens in the summary
 	MemorySaved     bool   // whether full conversation was saved to memory
 	MemoryID        string // memory ID if saved
+
+	// SummaryWasCutOffAtTokenLimit reports that the model hit MaxSummaryTokens
+	// before it finished writing, so the summary the turns were exchanged for is
+	// a fragment. The exchange still happens — this field records it rather than
+	// preventing it, because preventing it is one of three answers with
+	// different costs and the caller has not picked one yet.
+	SummaryWasCutOffAtTokenLimit bool
 }
