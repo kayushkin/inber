@@ -16,8 +16,10 @@ const interruptedToolResultText = "[session interrupted — tool call was not co
 // session is interrupted mid-tool-call. The Anthropic API requires
 // every tool_use to be followed by a tool_result.
 //
-// Fix: append a synthetic tool_result with an error message for each
-// dangling tool_use.
+// Fix: give each dangling tool_use a synthetic tool_result carrying an error
+// message. The result goes at the head of the message that answers the call,
+// because the API refuses a message that puts anything before its tool_results
+// — see the second pass below.
 func RepairDanglingToolUse(messages []anthropic.MessageParam) ([]anthropic.MessageParam, int) {
 	if len(messages) == 0 {
 		return messages, 0
@@ -146,8 +148,8 @@ func RepairEmptyContent(messages []anthropic.MessageParam) []anthropic.MessagePa
 	return result
 }
 
-// repairMissingToolResults adds missing tool_result blocks to user messages
-// that follow assistant messages with tool_use.
+// RepairMissingToolResults adds missing tool_result blocks to user messages
+// that follow assistant messages with tool_use, at the head of the message.
 func RepairMissingToolResults(messages []anthropic.MessageParam) ([]anthropic.MessageParam, int) {
 	repairs := 0
 	for i := 0; i < len(messages)-1; i++ {
@@ -176,11 +178,19 @@ func RepairMissingToolResults(messages []anthropic.MessageParam) ([]anthropic.Me
 			}
 		}
 
-		// Add missing tool_results
-		for id := range toolUseIDs {
-			messages[i+1].Content = append(messages[i+1].Content, anthropic.ContentBlockParamUnion{
+		// Build the missing results by walking the assistant message rather
+		// than the map, so a conversation repaired twice comes out the same
+		// way round both times. Map order is random per run, and a prompt
+		// whose blocks move between resumes is a cache miss as well as an
+		// untestable one.
+		var synthesized []anthropic.ContentBlockParamUnion
+		for _, block := range messages[i].Content {
+			if block.OfToolUse == nil || !toolUseIDs[block.OfToolUse.ID] {
+				continue
+			}
+			synthesized = append(synthesized, anthropic.ContentBlockParamUnion{
 				OfToolResult: &anthropic.ToolResultBlockParam{
-					ToolUseID: id,
+					ToolUseID: block.OfToolUse.ID,
 					IsError:   anthropic.Bool(true),
 					Content: []anthropic.ToolResultBlockParamContentUnion{
 						{OfText: &anthropic.TextBlockParam{
@@ -191,6 +201,24 @@ func RepairMissingToolResults(messages []anthropic.MessageParam) ([]anthropic.Me
 			})
 			repairs++
 		}
+		if len(synthesized) == 0 {
+			continue
+		}
+
+		// The results go at the HEAD of the message, not the end. Anthropic
+		// requires every tool_result to precede any other block in the message
+		// that answers a tool_use, and this message often already carries the
+		// user's own text: engine.prepareInput appends that text first and
+		// repairs second, so on an interrupted turn the message this pass
+		// finds is user(text) and appending would put the result after it.
+		//
+		// Measured against the live API rather than inferred from the comment
+		// in agent/agent_run.go that states the rule: user(tool_result, text)
+		// is accepted, user(text, tool_result) is a 400. The refusal reports
+		// the result as MISSING — "`tool_use` ids were found without
+		// `tool_result` blocks immediately after" — so a result in the wrong
+		// place fails looking exactly like a result that was never added.
+		messages[i+1].Content = append(synthesized, messages[i+1].Content...)
 	}
 	return messages, repairs
 }
