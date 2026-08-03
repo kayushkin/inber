@@ -123,8 +123,32 @@ func (g *Server) Inject(sessionKey, message string) (DeliveryRoute, error) {
 // persistSessionState saves a session's messages, turn count and safety limits
 // to disk — everything createSession reads back when it rebuilds the session
 // under that key.
+//
+// Taking s.mu here does NOT make the read safe against a turn: Session.turn
+// releases s.mu before calling Engine.RunTurn and holds nothing for the length
+// of the turn, so the engine's conversation is written by a goroutine this lock
+// does not reach. Callers that must not race a turn have to establish that
+// themselves and use persistSessionStateLocked. See the note there.
 func (g *Server) persistSessionState(s *Session) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	g.persistSessionStateLocked(s)
+}
+
+// persistSessionStateLocked is persistSessionState for a caller that already
+// holds s.mu and needs to keep holding it across the write.
+//
+// The reason that matters is not the lock's protection of the engine — it has
+// none — but what holding it excludes: Session.turn takes s.mu to move the
+// session to Running before it starts. So a caller that has checked, under this
+// same hold, that no turn is running knows that none can begin before it lets
+// go, and its read of the conversation is the only one there is. That is the
+// only way a caller in this package gets a race-free read of Engine.Messages
+// today, and it is why handleBridgeCompact does its whole job inside one hold
+// rather than compacting and then persisting.
+//
+// s.mu must be held.
+func (g *Server) persistSessionStateLocked(s *Session) {
 	msgs := s.Engine.Messages
 	turnCounter := s.Engine.Turn.Counter
 	var guardState guard.State
@@ -132,7 +156,6 @@ func (g *Server) persistSessionState(s *Session) {
 	if haveGuardState {
 		guardState = s.Engine.Guard.State()
 	}
-	s.mu.Unlock()
 
 	dir := filepath.Join(g.config.DataDir, "sessions", s.Key)
 	os.MkdirAll(dir, 0755)

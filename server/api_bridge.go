@@ -754,15 +754,48 @@ func (g *Server) handleBridgeCompact(w http.ResponseWriter, r *http.Request, id 
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
+	// A compaction rewrites the conversation, so it is a WRITER of the same
+	// slice the turn appends to — not a reader of it. Running one against a
+	// session whose turn is in flight puts two writers on Engine.Messages from
+	// two goroutines: this handler's, and the queue goroutine inside
+	// Session.turn, which releases s.mu before calling Engine.RunTurn and holds
+	// nothing for the length of the turn. `go test -race` reports it, and the
+	// damage it reports is real — summarizeIfNeeded replaces the whole slice
+	// while the turn is appending a tool result to it, so whichever write lands
+	// second silently discards the other. The half that loses can be the turn's,
+	// leaving a tool_use whose tool_result never arrives.
+	//
+	// So it is refused, the same way releaseSession refuses to close a session
+	// out from under a running turn. Refusing is not a lesser fix than
+	// serializing: compaction summarizes the conversation, and there is no
+	// meaningful summary of a turn that is still being written.
+	//
+	// The test is inside the same hold of s.mu as the compaction on purpose.
+	// Session.turn takes s.mu to set Status = Running before it starts, so a
+	// turn cannot begin between the two — checking and then unlocking would
+	// leave exactly the window this exists to close.
 	s.mu.Lock()
+	if s.Status == Running {
+		s.mu.Unlock()
+		jsonError(w, fmt.Sprintf("cannot compact session %s: a turn is in flight", id), http.StatusConflict)
+		return
+	}
 	before := len(s.Engine.Messages)
 	removed, err := s.Engine.CompactContext(r.Context(), req.Summary)
 	after := len(s.Engine.Messages)
-	s.mu.Unlock()
 
 	// Persist before reporting the error: a compaction can fail at the summary and
 	// still have pruned, and the durable copy has to match what the engine now holds.
-	g.persistSessionState(s)
+	//
+	// It happens inside the same hold of s.mu as the compaction, which is what
+	// makes the read of the conversation safe rather than merely locked. Between
+	// unlocking and persisting, a turn is free to start — Session.turn takes
+	// s.mu, sets Running and lets go — and then the persister marshals the very
+	// slice that turn is appending to. That is a live data race, not a
+	// theoretical one; it is what `go test -race` reported here after the
+	// refusal above was added and before this hold was widened.
+	g.persistSessionStateLocked(s)
+	s.mu.Unlock()
 
 	if err != nil {
 		jsonError(w, fmt.Sprintf("compact failed: %v", err), http.StatusInternalServerError)

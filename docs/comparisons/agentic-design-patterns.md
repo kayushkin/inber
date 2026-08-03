@@ -1852,6 +1852,48 @@ in-flight turn is expected to be present. The interrupt case is where this bites
 interrupts sessions deliberately: the autoworker hold gate stops a live session, and the reaper
 kills orphans. Both leave exactly the mid-turn state cline lost.
 
+> **AUDIT RUN 2026-08-03 — the audit was done and the answer is worse than "no stated
+> contract": there is no SAFE contract available, because the conversation has no lock at all.**
+> All fourteen rebuild and read entry points were walked. The good news first: both revive
+> paths do consult the live session before disk (`getOrCreateSession` at
+> `server/session_creation.go:24`, `handleBridgeResume` at `server/api_bridge.go:515`), so
+> cline #12622's actual bug — rebuilding from the durable copy while a resident object held
+> more — is not present here.
+>
+> 🔴 **What is present is the layer underneath it. `Session.turn` sets `Status = Running`
+> under `s.mu` and then RELEASES s.mu before calling `Engine.RunTurn`**
+> (`server/session.go:149-175`), so no lock is held for the length of a turn. Every
+> cross-goroutine toucher of `Engine.Messages` takes `s.mu` as though it guarded the engine:
+> the session list (`session_management.go:49`), `persistSessionState` (`:128`, reached from
+> `InterruptSession` at `:77` — the interrupted-turn case exactly), the history endpoint
+> (`api_sessions.go:183`), the bridge messages endpoint (`api_bridge.go:834`), and a fork
+> marshalling its parent (`session_forking.go:22`). `go test -race` reports all of them.
+>
+> 🟢 **One of them was a WRITER, not a reader, and that half is FIXED and shipped.**
+> `handleBridgeCompact` called `Engine.CompactContext` — which replaces the whole slice —
+> from the HTTP goroutine while a turn appended to it. Two writers, so the failure is a lost
+> write rather than a stale read, and the half that loses can be the turn's, leaving a
+> `tool_use` whose `tool_result` never arrives. It is now refused with 409 while a turn is in
+> flight, and its persist moved inside the same hold of `s.mu` (a turn was free to start in the
+> gap between unlocking and marshalling). Five sabotages, five caught. Refusing is not a
+> lesser fix than serialising: there is no meaningful summary of a turn still being written.
+>
+> ⛔ **Do NOT try to close the remaining readers with a mutex on `Engine.Messages` — it was
+> attempted and reverted, and the reason is the finding.** The conversation is passed to
+> `Agent.Run` as `*[]anthropic.MessageParam` (`engine/turn_execute.go:42`) and the `agent`
+> package mutates it throughout the tool loop, including in place across the WHOLE history:
+> `placeHistoryCacheBreakpoints` (`agent/agent.go:466-484`) rewrites `CacheControl` on content
+> blocks reached through pointers, on every API call. So a lock only the engine takes is
+> bypassed, a deep copy has to clone every content block rather than the slice, and a lock the
+> agent takes has to be held across a streaming model call — which would block the session list
+> and the interrupt path for the length of a model response. That is a genuine three-way
+> design choice, not a patch, and it is filed as its own todo with the `-race` evidence.
+>
+> ✅ **Checked and correct, so nobody re-audits them:** the fork/spawn paths write only the
+> child's engine before it is reachable (`session_forking.go:67`); `releaseSession` and the
+> reaper both refuse to close a `Running` session (`session_release.go:44`,
+> `session_reaper.go:69`).
+
 ### Also in-window, worth a line each
 
 - [cline #12641](https://github.com/cline/cline/pull/12641) — models emit `insert_line: "3"`
