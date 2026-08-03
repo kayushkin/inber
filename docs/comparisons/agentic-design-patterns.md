@@ -2017,6 +2017,51 @@ attacker-chosen path is a write tool pointed the other way. This is the fourth i
 at "gate on the call, not on a projection of it" (07-25 principals, 07-29 executable bytes, the
 enforceability paper in `papers/2026-07-harness-research.md`, here).
 
+> **[Walked 2026-08-03 — the MCP half is LATENT, and walking it found a LIVE hole one layer
+> up. The closed-world half is now checked; classifying the names is filed, not decided.]**
+>
+> **Latent, as this entry half-suspects:** `tools/mcp` still has zero non-test importers, and
+> `ToolInfo` (`tools/mcp/client.go:40-44`) parses `name`/`description`/`inputSchema` only, so
+> there is no `annotations` object to promote and `agent.Tool` (`agent/agent.go:35-40`) has no
+> field to carry one. The `*bool` recommendation is sound and has nothing to attach to yet.
+>
+> **Live, and not in this entry:** the closed-world criticism is right, but the population it
+> misses is not MCP tools — it is inber's own. `guard.isReadOnly`/`isDangerous` classify 12
+> names between them. **Nine names reach the model and are in neither**, so `CheckTool`'s
+> Assist branch returns `Allowed` and never consults the approver:
+> `task_plan` and `scratchpad` (via `Engine.buildSpecialTool`), and the seven the server
+> injects through `EngineConfig.ExtraTools` — `spawn_agent`, `steer_agent`, `agents_status`,
+> `merge_workspace`, `reject_workspace`, `fix_workspace`, `list_workspaces`.
+> `merge_workspace` rebases a spawn branch onto **main** and pushes; `reject_workspace`
+> deletes worktrees and branches. Both are strictly more destructive than `deploy`, which *is*
+> classified dangerous.
+>
+> **`spawn_agent` is not a hole in the gate, it is a door out of it.** Spawning is unclassified,
+> so Assist allows it unasked; the child is built by `createSession(..., RunRequest{}, ...)`
+> (`server/spawn.go`, `server/session_forking.go`), `EngineConfig` has no mode to copy, and
+> `guard.ParseMode("")` is `Unset`, whose `CheckTool` default allows everything. An Assist
+> session therefore reaches `shell_commands` by spawning a child that was never gated.
+> Observe is unaffected — it denies anything not read-only, so it denies spawning too.
+>
+> **Why the existing completeness test could not see any of this.** `TestEveryKnownToolIsClassifiedOrNamedHere`
+> promises that registering one more tool reddens it, but `knownToolNames` derives from
+> tool-store's *global registry* plus a hand-written constructor list. tool-store deliberately
+> does not auto-register its argument-taking constructors, and the list compensated for
+> `repo_map`/`recent_files` while missing `task_plan`/`scratchpad` from the same carve-out. It
+> has no term at all for `Server.toolsForAgent`, the only producer of `ExtraTools`.
+>
+> **What shipped: the check, not the policy.** `task_plan`/`scratchpad` are now in
+> `knownToolNames`, and `server/tool_classification_test.go` is the same completeness check over
+> the seven server-supplied tools, written in the package that owns them because `guard` cannot
+> import `server`. `TestAssistModeApprovalGateIsEscapableBySpawning` pins the escape **as
+> present**. Five sabotages, each run, each caught by a different assertion — including "a new
+> eighth server tool appears", which is the property the promise rests on.
+>
+> **Classifying them is the owner's call and is filed, not taken.** See the child todo on the
+> harness-watch shelf: it decides whether spawn inherits its parent's mode (the same
+> inheritance question `65301d09` parks for `disabled_tools` and `9e31d359` parks for caps),
+> and how these nine names should be classified.
+
 ### 3. A loop whose continuation an untrusted peer chooses needs four bounds, not one
 
 [codex #36039](https://github.com/openai/codex/pull/36039) reads as a pagination cleanup and is

@@ -20,14 +20,23 @@ func knownToolNames(t *testing.T) map[string]bool {
 		names[impl.Name] = true
 	}
 
-	// The rest are constructed on demand: tool-store's context-taking tools
-	// (repo_map, recent_files) and inber's own memory/deploy tools. Only Name is
-	// read, so the throwaway arguments are never used and the nil store is never
-	// dereferenced. Naming them via their constructors rather than restating the
-	// strings is the point — a renamed tool must move this set, not slip past it.
+	// The rest are constructed on demand: tool-store's context-taking tools and
+	// inber's own memory/deploy tools. Only Name is read, so the throwaway
+	// arguments are never used and the nil store is never dereferenced. Naming
+	// them via their constructors rather than restating the strings is the point
+	// — a renamed tool must move this set, not slip past it.
+	//
+	// tool-store's register.go deliberately does not auto-register the
+	// constructors that take arguments, so All() above cannot return any of
+	// them and every one has to be named here. This list picked up repo_map and
+	// recent_files from that carve-out and missed task_plan and scratchpad,
+	// which are in it for the same reason — so those two reached the model, via
+	// Engine.buildSpecialTool, entirely outside this test's view.
 	for _, name := range []string{
 		tools.RepoMap("", nil).Name,
 		tools.RecentFiles("").Name,
+		tools.TaskPlan("").Name,
+		tools.Scratchpad("", "").Name,
 		tools.Deploy().Name,
 		memory.SearchTool(nil).Name,
 		memory.SaveTool(nil).Name,
@@ -139,14 +148,14 @@ func TestObserveModeAllowsTheRealReadTools(t *testing.T) {
 // branch only diverts the names isDangerous knows and lets everything else
 // through — so an unclassified tool is not "not yet reviewed", it is approved.
 //
-// Six tools are in that position today and this test names all six, so the set
-// can only change deliberately. Registering a seventh tool reddens this test at
-// the moment the tool is added, which is the moment somebody can still answer
+// Eight tools are in that position today and this test names all eight, so the
+// set can only change deliberately. Registering a ninth tool reddens this test
+// at the moment the tool is added, which is the moment somebody can still answer
 // "should assist mode run this unattended?" while the answer is cheap.
 //
 // The set is not asserted to be empty, because emptying it is a policy call and
-// not this test's to make. Two of the six are the sharp ones and are recorded
-// here so the next reader does not have to re-derive them:
+// not this test's to make. Three of the eight are the sharp ones and are
+// recorded here so the next reader does not have to re-derive them:
 //
 //   - "scheduler" creates and deletes cron jobs, and this host's scheduler runs
 //     shell commands. An assist session can therefore schedule shell work it is
@@ -154,11 +163,21 @@ func TestObserveModeAllowsTheRealReadTools(t *testing.T) {
 //   - "memory_forget" deletes memories. Memory is where an agent's identity and
 //     instructions live (see engine.BuildSystemPrompt), so this is a write in
 //     the strongest sense while being classified as neither kind.
+//   - "scratchpad" and "task_plan" write files under the repo root AND their
+//     contents are injected into the system context every turn
+//     (engine.registerToolContextInjectors). That is the hazard already noted
+//     for memory_save — a write later turns read back as instructions — by a
+//     second route.
 //
-// "spawn_agent" belongs on this list and is absent from it only because it is
-// built outside the constructors knownToolNames can reach. It is tracked in
-// noteboard todo 9e31d359, together with the reason it matters: a spawned child
-// is created from a zero RunRequest, so it inherits no mode at all.
+// This test can only see the tools knownToolNames can construct, which is
+// tool-store's registry plus the constructors named there. It cannot see the
+// tools the server injects through EngineConfig.ExtraTools — spawn_agent,
+// steer_agent, agents_status and the four workspace tools — because those are
+// built by methods on *Server, which this package cannot import. That set is
+// checked by TestEveryServerSuppliedToolIsClassifiedOrNamedHere in package
+// server, and the sharpest of them, spawn_agent, is an exit from this gate
+// rather than merely a hole in it: a spawned child is created from a zero
+// RunRequest, so it inherits no mode at all.
 func TestEveryKnownToolIsClassifiedOrNamedHere(t *testing.T) {
 	unclassifiedToday := map[string]string{
 		"browser":       "drives a real browser; reads pages but also clicks and types",
@@ -166,6 +185,8 @@ func TestEveryKnownToolIsClassifiedOrNamedHere(t *testing.T) {
 		"memory_forget": "deletes memories, including the ones carrying identity",
 		"memory_save":   "writes a memory that later turns read back as instructions",
 		"scheduler":     "creates cron jobs, and cron jobs on this host run shell",
+		"scratchpad":    "writes a file under the repo root that is injected into every later turn",
+		"task_plan":     "writes a plan file under the repo root that is injected into every later turn",
 		"web_fetch":     "network read; note web_search IS classified read-only",
 	}
 
