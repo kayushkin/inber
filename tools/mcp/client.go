@@ -390,12 +390,19 @@ func (c *Client) CallTool(ctx context.Context, name string, input string) (strin
 		return "", fmt.Errorf("failed to call MCP tool %q: %w", name, err)
 	}
 
-	// Parse the result
+	// Parse the result.
+	//
+	// isError is how MCP reports a tool that ran and failed, as distinct from
+	// the JSON-RPC error the call above already handles: the protocol carries a
+	// successful response whose result says the tool itself did not succeed, and
+	// the reason is in the content blocks. Reading it is what separates "the
+	// tool failed" from "the tool returned this text".
 	var toolResult struct {
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
+		IsError bool `json:"isError"`
 	}
 	if err := json.Unmarshal(result, &toolResult); err != nil {
 		return "", fmt.Errorf("failed to parse tool result: %w", err)
@@ -407,6 +414,16 @@ func (c *Client) CallTool(ctx context.Context, name string, input string) (strin
 		if content.Type == "text" {
 			output += content.Text
 		}
+	}
+
+	// A failed tool reported as ordinary output is a failure the model reads as
+	// a result and builds on. Carry the server's own text into the error rather
+	// than replacing it: it is the only description of what went wrong.
+	if toolResult.IsError {
+		if output == "" {
+			return "", fmt.Errorf("MCP tool %q failed, and the server sent no text explaining why", name)
+		}
+		return "", fmt.Errorf("MCP tool %q failed: %s", name, output)
 	}
 
 	return output, nil
