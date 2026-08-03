@@ -75,6 +75,31 @@ func replaceToolResultText(block anthropic.ContentBlockParamUnion, text string) 
 	return anthropic.ContentBlockParamUnion{OfToolResult: &replaced}
 }
 
+// replaceToolUseInput swaps a tool call's arguments and leaves every other
+// field of the call exactly as it was. It is the tool_use twin of
+// replaceToolResultText, and it exists for the same reason.
+//
+// Pruning rewrites what a call SAYS it was given. It must not rewrite what the
+// call IS, and building a fresh ToolUseBlockParam from a literal does precisely
+// that: it drops every field the literal forgets. ToolUseBlockParam carries two
+// beyond the three that were being copied — CacheControl, which anchors a
+// prompt-cache breakpoint, and Caller, which names a call the model did not
+// make itself.
+//
+// Neither loss is reachable today, and the measurement is worth recording so
+// nobody re-derives it. Both prune sites in agent/agent_run.go are followed
+// immediately by placeHistoryCacheBreakpoints, which clears cache_control from
+// every block and re-places it, so a breakpoint dropped here is put back before
+// the request is built; and nothing in this repository sets Caller. This is the
+// field-loss shape closed before it has a live instance, not a fix for a
+// present bug — the SDK grows these fields without asking, which is the whole
+// argument for copying the struct rather than listing what to keep.
+func replaceToolUseInput(block anthropic.ContentBlockParamUnion, input any) anthropic.ContentBlockParamUnion {
+	replaced := *block.OfToolUse
+	replaced.Input = input
+	return anthropic.ContentBlockParamUnion{OfToolUse: &replaced}
+}
+
 // truncateToolCall summarizes a tool call input
 func truncateToolCall(block anthropic.ContentBlockParamUnion) anthropic.ContentBlockParamUnion {
 	if block.OfToolUse == nil {
@@ -87,15 +112,8 @@ func truncateToolCall(block anthropic.ContentBlockParamUnion) anthropic.ContentB
 	// usually a json.RawMessage, and %v on those bytes prints decimal byte
 	// codes instead of the arguments.
 	summary := fmt.Sprintf("%s: %s", toolUse.Name, truncateToOneLine(ToolInputText(toolUse.Input), 60))
-	
-	// Return simplified version (keep structure but summarize input)
-	return anthropic.ContentBlockParamUnion{
-		OfToolUse: &anthropic.ToolUseBlockParam{
-			ID:    toolUse.ID,
-			Name:  toolUse.Name,
-			Input: map[string]interface{}{"_summary": summary},
-		},
-	}
+
+	return replaceToolUseInput(block, map[string]interface{}{"_summary": summary})
 }
 
 // extractToolResultContent extracts text from tool result content blocks

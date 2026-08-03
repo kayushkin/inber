@@ -293,13 +293,7 @@ func DeduplicateFileRefs(messages []anthropic.MessageParam) int {
 				continue
 			}
 			if _, ok := stubIDs[block.OfToolUse.ID]; ok {
-				messages[i].Content[j] = anthropic.ContentBlockParamUnion{
-					OfToolUse: &anthropic.ToolUseBlockParam{
-						ID:    block.OfToolUse.ID,
-						Name:  block.OfToolUse.Name,
-						Input: map[string]interface{}{"_deduped": true},
-					},
-				}
+				messages[i].Content[j] = replaceToolUseInput(block, map[string]interface{}{"_deduped": true})
 			}
 		}
 	}
