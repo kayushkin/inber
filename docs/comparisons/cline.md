@@ -187,6 +187,21 @@ which is exactly inber's target regime.
 
 ### 1. The shell/cancel contract — and inber's interrupt is wired to a context nothing observes
 
+> **[Verified 2026-08-03 — STALE. Every defect this section names is fixed; do not re-derive.]**
+> `RunTurn` takes a `context.Context` (`engine/engine.go:244`) and `server/session.go:175`
+> passes one derived by `withoutCallerCancellation`, which keeps the caller's deadline and
+> drops its cancellation on purpose — the doc comment at `:117-131` says why, and
+> `engine/turn_cancellation_test.go` pins it. `s.cancel` is that context's cancel, so
+> interrupt reaches a running turn.
+> The shell half is fixed too, one layer down from where this section looked:
+> `tool-store/internal/childprocess` now owns command construction — `processgroup_unix.go:15-18`
+> sets `SysProcAttr.Setpgid`, and `childprocess.go:40,62` sets `WaitDelay`, with tests for the
+> grandchild-holds-the-pipe case. `tools/shell.go` calls `childprocess.NewCommand`, not
+> `exec.CommandContext`.
+> **Still open from this section:** the auto-proceed cap (a per-command wall-clock bound that
+> returns partial output plus "still running" rather than blocking) and `OnToolProgress`. Both
+> are features, neither is a defect.
+
 Cline [PR 12696](https://github.com/cline/cline/pull/12696) found that `applyAbort` was exactly
 `process.continue()`: cancellation only *detached Cline's listeners* and the spawned process kept
 running. The fix adds `VscodeTerminalManager.sendInterrupt()`, which writes `\x03` (ETX, no newline)
@@ -229,6 +244,16 @@ verbatim: best-effort send, and a regression test asserting the final tool resul
 
 ### 2. Resume restores the transcript but not the state *derived from* the transcript
 
+> **[Verified 2026-08-03 — the headline is STALE. `Turn.Counter` and `FrozenIdx` are both restored.]**
+> `initSession` reads a turn count back with the transcript and holds it
+> (`engine/engine_new.go:556-569`), and `initLimitsAndProfiling` installs both through
+> `RestoreSession` once `e.staged` exists (`:670-691`) — its own comment says a bare assignment
+> re-prunes the transcript and restarts the turn clock, which is exactly this finding.
+> `engine/turn_counter_restore_test.go` pins it.
+> **Still open and unchecked here:** the two turn clocks (`e.Turn.Counter` vs `session.turn`),
+> the inert `MaxCheckpoints`, and the `metadata.kind` marker for synthetic user-role injections.
+> The checkpoint half is todo `cf57e818`.
+
 Cline [PR 12713](https://github.com/cline/cline/pull/12713) is two mechanically distinct bugs with
 one theme. `local-runtime-host.ts:526` used `startInput.sessionMetadata ?? resumedArtifacts?.manifest.metadata`,
 so supplying *any* fresh metadata silently discarded **all** resumed manifest metadata; it became a
@@ -266,6 +291,15 @@ and `conversation/summarize.go:104-109` (the summary message plus a canned assis
 a round-trip through `messages.json` all three are indistinguishable from real user turns.
 
 ### 3. Compaction as a projectable sidecar over an intact source — and never fingerprint transport identity
+
+> **[Verified 2026-08-03 — the `findTurnBoundary` tail is STALE, the rest holds.]**
+> "`findTurnBoundary` counts every user-role message as a turn" is fixed (`d420980`):
+> `conversation.StartsUserTurn` excludes messages whose blocks are all tool_results, and its
+> doc comment carries the measurement — a 3.3× overcount on this host's transcripts, 6× on the
+> most tool-heavy, which is how `KeepRecentTurns: 8` came to retain about two real turns. The
+> unrecognised and empty cases answer true on purpose, erring toward keeping.
+> The compaction-as-sidecar proposal itself is untouched and still the honest large change; the
+> destructive-compaction half of it now has a measurement in the 2026-08-01 entry below.
 
 Cline [PR 12747](https://github.com/cline/cline/pull/12747) fixed three separable rules.
 **(a) Never hash transport identity into a validity fingerprint:** `session-compaction.ts:75-99`
@@ -311,6 +345,19 @@ are not what the config name says. Fix the count or rename the knob.
 
 ## Harness-watch — 2026-08-01: a wrapper's own message is not the error — extraction must be ordered by proximity to the origin
 
+> **[Verified 2026-08-03 — the max_tokens finding is REAL and its reporting half is SHIPPED.]**
+> Confirmed live: `conversation/summary_generation.go` never read `response.StopReason`, so a
+> summary the model was cut off mid-sentence returned `err == nil` and `engine/lifecycle.go`
+> logged the same success line it logs for a complete one. One correction: the
+> `mechanicalSummary` substitution this entry describes is already gone (`b04e998`), so the
+> failure path no longer files a word-frequency list — but the truncation path was untouched.
+> **Shipped:** `generateSummary` returns whether it was cut off, `SummarizeResult` carries
+> `SummaryWasCutOffAtTokenLimit`, and the engine warns, naming the archive id as the only
+> remaining copy of the turns. Behaviour is unchanged on purpose — reporting is decision-free,
+> and the three answers this entry names (abort, retry with a larger ceiling, accept-and-mark)
+> are not. Tests: `conversation/summarize_truncation_test.go`, with an end_turn control.
+> **The decision is todo `2a0289a6`.** Do not re-derive the mechanism.
+
 [#12800](https://github.com/cline/cline/pull/12800). When Vercel AI Gateway relays an upstream
 rejection (their case: Alibaba Qwen refusing on context length), the object reaching
 `extractErrorMessage` has `message: "Stream error occurred"`, a `cause` that is an unrelated
@@ -343,6 +390,19 @@ a session that consistently overruns then never compacts and hits the emergency 
 bound and a cost policy), or accept-but-mark so the injected block states its own incompleteness.
 
 ## Harness-watch — 2026-08-02: a restore that rewinds history but not files leaves a state that never existed
+
+> **[Verified 2026-08-03 — the checkpoint-stub finding is REAL and its honesty half is SHIPPED.]**
+> Confirmed as written: every method in `checkpoint/` returned a zero value and a nil error,
+> and `Take()` ran on every `RunTurn`.
+> **Shipped:** every entry point now returns `checkpoint.ErrNotImplemented`, the package doc
+> says it is a design sketch and carries the three questions this entry names, and the engine
+> no longer constructs it or calls it — the field and the per-turn call are gone.
+> **Found while doing it, and not in this entry:** `EnableTrace`, `EnableCodeIndex` and
+> `EnableCheckpoint` in `engine/engine_types.go` each occur exactly once in the tree, their own
+> declaration. Nothing reads them, so all three are switches that turn on nothing. Documented
+> in place, not deleted.
+> **Build-or-delete is todo `0963afe5`**, which carries the three questions. The conversation
+> half stays with `cf57e818`. Do not re-derive the stub.
 
 [cline #12831](https://github.com/cline/cline/pull/12831) fixes two independent checkpoint bugs. The
 transferable one: **restore only rewound tracked files**, so untracked files the agent created after

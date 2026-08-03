@@ -763,6 +763,16 @@ is that inber's interrupt endpoint cannot actually stop a running command.
 > error-marked result) and does not depend on what `Run`'s signature eventually becomes. Widening
 > the tool-result type is the genuinely large cross-module change (every tool in inber plus the
 > separate `tool-store` module) and is correctly deferred.
+>
+> **[2026-08-03 — the `isError` half is SHIPPED. The separation this block asked for was right.]**
+> `CallTool` decodes `isError` and returns an error carrying the server's own text, which is the
+> only description of what went wrong. Tests in `tools/mcp/tool_error_test.go` cover the failure,
+> an ordinary result (the control), an explicit `isError:false`, and a failure with no content;
+> the failure cases were sabotage-verified red. The adapter passes `(string, error)` straight to
+> `agent.Tool.Run`, so the error reaches the model's tool_result as an error rather than as
+> output. **The media half is untouched and still correctly deferred** — do not re-file it as a
+> defect, and note the drop happens at `json.Unmarshal`, one level earlier than the `Type ==
+> "text"` filter, as the correction above says.
 
 Three from this window; the first two are written up cross-cuttingly in
 `agentic-design-patterns.md` (2026-08-01, §1 and "Also in-window"), so only the goose-specific
