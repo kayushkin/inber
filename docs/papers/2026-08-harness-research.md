@@ -487,3 +487,101 @@ cache-write-amplification mechanism punishes, and CoACT does not touch it.
 - Dead code found while checking this, recorded so nobody re-derives it:
   `conversation/manage_tool_pruning.go:132` `truncateOldToolResults` is marked "(legacy)"
   and has zero callers, test or otherwise.
+
+# 2026-08-04 sweep
+
+Two papers survived the dedupe. Both dates were read off the arXiv `/abs`
+submission-history block, not off a search snippet. The window's other strong
+candidates were already on file: **2607.15516** (CAPC) is at
+`cache-optimization.md:297` and `2026-07-harness-research.md:927`, **2607.25066**
+(ARC) at `2026-07-harness-research.md:877`, and **2607.19595** (Twin Agent),
+**2607.23809** (ACM) and **2607.13071** (Compaction as Epistemic Failure) are all
+in this file already. Blogs were empty this window — Anthropic engineering's most
+recent post is 2026-04-23, and DeepMind/HuggingFace/Meta AI published nothing on
+harness design, context, caching or memory.
+
+## Remember When It Matters: proactive memory beats retrieval, and beats always-on injection
+
+[arXiv:2607.08716](https://arxiv.org/abs/2607.08716) — v1 2026-07-09, no revisions.
+Wu, Zhang, Zhou, Wang, Peng, Li, Fan, Zhao.
+
+Names the failure mode **"behavioral state decay"**: decision-relevant state —
+task requirements, environment facts, prior attempts, diagnoses, open subgoals —
+scatters across a growing trajectory and stops influencing decisions, either buried
+in the window or pushed past it. The intervention is a **separate memory agent
+running alongside an unmodified action agent**, maintaining a structured memory bank
+from the recent trajectory and deciding, per step, whether to inject a
+memory-grounded reminder **or stay silent**. Plug-and-play against frontier agents
+and existing harnesses. Reported: **+8.3 pp pass@1 on Terminal-Bench 2.0** and
+**+6.8 pp on τ²-Bench**, for both weaker and stronger action agents.
+
+The ablation grid is the reason this is worth filing, because it is a **negative
+result about the two designs inber actually has**. Selective intervention beat, in
+order: passive bank exposure, **always-on injection**, advisor-only guidance, and
+**general retrieval**. The claim is that *when* to inject is worth more than *what*
+is stored — the store is not the lever.
+
+**What inber should consider:**
+
+- **inber is the "always-on injection" arm, and its retrieval is the "general
+  retrieval" arm — the two baselines this paper beats.** Every turn,
+  `engine/turn_prompt.go:81` derives `messageTags` from the current user message via
+  `memory.AutoTag`, `:82` derives a budget from the turn counter, and `:86` hands both
+  to `MemStore.BuildContext`, which scores by tag overlap plus a recency bonus and
+  cuts on budget. There is no gate anywhere on that path that can answer "inject
+  nothing this turn". The paper's result says that gate, not a better scorer, is where
+  the points are.
+- **The gate is cheap to host here and expensive to get wrong.** inber already spawns
+  sub-agents, so the memory agent has a natural home, but note the trade this creates:
+  a per-turn LLM gating call is a second request on every turn, and 2607.12161
+  (2026-08-01 sweep) put cache traffic at ~87% of the bill. A shadow-mode rollout —
+  rank, decide, inject nothing, log what it *would* have suppressed — is the version
+  that costs nothing to learn from, and matches the discipline already recorded at
+  `agentic-design-patterns.md:1504`.
+- Deciding whether inber wants a *silent* option at all is a real call and is **not
+  made here**: today's unconditional injection is also what makes the BP2 prefix
+  predictable, and a gate that varies membership per turn is exactly the cache-churn
+  shape the 2026-08-02 entry filed.
+
+## PRO-LONG: keep the whole log and let the coding agent grep it
+
+[arXiv:2607.20064](https://arxiv.org/abs/2607.20064) — v1 2026-07-22, v2 2026-07-23.
+Fox, Wang, Rosu, Dhingra (Duke). Code and logs released.
+
+Rejects lossy compaction outright. The argument: every harness commits to a strategy
+for what to save and how to load it, and existing strategies face a tradeoff where
+"preserving more information makes retrieving relevant details less tractable."
+PRO-LONG's answer is to keep a **complete, structured interaction log** and lean on
+the fact that the agent is *already a coding agent* — it searches its own history
+with the file tools it has, rather than carrying that history in context. Reported on
+the full ARC-AGI-3 public game set: **+18.0 pp average over a base coding agent**
+across frontier models, matching or exceeding specialized harnesses at up to **76.1%
+pass@1**, while using **4.2–5.8× fewer tokens**; 97.4% best@2 with Fable 5 at $1,750.
+
+Honest caveat, since this doc set has been burned by transfer claims: the benchmark
+is ARC-AGI-3, i.e. games, not code editing. The token-efficiency mechanism transfers
+cleanly; the accuracy delta is argued, not shown, for SWE-style work.
+
+**What inber should consider:**
+
+- **inber already has the substrate and does not point the agent at it.** Every session
+  writes a `session.jsonl` (`session/timeline_jsonl.go:178` `findSessionJSONL`,
+  reconstructed at `:21`), and the agent has `read_files`, `list_files` and
+  `shell_commands`. Nothing tells the model that file exists or where. Exposing the
+  current session's log path as a readable artifact is close to free and is strictly
+  additive to the prefix — it adds one path string, not a history.
+- **It also lands directly on a deliberate inber decision, which is why this is a
+  consideration and not a defect.** `tools/tools.go:39-41` removed the dedicated
+  ripgrep tool on the documented rationale that grep-then-read "encourages a
+  two-turn pattern when reading the file directly is one turn" — with `rg` still
+  reachable through `shell_commands`. That rationale is correct for reading a *known
+  file* and is exactly what PRO-LONG contests for *unknown history*, where reading
+  the file directly is not an option because the file is 40 MB of JSONL. Whether the
+  two-turn cost is worth paying for history search specifically — and whether that
+  argues for re-registering a search tool scoped to the session log rather than the
+  repo — is the open question, and it is not settled here.
+- Composes with ARC (2607.25066, on file): ARC supplies the addressing scheme (stable
+  ids, truncate the rendering and keep the row), PRO-LONG supplies the argument that
+  the retrieval mechanism should be the agent's existing file tools rather than new
+  machinery. Both keep the prefix append-only, which is the property
+  2607.12161 says the bill actually turns on.

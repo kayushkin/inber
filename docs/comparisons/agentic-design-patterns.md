@@ -2715,3 +2715,326 @@ meant — otherwise the threshold you tuned on one unit is not the threshold you
 merge is over *verdicts from different sources* (goose #10612's inspector lattice) the OR is
 sound, because the sources are not independent draws from one noisy detector. Where it is over
 *repeated draws from the same detector on slices of one input*, it is not.
+
+## Harness-watch — 2026-08-04: a recovery gate must measure the quantity the recovery changes; a fallback is only legitimate for the one error it can actually answer; and a *section* of context should snapshot structured state, not its own rendering
+
+### 1. cline ships overflow recovery as a four-layer contract — and inber's equivalent is dead code below 70 messages
+
+[cline #12804](https://github.com/cline/cline/pull/12804) (+1472/−113) adds
+context-window-overflow detection and recovery to the SDK architecture, which had
+regressed relative to the legacy one. Four layers, connected by a typed value:
+`classifyProviderError()` walks the raw error object (depth-bounded, cycle-safe) and
+returns `context_window_exceeded | unknown`, with a deliberately conservative verdict
+order — an explicit `context_length_exceeded` code wins, then a **429 status vetoes**,
+then rate-limit *wording* vetoes, then any status outside `{400, 413, 422}` vetoes,
+and only then do the overflow patterns fire. The class rides the model `finish` event.
+The runtime retries **once per run** (re-armed on the next user message), and forces
+compaction through the deterministic `basic` strategy rather than the agentic
+summarizer, on a stated invariant worth quoting: *"recovery must not depend on another
+successful LLM request"* — the summarizer budgets with the same estimator that just
+undercounted, so it can overflow too. Three terminal states get named messages, and in
+the *nothing left to compact* case **the doomed request is not re-sent** (the test
+asserts the model saw exactly one request). A guard excludes turns that produced tool
+calls, so partial work is not discarded. [#12814](https://github.com/cline/cline/pull/12814)
+then puts a typed pre-pass in front of the structural walk, with two ideas worth
+keeping: on a `RetryError` **only the final attempt decides** (retried-away rate limits
+can neither veto nor fake the verdict), and on a typed `APICallError` the HTTP
+`statusCode` **gates the whole verdict**, because in the structural walk a collected
+status is merely an ambient signal with no attribution.
+
+**inber has three of the four layers and the fourth is inert.** The classifier exists —
+`agent/agent.go:22-32` `isContextLengthError` string-sniffs `"prompt is too long"`,
+`"context_length_exceeded"`, `"maximum context length"`, `"too many tokens"` — and the
+retry-once path exists at `agent/agent_run.go:205-218`, wired to a genuinely
+deterministic `BeforeRequest` (`engine/build.go:118-157`: `ShouldPrune` →
+`PruneConversation` → a hard head-drop, no LLM call anywhere). So inber already
+satisfies cline's load-bearing invariant, and the doc comment at `agent/agent.go:86-90`
+claiming pruning "can summarize, which is itself an API call" is simply wrong about its
+own implementation.
+
+The defect is the gate. `agent/agent_run.go:209` reads:
+
+```go
+pruned := a.BeforeRequest(ctx, *messages, a.contextWindow/2)
+if len(pruned) < len(*messages) {
+```
+
+It accepts the recovery only if the **message count** shrank — but the pruning it just
+called cannot change the message count. `ManageConversation` appends exactly one output
+message per input message (`conversation/manage.go:170`, `finalMessages = append(...)`
+inside the per-message loop), `ApplyStashing` allocates `make([]MessageParam, len(messages))`
+(`conversation/stash.go:326`), and the tool-result truncation returns *copies*. The only
+thing in the whole path that shortens the slice is the hard head-drop at
+`engine/build.go:132-154`, which needs `len(messages) > KeepRecentTurns*2` — 70 messages
+at the default role. So between 36 and 70 messages, `PruneConversation` runs, truncates
+and drops tool results, may free tens of thousands of tokens, and **the agent throws the
+result away and declines to retry**. Below 36 it frees nothing at all, which is the
+separate count-bail already filed as noteboard `0db2e05c`. A corollary found while
+reading it: `conversation/manage.go:173` computes
+`result.ManagedMessages = len(messages) - len(finalMessages)`, which is therefore
+**always 0**, and `PrunedMessages` mirrors it — the counter that would have exposed this
+reports zero by construction.
+
+**What inber should consider:** gate the retry on the quantity the recovery actually
+changes. `PruneConversation` already returns `result.TokensFreed`; accepting on
+`TokensFreed > 0` (or on a re-estimate below the window) costs nothing and makes the
+existing recovery reachable. Note what the fix must decide and what this entry does not:
+whether a recovery that freed *some* tokens but is still over the window should retry
+anyway or fail immediately is cline's "nothing to compact" case, and inber has no
+estimate of the non-message components to answer it with — `EstimateTokens`
+(`conversation/manage_text_utils.go:110-117`) takes `[]MessageParam` and nothing else,
+so the system prompt, memory blocks and the ~5–18 KB tools block are invisible to every
+gate in the tree.
+
+**Second, narrower gap: the OpenAI-compatible path has no overflow guard at all.**
+`engine/turn_execute.go:30` dispatches to `runOpenAITurn` and returns; `buildAgent` — and
+therefore `SetContextWindow` (`engine/build.go:114`) and `configureContextPruning` — is
+only reached on the Anthropic branch at `:41`/`:48`. `engine/turn_openai.go:79-82`
+wraps any error as `"OpenAI API call failed: %w"` and returns. So
+`context_length_exceeded` from OpenAI, Google, OpenRouter or Ollama is an unrecoverable
+turn failure with no compaction attempted. Noteboard `0db2e05c` measured this in
+passing and explicitly left it unfiled; it is filed now.
+
+**Third, and this one compounds:** `"prompt is too long"` falls through
+`errorIsEvidenceAboutTheModel` (`engine/failover.go:166-175`) to `return true`, so an
+overflow calls `modelStore.RecordError`. Per that function's own doc at `:98-104`
+model-store's health table is host-shared, persistent, thresholdless and decay-free —
+so inber's own context-management failure marks a healthy model unhealthy for every
+session on the box, and `selectModel` then fails over, possibly to a model with a
+*smaller* window, which cannot fix an over-long prompt. This is the same class the
+function was written to exclude, and it is a fourth error class beyond the three the
+2026-08-02 entry asked for: not provider, not model behaviour, not local policy, but
+**a fault in inber's own context assembly**.
+
+### 2. A fallback is legitimate only when scoped to "this is not the endpoint I asked for" — inber's spawn validation fails open on a registry outage
+
+[goose #10189](https://github.com/block/goose/pull/10189) is unusually well-documented
+because the PR body quotes the maintainer's repeated *rejection* of the naive fix:
+
+> "`fetch_supported_models` isn't just a 'nice to have' model list — it doubles as the
+> **configuration-correctness check**. … Falling back to the static list on *any* error
+> makes that signal disappear. It also swallows `Authentication`, `CreditsExhausted`,
+> and `RateLimitExceeded`: a user with a bad API key or exhausted account would sail
+> past config with a fabricated model list and only hit a confusing failure later at
+> chat time. That's why this catch-all approach keeps getting proposed and turned down —
+> it trades a clear config-time error for a murky runtime one."
+
+The shipped scoping: classify the HTTP status first, then read raw bytes, then decode —
+and map **only** a JSON decode failure or a missing `data` array to `EndpointNotFound`,
+which is the single class the static-list fallback answers. Everything that means *the
+user's configuration is wrong* stays loud. Prompted by a misconfigured `base_url`
+returning HTTP 200 and an HTML error page.
+
+**inber has the exact shape, and unlike goose's the failure is a security-relevant
+fail-open.** `agent/registry/spawn_tool.go:27-43` `fetchRegistryAgents` returns `nil`
+for a transport failure (`:31`), a body-read failure (`:36`) and a JSON parse failure
+(`:40`) alike — the HTTP status is never examined at all, so a 401 or a 500 whose body
+does not parse is indistinguishable from "zero agents registered". Only the `:40` branch
+is the legitimate fallback under goose's principle. The doc comment at `:26` states the
+policy plainly: *"Falls back to an empty list if the registry is unavailable."*
+
+The consumer is where it turns from degraded into unsafe — `spawn_tool.go:130-131`:
+
+```go
+agents := fetchRegistryAgents()
+if len(agents) > 0 {
+```
+
+When the fetch fails, `len(agents) == 0`, the whole validation block is skipped, and
+**any agent name the model invents is accepted** and emitted as a spawn request. A
+registry outage silently converts a validating tool into a non-validating one — failing
+open, in the direction that spawns work. The schema degrades in the same breath:
+`validAgentsDescription` (`:46-56`) drops the enumeration of real agents and ships
+*"Agent name to spawn. Must match a registered agent."*, so at the exact moment
+validation stops, the model also stops being told what the valid names are. Third, a
+cosmetic bug in the error path proves nobody has seen it fire: `:140-145` sizes
+`names := make([]string, len(agents))` to *all* agents but assigns only the enabled
+indices, so the message reads `Valid options: alpha, , gamma`.
+
+**What inber should consider:** check the status, distinguish the three errors, and pick
+a direction for each — goose's rule gives you the answer for the parse failure only. The
+open decision, which is a blast-radius call and is deliberately **not** made here: on a
+registry outage, should `spawn_agent` fail *closed* (refuse every spawn until the
+registry answers, which strands an unattended job) or stay open with a loud diagnostic?
+That is the same fail-open/fail-closed trade already live on `guard`'s `Unset` mode, and
+picking it in an unattended sweep is how a trust decision gets made by accident.
+
+Same window, same shape, lower stakes: [goose #10773](https://github.com/block/goose/pull/10773)
+fixed stdio extensions **silently vanishing** when the config omitted `name` or spelled
+`envs` as `env` — `parse_extensions_map` `continue`d past the deserialization failure and
+the extension was simply gone. The two fixes are one line each (inject the map key as the
+name; add `alias = "env"`), and the transferable rule is the shape, not the patch: *the
+map key is the identity, accept the ecosystem-standard spelling, and never `continue`
+past a parse failure without a loud signal.* inber's version is
+`engine/build_tools.go:27-37`: `buildConfiguredTools` tries `buildSpecialTool` then
+`findStandardTool`, and there is **no `else`** — a configured tool name matching neither
+vanishes with no log, no error and no counter. This is reachable today, because
+`ripgrep` and `end_turn` are both deliberately unregistered (`tools/tools.go:39-41`,
+and `EndTurn()` at `:56` has no callers), so any config naming them, or any typo, starts
+an agent that reports healthy while quietly missing a capability its config asked for.
+`tools/tools.go:116-126` documents the same policy for the sibling helper — *"Unknown
+tool names are silently ignored."*
+
+### 3. A context *section* should snapshot the structured state, not a hash of its own rendering
+
+[codex #36800](https://github.com/openai/codex/pull/36800) changes
+`PermissionsState::Snapshot` from a bare `WorldStateHash` into a two-field enum:
+
+```rust
+pub(crate) enum PermissionsSnapshot {
+    Current { instructions: WorldStateHash, approved_command_prefixes: BTreeSet<Vec<String>> },
+    Legacy(WorldStateHash),
+}
+```
+
+The `instructions` hash is now computed from the permissions block rendered **without**
+the allowed-prefix list, and the prefixes live in their own set. `render_diff` gains an
+arm: if the instructions hash is unchanged and the new prefix set is a strict *superset*
+of the old, emit only the added prefixes and return. Approving one command used to
+change the rendered block, change the hash, and re-emit the entire `<permissions
+instructions>` message — profile line, approval policy, sandbox text and the whole
+cumulative prefix list. Now the appended bytes are literally two lines. Prefix *removal*
+is not a superset, so it correctly falls through and re-renders in full, and the
+untagged `Legacy(hash)` variant keeps old snapshots deserializing. The out-of-band
+injection path was deleted in the same change — `record_execpolicy_amendment_message`
+is gone, because the world-state diff now owns that message and two owners would have
+produced two copies.
+
+**Correction to the framing this sweep started with, recorded so the next one does not
+repeat it:** this is *not* a prompt-cache fix. Neither the PR body nor the diff mentions
+caching, and world-state fragments are **appended**, so the old behaviour bloated the
+tail and put two contradictory-looking permission blocks in context rather than
+invalidating a cached prefix. Read it as context hygiene and single-ownership, and note
+that the same PR's sibling [#36815](https://github.com/openai/codex/pull/36815) — which
+swaps `Thread id: <uuid>` for `Agent name: /root/worker` in the token-budget block — is
+likewise not a cache-stability change, because the block still carries per-session
+random window UUIDs. Its value is that a subagent can name itself in the hierarchy, so a
+budget or compaction instruction addressed to "you" resolves to a canonical path instead
+of an opaque id the model cannot relate to anything.
+
+**What inber should consider:** the generalizable rule is that a diffable context section
+should key on the **structured state it represents**, not on a hash of the string it
+produced — otherwise every field that participates in rendering is a false-positive
+invalidation of every other field. inber's nearest equivalent is
+`engine/prompt_blueprint.go`, and the 2026-08-02 entry already recorded that its system
+blocks are matched **by position and hashed on `nb.Text`**, which is the right
+instrument. The place inber does *not* hold this shape is the split at
+`engine/turn_prompt.go:114`, which sorts memory into stable and volatile **on the
+memory's ID** rather than on whether its content varies per turn — an identity test
+standing in for a content test, which is the same substitution #36800 removed. That is
+the already-filed `d23b4a8b`, not a new finding; what is new is that codex has now
+shipped the structured-snapshot answer to it.
+
+### Also in-window, worth a line each
+
+- **[codex #36781](https://github.com/openai/codex/pull/36781)** — the most substantive
+  *contract* change of the window. A tool's visibility becomes an orthogonal
+  three-surface matrix (`ToolExposureSurface { CodeMode, Deferred, Direct }`, backed by a
+  `bitflags` set), and an MCP server can opt out of any surface without disabling its
+  tools everywhere: *"Servers need to be able to opt out of any of these surfaces without
+  disabling their tools everywhere."* Also strips `_meta` from code-mode results —
+  "MCP result metadata is private to clients and must not reach Code Mode." inber's tool
+  surface is a flat list with a single on/off, so this is a shape to hold in reserve
+  rather than a gap to close; `tools/mcp` still has zero importers.
+- **[goose #10612](https://github.com/block/goose/pull/10612)** — 100 of 105 added lines
+  are tests; the production change is one condition. Permission buckets must be
+  **mutually exclusive and deny must be absorbing**: a request denied by one inspector
+  and `RequireApproval`ed by another landed in *both* buckets, so an already-denied call
+  could resurface in the approval queue and be approved by the user. Order-independent
+  `Deny > RequireApproval > Allow`. inber has one gate, not a lattice, so this is
+  prophylactic — but it is the concrete failure the 2026-08-03 entry's "deny-dominates
+  lattice" caveat was abstractly about.
+- **[goose #10545](https://github.com/block/goose/pull/10545)** — `canonicalize()` both
+  sides *before* `starts_with`, or `nested/../../outside` and an outbound directory
+  symlink both pass containment. The subtle bit worth copying: `continue` on a
+  canonicalize failure rather than recording the path as loaded, so a directory that does
+  not exist yet stays retryable instead of being permanently skipped once it appears.
+- **[cline #12845](https://github.com/cline/cline/pull/12845)** — retry an empty model
+  response at the model boundary, with the invariant that **a tool-call-only turn counts
+  as content and is never retried** (the harness runs its own tool loop and wants those
+  turns). Their stated reason for not using the vendor's own reliability layer is the
+  reusable part: it *"owns the tool loop"*, executing tools itself, which "would hijack
+  tool calling and break the agent loop."
+- **[cline #12619](https://github.com/cline/cline/pull/12619)** — an MCP `list_changed`
+  notification was being forwarded to a toast and the cached list was **never actually
+  refreshed**; the notification was purely decorative. Fix registers typed handlers that
+  do the refresh, debounced 300 ms per server per list kind, looking the connection up
+  **fresh by name when the timer fires** so it is safe across delete/reconnect races.
+- **Rejected this window, so the next sweep does not re-triage:** codex #36787 (model-
+  instruction SSoT refactor; the one real behaviour change is that a model with no
+  template now gets *empty* instructions rather than a silent default — the right
+  direction, and inber has no template registry), #36830 (code-mode transport timeout),
+  #36809 (state-db-first `exec resume --last`; the id-match guard against a stale index
+  is the only notable bit), #36413 (pass-through plumbing of a Realtime API flag),
+  #36812/#36810/#36811/#36793/#36796/#36792 (transport, conformance gates, shell policy,
+  process-tree kills, plugin config parsing — #36792's model-capability gating of plugin
+  prose is already at `agentic-design-patterns.md:1462`). goose #10808 (streaming shell
+  output — UX, nothing architectural), #10870 (covered in the 2026-08-03 entry), #10223,
+  #10766, #10663. cline #12791/#12790/#12719 (UI extraction), #12891 (AI SDK 7 bump),
+  #12831 (already cross-referenced in the 2026-08-02 entry). opencode: nothing non-trivial
+  landed — the window is release syncs, locale expansion, diff-viewer polish and a
+  reverted "fix slow queries". aider, roo-code and dexto: no substantive commits.
+
+**Filed to the queue this pass (3, the per-run cap):** `799b92c6` (the prune-accept gate
+measures message count, which the pruner cannot change — both call sites),
+`4d12d490` (spawn_agent validation fails open on a registry outage), `df1de352` (the
+OpenAI path has no overflow guard, and an overflow demotes the model host-wide).
+
+**Held back by the cap, verified against code this pass, so the next sweep does not
+re-derive them.** Nine, roughly in descending order of sharpness:
+
+- **A live credential fragment reaches the log on every client construction.**
+  `agent/clients.go:112` — `log.Printf("[auth] creating Anthropic client: key_prefix=%s", key[:min(20, len(key))])`.
+  The `sk-ant-api03-` prefix is 13 characters, so ~7 characters of real secret are
+  printed each time. `redact/` exists in this repo and is not on this path.
+- **An auth-store rejection is indistinguishable from "no credential configured", and
+  then silently becomes an env credential.** `agent/clients.go:47-51` guards
+  `auth.ResolveKey` with `if err == nil` and no `else`, so an expired or revoked token
+  leaves `apiKey` empty; `:56` then falls through to `envKeyForProvider`. The one error
+  that does surface (`:59-61`, "no credentials found") cannot distinguish "auth-store
+  said no" from "auth-store was unreachable". This is exactly goose #10189's swallowed
+  `Authentication`, and it is a fallback chain of the kind the repo directives forbid.
+- **A model-store miss fabricates a provider rather than failing.**
+  `agent/clients.go:29-33` swallows the `ResolveModel` error the same way; `:38-42` then
+  builds a `Model` whose `Provider` comes from `guessProvider` (`:135-148`), a hardcoded
+  prefix allowlist whose `default:` branch (`:145-146`) returns `"anthropic"` for **any**
+  unrecognized model id. An unresolvable id is therefore routed to the Anthropic client
+  and fails at the API, not at config time — the murky-runtime-error trade #10189 names.
+- **Five divergent hardcoded default models**, against a single-source-of-truth store:
+  `agent/models.go:164` (`claude-sonnet-4-20250514`), `agent/registry/config.go:159`
+  (`claude-sonnet-4-5`), `cmd/inber-server/main.go:174` and `engine/lifecycle.go:92`
+  (`claude-sonnet-4-5-20250929`), `server/api_oneshot.go:15` (`claude-haiku-4-5-20251001`).
+  Two disagree about the model *generation*. The `config.go` one sits inside
+  `LoadFromAgentStore`, whose own doc comment at `:79` reads *"This is the only source of
+  truth for agent configuration"*.
+- **A model-store read failure is reported to the user as "no healthy fallbacks".**
+  `engine/failover.go:68-71` — `if err != nil || len(models) == 0 { return nil }` drops
+  `err` unlogged, and `selectModel` then logs the `:59` line `"no healthy fallbacks,
+  using %s anyway"`, which is untrue when the cause was a failed read.
+- **A read error re-seeds a possibly-populated store.** `engine/engine_new.go:256` —
+  `providers, _ := store.Providers()`; on error `providers` is empty, the code concludes
+  the store is uninitialized, and calls `store.Seed()`.
+- **The tool registry is a name-keyed map that overwrites silently.**
+  `tools/interface.go:45-47` — `r.tools[tool.Name()] = tool`, with the doc comment
+  conceding *"If a tool with the same name already exists, it will be replaced."* No id,
+  no error, no diagnostic. This is the "join on ids, never on names" rule inverted, and
+  it is the registration-policy gap the 2026-07-31 entry described upstream.
+- **The sideband/chain enum is uncapped and grows the tool block quadratically.**
+  `agent/chain.go:117-119` collects every tool name with no bound, `:50` embeds the list
+  verbatim as `"enum"`, and `:128` injects that same full enum into **every** tool's
+  schema. Measured against the real registry: 9 tools go 6,566 B -> 18,338 B (+179%);
+  per-tool overhead rises 1,281 B at N=5 to 4,791 B at N=200, where the block is ~960 KB.
+  Both call sites (`agent/agent_run.go:26`, `engine/turn_openai.go:32`) rebuild it every
+  request. Mostly a cache-*write* and OpenAI-path cost, per the 2026-08-02 entry — but
+  codex #36507's bounding discipline (cap, prioritize, and **report what was dropped**)
+  is the shape, and inber has no cap at all.
+- **The overflow retry silently downgrades a streaming turn.** `agent/agent_run.go:216`
+  unconditionally calls `a.provider.Complete`, even when the original call went out via
+  `CompleteStreaming` (`:168`). `result.Text` is still populated, so nothing breaks, but
+  `hooks.OnTextDelta` never fires and a user watching a live stream gets the recovered
+  response in one block.
+
+Two more, already covered inline above and not repeated here: the silent drop of an
+unresolvable configured tool name (`engine/build_tools.go:27-37`, §2) and the
+always-zero `ManagedMessages`/`PrunedMessages` counters (`conversation/manage.go:173`,
+recorded on `799b92c6`).
