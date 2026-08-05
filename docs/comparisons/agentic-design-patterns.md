@@ -3038,3 +3038,229 @@ Two more, already covered inline above and not repeated here: the silent drop of
 unresolvable configured tool name (`engine/build_tools.go:27-37`, §2) and the
 always-zero `ManagedMessages`/`PrunedMessages` counters (`conversation/manage.go:173`,
 recorded on `799b92c6`).
+
+## Harness-watch — 2026-08-05: a deadline must name the thing it is bounding, and a policy read once is a policy that cannot be tightened — plus inber's second provider path is where its own invariants go missing
+
+> ⚠️ **Scope caveat for §3 and half of §1, established before the findings and not
+> after them.** Every enabled inber agent in agent-store runs an Anthropic model
+> (`agent_harness`, `harness_id='inber'`: 15 × `claude-sonnet-4-5`, one each of
+> `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-sonnet-4-5-20250929`), and **no
+> agent configures a fallback at all** (`model_fallbacks` is empty or `[]` on every
+> enabled row). So the OpenAI-compatible turn is reachable only by naming an OpenAI
+> model on a `RunRequest`, never by failover. The defects below are **TRUE in code and
+> LATENT on this host's corpus.** That is a priority argument, not a correctness one —
+> the model-store registry carries the OpenAI models today, so the first session that
+> asks for one gets all of it at once.
+
+### 1. goose splits the transport deadline from the turn's duration — inber's Anthropic stream has neither bound, and its OpenAI turn loop has no runaway cap at all
+
+[goose #10620](https://github.com/block/goose/pull/10620) (+418/−69) is the clearest
+statement of a distinction harnesses keep collapsing. `ApiClient` set reqwest's
+client-level `.timeout(600s)` — a **total request deadline that includes the streamed
+body** — so it capped *turn duration* while claiming to measure *connection health*.
+Every turn streaming past ten minutes died with `Stream decode error`, and in headless
+`goose run` the reply loop treated that as terminal and ended the session silently. They
+reproduced it on Terminal-Bench 2.1: all five regex-chess trials died at 600–601s. The
+fix splits one knob into three — `connect_timeout(30s)` + `read_timeout(timeout)` on the
+client, and the total deadline applied per request **only to non-streaming calls**, with
+SSE call sites marked `.streaming(true)`. Streaming still bounds everything before the
+body (connect, upload, first byte); only the body itself is exempt. Result: stream deaths
+11/20 → 0/20, 23 turns over 600s survived, longest 2440s. They state the residual cost
+plainly — *"worst-case hung-stream detection stays 600s (of silence)"* — which is the
+point: a read timeout still catches a dead provider, it just stops catching a working one.
+
+**inber has the two halves inverted.** The Anthropic path is the one that streams, and it
+carries **no deadline of any kind**: `agent/clients.go:110-128` builds the client with
+only egress redaction, auth and headers — no `option.WithRequestTimeout`, no custom
+`http.Client` — and `agent/provider.go:54` calls `p.client.Messages.NewStreaming(ctx, *params)`
+bounded only by `ctx`. That is correct by #10620's first rule and wrong by its second:
+there is no read timeout either, so a provider that opens a stream and then goes silent
+hangs a CLI turn with no deadline **forever**. The one deadline that does reach a live
+stream is a policy budget, not a transport one — `server/spawn.go:303-305` wraps a
+subagent turn in `context.WithTimeout(ctx, timeout)` at `defaultSpawnTimeout = 5 * time.Minute`
+(`server/spawn.go:23`), and it is not idle-based, so a subagent streaming steadily for
+five minutes is killed exactly like one that hung. Meanwhile the OpenAI-compatible client
+carries the total deadline goose removed — `agent/openai.go:34`, `Timeout: 120 * time.Second`
+— on a path that does **not** stream (`ChatCompletion` does `io.ReadAll`, and nothing in
+the repo ever sets `"stream": true`), so it cannot kill a stream today but does cap a
+legitimate long completion at 120s against a `MaxTokens` of 16384. That last one is
+already filed; the two new ones are the missing read timeout and what follows.
+
+**Reading the OpenAI turn loop for its bounds turned up that it has none.** The Anthropic
+loop caps itself at `agent/agent.go:336-341`:
+
+```go
+const maxAPICalls = 50
+if apiCalls > maxAPICalls {
+```
+
+with a named error (`agent.ErrMaxAPICallsExceeded`, `agent/agent.go:20`) that
+`engine/failover.go:169` deliberately excludes from model-health evidence, because it is
+*inber's own* runaway cap and says nothing about the provider. `engine/turn_openai.go:56`
+is a bare `for {` with no counter, no cap, and no `ctx.Err()` check at the head. A model
+served by OpenAI, Google, OpenRouter or Ollama that keeps emitting `tool_use` loops until
+the context window fills or the caller cancels — every iteration a paid request. The cap
+is not a tuning value inber lacks an opinion on; it exists, it is named, and one of two
+turn loops enforces it.
+
+**What inber should consider:** adopt goose's split explicitly rather than picking a
+number. A *read* (inter-chunk) timeout on the Anthropic stream bounds a dead provider
+without bounding a working turn; a *total* deadline belongs only on the non-streaming
+OpenAI client, where it already is. And lift `maxAPICalls` out of `Agent.Run` into
+something both loops consult, so the runaway cap is a property of a turn rather than of
+one provider branch. **What a fix must decide, and this entry does not:** what the read
+timeout should be, and whether a subagent's 5-minute budget should become idle-based
+(which would let a long-but-healthy subagent run unboundedly) or stay a wall-clock
+budget (which is what it is for). Those are blast-radius calls, not oversights.
+
+### 2. codex re-reads the approval policy from the *current* configuration — inber accepts a mid-session `mode` change with a 200 and discards it
+
+Four codex commits landed the same rule on 2026-08-04:
+[#36930](https://github.com/openai/codex/pull/36930) "Read turn permissions from the
+current configuration", [#36912](https://github.com/openai/codex/pull/36912) "Read
+approval policy from the current turn configuration",
+[#36901](https://github.com/openai/codex/pull/36901) "Propagate updated permissions to
+review threads", and [#36941](https://github.com/openai/codex/pull/36941) "Use current
+session settings for review threads". The shape: a permission policy captured once — at
+session start, or into a spawned sub-thread — keeps being enforced after the user changes
+it, and the stale value is usually the more permissive one. The fix is not a new
+mechanism; it is deleting the capture.
+
+**inber's guard passes the part of this test that the older audit failed it on, and fails
+a different one.** ⛔ **The claim in `claude-code.md` §3 that `guard.CheckTool` "has zero
+non-test callers and the mode is hardwired `guard.Autonomous`" is SPENT — do not repeat
+it.** `CheckTool` has one production caller, `engine/build_hooks.go:94`, wired every turn
+at `engine/build.go:105` and again on the OpenAI path at `engine/turn_openai.go:120`, and
+it reads `g.cfg.Mode` live under the mutex per call (`guard/guard.go:165-188`) rather than
+closing over a copy. `server/session_creation.go:88-89` plumbs `req.Mode` into the engine
+config. Refusal is real enforcement, not advice — it short-circuits the primary call, the
+`then` chain and the sideband fields (`agent/chain.go:389-395`). Observe mode is an
+**allowlist** (`guard/guard.go:171-176` → `isReadOnly`), which is the stronger
+construction than cline's blocklist in [#12906](https://github.com/cline/cline/pull/12906)
+and immune to that PR's `sed -i`/heredoc bypass class.
+
+The defect is one layer up, in the server. `mode` is a per-request field on `RunRequest`
+(`server/server.go:231`), and `applyRequestOverrides` copies it (`server/session_creation.go:88-89`)
+— but that function is reached only from `createSession`. `getOrCreateSession` returns an
+existing session before looking at `req` at all:
+
+```go
+func (g *Server) getOrCreateSession(ctx context.Context, key, agentName string, ac AgentConfig, req RunRequest, onEvent func(StreamEvent)) (*Session, error) {
+	if val, ok := g.sessions.Load(key); ok {
+		sess := val.(*Session)
+		sess.setOnEvent(onEvent)
+		return sess, nil
+	}
+```
+
+(`server/session_creation.go:23-28`.) The only field `Run` acts on for a live session is
+`req.NewSession` (`server/server.go:325-329`). So on the second and every later `POST /run`
+for a session key, `mode` is parsed, accepted, **200'd and discarded** — and there is no
+other endpoint that carries it: `ConfigRequest` (`server/api_bridge.go:668-673`) has
+model, effort, disabled tools and budget, and no mode. A user tightening a running
+autonomous session to `observe` mid-conversation gets no error and no effect. It fails
+open in the direction that matters. `server/mode_request_test.go` tests
+`applyRequestOverrides` in isolation, so it passes while the wiring gap stands.
+
+The related gap — a spawned child getting `RunRequest{}` → `ParseMode("")` → `Unset` →
+allow-all, so an Assist parent produces an unrestricted child — is **already filed** on
+noteboard as *"nine tool names reach the model unclassified, and spawn_agent is a door out
+of the Assist gate"*, down to the same four-step chain, and is not re-filed here.
+
+**What inber should consider:** codex's answer is that the policy has one reader and it
+reads current state; inber's guard already does that, so the fix is entirely in
+`getOrCreateSession`. **What a fix must decide:** which `RunRequest` fields are per-turn
+and which are per-session. `applyRequestOverrides` copies eleven fields — model, thinking,
+raw, no-tools, no-hooks, system, detach, mode and the four safety caps — and re-applying
+all of them on every run would let a single request silently reshape a live conversation's
+model and system prompt. Mode is the field with a security argument for per-turn
+semantics and no competing endpoint; the rest is a design call, not an oversight.
+
+### 3. The volatile-context channel does not exist on the OpenAI-compatible path — the fleet, the plan, the scratchpad and the stale-read warning are all built and dropped
+
+[goose #10937](https://github.com/block/goose/pull/10937) is the OpenAI-compatible mirror
+of the Anthropic fix in #10030: the volatile `<turn-context>` block sits mid-history during
+a tool loop, and when it moves to the new user message at the turn boundary the entire
+previous turn is re-billed. `formats/openai.rs` now strips it before formatting and
+re-emits it at the tail, merged into a trailing user message when one exists (strict chat
+templates reject consecutive user messages), so only the request tail changes. Measured
+A/B on gpt-4.1-mini: turn-boundary cache hit 75.6% → 95.0%, re-billed history per boundary
+−85%.
+
+**inber's Anthropic path already has the good version of this, and its OpenAI path has no
+version of it.** `engine/turn_prompt.go:126-152` splits the turn's context in two: stable
+memories become the `system` array carrying BP2, and everything volatile is joined into
+`e.Turn.VolatileContext` — fleet status, volatile memories, every registered context
+injector, and the `[source: …]` ref. `engine/volatile_context.go:38-48` folds in the notes
+queued earlier by context preparation. `agent/agent_run.go:92-121` then injects that string
+into the **last user message, after the last `tool_result`** — at or after BP3, exactly
+where goose put it — once per turn, clearing the field so the tool loop's own prefix stays
+byte-stable.
+
+That injection has exactly one entry point: `a.VolatileContext = e.takeVolatileContext()`
+at `engine/build.go:40`, inside `buildAgent`. And `buildAgent` is on the Anthropic branch
+only — `engine/turn_execute.go:29-31` routes an OpenAI client to `runOpenAITurn` and
+returns. `runOpenAITurn` builds its system message from `systemBlocks` alone
+(`engine/turn_openai.go:47-52`) and never reads `e.Turn.VolatileContext`, which
+`engine/turn_prepare.go:94` then clears at the start of the next turn. The content is
+assembled every turn and thrown away.
+
+What an OpenAI-served session therefore never sees:
+
+- the live agent fleet and their statuses — `server/session_context.go:31`, whose own doc
+  comment explains why it must ride the volatile channel and not the system prompt;
+- the live session status (`sessionStatusInjector`, same file);
+- `task_plan` and `scratchpad` contents — `engine/engine_new.go:648-666`, i.e. the model's
+  own plan and notes, on a path where the tools that write them still exist;
+- the workspace roots — `engine/turn_prepare.go:107`;
+- **the cross-zone stale-read note** — `engine/lifecycle.go:167-177`, the message that says
+  *"these files were re-read since last context snapshot — ignore earlier versions"*. Its
+  absence is the one with a correctness cost rather than a recall cost: the model keeps
+  acting on a superseded file read with nothing telling it not to.
+
+Note the irony worth recording: the drop makes the OpenAI prefix *more* cache-stable than
+the Anthropic one, because there is nothing per-turn left to inject. That is not a defense.
+
+**What inber should consider:** goose's `formats/openai.rs` is the template — strip and
+re-emit at the tail, merged into a trailing user message. inber's Anthropic injector at
+`agent/agent_run.go:92-121` already does the merge and already solves the harder ordering
+problem (`tool_result` blocks must precede text), so the work is calling
+`takeVolatileContext` from a place both branches reach and porting ~30 lines to the
+OpenAI message shape. **What a fix must decide:** whether the volatile block goes into the
+trailing user message (goose's choice, and inber's on Anthropic) or into the `system`
+string, which is one line of code and would put per-turn bytes at the head of the prefix —
+the exact thing #10030 and #10937 exist to prevent.
+
+### 4. Checked against inber and already covered — recorded so the next sweep does not re-walk them
+
+- **[codex #36954](https://github.com/openai/codex/pull/36954)** (tool registry collision
+  policy) — the 2026-07-31 entry already describes the upstream shape, and inber's version
+  is filed twice on noteboard (*"a duplicated tool name puts two definitions on the wire
+  and dispatches to the second"*, *"tool names are load-bearing control flow, and no name
+  is reserved"*). Re-verified: `engine/extra_tools.go:19-41` handles extras-vs-base
+  explicitly **and logs a warning**, which is better than codex's pre-#36954 behaviour;
+  the unhandled case is duplicates *within* the base set (`engine/build_tools.go:24-45`,
+  no dedupe on an unvalidated `AgentConfig.Tools` list). The MCP dimension stays moot —
+  `tools/mcp` still has zero non-test importers.
+- **[codex #36998](https://github.com/openai/codex/pull/36998)** (deferred custom tools in
+  tool search) — not applicable at inber's scale. A default server session carries 13–17
+  tools; the deferrable weight is not the tool count but `AddChainAndSidebandFields`
+  (`agent/chain.go:115`) injecting ~1.4–1.6 KB of identical `then`/sideband schema into
+  *every* tool, which is the uncapped-enum finding already recorded on 2026-08-04.
+- **[goose #10937](https://github.com/block/goose/pull/10937)**'s prefix-stability lesson
+  applied to inber's *system* array reproduces the 2026-08-02 §1 finding exactly (memory
+  selection keyed on this turn's user message, `Turn.Counter` and wall-clock recency).
+  Both halves are filed. Independently re-derived this sweep and confirmed; not re-filed.
+- **[cline #12906](https://github.com/cline/cline/pull/12906)** (plan-mode command
+  blocklist) — inber's Observe mode allowlists rather than blocklists
+  (`guard/guard.go:171-176`), so the bypass class does not exist here.
+  **[cline #12929](https://github.com/cline/cline/pull/12929)** (remove model-initiated
+  plan→act switching) — inber has no tool that writes `Guard.cfg.Mode`; the escalation
+  route it does have is `spawn_agent`, already filed.
+- **[cline #12948](https://github.com/cline/cline/pull/12948)** (flatten top-level tool
+  schema unions) — the trigger is an MCP server advertising a top-level `anyOf`. Moot
+  until `tools/mcp` has an importer; worth remembering at the moment it does.
+- **[cline #12927](https://github.com/cline/cline/pull/12927)** (retry empty model turns on
+  all providers) — inber has no empty-turn detection on either path, but the measured rate
+  upstream is ~1.3 per 1k requests on OpenAI-compatible endpoints, which on this host's
+  Anthropic-only corpus is not evidence of anything. Recorded, not filed.

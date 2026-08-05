@@ -585,3 +585,206 @@ cleanly; the accuracy delta is argued, not shown, for SWE-style work.
   the retrieval mechanism should be the agent's existing file tools rather than new
   machinery. Both keep the prefix append-only, which is the property
   2607.12161 says the bill actually turns on.
+
+# 2026-08-05 sweep
+
+Coverage check first, because it changes how this sweep should be read: `docs/`
+carries **120 distinct arXiv ids and not one of them is `2608.*`** — the newest is
+`2607.28147`. The 08-01 through 08-04 sweeps all logged late-July work. The entire
+August listing was unswept, which is where all four of these come from, and it is
+also why the crop is unusually good: this is a backlog, not a week's yield. Every
+id below was confirmed against the arXiv Atom API (`export.arxiv.org/api/query`,
+following the 301 to https — the bare http call returns empty and silently looks
+like "not found"), title and `published` date both.
+
+The theme, unplanned: **three of the four are about deciding something before the
+model is asked, using state the model never sees.** Ledger governs a command before
+it runs; the Wix gate drops a tool before it is described; CapLease admits an action
+before it is authorized. Only the compression paper is about the prompt itself.
+
+## Ledger: interaction history as deterministic execution state
+
+[arXiv:2608.00808](https://arxiv.org/abs/2608.00808) — Wang, Xu, Li, Peng, Adams,
+Hassan, Chen (Concordia / Queen's / ByteDance), published 2026-08-01.
+
+Ledger keeps a deterministic online record of what the agent has observed, modified
+and attempted, and applies it at two boundaries per step. **Inform** appends a compact
+runtime-state view to the prompt before the model acts. **Govern** intercepts a
+proposed command before execution and either returns a still-valid cached earlier
+result instead of re-running it, or flags it as likely-redundant repetition. Zero
+extra LLM calls; it wraps an unmodified agent. All 500 SWE-bench Verified instances:
+Pass@1 56.2% → 64.2% (GPT-5 mini) and 75.8% → 81.0% (MiniMax M2.5), with **total cost
+down 28.9% / 31.8%**; +3.4pp at −24.4% cost on OpenAI Codex. Ablations put most of the
+*resolution* gain on govern and most of the *efficiency* gain on inform.
+
+**Why it matters here.** This is the successor to CORVUS (2607.22711, on file at
+`2026-07-harness-research.md`), and the difference is the part worth taking. CORVUS
+fixes stale *file* snapshots with a synced registry — which is the half inber has
+partially built, in `agent/read_cache.go`. Ledger's govern path is a *command*-level
+result cache with a redundancy check, which CORVUS does not have and inber does not
+have. Both paths are pure Go with no model dependency: the ledger is the shape of a
+SQLite session-store table, and govern is a hook in the tool-dispatch layer that
+inber already owns (`agent.ExecuteToolCallWithChainAndSideband`).
+
+Two cautions before anyone reaches for this. First, it is the **first paper in this
+corpus reporting a large billed-cost reduction that is not achieved by shrinking the
+prompt** — which is exactly what 2607.12161 (the 08-01 sweep's headline, r = 0.15
+between tokens and dollars) said to go looking for. That makes it interesting and
+also means the mechanism, not the number, is the transferable part. Second, the
+inform view is *appended* per step rather than rewriting history, so it does not
+invalidate the cached prefix the way a compaction rewrite does. If inber implements
+inform as anything other than an append at the tail, it inherits the cache-write
+amplification 2607.12161 blames for the decorrelation.
+
+**What inber should consider:** govern first, inform second. Govern is a dispatch-layer
+hook with a measurable local win and no prompt-shape risk. Inform touches the cached
+prefix and should be built only at the tail, where the volatile context already lives.
+
+## Control Under Compression: the tool/policy block has a cliff, and it is per-context
+
+[arXiv:2608.01056](https://arxiv.org/abs/2608.01056) — Hou, Yang, published 2026-08-02.
+
+CompressAgent: 15,525 environment-verified runs over nine independently built "agent
+control contexts" — the persistent system-side text specifying tools, arguments,
+policies, execution protocols and recovery — across three task families and six
+retained-context budgets. The reliability curve is **nonlinear and method-dependent**.
+At 75% retained, generic rewriting and section-based compression hold 92.7% / 92.4%
+against a 93.8% full-context baseline: essentially free. Between 50% and 35% the
+methods diverge violently — at 35%, section-based 47.0%, obligation-aware 39.0%,
+generic rewriting 19.9%. Below 25% executable protocols become fragile. Reliability
+varies enough *across* control contexts that universal compressor rankings are
+invalid; each context needs its own qualification. Failures surface as tool-execution
+and action-parsing errors, not reasoning errors.
+
+**Why it matters here.** Every prior compaction paper in this corpus is about the
+*transcript*. This one is about the part of the prompt inber never compacts and always
+caches: the tool-definition and policy block. It gives a defensible budget (trim to
+~75%, stop), a warning that the safe ratio must be measured per tool-set rather than
+assumed, and a diagnostic signature — a spike in tool-execution and parse errors, not
+worse answers — that maps onto counters inber can already emit.
+
+It also lands on a live inber finding. The uncapped `then`/sideband enum
+(`agent/chain.go:115-128`, recorded on 2026-08-04) injects ~1.4–1.6 KB of identical
+schema into *every* tool, measured at 6,566 B → 18,338 B for nine tools. That is the
+obvious compression target, and this paper says the obvious move is the wrong one:
+the tool block is the **stable cached prefix**, so shrinking it buys 0.10× reads while
+risking the failure mode that shows up as broken tool calls. Deduplicate the repeated
+schema — which is lossless — rather than summarizing the block, which is not.
+
+**What inber should consider:** never auto-summarize the tool block as a cost measure.
+If it is ever trimmed, qualify the ratio against inber's own tool set and watch tool-
+execution error rate, not answer quality.
+
+## CapLease: retries, delegation and crash-resume defeat single-use authorization
+
+[arXiv:2608.01710](https://arxiv.org/abs/2608.01710) — Xu, Fan, Wang, Li, Liu,
+published 2026-08-03.
+
+Names **semantic replay**: an agent replans, retries, delegates to a subagent, or
+resumes after a crash, and one user approval executes several times under *freshly
+issued, individually valid* single-use token identifiers. The argument is an
+impossibility one — identifier-local consumption provably cannot prevent reissuance
+unless the issuer keeps **monotonic durable state** over the triple (authorized
+action, confirmation event, remaining execution budget). CapLease binds an
+authenticated confirmation to a *canonical* action and enforces transactional
+Issue-Prepare-Commit. Across replanning, retry, delegation, concurrency,
+confirmation-replay and crash-recovery scenarios, only stateful designs prevented
+duplicate admission, and duplicate *external effects* additionally required an
+idempotent sink. No headline accuracy numbers; it is a systems argument with scenario
+coverage.
+
+**Why it matters here.** This sits on the intersection of three inber properties at
+once — subagent spawning (delegation), session resumption from the SQLite store (crash
+recovery), and an approval prompt. inber's exposure is unusual and worth stating
+precisely: it currently has **no approval routing at all** — `NeedsApproval` is
+rendered as a flat refusal because no session sets `ApprovalFunc`
+(`engine/build_hooks.go:85-88`) — so there is no lease to replay yet. That makes this
+a *design input for work not yet done* rather than a defect, and it is the cheapest
+possible moment to get it right: the approval record should be a durable row keyed on
+a canonical action form with a decrementing budget and Issue/Prepare/Commit states,
+written in the same transaction as the tool call, not a per-call boolean.
+
+The canonical-action requirement links straight to 2607.27834 (canonicalize a command
+before judging it, already on file) — same lesson, one layer up. And note the second
+half that a store cannot fix: duplicate *effects* need an idempotent sink. An approval
+lease stops inber admitting the same `git push` twice; it does not stop the push.
+
+**What inber should consider:** when `ApprovalFunc` is finally wired, model approval as
+a lease row, not a callback return value. Retrofitting durability onto an approval
+mechanism after subagents already inherit it is the expensive order.
+
+## Executability gating: drop a tool before you describe it
+
+[arXiv:2608.01050](https://arxiv.org/abs/2608.01050) — Ashkenazi, Kloz, Ulianchenko
+(Wix), published 2026-08-02.
+
+A deployed three-stage pipeline. A recall-oriented semantic matcher narrows a large
+skill library *without* consulting state; a **deterministic executability gate** then
+drops every candidate whose own hard-stop preconditions currently hold; only the
+survivors are described to the model, which makes the final call. The correctness
+argument is **predicate parity** — the gate evaluates the *same* exit predicates the
+skill itself would, against fresh authoritative state, so a blocked candidate provably
+could not have completed. On 756.6K production messages: semantics retained 23.1%, the
+gate removed 59.4% of candidate skill-message pairs and 59.1% of skill-description
+tokens, **90.5% total context reduction**. Counterfactual replay: without the gate the
+model picked a skill that would have failed in **7.8%** of cases.
+
+**Why it matters here.** The deployment is customer care; the mechanism is domain-free
+and lands on how inber decides what tools to put in the prompt. Today that decision
+consults configuration and nothing else (`engine/build_tools.go`), so a tool whose
+preconditions cannot hold is still described in full: `deploy` with no credential in
+auth-store, a workspace tool with no worktree, an MCP tool whose server is unreachable.
+The 7.8% is the price — a confidently selected tool that cannot run, burning a turn and
+adding a cache-invalidating error observation.
+
+The load-bearing constraint is predicate parity, and it is the single-source-of-truth
+rule restated: **the gate must read the tool's own preconditions, never a copied
+allowlist.** inber has already been bitten by the copied-table version of this twice —
+`guard.isDangerous` and the read-cache invalidation switch are both closed name-keyed
+tables that fail open on an unrecognized name. A gate built the same way would be a
+third.
+
+**What inber should consider:** this is the honest counter-argument to the
+"deferred/lazy tool schemas" idea recorded against codex #36998, which inber does not
+need at 13–17 tools. Gating on *executability* is cheaper than deferral, needs no
+search tool, and removes tools that would have failed rather than tools that are merely
+unlikely to be used. Note the tension with prompt caching, which this paper does not
+address: a gate that changes the tool list between turns rewrites BP1, the first hashed
+section, and cascades to everything after it. Gate at session start, or accept the
+write. That trade is unresolved and should not be decided by whoever implements it
+first.
+
+## Checked and rejected
+
+- **[arXiv:2608.03222](https://arxiv.org/abs/2608.03222) FailFast-RestartSmart** — a
+  0.6B monitor predicts failure from observable prefixes; on alarm, restart a fresh
+  rollout offering the interrupted repo diff as an *optional* overlay. 14.6–20.4% token
+  savings at 5% FPR; 66.6% → 71.8% resolution at 25% FPR. Rejected only because it needs
+  a separate monitor model trained and served, which inber has no path to. **The
+  restart-with-optional-diff-overlay half is harness-side and free**, and is the part to
+  remember if the trigger ever comes from somewhere cheaper than a trained monitor.
+- **2608.00902** *Practical Online KV Cache Compaction for LLM Agents* — serving-side KV
+  work. inber is API-side and cannot reach it. Same rejection this corpus already applies
+  to the class.
+- **2608.02639** *Instruction Stacking Collapse* — real result (follow rate 96% → 20% as
+  constraints stack; "output JSON" jointly unsatisfiable with nine other constraints),
+  but the remedy is an LLM prompt-rewrite whose benefit the paper states is nil for
+  frontier models, which is what inber runs.
+- **2608.02645** *Verified Tool Calls Under Non-Atomic Failures* — right idea
+  (postcondition verification, verify-before-retry, idempotency keys) but simulated
+  environment and no numbers. 2608.01710 above covers the same ground with a stronger
+  argument.
+- **2608.00122** *Shared Organizational Memory for Enterprise Coding Agents* — deployment
+  snapshot, effects "remain under evaluation". No result.
+- **2608.02680 TraceCompiler**, **2608.02679 AI Sandbox**, **2608.00267 LoopsBench**,
+  **2608.01558**, **2608.00017** — benchmark-only or thin mechanism.
+- **2607.05378 CompactionRL** and **2607.10582 MemDecay** surfaced repeatedly in search.
+  CompactionRL is already rejected as training-side at line 421 of this file; MemDecay is
+  serving-side KV eviction.
+
+## Blogs: nothing in window
+
+Anthropic engineering has published nothing since 2026-04-23. DeepMind's July output is
+Gemini and robotics model launches. HuggingFace's only in-window agent post is Allen AI's
+Shippy retrospective (~07-26), a maritime-domain agent whose lesson is per-session
+Kubernetes sandboxing — no transferable mechanism. Meta AI had nothing in window.
