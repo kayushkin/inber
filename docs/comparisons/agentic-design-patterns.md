@@ -3264,3 +3264,215 @@ the exact thing #10030 and #10937 exist to prevent.
   all providers) — inber has no empty-turn detection on either path, but the measured rate
   upstream is ~1.3 per 1k requests on OpenAI-compatible endpoints, which on this host's
   Anthropic-only corpus is not evidence of anything. Recorded, not filed.
+
+## Harness-watch — 2026-08-06: cache locality is a property of the *provider*, not of the block being moved — and inber's OpenAI path cannot see a cache hit, cannot name a reasoning model, and enforces none of the session's caps
+
+> ⚠️ **Same scope caveat as 2026-08-05, restated because three of the four findings below sit
+> on the same path.** Every enabled inber agent in agent-store runs an Anthropic model and no
+> enabled agent configures a fallback, so `runOpenAITurn` is reachable only by naming an
+> OpenAI-compatible model on a `RunRequest`, never by failover. **TRUE in code, LATENT on this
+> host's corpus.** That is a priority argument, not a correctness one.
+
+### 1. ⛔ Correction to yesterday's §3: goose reverted the tail-relocation for the Responses stack, and inber's Anthropic path already does the version goose restored
+
+[goose #10993](https://github.com/block/goose/pull/10993) walks back
+[#10937](https://github.com/block/goose/pull/10937) for one class of model. #10937 — written up
+here yesterday as the template inber should port — strips the volatile `<turn-context>` block
+out of mid-history and re-emits it at the request tail on every request, so a turn boundary
+stops re-billing the previous turn. That is correct for a **token-granular** cache. It is
+actively harmful for OpenAI's **Responses stack** (gpt-5.x, o-series), whose implicit cache
+reuses an entry only when the stored prompt is a byte **prefix** of the new request. Relocating
+a block on every request means *no request ever extends its predecessor*, so hits stay pinned to
+the static system-prompt/tools prefix for the whole session. Measured on gpt-5.6-terra via
+OpenRouter: cached share went 4,710/~36,000 (13%) → 77–100%; on Terminal-Bench, median cache
+share 7% → 63%, cached tokens per request 26% → 85%. The rule goose landed is conditional —
+**Responses-stack models keep turn-context stationary on the user message it first arrived on;
+everything else keeps the #10937 relocation.**
+
+**inber already has the restored behaviour on Anthropic, and this changes what the open todo
+should do.** `agent/agent_run.go:92-121` injects `VolatileContext` into the last user message
+once per turn and clears the field, so the block stays where it landed and the tool loop's own
+prefix is byte-stable — stationary, which is #10993's rule, not #10937's. Anthropic's cache is
+explicit-breakpoint prefix caching, so this is the right shape for it.
+
+**What inber should consider:** todo `ec9c7122` (port the volatile channel to `runOpenAITurn`)
+says its open decision is "trailing user message vs system string". #10993 adds a third answer
+and rules out a fourth: **do not re-emit the block on every request.** Write it into the user
+message that opens the turn and leave it there, which is what `agent/agent_run.go` already does —
+porting the Anthropic injector verbatim is now the *cheapest and the most correct* option, where
+yesterday it read as merely convenient. The generalisation is worth keeping: **before moving a
+block to improve cache locality, establish whether the cache is prefix-matched or
+token-granular. The same edit doubles the hit rate on one and floors it on the other.**
+
+### 2. cline switches `max_tokens` → `max_completion_tokens` from the model id — inber's version is a two-prefix `HasPrefix`, and the 400 it earns is filed as the model being unhealthy
+
+[cline #12902](https://github.com/cline/cline/pull/12902) fixes a hard first-request failure on
+the generic OpenAI-compatible provider: OpenAI rejects `max_tokens` for reasoning-era models with
+*"Unsupported parameter: 'max_tokens' is not supported with this model. Use
+'max_completion_tokens' instead."* cline deliberately did **not** reach for catalog metadata —
+on a generic endpoint the model id is free-form user input and no catalog can answer for it — and
+instead matches `o[134]` and `gpt-5` with **non-alphanumeric boundary anchoring**, so `gpt-4o`
+and `yolo1` cannot match while the namespaced `openai/o3-mini` can.
+
+**inber's is the naive version of exactly that, one line long:**
+
+```go
+// engine/turn_openai.go:69-73
+// o-series models (o1, o3, etc.) require max_completion_tokens instead of max_tokens.
+if strings.HasPrefix(client.Model, "o1") || strings.HasPrefix(client.Model, "o3") {
+	req.MaxCompletionTokens = 16384
+} else {
+	req.MaxTokens = 16384
+}
+```
+
+Three misses, each a hard 400 on the first request of the session: **`o4-*`** (the branch names
+o1 and o3 only), **the whole `gpt-5` family** (reasoning models under OpenAI's current rule), and
+**every namespaced id** — `openai/o3-mini`, `azure/o3` — which is not incidental, because
+`agent/clients.go` routes openrouter through this same client and OpenRouter ids are all
+namespaced. Note the *only* answer that is not a bare error is the false negative: a model that
+needs `max_completion_tokens` and does not get it fails loudly.
+
+**What it costs beyond the 400.** `client.ChatCompletion` returns the error, `runOpenAITurn`
+wraps it (`engine/turn_openai.go:99`), and `engine/turn_execute.go:56` hands it to
+`recordModelHealth`. `errorIsEvidenceAboutTheModel` (`engine/failover.go:127-160`) excludes three
+things — a cancel, inber's own deadline, `ErrMaxAPICallsExceeded` — and a provider 400 is none of
+them, so `modelStore.RecordError` fires and the model goes unhealthy in a **host-shared** store.
+A parameter-name mismatch in inber's own request builder is therefore recorded as the provider
+being at fault, for every other harness on this box. Same compounding shape already recorded
+against the overflow path (`df1de352`).
+
+**What inber should consider:** take cline's boundary-anchored matcher rather than widening the
+prefix list, because the failure mode of a prefix list is that it silently stops covering the
+next model family. **What a fix must decide, and this entry does not:** whether the answer
+belongs in inber at all. The single-source-of-truth move is a capability field on the model-store
+row — but `modelstore.Model` (`~/repos/model-store/store.go:25-42`) carries id, provider, name,
+short name, aliases, context window, two prices, enabled and priority, and **no capability of any
+kind**, so today there is nothing to read. Adding one is a change to the owning store and to
+every seeded row; a local matcher is a change to one line. cline chose the matcher *and said
+why* — free-form ids on a generic endpoint have no catalog row. inber's ids come from model-store
+for a configured model and from the request for an ad-hoc one, so it has both cases and has to
+pick per case. Adjacent and already filed, do not merge: `e68b05e0`, reasoning **effort**
+discarded on the same path.
+
+### 3. inber cannot observe a cache hit on the OpenAI path at all — the wire fields are not in the struct, so every cached token is priced as fresh input
+
+The half of #10993 that is not about placement is that it is **measured**: the whole PR is
+argued in cached-token share. [opencode #40450](https://github.com/sst/opencode/pull/40450) is
+the same instinct from the other end — cache *writes* were missing from the usage it reports over
+ACP, so its own accounting understated what a session cost.
+
+**inber's OpenAI-compatible usage type has three fields and none of them is a cache figure:**
+
+```go
+// agent/openai_types.go:64-68
+type OpenAIUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+```
+
+`prompt_tokens_details.cached_tokens` — the field every OpenAI-compatible endpoint that caches
+reports — is not parsed, so it is dropped at the JSON boundary.
+`agent/openai_conversion.go:196-199` and `:236-239` then build `anthropic.Usage` with
+`InputTokens`/`OutputTokens` only, leaving `CacheReadInputTokens` and
+`CacheCreationInputTokens` at zero. `CalcCostWithCache` (`session/timeline_cost.go:49-55`) is
+called with `cacheRead=0, cacheWrite=0` on this path by construction, so **every cached token is
+billed at the full input price** — and, worse for the work in §1, there is no number that could
+tell anyone whether a cache change on this path did anything. You cannot fix a cache you cannot
+see.
+
+**What inber should consider:** parse `prompt_tokens_details` and carry it through the
+conversion. **What a fix must decide, and it is a real trap rather than a mechanical port:**
+the two providers disagree about what the input count *contains*. Anthropic's `input_tokens`
+**excludes** the cached portion; OpenAI's `prompt_tokens` **includes** it. Passing OpenAI's
+`prompt_tokens` as `inTok` alongside `cached_tokens` as `cacheRead` double-charges the cached
+span — which is the mirror image of the bug the comment at `session/timeline_cost.go:30-43`
+records inber already shipped once, and closed as `00093e48`. So the decision is where the
+inclusive→exclusive normalisation happens: in the conversion (making `anthropic.Usage` mean one
+thing everywhere, at the cost of a lossy transform in a layer that is supposed to be
+transparent), or in the cost function (which then needs to know which provider produced the
+numbers it was handed, and today it does not).
+
+### 4. The session's configured caps and the mid-turn injection channel are attached inside `buildAgent` — so the OpenAI turn honours neither
+
+[codex #37114](https://github.com/openai/codex/pull/37114) adds per-session execution limits to
+code mode; the transferable part is only that a limit belongs to the *session*, not to whichever
+execution path happens to run it.
+
+`buildLimitCheck` (`engine/build_hooks.go:37-72`) enforces the three caps an operator can
+actually set — `MaxInputTokens`, `MaxTurns`, `MaxResponseTime`, the last being the orchestrator
+speed enforcement that tells a slow orchestrator to answer or spawn. `buildInjectCheck`
+(`:14-30`) drains `e.injections`, the channel a mid-turn steer arrives on. **Both are wired in
+exactly one place** — `engine/build.go:98` (`a.InjectCheck = e.buildInjectCheck()`) and
+`engine/build.go:109` (`a.SetLimitCheck(e.buildLimitCheck())`) — and both of those lines are
+inside `buildAgent`, which `engine/turn_execute.go:29-31` skips outright when the client is
+OpenAI-compatible. `runOpenAITurn`'s loop calls `e.buildHooks()` and neither of the other two.
+
+So on an OpenAI-served session: the token budget, the turn cap and the response-time cap are
+accepted by `applyRequestOverrides`, stored on `e.Limits`, and never read; and a message injected
+while the turn is running is never drained mid-turn. The injection half is bounded rather than
+lost — `Session.turn` requeues anything unread onto `pendingMessages` (the `1018979` fix) — so it
+surfaces at the next turn instead of never, which is a delivery-latency bug, not a data-loss one.
+The limits half has nothing catching it.
+
+This is the fourth instance of one root cause and it is worth naming as such: **`buildAgent` is
+where inber attaches everything that makes a turn a *governed* turn, and one of its two turn
+loops does not go through it.** The three already filed are the volatile context (`ec9c7122`),
+the context-overflow guard (`df1de352`) and the runaway API-call cap (`9fb35070`, which is the
+hardcoded `maxAPICalls = 50` and **not** these configured caps). **What a fix must decide:**
+whether to keep porting hook-by-hook, or to split `buildAgent` into a provider-independent
+"govern this turn" half and an Anthropic-specific "build the SDK agent" half so the next hook
+added cannot land on one path only. The second is the fix that stops the pattern; it is also a
+refactor of the hottest function in the engine, which is a blast-radius call, not an oversight.
+
+### 5. Checked against inber this window and NOT worth a finding — recorded so the next sweep does not re-walk them
+
+- **[goose #10992](https://github.com/block/goose/pull/10992)** (byte-bound the shell truncation
+  preview) — inber already landed this class as `47c7cefe`. `internal/textutil` cuts to a byte
+  budget on a rune boundary, `session/truncate.go:98-127` uses it for both head and tail, and 27
+  call sites across 17 files route through it. Re-verified, nothing to do.
+- **[codex #37190](https://github.com/openai/codex/pull/37190)** (interrupt the turn after one
+  Guardian denial) — the underlying observation transfers: inber's refusal is a *string returned
+  as a tool error* (`engine/build_hooks.go:90-101`), the loop `continue`s, and nothing counts
+  denials, so a model refused in Observe mode can walk the tool list rephrasing until
+  `maxAPICalls` (or forever on the OpenAI path). **Not filed** because the mechanism that would
+  count it already exists and is already filed as dead: `guard.RecordToolCall` (`guard/guard.go:209`)
+  and `IsRepeating` (`:305`) have never run — todo `db1817cb`. Whoever picks that up should decide
+  there whether a repeated *denial* is the repetition worth acting on, rather than have it filed
+  twice.
+- **[goose #10986](https://github.com/block/goose/pull/10986)** (make shell approval titles
+  faithful — the approval prompt named a different command than the one that would run) — moot
+  here. `ApprovalFunc` is set by no session in the tree, which is why `CheckTool` answers
+  `NeedsApproval` rather than asking; there is no approval surface to be unfaithful. Becomes live
+  the moment one is built, and the rule to carry over is that the string shown to the approver
+  must be the string handed to the tool.
+- **[codex #37204](https://github.com/openai/codex/pull/37204)** (durable user-message queue
+  dispatch) — inber's queue is `pendingMessages`, in memory, and its admission contract is
+  already open as `5320b48f`. Durability is one of the choices that todo has to make; adding a
+  second todo would fragment it.
+- **[codex #37188](https://github.com/openai/codex/pull/37188) / [#37022](https://github.com/openai/codex/pull/37022)
+  / [#37020](https://github.com/openai/codex/pull/37020) / [#37053](https://github.com/openai/codex/pull/37053)**
+  (reserve the `tool_search` namespace; canonicalize defaults under `functions`; strict collision
+  and conflicting-description errors) — the same cluster as #36954 last week, and inber's version
+  is filed twice already (*"a duplicated tool name puts two definitions on the wire"*, *"tool
+  names are load-bearing control flow, and no name is reserved"*). Re-verified unchanged.
+- **[codex #37038](https://github.com/openai/codex/pull/37038) / [#37040](https://github.com/openai/codex/pull/37040)
+  / [#37031](https://github.com/openai/codex/pull/37031)** (turn environment permissions, applied
+  to future turns) — the 2026-08-05 §2 cluster continuing; inber's gap is `getOrCreateSession`
+  and is filed as `c14cd190`. Nothing new.
+- **[cline #12928](https://github.com/cline/cline/pull/12928)** (Bedrock wants Converse
+  `cachePoint` markers, not Anthropic `cache_control`) — no Bedrock path in inber;
+  `agent/clients.go` names anthropic, openai, google, openrouter, ollama and a catch-all. Worth
+  remembering as the shape *"a cache marker is provider-syntax, not a portable concept"* if a
+  Bedrock credential is ever added, since inber's four `cache_control` blocks are spent by name
+  (`bd706121`).
+- **[cline #12953](https://github.com/cline/cline/pull/12953)** (a recoverable error must not
+  kill a turn that completed with a plan) — the same family as #12820, already written up
+  2026-08-02 §2 and filed as `69f05f89`. The inber-specific version, `runOpenAITurn` treating
+  `max_tokens` as a clean `end_turn` (`engine/turn_openai.go:107-115`), is a stop-reason question
+  and belongs on `6b4a9ab5`.
+- **[codex #37151](https://github.com/openai/codex/pull/37151)** (coalesce concurrent git status
+  scans) — a singleflight around a repeated subprocess. inber runs git at close
+  (`321d7d49` territory), not per-turn against a shared cache, so there is nothing to coalesce.
