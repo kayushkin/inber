@@ -788,3 +788,151 @@ Anthropic engineering has published nothing since 2026-04-23. DeepMind's July ou
 Gemini and robotics model launches. HuggingFace's only in-window agent post is Allen AI's
 Shippy retrospective (~07-26), a maritime-domain agent whose lesson is per-session
 Kubernetes sandboxing — no transferable mechanism. Meta AI had nothing in window.
+
+# 2026-08-06 sweep
+
+Coverage note: the 08-05 sweep's ceiling was **2608.03222**; the listing now runs to
+**2608.05xxx**, so 2608.033xx+ was unswept, plus two late-July items earlier sweeps
+missed. Dates below read off the arXiv `/abs` submission-history block, not search
+snippets. Deduped against the 175 arXiv ids across all five paper docs and
+`comparisons/`.
+
+## ECLoop: gate the *action* on evidence the trajectory has already observed
+
+[arXiv:2607.28815](https://arxiv.org/abs/2607.28815) — v1 2026-07-30, no revisions. Xu,
+Li, Wang, Yang, Chen (cs.SE).
+
+Names the failure **premature commitment**: a coding agent edits files or submits a patch
+before it has looked at enough repository evidence to justify the change. ECLoop sits
+between the agent and the repo. It compiles per-task **evidence conditions** from the
+issue text and repo structure — what must have been observed before each *class* of
+mutation — tracks which the running trajectory has satisfied, and **postpones** any
+proposed action whose conditions are unmet. All 500 SWE-bench Verified instances, two
+models × two scaffolds: **Pass@1 +4.8 to +11.8 pp**, no retraining and no scaffold
+change, and **token consumption down up to 12.1%**, because the agent stops chasing
+actions it cannot support. The ablation matters: structured conditions beat an equivalent
+natural-language summary, so the structure is load-bearing rather than the reminder.
+
+**What inber should consider:** this is the third dispatch-layer gate in this doc — after
+Ledger's *govern* (2607/2608 entry, `2608.00808`) and the Wix executability gate
+(`2608.01050`) — but it is keyed on **trajectory state** rather than a result cache or
+static preconditions, and it is the one with a headline number on the benchmark inber
+cares about. It slots into `agent.ExecuteToolCallWithChainAndSideband` as a predicate over
+"what has this session read so far", which `agent/read_cache.go` already tracks part of.
+The property that makes it cheap is the one the 08-01 entry (`2607.12161`) says actually
+governs the bill: **it costs nothing in the prompt** — no injected text, no BP1/BP2 churn.
+Pair the reading with CapLease: a postponement is a deferral, not a denial, so it needs the
+same durable-state care the moment a subagent inherits it.
+
+## Skill-Use: skill invocation is a property of the harness, not of the model
+
+[arXiv:2608.04828](https://arxiv.org/abs/2608.04828) — v1 2026-08-05. Han, Xu, Liao, Wang,
+Jiang, Di, Lu, Hu, Xiao (cs.CL).
+
+A benchmark for skill use **under progressive disclosure** — the agent sees only a skill's
+name and short description and must retrieve the full procedure before following it, which
+is exactly inber's skill-store contract. The outcome is decomposed into three
+independently-scored facets: **Trigger** (did it invoke the right skill at all),
+**Compliance** (did it follow the prescribed procedure), and **Boundary** (did it avoid
+forbidden operations), with execution credited only after trigger. 79 real skills, 177
+executable tasks, nine domains, isolated Docker sandbox, trajectory-rubric scored. Eight
+LLMs across two harnesses: the best configuration reaches an SU of only **0.613**, trigger
+and compliance fail as **independent bottlenecks**, and both absolute scores *and model
+rankings* shift with the harness.
+
+**What inber should consider:** the harness-conditioning result means a skill-store quality
+signal measured under one harness does not transfer, so inber cannot read skill efficacy
+off an external eval — it has to measure trigger rate against its own prompt assembly. The
+immediately useful piece is the **three-way split**. inber today can only observe "the
+skill didn't help", which conflates a `description` that never fired with a procedure that
+fired and was ignored — two defects with opposite fixes (rewrite the description field vs.
+restructure the SKILL.md body). Logging trigger separately from compliance is a counter,
+not a feature. Note also that **Boundary** is the skill-side twin of the permission guard:
+a skill that says "never do X" and a guard that blocks X are two enforcement points for one
+rule, and per the single-source-of-truth rule they should not each carry their own copy of
+the list.
+
+## Scrouting / SuperScout: the value is the *verified handoff*, and the paper's own ablation says the routing is not
+
+[arXiv:2608.04804](https://arxiv.org/abs/2608.04804) — v1 2026-08-05. Bhola, Krishnan, NS
+(cs.SE).
+
+A 7B searcher explores the repository first and emits a **structured handoff whose
+reproduction claims are sandbox-verified, with false claims stripped before delivery**; its
+hidden states plus the task text then route to one of four frontier fixers (adding a fixer
+needs no retraining). On the full Python slice of SWE-bench Pro (266 tasks, official capped
+budget tier): **159/266 solved vs 158 for the best single model, at about one fifth the
+cost per solve**, searcher compute under half a cent of GPU per task. The reason to file it
+is the authors' own honest ablation — **a no-router baseline that always picks the cheapest
+fixer, given the handoff, ties the full routed system.** A paired calibration study suggests
+the handoff *redistributes* rather than adds solving ability, lifting the three cheaper
+fixers while slightly hurting the strongest (directional only, N=99).
+
+**What inber should consider:** inber already has subagent spawning, so the actionable half
+is nearly free and the expensive half — a trained 7B searcher and a hidden-state router —
+is the half the paper's own ablation says did not matter. The mechanism worth taking is a
+**read-only scout subagent that returns a structured handoff whose claims it could not
+reproduce in the sandbox are deleted rather than hedged.** Two cautions land directly: the
+"slightly hurting the strongest fixer" direction argues for scoping a handoff to cheaper
+models rather than applying it uniformly, and this is the third independent appearance of
+the scout-subagent shape in this corpus — including one where **opencode built it and then
+removed it** ([PR 30435](https://github.com/sst/opencode/pull/30435),
+`docs/comparisons/opencode.md`, 2026-06-03 entry). That removal is evidence about the
+*dedicated-subagent packaging*; this paper is evidence about the *verified handoff
+artifact*. They are separable and should not be conflated.
+
+## Provenact: authorization goes stale between approval and effect
+
+[arXiv:2608.02764](https://arxiv.org/abs/2608.02764) — v1 2026-08-03. Peng, Wu (cs.MA).
+
+Identifies **stale authorization** as the core failure of concurrent agent governance:
+safeguards decide whether an action is allowed from the state visible *when the action is
+requested*, but budgets, approval status and risk signals can change before the effect
+actually occurs. It defines **policy-state serializability** — every committed effect must
+be explainable as authorized against the policy state immediately *before it occurred*, not
+at request time — and implements Provenact, a runtime that keeps policies as reviewable
+programs while coordinating the state and effects needed to preserve their decisions. A
+PostgreSQL-backed prototype prevents stale authorizations that baselines passing policy
+state as ordinary request context miss, preserves delayed approvals while unrelated work
+proceeds, and keeps policy evolution in policy text rather than in trusted provider code.
+
+Measurement caveat, stated plainly: the procurement workflow is **scripted and LLM-free**.
+This is a systems argument with scenario coverage, the same class this doc already accepted
+CapLease (`2608.01710`) on — not an accuracy result.
+
+**What inber should consider:** this is the *orthogonal* half of CapLease, not a duplicate.
+CapLease is about one approval being **replayed** across retry, delegation and crash-resume;
+Provenact is about one approval being **honored too late**, after the world it was granted
+against has changed. inber's exposure is structural: subagents run concurrently against a
+shared worktree and shared session state, so a verdict the guard reaches in Assist mode is
+evaluated against state a sibling subagent may already have mutated. The design consequence
+is one line and it is the same one CapLease implies from the other direction —
+**re-evaluate the policy at commit, not at request**, which means a guard verdict cannot be
+a value the caller carries around. Decide this *before* `ApprovalFunc` is wired
+(`engine/build_hooks.go:85-88` records that nothing sets it yet), because both papers now
+say the retrofit order is the expensive one.
+
+## Checked and rejected — 2026-08-06
+
+- **[arXiv:2608.01918](https://arxiv.org/abs/2608.01918) HarnessCompass** (08-03) reports
+  SWE-bench Verified Pass@1 **54% → 66%** over five automatic-harness-evolution iterations,
+  with claimed transfer to held-out tasks and other models. Withheld because it sits in
+  direct tension with *Rethinking the Evaluation of Harness Evolution for Agents*
+  ([arXiv:2607.12227](https://arxiv.org/abs/2607.12227), `2026-07-harness-research.md`),
+  which argues AHE does not consistently beat matched baselines. That contradiction is
+  worth resolving deliberately rather than filing as a finding, and the method needs an
+  evolution loop inber has no path to. The one cheap transferable idea: **solicit
+  first-person feedback from the agent about harness usage** as an evolution signal,
+  separate from trajectory-derived signals.
+- **[arXiv:2608.03463](https://arxiv.org/abs/2608.03463) LeanMem** (08-04) types memories by
+  compressibility (profile / event / record), updates only the evolving type, and allocates
+  retrieval budget per query — up to **+15.1 points** at lowest cost on LoCoMo and
+  LongMemEval-S. Withheld on transfer: conversational-memory benchmarks with GPT-4.1-mini
+  and Qwen3-8B, and it is a **store-side** improvement, which the 08-04 entry
+  (`2607.08716`) argues explicitly is not the lever — the gate on *when* to inject is.
+
+## Blogs: still nothing, 2026-07-23 → 2026-08-06
+
+Anthropic engineering's index surfaces no post newer than the 2026-04-23 item already
+recorded. DeepMind, Meta AI, Microsoft Research and HuggingFace published nothing in window
+on harness design, context, caching, memory or permissions.
