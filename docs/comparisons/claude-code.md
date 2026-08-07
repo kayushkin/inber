@@ -213,11 +213,30 @@ if inber enforces a read-before-edit invariant, let any content-observing tool
 (grep/search returning file lines) mark the file "seen" for the turn, not just the
 dedicated Read tool.
 
+> ⛔ **WALKED 2026-08-07 (nightly worker) — the read-before-edit half is LATENT and needs no
+> further thought until that changes.** inber enforces no read-before-edit invariant at all:
+> `grep -rn "read.before.edit\|readBeforeEdit\|has not been read"` over every `.go` file
+> returns zero. The sentence is conditional ("if inber enforces") and the condition is false,
+> so there is nothing to widen. The path-escalation half is a genuine feature proposal, not a
+> defect, and belongs with the guard-mode work (`9eeba694`), not on the finding shelf.
+
 The permission system would have the highest impact on daily usability while being relatively straightforward to implement given inber's existing tool architecture.
 
 ## Harness-watch — 2026-07-13: memory is the *non-derivable complement* of the codebase — a falsifiable rule for what to cut
 
 [claude-code 2.1.206](https://github.com/anthropics/claude-code/commits/main/CHANGELOG.md) adds "a `/doctor` check that proposes trimming checked-in `CLAUDE.md` files by cutting content Claude could derive from the codebase." Small line, good idea. Every harness tells you to keep memory files short; nobody ships a *rule* for what to cut — so in practice memory files only grow. This criterion is falsifiable and automatable: **if the agent could recover the fact by reading the repo, it does not belong in memory.** Memory is for what is *not* in the source — preferences, decisions, landmines, non-obvious invariants, things that cost someone an afternoon to learn. It reframes memory from "helpful notes" to the non-derivable complement of the codebase. Note the deliberate posture: it **proposes**, it does not auto-delete.
+
+> ⛔ **WALKED 2026-08-07 (nightly worker) — the premise below is FALSE twice over. Do not act on it.**
+> (a) **inber has no top-level `MEMORY.md`, and never has.** `git log --all -- MEMORY.md` returns
+> nothing and `git ls-files | grep -i memory` lists only source files. (b) **`:8160` is not
+> memory-store.** `ss -tlnp` shows `:8160` is the `llm-bridge` gateway binary; memory-store is a
+> library, not a service with a port (see repos CLAUDE.md). The accreting MEMORY.md the entry is
+> actually describing is **Claude Code's own auto-memory on this host**
+> (`~/.claude/projects/-home-kayushkincom-repos/memory/MEMORY.md`) — measured at **1,489 bytes**,
+> 13 one-line index entries, and **zero** `FIXED`/`RESOLVED` markers. So the bloat the proposed
+> pruning job would attack does not exist here, in either repo. The *idea* (memory is the
+> non-derivable complement of the codebase) is still worth keeping; the inber-specific
+> justification under it is not.
 
 **What inber should consider:** inber has both a `memory-store` (:8160) and a large top-level `MEMORY.md` that only accretes (several entries are already marked FIXED/RESOLVED and are now pure context cost, paid on every session). A scheduler job that walks each memory entry with a cheap model and asks *"could you have derived this by reading the repo?"* — then files the candidates as a **proposal** rather than deleting — is roughly a day of work and attacks context bloat on every single session thereafter. Keep the propose-don't-apply posture; the same reason the noteboard decision backlog uses it. The complementary entry is 07-13 in `agentic-design-patterns.md`, which covers the *authority* half of claude-code's window (consent provenance, transcript tampering, headless consent banking).
 
@@ -282,6 +301,36 @@ earlier — `engine/build_hooks.go:105` receives `toolID` and calls `d.OnToolCal
 `server/api_bridge.go:840-845` even though the bridge defines it. Same missing-identity root cause as
 the goose #10716 entry.
 
+> ⛔ **WALKED 2026-08-07 (nightly worker). This entry is now SPENT. Four claims, four different
+> fates — do not re-derive any of them.**
+>
+> 1. **"Every depth-2 subagent is silently invisible" — FIXED, no longer true.** `13d87d1` made
+>    the forwarder pass a descendant's envelope through unchanged; `server/spawn.go:96` is
+>    `case eventKindAgentUpdate, eventKindAgentSpawned, eventKindAgentDone: emit(ev)`. Todo
+>    `c81c4b63`.
+> 2. **`msg.ToolCallEvent.ToolID` always empty — FIXED tonight, inber `0d72bc3`.** The id was
+>    dropped only on `DisplayHooks`, which took `(name, input)`; it now takes `toolID`, and
+>    `StreamEvent.ToolID` carries it to `api_bridge`. The live cost was larger than this entry
+>    says: bridge-ui pairs call to result by `tool_id`, so an empty id put them in unrelated
+>    rows and the tool **output was discarded**, not merely unlabelled.
+> 3. **"`Store.SpawnChildren` … a grandchild's spend rolls up into no ancestor at any depth" —
+>    REFUTED. Do not file this.** `server/spawn.go:262-266` resolves `ActiveRequest(req.ParentKey)`
+>    and `:281` writes it as the child's `parent_request_id`, so a grandchild IS linked — to its
+>    immediate parent. The query (now at `server/store.go:572-579`, not `:266-272`) is a normal
+>    one-hop adjacency lookup; a caller wanting a subtree recurses. And there is no caller:
+>    `SpawnChildren` has exactly one reference in the repo, `server/store_test.go:130`. No
+>    aggregate over `requests` exists anywhere (no `SUM`, no `GROUP BY`), and the only dollar cap,
+>    `guard/guard.go:287`, is fed solely by the session's own turns via `RecordCost`. There is no
+>    rollup for a grandchild to fall out of.
+> 4. **The `agent_*` attribution drop — CONFIRMED and FILED as `e37fc5f4`.** `Data` carries
+>    `agent`/`session_key`/`parent_key`/`depth` (and `status` on `agent_done`), and
+>    `streamEventToBridge`'s `default:` branch copies only `Subtype` and `Message`. Left open
+>    because mapping it onto `msg.SystemEvent`'s `TaskID`/`SubagentType`/`TaskStatus` is a
+>    protocol question spanning three repos.
+>
+> Note the doc's line numbers were stale in every case (`store.go:266-272`, `server.go:56-58`,
+> `spawn.go:57`, `build_hooks.go:105`, `api_bridge.go:840-845`). Re-locate by symbol, not line.
+
 ### 3. Two settings with no inber analogue, recorded so the gap is named
 
 `sandbox.network.strictAllowlist` denies non-allowlisted hosts for sandboxed commands **without
@@ -296,3 +345,18 @@ a host allowlist consulted without a prompt, so the sandbox is not merely adviso
 rather than silently missing; inber emits no init/system event and `msg.SystemEvent.MCPServers` is
 never populated, which is moot only because `tools/mcp/` still has zero importers
 (`harness-control-matrix.md:91`) — worth wiring at the same time as the client.
+
+> ⛔ **WALKED 2026-08-07 (nightly worker). The load-bearing claim here is STALE — do not repeat it.**
+> "`guard.CheckTool` has zero non-test callers and the mode is hardwired `guard.Autonomous`" was
+> true when written and is not now. `engine/build_hooks.go:94` is
+> `switch e.Guard.CheckTool(tool, input)`, and the mode comes from config:
+> `engine/engine.go:201` `mode, err := guard.ParseMode(cfg.Mode)` feeding
+> `:205` `e.Guard = guard.New(e.Limits.GuardConfig(mode))`. The gate is wired. What is genuinely
+> still open is *which tools are classified* — nine names reach the model unclassified, so Assist
+> allows them unasked. That is filed as `9eeba694`, not here.
+>
+> The egress-axis and `mcp_server_errors` halves stand as written: both are absent, and both are
+> latent while `tools/mcp/` has no importer. The worktree-confinement point in the 2026-07-13
+> entry above is already filed as `d967400a` (an A/B/C/D policy call), so it needs no new todo —
+> `forge` IS live in inber (`server/spawn.go`, `engine/engine_new.go` import it), so that one is
+> live rather than latent.
