@@ -14,11 +14,21 @@ import (
 // defaultOneShotModel is used when the caller omits Model in a OneShotRequest.
 const defaultOneShotModel = "claude-haiku-4-5-20251001"
 
+// defaultOneShotMaxTokens caps the response when the caller names no limit.
+const defaultOneShotMaxTokens = 4096
+
 // OneShotRequest is a stateless single-turn LLM call.
 //
 // When Schema is set, the response is hard-forced via tool_choice: the model
 // MUST call a synthetic tool named "output" whose input schema is the provided
 // Schema. The tool's input is returned in OneShotResponse.Parsed.
+//
+// Schema is a whole JSON Schema object, which is what the canonical wire type
+// says it is (msg.OneShotRequest in ~/repos/llm-bridge). It is not a bare
+// properties map: this handler used to assign it straight to the SDK's
+// Properties field, so a caller honouring the documented contract sent
+// {"properties":{"type":"object","properties":{...},"required":[...]}} and got
+// a 400 back. See toolInputSchema.
 type OneShotRequest struct {
 	Prompt       string          `json:"prompt"`
 	SystemPrompt string          `json:"system_prompt,omitempty"`
@@ -64,13 +74,10 @@ func (g *Server) handleOneShot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model := req.Model
-	if model == "" {
-		model = defaultOneShotModel
-	}
-	maxTokens := req.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 4096
+	params, err := buildOneShotParams(req)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	// This handler builds its own client instead of taking one from the
@@ -79,44 +86,12 @@ func (g *Server) handleOneShot(w http.ResponseWriter, r *http.Request) {
 	// that would silently post an unredacted prompt if this were dropped.
 	client := anthropic.NewClient(agent.EgressRedactionRequestOption())
 
-	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(model),
-		MaxTokens: int64(maxTokens),
-		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(req.Prompt)),
-		},
-	}
-	if req.SystemPrompt != "" {
-		params.System = []anthropic.TextBlockParam{{Text: req.SystemPrompt}}
-	}
-
-	// Schema → synthetic "output" tool with tool_choice forced to it.
-	if len(req.Schema) > 0 {
-		params.Tools = []anthropic.ToolUnionParam{
-			{
-				OfTool: &anthropic.ToolParam{
-					Name:        "output",
-					Description: anthropic.String("Respond by calling this tool with structured output matching the schema."),
-					InputSchema: anthropic.ToolInputSchemaParam{
-						Properties: json.RawMessage(req.Schema),
-					},
-				},
-			},
-		}
-		params.ToolChoice = anthropic.ToolChoiceUnionParam{
-			OfTool: &anthropic.ToolChoiceToolParam{
-				Name: "output",
-				Type: "tool",
-			},
-		}
-	}
-
 	start := time.Now()
 	resp, err := client.Messages.New(r.Context(), params)
 	if err != nil {
 		logger.WithComponent("oneshot").Error("api call failed", map[string]interface{}{
 			"error": err.Error(),
-			"model": model,
+			"model": string(params.Model),
 		})
 		jsonError(w, "api call failed: "+err.Error(), http.StatusInternalServerError)
 		return

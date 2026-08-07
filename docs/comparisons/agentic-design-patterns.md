@@ -3476,3 +3476,172 @@ refactor of the hottest function in the engine, which is a blast-radius call, no
 - **[codex #37151](https://github.com/openai/codex/pull/37151)** (coalesce concurrent git status
   scans) — a singleflight around a repeated subprocess. inber runs git at close
   (`321d7d49` territory), not per-turn against a shared cache, so there is nothing to coalesce.
+
+## Harness-watch — 2026-08-07: a prefix survives because nothing already sent ever moves — goose turns that into a declared per-provider contract *and a test*, and inber's own provider contract is four tables that disagree
+
+### 1. goose stops relocating cached bytes altogether, declares the cache contract per (provider, model), and pins it with a prefix-invariance test
+
+[goose #11022](https://github.com/block/goose/pull/11022) closes the two-entry arc this doc
+recorded on 2026-08-05 (#10937 relocates turn-context to the tail) and 2026-08-06 (#10993 walks it
+back for the Responses stack). The resolution is not a third placement rule. It is the observation
+that **persistence and relocation cannot coexist**, so goose keeps persistence and deletes
+relocation. Three pieces:
+
+- **Append-only turn context.** The turn-context block renders **once**, at turn start, and is
+  persisted as a standalone agent-only user message carrying a `turnContext` marker. It is never
+  spliced into an existing message and never re-emitted. The stated invariant is *"bytes already
+  sent to a provider are never moved or edited"* — so *"every request in the turn, and in every
+  later turn, carries identical bytes at identical positions."* The per-format relocation
+  machinery (Anthropic tail relocation, OpenAI chat extraction) is deleted; the PR is **−153
+  production lines** with the growth in test assertions.
+- **Extension parts frozen at turn start.** Todo lists, timer counts and code-mode metrics stop
+  churning mid-turn — the same rule applied to the things that render *into* the block.
+- **A declared `CacheSemantics` table keyed by (provider, model)**, naming which contract each pair
+  has: explicit breakpoints (Anthropic, Databricks, OpenRouter) or implicit prefix matching (OpenAI,
+  Responses). **An unknown pair defaults to strict byte append-only** — the most conservative
+  contract, not the most convenient one. One shared breakpoint writer
+  (`apply_chat_payload_breakpoints`) replaces the scattered per-provider copies across OpenRouter,
+  LiteLLM and Databricks.
+- **`prefix_invariance.rs`**, a test harness asserting *request N is a cache-valid prefix of request
+  N+1* across every format, with **seeded regressions** proving it detects the bug classes that were
+  already shipped. Measured after: Anthropic ~8k input tokens served from cache on resume; OpenAI
+  gpt-5-mini 93–98% of input cached; Moonshot 96% on resume.
+
+**Where inber already stands, checked rather than assumed.** The placement half is done and was
+done before this PR: `agent/agent_run.go:93-121` injects `VolatileContext` into the last user
+message once per turn and clears the field, and `agent/volatile_context_writeback_test.go` pins
+that the write lands in the caller's slice (`&e.Messages`) rather than a request-local copy — so the
+block is persisted, stationary, and inherited by a fork. That is #11022's shape, arrived at
+independently. The mid-turn-churn half is also clean: the one thing that changes between API calls
+of a turn is tools being withheld under `forceSummary` (`agent/agent_run.go:78-80`), which is
+deliberate, documented, and already priced and named by the cache-miss report
+(`engine/cache_miss_report_test.go`).
+
+**What inber should consider:** the third piece, which inber has nothing of. inber measures cache
+misses **at runtime** — `PromptBlueprint` diffs turn N's blocks against turn N−1's and
+`engine/cache_miss_report_test.go` pins that a re-bought prompt is named to an operator — but there
+is **no test that runs a sequence of turns and asserts the byte-prefix relation between successive
+requests**. The blueprint tests assert the *diff reports* correctly; they do not assert the prefix
+*holds*. The standing open todo — the BP2-cached system prefix rebuilt from a clock, a turn counter
+and the user's message text — is precisely the failure a `prefix_invariance` test fails on, and it
+was found by hand-probing a memory-store DB instead. **The transferable artifact is the seeded
+regression**: a test that cannot be shown to catch the bug you already shipped is a test you cannot
+trust to catch the next one.
+
+### 2. inber's provider contract is four hardcoded tables that must agree and do not — Google's base URL is wrong, ollama is unreachable, and zhipu exists in exactly one of them
+
+> **FILED 2026-08-07 as todos `95e1f1aa` (the Google base URL) and `7ec4c2da` (the four
+> disagreeing tables). Do not re-file.** They are separate because their fixes are different
+> sizes; they share the decision in the last paragraph and should be decided together.
+
+#11022's `CacheSemantics` is one declared table replacing scattered per-provider copies. inber has
+the copies and no table. `agent/clients.go` answers four separate per-provider questions in four
+separate switches, and **no two of them list the same providers**:
+
+| function | line | providers it knows |
+|---|---|---|
+| `guessProvider` | `:135-148` | anthropic, openai, google, **zhipu**, default→anthropic |
+| `newClientFromKey` switch | `:82-100` | anthropic \| openai, google, openrouter, **ollama** \| default |
+| `envKeyForProvider` | `:151-162` | anthropic, openai, google, openrouter |
+| `defaultBaseURL` | `:165-176` | openai, google, openrouter |
+
+Three live consequences, each verified in code:
+
+- **Every Google model 404s.** `defaultBaseURL` returns `https://generativelanguage.googleapis.com/v1beta`
+  (`agent/clients.go:170`) and `agent/openai.go:52` appends `/chat/completions`. Gemini's
+  OpenAI-compatible endpoint is `https://generativelanguage.googleapis.com/v1beta/**openai**/chat/completions`
+  ([Google's own docs](https://ai.google.dev/gemini-api/docs/openai)); `/v1beta/chat/completions`
+  is not an endpoint on that host at all. The auth half is fine — Gemini's compat endpoint takes
+  `Authorization: Bearer <key>`, which is what `agent/openai.go:58-59` sends — so the whole break is
+  one missing path segment. It costs more than a 404: `ChatCompletion` returns
+  `API error 404: ...` (`agent/openai.go:73`), `engine/turn_execute.go:56` hands it to
+  `recordModelHealth`, and `errorIsEvidenceAboutTheModel` (`engine/failover.go:127-160`) excludes
+  only a cancel, inber's own deadline and `ErrMaxAPICallsExceeded` — so `modelStore.RecordError`
+  fires and **every Gemini model is marked unhealthy in the host-shared model-store**, blaming
+  Google for a typo in inber's URL, for every other harness on this box. Third instance of that
+  compounding shape (`df1de352`, `25b91c78`).
+- **ollama is named at `:92` and reachable by nothing.** It has no entry in `defaultBaseURL`, so it
+  gets `baseURL == ""`, and no entry in `envKeyForProvider`, so a local server that needs no key
+  is rejected at `agent/clients.go:59-60` with *"no credentials found for provider"* before it ever
+  reaches the switch. If a placeholder key is stored to get past that guard, the request POSTs to a
+  bare `/chat/completions` with no host. The 2026-08-03 cline entry already reasoned about ollama's
+  timeout on this path; that reasoning was about a provider that cannot currently be selected.
+- **zhipu is invented at `:143-144` and honoured nowhere.** `guessProvider` returns it for `glm-*`
+  and `zai/*` ids; it is absent from the client switch, the env-key map and the base-URL switch, so
+  it falls through the `:97` catch-all to `NewOpenAIClient("")` — the same hostless POST.
+
+And the framing #11022 supplies: **the default for an unknown pair should be the conservative
+contract.** goose's unknown (provider, model) falls back to *strict byte append-only*, the rule that
+is safe under every cache. inber's unknown model id falls back at `agent/clients.go:145-146` to
+`"anthropic"` — the provider with the *most* specific wire contract in the tree (explicit
+`cache_control` breakpoints, thinking blocks, a distinct tool-schema shape). It is the fail-open
+default in the place goose deliberately chose fail-closed.
+
+**What a fix would have to decide, and this entry does not.** Whether provider transport belongs in
+inber at all. The single-source-of-truth answer is a base-URL (and capability) column on the
+model-store row, which is where `provider` already comes from — but `modelstore.Model`
+(`~/repos/model-store/store.go:25-42`) carries no transport field of any kind, so adding one is a
+change to the owning store and to every seeded row. The local answer is one declared table replacing
+the four switches, which is a change to one file and leaves the store's rows silent about how to
+reach them. This is the same fork the 2026-08-06 `max_completion_tokens` entry hit, and it should be
+decided once for both rather than twice differently. Separately and smaller: whether `guessProvider`
+should exist. It fires only when `ResolveModel` fails, and its honest answer there is an error.
+
+### 3. goose makes the agent loop re-entrant by declaring the conversation to be the execution state
+
+[goose #9574](https://github.com/block/goose/pull/9574) replaces the coroutine agent loop with a
+re-entrant state machine behind `GOOSE_STATE_MACHINE`. *"Each call runs from the persisted
+conversation to the next applied step or client yield; no coroutine state is held between steps."*
+Commands, tools, context management, hooks and inference all become one `Operation` protocol;
+`StateMachine::step` runs the ordered operations until one returns `Applied`; per-operation notes
+are stored **on the messages** under the operation name. The claim that makes it testable:
+*"reconstruction tests discard and rebuild the pipeline after each applied step, proving that
+progress comes from persisted state rather than operation instances."*
+
+**inber's turn loop is the coroutine shape.** `Agent.Run` (`agent/agent.go:311-450`) holds
+`turnAnchorIdx`, `tools`, `apiCalls` and the accumulating `*TurnResult` in Go locals for the whole
+turn, and `runOpenAITurn` (`engine/turn_openai.go`) holds a second, differently-shaped set. Nothing
+outside those frames can answer "where is this turn". That is the structural reason the same hook
+keeps landing on one loop and not the other — the fourth instance was written up yesterday
+(2026-08-06 §4) — and it is why a crash mid-turn cannot resume mid-turn.
+
+**What inber should consider:** not the rewrite. The cheap half is goose's *test* idea applied to
+the state inber already persists: a reconstruction test that, after each API call of a turn,
+rebuilds the engine from `e.Messages` + the turn counter and asserts the next call is identical.
+Whatever that test cannot reconstruct is exactly the per-turn state that lives only in a Go local,
+and that list is the input to any decision about splitting `buildAgent`. It is a measurement, not a
+refactor, and it is the thing the open blast-radius question is currently missing.
+
+### 4. Checked against inber this window and NOT worth a finding — recorded so the next sweep does not re-walk them
+
+- **[codex #37347](https://github.com/openai/codex/pull/37347)** (track context windows per agent —
+  a fork inherits compacted history but must start a *distinct* window lineage, and inherited
+  compaction metadata is reset to the child's initial window) — inber's fork does the deliberate
+  opposite and says why: `server/session_forking.go:57-58` calls
+  `child.Engine.RestoreSession(parentMessages, parentTurnCounter)` so the child's BP3 lands on the
+  boundary the parent already cached instead of re-staging the inherited transcript. That is a cache
+  decision, and codex's is an identity decision; they do not conflict. The identity half was covered
+  2026-06-20 and nothing here changes it.
+- **[codex #37188](https://github.com/openai/codex/pull/37188)** (reserve the `tool_search`
+  namespace) — same cluster as #36954 and #37022, filed twice already. Unchanged.
+- **[codex #37190](https://github.com/openai/codex/pull/37190)** (interrupt the turn after one
+  Guardian denial) — re-appeared in this window's list; already dispositioned 2026-08-06 §5 onto
+  todo `db1817cb`. Do not re-file.
+- **[codex #37367](https://github.com/openai/codex/pull/37367) / [#37368](https://github.com/openai/codex/pull/37368) /
+  [#37369](https://github.com/openai/codex/pull/37369) / [#37371](https://github.com/openai/codex/pull/37371)**
+  (fork in `codex exec`; restore the approval policy when resuming a thread; archive and un-archive
+  from the resume picker) — the resume-fidelity family. #37368 is the one with a shape worth keeping:
+  *a resumed thread must come back under the policy it was running under, not the ambient default.*
+  inber has no analogue to lose, because it has no persisted per-session policy — `disabled_tools`
+  is engine memory (goose.md §2, already written up) and `mode` comes from config on every revive.
+  It becomes live the moment either is persisted.
+- **[codex #37206](https://github.com/openai/codex/pull/37206)** (a unified image budget) — inber
+  sends no images on either turn path; `agent/openai_conversion.go` builds text and tool blocks only.
+  Nothing to bound.
+- **[codex #37261](https://github.com/openai/codex/pull/37261)** (start cached MCP servers lazily for
+  subagents) — `MCPToolRegistry` still has no caller outside `tools/mcp/`, re-verified. A cost for
+  whoever wires MCP, not one today.
+- **[cline #12906](https://github.com/cline/cline/pull/12906)** (a plan-mode command blocklist on
+  `run_commands`) — inber's mode gate is `guard.CheckTool` and the live gap there is the Assist
+  denylist failing open, counted and re-counted on the existing todo. A second blocklist would
+  fragment it.

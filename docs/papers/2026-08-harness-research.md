@@ -936,3 +936,165 @@ say the retrofit order is the expensive one.
 Anthropic engineering's index surfaces no post newer than the 2026-04-23 item already
 recorded. DeepMind, Meta AI, Microsoft Research and HuggingFace published nothing in window
 on harness design, context, caching, memory or permissions.
+
+# 2026-08-07 sweep
+
+Prior sweeps had swept arXiv up to **2608.04828**; the listing now runs to **2608.063xx**,
+so the 2608.049xx–063xx band was unswept and three of the five below sit inside it.
+
+## Resume Means Resume: a machine-checked conformance contract for checkpoint / interrupt / resume
+
+[arXiv:2608.03836](https://arxiv.org/abs/2608.03836) — v1 2026-08-04, v2 2026-08-06. Sajjad Khan.
+
+Defines a **resume contract** of six properties over a workflow-persistence API — prefix
+continuation, effect exactly-once, fork determinism, checkpoint validity, consume-once, recovery
+determinism — checks a reference semantics exhaustively in TLA+ (7.4M states), and then measures
+five deployed agent-workflow frameworks at pinned releases with a deterministic LLM-free harness.
+The measurements are specific rather than rhetorical: LangGraph 1.2.9 durably records a second
+resume value and never consults it, persists schema-invalid state without complaint, and
+re-executes durably-recorded work after a real `SIGKILL`; CrewAI 1.15.2 re-executes completed
+effect-bearing methods against its own documented claim; **no two frameworks share a conformance
+profile**. The sharpest result is a concurrency one: **consume-once holds sequentially and fails
+under concurrency** — *k* processes resuming one parked interrupt fire the gated effect *k* times,
+saturation 1.0 in 36 of 40 cells, and the failure crosses hosts.
+
+This is the session-resumption paper the 08-02 and 08-05 sweeps recorded as *absent* for three
+consecutive windows. It lands where inber's SQLite session store, `server/session_forking.go` and
+concurrent `spawn_agent` intersect: the k-processes-one-parked-interrupt cell is inber's shape the
+moment two subagents can resume the same session, and inber's resume path is exactly where a
+`CapLease` lease ([2608.01710](https://arxiv.org/abs/2608.01710)) and a `Provenact` policy verdict
+([2608.02764](https://arxiv.org/abs/2608.02764)) are both re-read.
+
+- **What inber should consider:** take the six properties as a **checklist to test against, not a
+  framework to adopt**. `fork determinism` and `prefix continuation` are already implicitly claimed
+  by `server/session_forking.go:57` (the child inherits messages *and* turn counter so its BP3 lands
+  on the parent's cached boundary) and nothing asserts either. `effect exactly-once` is the one with
+  a live blast radius, because a resumed inber session replays tool calls and inber's tools are not
+  idempotent.
+
+## Towards a Risk Assessment of Malicious Skill Files in Coding Agents
+
+[arXiv:2608.05223](https://arxiv.org/abs/2608.05223) — 2026-08-05. Yang, Fu, Tantithamthavorn,
+Arora, Chua (Monash). Code/data: `github.com/awsm-research/AgentJailbreak`.
+
+Transforms 471 real shell commands into benign-appearing SKILL files using six LLMs across four
+families, releasing a **2,826-skill benchmark mapped to 11 MITRE ATT&CK tactics**, then
+characterizes two enterprise coding agents over **5,629 completed runs** with a three-judge panel
+validated against a blind human gold standard (κ = 0.85). **Gemini CLI is exploited in 95.5–96.1%
+of runs and Qwen Code in 71.6–74.0%**, near-invariant to which model wrote the skill, and the agent
+**explicitly recognizes the safety problem in 1.99% of runs**.
+
+skill-store (`:8301`) ingests SKILL.md folders from GitHub repos, and the only thing standing
+between an ingested skill body and a shell on this host is `guard.CheckTool(name, input)` on the
+emitted command. This paper measures that exact configuration on a comparable agent at ~95%. It is
+a **different** finding from [2607.12340](https://arxiv.org/abs/2607.12340) (hallucinated skill
+*names*), already on file: that one is about the registry, this one is about the body.
+
+- **What inber should consider:** the finding compounds with a defect already filed — the Assist
+  denylist `isDangerous` (`guard/guard.go:328-334`) names four tools, so everything unclassified is
+  allowed without approval. A malicious skill body does not need to name a dangerous tool; it needs
+  to name one of the unclassified ones. The paper's 1.99% recognition rate is the argument against
+  any mitigation that relies on the model noticing.
+
+## EA-Graph: artifact-anchored verification memory under upstream drift
+
+[arXiv:2608.04278](https://arxiv.org/abs/2608.04278) — 2026-08-04. Hsu, Chi, Everett.
+
+Names a failure that applies to every memory store built out of prose: **a note preserves the
+conclusion without the program state that supported it**, so after an upstream change the repo still
+builds while the earlier verification claim is silently invalid. EA-Graph represents artifacts at
+sub-path granularity, resolves aliases to leaf definitions, anchors each claim to the content used
+to establish it, keeps **evidence strength separate from freshness** as two fields rather than one
+score, and — the load-bearing choice — marks a claim **unprovable rather than guessed** when the
+replacement content is unavailable. Preregistered over 42 sessions, seven worlds, three memory
+conditions and two model tiers: artifact-anchored memory beat prose notes and no-memory in all seven
+Haiku worlds (paired Wilcoxon p = 0.0156 each) and no session fabricated withheld content. The
+authors state plainly that the Sonnet round hit control ceilings and its preregistered contrasts
+were non-significant.
+
+memory-store's rows are the prose-note condition this is measured against, and the
+unprovable-not-guessed rule is the same rule inber already shipped one instance of when it stopped
+summarization from laundering a failed tool call into a clean one
+(`conversation/summarize_preserves_is_error_test.go`, `efafc69`).
+
+- **What inber should consider:** splitting importance into **strength** and **freshness** is a
+  schema change to the memory row, not new machinery — and it is directly relevant to a live inber
+  problem rather than a speculative one, because the single blended `importance` score with its
+  `+0.2` recency bonus and `importance*1.01` read-bump (`memory-store/access.go:8-13`) is precisely
+  what makes the BP2 system prefix reorder itself between turns (goose.md, "held back", 2026-08-06).
+  Separating the two fields is one of the candidate fixes for that open todo, arriving here with an
+  independent argument for it.
+
+## Comparative Approaches to Agent Retrieval over Large Skill Libraries
+
+[arXiv:2608.06196](https://arxiv.org/abs/2608.06196) — 2026-08-06. Kolluru, Sportsman.
+
+A clean negative over 690 skills and 117 realistic non-echoing queries: a hybrid lexical+dense
+ranker puts the correct skill in the top five **73.5% ± 8.0** of the time, while a typed knowledge
+graph encoding prerequisites, data flow and ordering is **significantly worse at matched token
+budget (−11.2 points, p = 0.0007)**. The mechanism is a *pre-filter topology bound* — the graph's
+candidate edges are drawn from the same embedding neighbourhood the ranker already searched, so
+**98.6% of typed edges connect skills the ranker had already surfaced together**, and 73% of the
+queries the ranker misses are unreachable through the graph at all. It also drops a methodology
+result worth more than the headline: evaluating on **author-written** queries overstates hit@5 by up
+to **44 points**, which would have hidden the entire finding.
+
+- **What inber should consider:** this argues against the obvious shape of the unbuilt Phase 1
+  resolver — added structure over a strong ranker buys nothing when the structure is *derived from
+  the same embeddings*, which is the cheap way anyone would build it. It also corroborates codex's
+  bet from 2026-07-17 (lexical-before-embeddings for skill routing). The methodology half binds
+  immediately and regardless: **any skill-store recall number inber measures against queries inber
+  wrote itself is worth up to 44 points less than it reads.**
+
+## DCAS: decoupling CLI agent scaffolding, and the two senses of "planning"
+
+[arXiv:2608.06113](https://arxiv.org/abs/2608.06113) — 2026-08-06. Thangarajah, Chen, Hassan
+(Queen's / Concordia).
+
+Shows the open coding-agent ecosystem has converged on a single training environment — trajectories
+are collected almost exclusively under OpenHands — and that models fine-tuned on that data
+**degrade substantially under any non-training scaffold, while untrained base models show no such
+divergence**. The gap is therefore fine-tuning-induced and tied to scaffold convention, not to model
+capability. The paper argues the load-bearing scaffold-specific behaviour is *planning structure*
+and splits it into **explicit planning** (a pre-execution plan as a first-class artifact) and
+**implicit planning** (structural conventions shaping the whole agent loop), showing the two are
+empirically separable in training data. DCAS itself is a backend-substitution interception layer
+routing API traffic between any CLI scaffold and any backend model without modifying the scaffold.
+
+- **What inber should consider:** llm-bridge **is** DCAS's interception layer — it already routes
+  between many CLI harnesses and many backend models — so the cross-scaffold evaluation the paper
+  needs is something this host can run without building anything. The explicit/implicit split is a
+  direct question for the engine turn loop: inber's `task_plan` tool makes a plan an artifact, while
+  the sideband `then`-chain is implicit convention, and the paper says which of the two a fine-tuned
+  model is sensitive to is measurable rather than a matter of taste.
+
+## Checked and rejected — 2026-08-07
+
+- **Prompt caching / KV reuse: nothing adoptable in window.** The in-window hits
+  ([2608.01657](https://arxiv.org/abs/2608.01657) multi-tenant prefix-cache admission,
+  [2608.01655](https://arxiv.org/abs/2608.01655) PrefixPlace,
+  [2608.01126](https://arxiv.org/abs/2608.01126) spatial prefix caching for wireless edge) are all
+  **serving-side**, which this corpus has repeatedly ruled unreachable from an API-side harness.
+- **[arXiv:2608.06057](https://arxiv.org/abs/2608.06057) When History Lies** — structurally-valid
+  but stale history flips **32.1%** of correct tool decisions. Strong effect, but measured on
+  Qwen3-1.7B and the proposed fix is distillation: the same scope objection that sank 2607.26117.
+- **[arXiv:2608.05778](https://arxiv.org/abs/2608.05778) When Do Prompt-Side Agent Playbooks
+  Transfer?** — frozen-playbook transfer is a conditional cold-start rather than reuse-by-default;
+  a global Holm correction retains **1 of 135** route-level effects. Honest, and too thin to act on.
+- **[arXiv:2608.05604](https://arxiv.org/abs/2608.05604) SkillZip** — contract-preserving graph
+  compression, 3.46× at 99.2% dependency preservation. Held because it sits in direct tension with
+  [2607.03048](https://arxiv.org/abs/2607.03048)'s finding that no skill-representation optimisation
+  breaks even at real prices. Worth resolving deliberately rather than filing.
+- **[arXiv:2608.03169](https://arxiv.org/abs/2608.03169)** — prespecified equivalence study finding
+  reasoning effort does not change unauthorized tool use. **Zero violations in 840 trajectories** is
+  a floor effect; the study cannot discriminate.
+- Also verified real and passed over: 2608.05810 *When Self-Evolution Backfires*, 2608.05791
+  *TIPEX*, 2608.06301 *HarnessOpt-Bench*, 2608.05013 *OneDayAgent*, 2608.05446 *EvoHarness-RL*.
+
+## Blogs: still nothing — and the Anthropic index timestamp is a false positive
+
+Anthropic engineering's index surfaces a **2026-07-21** date that is a `siteSettings._updatedAt`
+CMS field, not a post date; the newest actual article remains the 2026-04-23 item prior sweeps
+recorded. Written down so the next sweep does not chase it. HuggingFace daily papers surfaced no
+agent-harness item not already in the arXiv sweep — it did independently feature 2608.03836,
+corroborating the first pick. DeepMind, Meta AI and Microsoft Research published nothing in window.
