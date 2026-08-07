@@ -54,6 +54,11 @@ func newRepoWithRemote(t *testing.T) (repo string, remote string) {
 
 // dirtyWorkTree leaves one uncommitted file, so finishSessionGit has something
 // to commit and therefore something to try to push.
+//
+// The tests below that want it committed also put it in `changedFiles`: the
+// close-time commit takes the session's own writes and nothing else, so a file
+// nobody recorded is left where it is. Attribution is not what those tests are
+// about — `workflow_git_attribution_test.go` is — so they state it and move on.
 func dirtyWorkTree(t *testing.T, repo, name string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repo, name), []byte("work\n"), 0o644); err != nil {
@@ -79,7 +84,8 @@ func TestSessionCloseRefusesToPushTheRemotesDefaultBranch(t *testing.T) {
 	before := remoteTip(t, remote, "main")
 	dirtyWorkTree(t, repo, "new.txt")
 
-	h := &WorkflowHooks{repoRoot: repo, autoCommit: true}
+	h := &WorkflowHooks{repoRoot: repo, autoCommit: true,
+		changedFiles: []string{filepath.Join(repo, "new.txt")}}
 	summary := strings.Join(h.finishSessionGit(), "\n")
 
 	if remoteTip(t, remote, "main") != before {
@@ -108,7 +114,8 @@ func TestSessionClosePushesABranchThatIsNotTheDefault(t *testing.T) {
 	runGit(t, repo, "push", "--set-upstream", "origin", "feature/work")
 	dirtyWorkTree(t, repo, "new.txt")
 
-	h := &WorkflowHooks{repoRoot: repo, autoCommit: true}
+	h := &WorkflowHooks{repoRoot: repo, autoCommit: true,
+		changedFiles: []string{filepath.Join(repo, "new.txt")}}
 	summary := strings.Join(h.finishSessionGit(), "\n")
 
 	if !remoteHas(t, remote, "feature/work") {
@@ -125,7 +132,8 @@ func TestPushToDefaultBranchOptInPublishesMain(t *testing.T) {
 	before := remoteTip(t, remote, "main")
 	dirtyWorkTree(t, repo, "new.txt")
 
-	h := &WorkflowHooks{repoRoot: repo, autoCommit: true, pushToDefaultBranch: true}
+	h := &WorkflowHooks{repoRoot: repo, autoCommit: true, pushToDefaultBranch: true,
+		changedFiles: []string{filepath.Join(repo, "new.txt")}}
 	summary := strings.Join(h.finishSessionGit(), "\n")
 
 	if remoteTip(t, remote, "main") == before {
@@ -192,7 +200,8 @@ func TestAFailedStageStopsTheCommitAndThePush(t *testing.T) {
 	}
 	defer os.Remove(lock)
 
-	h := &WorkflowHooks{repoRoot: repo, autoCommit: true}
+	h := &WorkflowHooks{repoRoot: repo, autoCommit: true,
+		changedFiles: []string{filepath.Join(repo, "new.txt")}}
 	summary := strings.Join(h.finishSessionGit(), "\n")
 
 	if !strings.Contains(summary, "git add failed") {
