@@ -99,11 +99,11 @@ func (s *Session) updateHooks() {
 			OnTextDelta: func(text string) {
 				onEvent(StreamEvent{Kind: "delta", Text: text, Turn: sess.CurrentTurn(), MessageID: eng.CurrentMessageID()})
 			},
-			OnToolCall: func(name, input string) {
-				onEvent(StreamEvent{Kind: "tool_call", Tool: name, Text: input, Turn: sess.CurrentTurn(), MessageID: eng.CurrentMessageID()})
+			OnToolCall: func(toolID, name, input string) {
+				onEvent(StreamEvent{Kind: "tool_call", ToolID: toolID, Tool: name, Text: input, Turn: sess.CurrentTurn(), MessageID: eng.CurrentMessageID()})
 			},
-			OnToolResult: func(name, output string, isError bool) {
-				onEvent(StreamEvent{Kind: "tool_result", Tool: name, Text: output, Turn: sess.CurrentTurn(), MessageID: eng.CurrentMessageID()})
+			OnToolResult: func(toolID, name, output string, isError bool) {
+				onEvent(StreamEvent{Kind: "tool_result", ToolID: toolID, Tool: name, Text: output, Turn: sess.CurrentTurn(), MessageID: eng.CurrentMessageID()})
 			},
 			OnStatus: func(text string) {
 				onEvent(StreamEvent{Kind: "status", Text: text, Turn: sess.CurrentTurn()})

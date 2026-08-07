@@ -98,10 +98,10 @@ func TestDisplayHooks_Basic(t *testing.T) {
 		OnTextDelta: func(text string) {
 			textDeltaCalled = true
 		},
-		OnToolCall: func(name string, input string) {
+		OnToolCall: func(toolID, name, input string) {
 			toolCallCalled = true
 		},
-		OnToolResult: func(name string, output string, isError bool) {
+		OnToolResult: func(toolID, name, output string, isError bool) {
 			toolResultCalled = true
 		},
 	}
@@ -114,10 +114,10 @@ func TestDisplayHooks_Basic(t *testing.T) {
 		hooks.OnTextDelta("test delta")
 	}
 	if hooks.OnToolCall != nil {
-		hooks.OnToolCall("test_tool", "test input")
+		hooks.OnToolCall("toolu_test", "test_tool", "test input")
 	}
 	if hooks.OnToolResult != nil {
-		hooks.OnToolResult("test_tool", "test output", false)
+		hooks.OnToolResult("toolu_test", "test_tool", "test output", false)
 	}
 
 	if !thinkingCalled {

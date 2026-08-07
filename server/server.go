@@ -253,6 +253,12 @@ type StreamEvent struct {
 	Kind string `json:"kind"` // "delta", "thinking", "tool_call", "tool_result", "done"
 	Text string `json:"text,omitempty"`
 	Tool string `json:"tool,omitempty"`
+	// ToolID is the provider's id for the tool_use block this event belongs
+	// to, and it is what pairs a "tool_call" with its "tool_result". Tool
+	// NAMES are not unique within a turn, so a consumer matching on the name
+	// mispairs precisely when a turn calls one tool more than once. Empty on
+	// every kind that is not a tool event.
+	ToolID string `json:"tool_id,omitempty"`
 	Turn int    `json:"turn,omitempty"` // API round-trip number from session
 	// MessageID is the model provider's own identifier for the assistant
 	// message this event belongs to. It is what a consumer joins a stream of

@@ -143,7 +143,7 @@ func (e *Engine) buildHooks() *agent.Hooks {
 				logHooks.OnToolCall(toolID, name, input)
 			}
 			if d := e.GetDisplayHooks(); d != nil && d.OnToolCall != nil {
-				d.OnToolCall(name, string(input))
+				d.OnToolCall(toolID, name, string(input))
 			}
 		}
 		hooks.OnToolResult = func(toolID, name, output string, isError bool) {
@@ -151,7 +151,7 @@ func (e *Engine) buildHooks() *agent.Hooks {
 				logHooks.OnToolResult(toolID, name, output, isError)
 			}
 			if d := e.GetDisplayHooks(); d != nil && d.OnToolResult != nil {
-				d.OnToolResult(name, output, isError)
+				d.OnToolResult(toolID, name, output, isError)
 			}
 			if isError {
 				e.Turn.ConsecutiveErrors++
@@ -230,12 +230,12 @@ func (e *Engine) buildHooks() *agent.Hooks {
 		}
 		hooks.OnToolCall = func(toolID, name string, input []byte) {
 			if d := e.GetDisplayHooks(); d != nil && d.OnToolCall != nil {
-				d.OnToolCall(name, string(input))
+				d.OnToolCall(toolID, name, string(input))
 			}
 		}
 		hooks.OnToolResult = func(toolID, name, output string, isError bool) {
 			if d := e.GetDisplayHooks(); d != nil && d.OnToolResult != nil {
-				d.OnToolResult(name, output, isError)
+				d.OnToolResult(toolID, name, output, isError)
 			}
 		}
 	}

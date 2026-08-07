@@ -932,6 +932,7 @@ func streamEventToBridge(e StreamEvent, sessionID string) msg.Event {
 	case "tool_call":
 		bridgeEvent.Type = msg.EventToolCall
 		bridgeEvent.ToolCall = &msg.ToolCallEvent{
+			ToolID:    e.ToolID,
 			Name:      e.Tool,
 			Input:     json.RawMessage(e.Text),
 			MessageID: e.MessageID,
@@ -940,6 +941,7 @@ func streamEventToBridge(e StreamEvent, sessionID string) msg.Event {
 	case "tool_result":
 		bridgeEvent.Type = msg.EventToolResult
 		bridgeEvent.ToolResult = &msg.ToolResultEvent{
+			ToolID:    e.ToolID,
 			Name:      e.Tool,
 			Output:    e.Text,
 			MessageID: e.MessageID,

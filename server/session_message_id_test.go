@@ -38,8 +38,8 @@ func TestDisplayEventsNameTheMessageTheyBelongTo(t *testing.T) {
 
 	hooks.OnTextDelta("hello")
 	hooks.OnThinking("hmm")
-	hooks.OnToolCall("read_files", "{}")
-	hooks.OnToolResult("read_files", "ok", false)
+	hooks.OnToolCall("toolu_01ABC", "read_files", "{}")
+	hooks.OnToolResult("toolu_01ABC", "read_files", "ok", false)
 	hooks.OnStatus("Running agent...")
 
 	if len(events) != 5 {
