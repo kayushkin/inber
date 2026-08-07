@@ -52,8 +52,32 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 	}
 	systemMessage := strings.Join(systemParts, "\n\n")
 	
-	// Tool call loop
+	// Tool call loop.
+	//
+	// The two guards at its head are the ones Agent.Run has always had on the
+	// Anthropic path and this loop never had: a turn stops when the caller
+	// stops it, and a turn stops after agent.MaxAPICallsPerTurn round-trips
+	// whatever the model keeps asking for. Without them a model that answers
+	// tool_use forever loops until the context window fills, every iteration a
+	// paid request, and a cancelled turn keeps paying until the in-flight call
+	// is the one that notices.
+	apiCalls := 0
 	for {
+		apiCalls++
+
+		if ctx.Err() != nil {
+			return result, agent.StopForCancelledTurn(result, ctx.Err(), apiCalls-1)
+		}
+
+		// agent.StopForAPICallCap, not a bare fmt.Errorf: recordModelHealth
+		// matches agent.ErrMaxAPICallsExceeded to keep inber's own runaway cap
+		// out of model-store's host-shared health table. An unmatchable error
+		// here would mark a model that answered every call unhealthy for every
+		// harness on the box.
+		if apiCalls > agent.MaxAPICallsPerTurn {
+			return result, agent.StopForAPICallCap(result)
+		}
+
 		oaiMessages := agent.ConvertAnthropicMessagesToOpenAI(e.Messages)
 		
 		if systemMessage != "" {

@@ -19,6 +19,49 @@ import (
 // for exactly that reason.
 var ErrMaxAPICallsExceeded = errors.New("exceeded max API calls")
 
+// MaxAPICallsPerTurn bounds the API round-trips one turn may make, whichever
+// provider serves it. A model that keeps answering tool_use has no other reason
+// to stop, and every iteration is a paid request.
+//
+// It is a property of a turn, not of a provider branch. It lived inside
+// Agent.Run as a local const, so the OpenAI-compatible loop in
+// engine.runOpenAITurn — the only other place inber drives a model to
+// completion — ran uncapped: same runaway, no ceiling. Both loops read this.
+//
+// 50 is the number the Anthropic loop has always used. Nothing here argues it is
+// the right one; it is the one already in force, and making the second loop
+// obey a different one would be a new opinion smuggled in as a bug fix.
+const MaxAPICallsPerTurn = 50
+
+// StopForAPICallCap ends a turn that has reached MaxAPICallsPerTurn.
+//
+// Both loops call this so the sentinel and the operator-visible text stay one
+// thing. The placeholder matters as much as the error: a turn that stops with
+// empty text shows the user nothing at all, so a runaway looks like a model
+// that simply had nothing to say. It is written only when the turn produced no
+// text of its own, so a partial answer is never overwritten.
+func StopForAPICallCap(result *TurnResult) error {
+	if result.Text == "" {
+		result.Text = fmt.Sprintf("[Agent stopped: exceeded %d API calls in one turn]", MaxAPICallsPerTurn)
+	}
+	return fmt.Errorf("%w (%d)", ErrMaxAPICallsExceeded, MaxAPICallsPerTurn)
+}
+
+// StopForCancelledTurn ends a turn whose context was cancelled or timed out —
+// the stop button, a spawn timeout, a session's max_duration.
+//
+// completedAPICalls is how many calls actually finished, so the text reports
+// work done rather than the call that was about to be attempted. Returns the
+// context's own error unwrapped: engine.recordModelHealth distinguishes a cancel
+// from a deadline, and wrapping would not change errors.Is but would change what
+// an operator reads.
+func StopForCancelledTurn(result *TurnResult, err error, completedAPICalls int) error {
+	if result.Text == "" {
+		result.Text = fmt.Sprintf("[Agent stopped: %s after %d API calls]", err, completedAPICalls)
+	}
+	return err
+}
+
 // isContextLengthError checks if an API error is due to exceeding the model's context window.
 func isContextLengthError(err error) bool {
 	if err == nil {
@@ -326,19 +369,12 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 
 		// Check context cancellation (e.g. spawn timeout).
 		if ctx.Err() != nil {
-			if result.Text == "" {
-				result.Text = fmt.Sprintf("[Agent stopped: %s after %d API calls]", ctx.Err(), apiCalls-1)
-			}
-			return result, ctx.Err()
+			return result, StopForCancelledTurn(result, ctx.Err(), apiCalls-1)
 		}
 
 		// Hard cap on API round-trips per turn to prevent runaway agents.
-		const maxAPICalls = 50
-		if apiCalls > maxAPICalls {
-			if result.Text == "" {
-				result.Text = fmt.Sprintf("[Agent stopped: exceeded %d API calls in one turn]", maxAPICalls)
-			}
-			return result, fmt.Errorf("%w (%d)", ErrMaxAPICallsExceeded, maxAPICalls)
+		if apiCalls > MaxAPICallsPerTurn {
+			return result, StopForAPICallCap(result)
 		}
 
 		// Check for mid-run injected messages from the user
