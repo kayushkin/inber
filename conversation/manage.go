@@ -11,9 +11,20 @@ import (
 
 // ManagementResult contains statistics about what was managed (pruned/stashed)
 type ManagementResult struct {
-	OriginalMessages   int
-	ManagedMessages    int
-	PrunedMessages     int // Alias for ManagedMessages for backward compatibility
+	OriginalMessages int
+
+	// ManagedMessages counts the messages this pass rewrote.
+	//
+	// It used to be computed as len(input) - len(output), which is zero on
+	// every possible run: the pruning loop appends exactly one message per
+	// input message, and nothing else on this path removes one either. So the
+	// one counter that could have shown pruning working reported nothing,
+	// which is a large part of why the callers' "did the slice get shorter"
+	// gate went unquestioned for so long. Read TokensFreed for the weight;
+	// this is the count of messages that weight came out of.
+	ManagedMessages int
+	PrunedMessages  int // Alias for ManagedMessages for backward compatibility
+
 	TokensFreed        int
 	MemoriesSaved      int
 	Strategy           string
@@ -83,6 +94,7 @@ func ManageConversation(
 	// Apply role-based pruning per message
 	var finalMessages []anthropic.MessageParam
 	tokensFreed := 0
+	rewrittenMessages := 0
 
 	// A tool_result names only the id of the call it answers, so pair the ids
 	// with their tool names before pruning summarises any of them.
@@ -166,11 +178,12 @@ func ManageConversation(
 
 		if pruned {
 			tokensFreed += estimateMessageTokens(msg) - estimateMessageTokens(managedMsg)
+			rewrittenMessages++
 		}
 		finalMessages = append(finalMessages, managedMsg)
 	}
 
-	result.ManagedMessages = len(messages) - len(finalMessages)
+	result.ManagedMessages = rewrittenMessages
 	result.PrunedMessages = result.ManagedMessages // Backward compatibility
 	result.TokensFreed = tokensFreed
 	return finalMessages, result, nil

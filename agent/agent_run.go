@@ -123,8 +123,8 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 
 	// Guard against context overflow: let caller prune if needed
 	if a.BeforeRequest != nil && a.contextWindow > 0 {
-		pruned := a.BeforeRequest(ctx, *messages, a.contextWindow)
-		if len(pruned) < len(*messages) {
+		pruned, tokensFreed := a.BeforeRequest(ctx, *messages, a.contextWindow)
+		if pruneDidSomething(*messages, pruned, tokensFreed) {
 			a.shiftBreakpointIndicesAfterHeadDrop(len(*messages) - len(pruned))
 			*messages = pruned
 			params.Messages = *messages
@@ -138,6 +138,27 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 	}
 
 	return &params
+}
+
+// pruneDidSomething reports whether a BeforeRequest call is worth adopting.
+//
+// The obvious test — did the slice get shorter — is wrong, and was wrong here
+// for as long as the guard has existed. Dropping whole messages off the head is
+// the *only* thing in the prune path that changes the count, and it needs more
+// than twice KeepRecentTurns messages before it fires (70 at the default role).
+// Everything else the pruner does rewrites messages in place: it truncates old
+// tool results, cuts old assistant text down to a summary, shortens tool-call
+// arguments and stashes large blocks to memory, writing exactly one output
+// message per input message. So between the point where pruning starts and the
+// point where the head-drop starts, a prune could free most of a conversation
+// and hand it back at the same length — and a caller reading only the length
+// threw all of it away, then, on the retry path, declined to retry at all.
+//
+// Freed tokens are therefore the primary signal and the length is the backstop:
+// a head-drop is credited by the length test even though the freed count does
+// not include it.
+func pruneDidSomething(before, after []anthropic.MessageParam, tokensFreed int) bool {
+	return tokensFreed > 0 || len(after) < len(before)
 }
 
 // toolsWereWithheld reports that a built request carries no tools block while
@@ -205,8 +226,8 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 	if apiErr != nil {
 		// If we hit a context length error, try pruning and retry once
 		if a.BeforeRequest != nil && a.contextWindow > 0 && isContextLengthError(apiErr) {
-			pruned := a.BeforeRequest(ctx, *messages, a.contextWindow/2)
-			if len(pruned) < len(*messages) {
+			pruned, tokensFreed := a.BeforeRequest(ctx, *messages, a.contextWindow/2)
+			if pruneDidSomething(*messages, pruned, tokensFreed) {
 				a.shiftBreakpointIndicesAfterHeadDrop(len(*messages) - len(pruned))
 				*messages = pruned
 				params.Messages = *messages

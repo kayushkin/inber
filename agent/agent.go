@@ -82,13 +82,19 @@ type Agent struct {
 
 	// BeforeRequest is called before each API call with a mutable reference to
 	// the messages slice. Use it to prune/compact if the conversation is too large.
-	// Return the (possibly pruned) messages. Called after OnRequest hook.
+	// Called after OnRequest hook.
 	//
-	// It takes the turn's context because pruning is not free work done between
-	// API calls: it can summarize, which is itself an API call. Handing the
-	// callback a root context would leave a cancelled turn paying for one more
-	// model round-trip before it stopped.
-	BeforeRequest func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam
+	// It returns the (possibly pruned) messages AND the number of tokens the
+	// prune freed, because those are two different answers and the caller needs
+	// the second one. Most of what pruning does — truncating old tool results,
+	// summarizing old assistant text, stashing large blocks to memory — rewrites
+	// messages in place and leaves the slice exactly as long as it was. A caller
+	// that reads only the length therefore cannot tell a prune that freed ninety
+	// percent of the conversation from one that did nothing at all.
+	//
+	// It takes the turn's context because pruning is work done on behalf of the
+	// API call it guards, so cancelling that call must stop it too.
+	BeforeRequest func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) (pruned []anthropic.MessageParam, tokensFreed int)
 
 	// LimitCheck is called before each API call (after the first) to check
 	// whether turn/token limits have been exceeded. If it returns (true, reason),
@@ -214,8 +220,10 @@ func (a *Agent) SetOAuth(isOAuth bool) {
 // SetBeforeRequest sets a callback invoked before each API call to allow
 // pruning messages if they're approaching the context window limit. The
 // callback receives the context of the API call it is guarding, so cancelling
-// that call also stops the pruning done on its behalf.
-func (a *Agent) SetBeforeRequest(fn func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam) {
+// that call also stops the pruning done on its behalf, and returns the tokens
+// it freed alongside the messages — see the BeforeRequest field for why the
+// message count alone cannot answer that.
+func (a *Agent) SetBeforeRequest(fn func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) (pruned []anthropic.MessageParam, tokensFreed int)) {
 	a.BeforeRequest = fn
 }
 
