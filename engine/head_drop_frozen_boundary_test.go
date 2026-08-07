@@ -59,7 +59,7 @@ func TestAHeadDropMovesTheFrozenBoundaryWithTheMessagesItPointsAt(t *testing.T) 
 
 	// A huge context window keeps ShouldPrune's token branch out of it: this test is
 	// about the message-count hard drop, which fires on count alone.
-	shortened := testAgent.BeforeRequest(context.Background(), messages, 1<<24)
+	shortened, _ := testAgent.BeforeRequest(context.Background(), messages, 1<<24)
 
 	dropped := len(messages) - len(shortened)
 	if dropped == 0 {
@@ -97,7 +97,7 @@ func TestAHeadDropPastTheFrozenBoundaryCollapsesItToZero(t *testing.T) {
 
 	testAgent := &agent.Agent{}
 	engine.configureContextPruning(testAgent)
-	shortened := testAgent.BeforeRequest(context.Background(), messages, 1<<24)
+	shortened, _ := testAgent.BeforeRequest(context.Background(), messages, 1<<24)
 
 	if len(shortened) >= len(messages) {
 		t.Fatalf("expected a head drop from %d messages, got %d", len(messages), len(shortened))
@@ -118,7 +118,7 @@ func TestAConversationShortEnoughToKeepIsNotShiftedAtAll(t *testing.T) {
 
 	testAgent := &agent.Agent{}
 	engine.configureContextPruning(testAgent)
-	unchanged := testAgent.BeforeRequest(context.Background(), messages, 1<<24)
+	unchanged, _ := testAgent.BeforeRequest(context.Background(), messages, 1<<24)
 
 	if len(unchanged) != len(messages) {
 		t.Fatalf("expected no drop from %d messages, got %d", len(messages), len(unchanged))

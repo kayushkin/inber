@@ -24,18 +24,18 @@ func (contextLengthErrorProvider) CompleteStreaming(ctx context.Context, params 
 
 var errPromptTooLong = errors.New("prompt is too long: 300000 tokens > 200000 maximum")
 
-// BeforeRequest is the hook the engine hangs conversation pruning on, and that
-// pruning can summarize — an API call of its own, made on the way into another
-// API call. It is only stoppable if it is handed the context of the call it is
+// BeforeRequest is the hook the engine hangs conversation pruning on. Pruning
+// walks the whole conversation rewriting it, on the way into another API call,
+// and it is only stoppable if it is handed the context of the call it is
 // guarding, so this pins that it gets that context and not a fresh root.
 func TestBeforeRequestReceivesTheAPICallsContext(t *testing.T) {
 	a := &Agent{}
 	a.SetContextWindow(200000)
 
 	var seen context.Context
-	a.SetBeforeRequest(func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam {
+	a.SetBeforeRequest(func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) ([]anthropic.MessageParam, int) {
 		seen = ctx
-		return messages
+		return messages, 0
 	})
 
 	want := "the caller's"
@@ -56,19 +56,20 @@ func TestBeforeRequestReceivesTheAPICallsContext(t *testing.T) {
 }
 
 // The same guarantee on the retry path. A context-length error re-enters
-// BeforeRequest to prune harder, and that second attempt is the one most likely
-// to summarize, so it is the one that most needs to stop with its call.
+// BeforeRequest to prune harder, and that second attempt walks a conversation
+// already known to be over the window, so it is the one that most needs to stop
+// with its call.
 func TestBeforeRequestOnContextLengthRetryReceivesTheAPICallsContext(t *testing.T) {
 	a := &Agent{}
 	a.SetContextWindow(200000)
 
 	var calls []context.Context
-	a.SetBeforeRequest(func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam {
+	a.SetBeforeRequest(func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) ([]anthropic.MessageParam, int) {
 		calls = append(calls, ctx)
-		// Return the messages unchanged: shrinking them here would make the
+		// Report a prune that did nothing: freeing anything here would make the
 		// retry fire a second provider call, which this agent has no provider
 		// to serve.
-		return messages
+		return messages, 0
 	})
 
 	want := "the caller's"

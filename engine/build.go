@@ -116,15 +116,17 @@ func (e *Engine) configureAgent(a *agent.Agent) {
 
 // configureContextPruning sets up automatic context pruning when approaching token limits.
 func (e *Engine) configureContextPruning(a *agent.Agent) {
-	a.SetBeforeRequest(func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) []anthropic.MessageParam {
+	a.SetBeforeRequest(func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) ([]anthropic.MessageParam, int) {
 		cfg := e.pruneConfig()
 		cfg.TokenBudget = contextWindow / 2
+		tokensFreed := 0
 
 		if conversation.ShouldPrune(messages, cfg) {
 			Log.Warn("context approaching limit (%d messages), pruning", len(messages))
 			pruned, result, err := conversation.PruneConversation(ctx, messages, e.MemStore, "", cfg)
 			if err == nil {
 				Log.Info("pruned: %d tokens freed", result.TokensFreed)
+				tokensFreed += result.TokensFreed
 				messages = pruned
 			}
 		}
@@ -141,6 +143,7 @@ func (e *Engine) configureContextPruning(a *agent.Agent) {
 			}
 			if dropTo < len(messages) && dropTo > 0 {
 				Log.Warn("hard-dropping %d old messages (%d → %d)", dropTo, len(messages), len(messages)-dropTo)
+				tokensFreed += conversation.EstimateTokens(messages[:dropTo])
 				messages = messages[dropTo:]
 				// The agent shifts its own copy of the boundary (see
 				// shiftBreakpointIndicesAfterHeadDrop), but that copy is rebuilt from
@@ -153,6 +156,6 @@ func (e *Engine) configureContextPruning(a *agent.Agent) {
 			}
 		}
 
-		return messages
+		return messages, tokensFreed
 	})
 }
