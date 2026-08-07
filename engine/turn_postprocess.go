@@ -88,6 +88,7 @@ func (e *Engine) recordTurnUsage(result *agent.TurnResult) {
 	}
 
 	e.reportCallsThatBoughtNoCache(result)
+	e.reportCacheTheProviderServedButNobodyPriced(result)
 }
 
 // reportCallsThatBoughtNoCache prices, on its own, any call in the turn that
@@ -116,4 +117,41 @@ func (e *Engine) reportCallsThatBoughtNoCache(result *agent.TurnResult) {
 			i+1, len(result.APICalls), call.InputTokens, call.OutputTokens,
 			call.CacheCreationTokens, call.CacheReadTokens, cost)
 	}
+}
+
+// reportCacheTheProviderServedButNobodyPriced says how much of this turn's
+// prompt an OpenAI-compatible provider served from its own cache, and states
+// that the turn's dollar figure does not reflect it.
+//
+// The number is new. It arrives as prompt_tokens_details.cached_tokens and used
+// to be dropped at the JSON boundary, so there was no figure on this path that
+// could say whether a cache change did anything — which is what blocks the
+// volatile-context placement question in todo ec9c7122, and what makes the
+// pricing half of 0d052752 undecidable rather than merely undecided.
+//
+// It is reported and not priced, deliberately. OpenAI's prompt_tokens INCLUDES
+// the cached span where Anthropic's input_tokens excludes it, so pricing this
+// beside an unadjusted input count double-charges; see
+// agent.APICallUsage.CachedTokensIncludedInInputTokens. Saying the overstatement
+// out loud is the honest thing an unpriced measurement can do — the alternative
+// is a cost line that is wrong and silent about it.
+//
+// Silent when the provider reported no cached tokens, which is every turn on
+// the Anthropic path, so this adds nothing to the output there.
+func (e *Engine) reportCacheTheProviderServedButNobodyPriced(result *agent.TurnResult) {
+	var cached, input int
+	for _, call := range result.APICalls {
+		cached += call.CachedTokensIncludedInInputTokens
+		input += call.InputTokens
+	}
+	if cached == 0 {
+		return
+	}
+	share := 0.0
+	if input > 0 {
+		share = 100 * float64(cached) / float64(input)
+	}
+	Log.Info("cache: the provider served %d of %d prompt tokens from its own cache (%.0f%%) across %d API call(s) — "+
+		"this turn's cost prices all %d at the full input rate, so it is an overstatement (todo 0d052752)",
+		cached, input, share, len(result.APICalls), input)
 }
