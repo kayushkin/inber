@@ -248,9 +248,38 @@ type TokenUsage struct {
 	Cost       float64 `json:"cost"`
 }
 
-// StreamEvent is emitted during streaming.
+// StreamEvent is emitted during streaming. Ten kinds are live, and they split
+// by who produced them.
+//
+// Seven are the session's own turn:
+//
+//	thinking     model reasoning text                          (session.go)
+//	delta        assistant response text                       (session.go)
+//	tool_call    a tool is about to run; Text is its input     (session.go)
+//	tool_result  that tool's output; paired to the call by ToolID (session.go)
+//	status       engine progress, belonging to no message      (session.go)
+//	done         the turn ended; Data carries tokens and duration_ms (server.go)
+//	error        the turn failed; Text is the error            (api_run.go)
+//
+// Three are a spawned child's, emitted onto the PARENT's stream rather than the
+// child's, each with Data naming agent, session_key, parent_key and depth
+// (spawn.go, kinds under the eventKindAgent* constants):
+//
+//	agent_spawned  a child started; Text is its task
+//	agent_update   a child's own status or thinking, relabelled
+//	agent_done     a child finished; Data adds status
+//
+// done and error terminate a turn, everything else is progress. error is the
+// one kind no session emits: api_run.go writes it straight to the SSE stream
+// when Stream returns an error, so a consumer reading events off a Session
+// never sees one.
+//
+// Nothing here can say a tool failed. A tool_result whose call the guard
+// refused is byte-identical to one that ran and succeeded, except for the prose
+// in Text — widening that changes a contract that crosses into llm-bridge, so
+// it is tracked rather than settled here.
 type StreamEvent struct {
-	Kind string `json:"kind"` // "delta", "thinking", "tool_call", "tool_result", "done"
+	Kind string `json:"kind"`
 	Text string `json:"text,omitempty"`
 	Tool string `json:"tool,omitempty"`
 	// ToolID is the provider's id for the tool_use block this event belongs
