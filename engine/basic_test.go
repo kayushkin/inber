@@ -16,29 +16,6 @@ func TestLogger_Functions(t *testing.T) {
 	Log.Plain("test plain: %s", "working")
 }
 
-func TestIsVolatileBlock_KnownBlocks(t *testing.T) {
-	testCases := []struct {
-		name     string
-		blockID  string
-	}{
-		{"instructions", "instructions"},
-		{"context", "context"},
-		{"memory", "memory"},
-		{"tools", "tools"},
-		{"empty", ""},
-		{"unknown", "some-unknown-block"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Test that the function doesn't panic
-			result := isVolatileBlock(tc.blockID)
-			// Don't assert specific behavior, just ensure no panic
-			_ = result
-		})
-	}
-}
-
 func TestAutoWorkflowConfig_Defaults(t *testing.T) {
 	// Test that we can create a config without panicking
 	cfg := AutoWorkflowConfig{

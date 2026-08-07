@@ -50,11 +50,6 @@ func sourceRef() string {
 	return sourceRefValue
 }
 
-// cacheBoundaryID is the sentinel block ID that separates stable (cacheable)
-// system blocks from volatile (per-turn) blocks. buildSystemBlocks places
-// cache_control on the last block before this marker.
-const cacheBoundaryID = "__CACHE_BOUNDARY__"
-
 // cachedPrefix stores the hash and blocks of the last stable system prefix,
 // allowing us to reuse the exact byte sequence when content hasn't changed.
 type cachedPrefix struct {
@@ -64,13 +59,22 @@ type cachedPrefix struct {
 
 // BuildSystemPrompt builds a context-aware system prompt as individual named blocks.
 //
-// Block ordering is optimized for prompt caching (most stable first):
+// Only stable content becomes a system block. The returned blocks are, in order:
 //  1. Always-load memories (identity, instructions, tools) — never change
 //  2. Tag-matched persistent memories — rarely change
-//  3. __CACHE_BOUNDARY__ sentinel (not emitted as a block)
-//  4. Fleet status — changes every turn
-//  5. Recent files — changes every turn
-//  6. Context injectors — changes every turn
+//
+// Everything that changes between turns — volatile memories (file refs, recent
+// files), fleet status, context injectors and the source ref — is assembled into
+// e.Turn.VolatileContext instead and injected into this turn's user message by
+// agent.Run. That keeps it after the turn-anchor breakpoint, so writing it can
+// never invalidate the cached system prefix.
+//
+// This replaced an earlier design that kept volatile content in the system
+// section and separated the two halves with a "__CACHE_BOUNDARY__" sentinel
+// block. There is no sentinel any more: the split is the two destinations above,
+// decided by isVolatileMemoryID. Design notes written against the sentinel
+// (docs/cache-optimization.md, docs/papers/*) describe the superseded layout —
+// "place it before __CACHE_BOUNDARY__" now means "put it in VolatileContext".
 //
 // A memory lookup that fails is returned as an error rather than as an empty
 // prompt. The agent's identity, its instructions and its tool memories all live
@@ -184,9 +188,6 @@ func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.T
 	var systemBlocks []anthropic.TextBlockParam
 
 	for _, b := range blocks {
-		if b.ID == cacheBoundaryID {
-			continue // legacy marker, skip
-		}
 		if b.Text == "" {
 			continue
 		}
@@ -226,36 +227,12 @@ func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.T
 	return systemBlocks
 }
 
-// buildDynamicBlocks assembles volatile system content that should *not* be cached
-// (current code references, fleet status, session list, source ref).
-func (e *Engine) buildDynamicBlocks() []sessionMod.NamedBlock {
-	var blocks []sessionMod.NamedBlock
-
-	// Source reference
-	if ref := sourceRef(); ref != "" {
-		blocks = append(blocks, sessionMod.NamedBlock{
-			ID:   "source-ref",
-			Text: fmt.Sprintf("[Context]\nBuild: %s\n", ref),
-		})
-	}
-
-	return blocks
-}
-
 // isVolatileMemoryID checks if a memory ID indicates volatile file content
 // that should always be fetched fresh (not cached across turns).
 func isVolatileMemoryID(id string) bool {
 	return strings.HasPrefix(id, "fileref:") ||
 		strings.HasPrefix(id, "recent:") ||
 		strings.HasPrefix(id, "file:")
-}
-
-// isVolatileBlock checks if a named block ID indicates volatile content.
-// Used by agent-store's partitionStableFirst for memory ordering.
-func isVolatileBlock(id string) bool {
-	return isVolatileMemoryID(id) ||
-		id == "fleet-status" ||
-		id == "server-sessions"
 }
 
 // hashStrings produces a SHA-256 hash of concatenated strings,

@@ -134,9 +134,6 @@ func BuildBlueprint(
 	var sysBlocks []BlueprintBlock
 	sysIdx := 0
 	for _, nb := range namedBlocks {
-		if nb.ID == cacheBoundaryID {
-			continue
-		}
 		if nb.Text == "" {
 			continue
 		}
