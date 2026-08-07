@@ -1,9 +1,47 @@
 # Prompt Caching Optimization
 
-**Status:** Design doc  
+**Status:** Design doc — **items 2, 3, 4 and 6 of the Implementation Plan are RETIRED, not pending**  
 **Created:** 2026-04-04  
+**Corrected:** 2026-08-07  
 **Source commits:** inber@07e1244, agent-store@bcd6191  
 **References:** Anthropic prompt caching docs, Claude Code source analysis, OpenClaw #49700
+
+> ## ⚠️ Read before implementing anything below
+>
+> Two corrections, both found 2026-08-07 while mining the harness-watch shelf
+> (todo `a88bca06`).
+>
+> **1. `engine/build_prompts.go` does not exist.** It is named as the target
+> **File:** of implementation items 2, 3, 4, 5 and 6 below. Commit `3d3625c`
+> split it into `engine/turn_context.go` and `engine/turn_prompt.go`. The
+> breakpoint placement it describes now lives across `engine/lifecycle.go:142`
+> (the BP1–BP4 layout comment), `engine/build.go:42` and
+> `engine/turn_prompt.go:128`.
+>
+> **2. The `__CACHE_BOUNDARY__` scheme this document specifies was DELETED on
+> 2026-08-07** as dead code, by commit `e8f378d` — *hours* before this note was
+> written. Items **2, 3 and 4 below propose building it**, and item 4 proposes
+> replacing `isVolatileBlock()`, which `e8f378d` also deleted. Item 6's closing
+> line ("this should go in the dynamic group (after boundary)") refers to the
+> same retired boundary.
+>
+> The sentinel never worked: the only path that builds these blocks rewrites
+> every memory's ID to `"<id8> (<importance>, tags: …)"` first, so no block ever
+> carried it and both of its readers were unreachable. Volatile content had
+> already moved out of the system section into the user message
+> (`e.Turn.VolatileContext`) — see `engine/turn_prompt.go:73-77`, which states
+> that **"place it before `__CACHE_BOUNDARY__`" now means "put it in
+> `VolatileContext`"**. That sentence is the migration rule for everything
+> below.
+>
+> This is worth stating loudly because the dead name was **steering live design
+> work**: three of inber's own research papers still reason about where to place
+> content relative to a sentinel that does nothing. Retiring the code is not
+> retiring the document that specifies it.
+>
+> What is **not** retired: the Background section, the measurements, and items
+> **1** (the `agent-store` duplicate-recent-files fix) and **5** (deterministic
+> system-block hashing) — neither depends on the sentinel.
 
 ## Background
 
@@ -98,9 +136,13 @@ ID: "recent:" + f.RelativePath,  // was: "recent:" + uuid.NewString()
 ```
 This makes Save() upsert on the same key.
 
-### 2. Explicit boundary marker in BuildSystemPrompt (inber)
+### 2. Explicit boundary marker in BuildSystemPrompt (inber) — ⛔ RETIRED
 
-**File:** `engine/build_prompts.go`  
+⛔ **Do not implement.** Shipped, found dead, and deleted by `e8f378d`
+(2026-08-07). Volatile content now goes in `e.Turn.VolatileContext` instead.
+Kept for the history only.
+
+**File:** ~~`engine/build_prompts.go`~~ — does not exist; split by `3d3625c`.  
 **Current:** Returns flat `[]NamedBlock`, volatile detection is heuristic.
 
 **Change:** Insert an explicit sentinel block ID `__CACHE_BOUNDARY__`
@@ -115,9 +157,14 @@ blocks = append(blocks, sessionMod.NamedBlock{
 // Then fleet status, recent files, context injectors
 ```
 
-### 3. Reorder system blocks by stability (inber)
+### 3. Reorder system blocks by stability (inber) — ⛔ RETIRED
 
-**File:** `engine/build_prompts.go`
+⛔ **Do not implement.** The ordering below is expressed in terms of the
+`__CACHE_BOUNDARY__` sentinel deleted by `e8f378d`. Steps 3-6 of its list
+(boundary, fleet status, recent files, context injectors) no longer describe
+where that content goes.
+
+**File:** ~~`engine/build_prompts.go`~~ — does not exist; split by `3d3625c`.
 
 Current order from BuildContext: tag-scored, partitioned (stable first, volatile last).
 But fleet status and context injectors are appended AFTER the memory partition,
@@ -131,9 +178,13 @@ Change: Ensure order is:
 5. Recent files (from BuildContext volatile partition)
 6. Context injectors
 
-### 4. Update buildSystemBlocks to use boundary marker (inber)
+### 4. Update buildSystemBlocks to use boundary marker (inber) — ⛔ RETIRED
 
-**File:** `engine/build_prompts.go`
+⛔ **Do not implement.** Both sides of this item are gone: `e8f378d` deleted the
+boundary marker *and* `isVolatileBlock()` (a zero-caller predicate whose comment
+named a caller in agent-store that never existed).
+
+**File:** ~~`engine/build_prompts.go`~~ — does not exist; split by `3d3625c`.
 
 Replace heuristic `isVolatileBlock()` with boundary marker detection:
 ```go
@@ -162,7 +213,11 @@ func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.T
 
 ### 5. Deterministic system block hashing (inber)
 
-**File:** `engine/build_prompts.go` or `engine/build.go`
+✅ Still live — this one does not depend on the sentinel.
+
+**File:** ~~`engine/build_prompts.go`~~ or `engine/build.go`. The first does not
+exist (split by `3d3625c`); the system blocks are now assembled in
+`engine/turn_prompt.go`.
 
 Hash the stable system blocks. If hash matches previous turn, reuse
 the exact same byte sequence (don't rebuild). This prevents accidental
@@ -175,9 +230,14 @@ type cachedSystemPrefix struct {
 }
 ```
 
-### 6. Track source commit in system prompt (inber)
+### 6. Track source commit in system prompt (inber) — ⚠️ NEEDS RE-AIMING
 
-**File:** `engine/build_prompts.go`
+⚠️ The idea survives; its placement rule does not. Its closing line says the
+block "should go in the dynamic group (after boundary)", and there is no
+boundary — put deploy-varying text in `e.Turn.VolatileContext` instead
+(`engine/turn_prompt.go:73-77`).
+
+**File:** ~~`engine/build_prompts.go`~~ — does not exist; split by `3d3625c`.
 
 When the system prompt references code or configuration, include a short
 commit hash so we know when the prompt diverges from actual code:

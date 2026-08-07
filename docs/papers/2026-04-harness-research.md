@@ -4,6 +4,35 @@ Notes from the harness-watch sweep on 2026-04-29. Four arXiv papers from the
 last 30 days that intersect with inber's design surface. One paragraph + one
 concrete consideration each. No fluff.
 
+> **Mined 2026-08-07 (nightly worker). Do not re-mine this file expecting
+> defects.** All four of its "What inber should consider" entries are design
+> proposals; none reports a defect in inber's code. This is the **last**
+> unwalked doc on the harness-watch shelf — see todo `a88bca06`.
+>
+> Two factual claims about inber's code were checked:
+>
+> - 🔴 **"skill-store" is not part of inber.** The Externalization entry
+>   (2604.08224) maps inber onto "memory-store, tool-store/skill-store,
+>   llm-bridge protocol". `tool-store` is real — a `require` **and** a
+>   `replace` in `go.mod`. **`skill-store` is neither**, and inber's Go has
+>   **zero** case-insensitive hits for "skill". The passage then reasons from
+>   the false half ("'Skills' as a first-class externalization is what
+>   `skill-store` already provides — but inber agents don't yet have a clean
+>   way to invoke skills"), so its conclusion is right by accident.
+>
+>   This is the **second recorded site** of the same wrong claim: the
+>   `gemini-cli.md` pass (2026-08-07, earlier) found "inber's skill story sits
+>   in skill-store" and refuted it the same way. Two independent docs asserting
+>   the same non-existent dependency is a pattern, not a typo — **inber is
+>   repeatedly described as owning services that merely live on the same box.**
+>
+> - ✅ **`docs/reference-based-prompt-architecture.md` exists**, as cited.
+>
+> Not a defect, though it reads like a broken link on a grep: `docs/safety-layers.md`
+> is **proposed**, not cited — "Worth adding a `docs/safety-layers.md` if/when
+> guardrails become a deliberate workstream." A path-existence sweep flags it;
+> reading the sentence clears it. Check the verb before filing a missing file.
+
 ## Architectural Design Decisions in AI Agent Harnesses
 
 [arXiv:2604.18071](https://arxiv.org/abs/2604.18071) — published 2026-04-20
@@ -40,11 +69,15 @@ execution). Argues that infrastructure components are now reliability
 multipliers rather than supporting cast, and predicts adaptive/shared
 harness ecosystems as the next frontier.
 
-**What inber should consider:** Inber's architecture already maps cleanly to
-three of the four (memory-store, tool-store/skill-store, llm-bridge protocol).
-"Skills" as a first-class externalization is what `skill-store` already
-provides — but inber agents don't yet have a clean way to invoke skills as
-procedural artifacts beyond reading SKILL.md instructions. Worth re-reading
+**What inber should consider:** ⚠️ *Corrected 2026-08-07.* Inber's architecture
+maps cleanly to two of the four (memory-store, tool-store — both `require`d and
+`replace`d in `go.mod` — plus the llm-bridge protocol). **`skill-store` is not a
+dependency of inber and inber's Go contains zero hits for "skill"**, so the
+original claim that "'Skills' as a first-class externalization is what
+`skill-store` already provides" was describing a service that runs on the same
+host, not a part of inber. The conclusion still stands, and more strongly than
+written: inber agents have no way to invoke skills as procedural artifacts,
+because inber has no skill surface at all. Worth re-reading
 `docs/reference-based-prompt-architecture.md` against this framing to see
 whether skills should be promoted from documentation into a first-class
 runtime invocation.

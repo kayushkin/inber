@@ -5,6 +5,86 @@ last 7-10 days that weren't in the April 29 sweep and bear directly on
 inber's harness design. Upstream commit feeds for all eight tracked harness
 repos failed this run, so this is a paper-only update.
 
+> **Mined 2026-08-07 (nightly worker). Do not re-mine this file expecting
+> defects.** All 14 of its "What inber should consider" entries are design
+> proposals; none reports a defect in inber's code. Same property as
+> `2026-06-harness-research.md` — see its header banner for why that is a
+> property of a *paper* file rather than of the pass.
+>
+> The yield, as in June, is in the file's factual claims about inber's own
+> code. **Eight were checked; seven were wrong.** They are corrected in place
+> below and summarised here:
+>
+> - 🔴 **`engine/build_prompts.go` does not exist** (BP3 retargeting, 05-11
+>   sweep note). Split by `3d3625c` into `engine/turn_context.go` +
+>   `engine/turn_prompt.go`; BP3 placement is in `engine/lifecycle.go:142`,
+>   `engine/build.go:42` and `engine/turn_prompt.go:128`. Second ghost path
+>   found on this shelf after `engine/turn_summary.go`.
+> - 🔴 **`HARNESS-LAYER.md` is not inber's**, and the cross-reference asserted
+>   for it does not exist. The file lives in `llm-bridge-server`; `git log --all`
+>   finds no commit adding it here, and `docs/cache-optimization.md` contains
+>   **zero** references to it. Two false claims in one parenthetical.
+> - 🔴 **There is no `create_memory` tool** (MemRouter, 2605.00356). Zero hits
+>   in the Go tree. The tool is **`memory_save`** (`memory/tools.go:98`). The
+>   passage names the wrong tool twice while citing the right file and roughly
+>   the right line.
+> - 🔴 **`spawn_agent` is NOT same-model** (Terminus-4B, 2605.03195) — the most
+>   consequential error here, because the passage proposes building a capability
+>   inber already has. `server/spawn_tools.go:90-93` declares a `model`
+>   parameter, and `server/spawn.go:174-176` honours it by overwriting the
+>   child's resolved config. Absent an override the child runs on **its own
+>   agent config's** model (`server/spawn.go:170`), not the parent's. The
+>   "register a shell-summariser subagent wired to a cheap model" experiment is
+>   a config change, not a code change.
+> - 🔴 **`spawn_agent` does not return when the child is done** (2605.02801).
+>   It returns immediately — `server/spawn_tools.go:144-145` answers
+>   `"🚀 Spawned … Result will be delivered when complete."` and
+>   `server/spawn.go:445-448` returns `Status: "accepted"`. The passage's real
+>   point survives: nothing validates the child's output, `Status` is derived
+>   from mechanics only (`server/spawn.go:309-320`).
+> - 🔴 **inber does not have a Grep tool, or a Glob tool** (ARISE, 2605.03117).
+>   "the standard CC-style trio (Read/Grep/Glob)" is wrong on two of three:
+>   ripgrep is **deliberately** not registered (`tools/tools.go:38-40` explains
+>   why), and no glob tool exists anywhere in inber or tool-store. The passage
+>   argues from "Grep is syntactic" about a tool the model is not given.
+> - 🔴 **`workflow_build.go` does not run the build** (RHB, 05-11). The claim
+>   "already partially true in inber (workflow_build.go runs the build, the
+>   agent doesn't)" is false: `buildAndTest`'s only caller is
+>   `engine/workflow_hooks.go:91`, which sits behind the dead
+>   `write_file`/`edit_file` name guard at `:67`. **Nothing runs the build.**
+>   That is open todo `af237d64`, reached here through a different door, and it
+>   is now pinned by `engine/workflow_hooks_toolname_test.go`.
+> - 🟡 **The guard is not oriented the way that passage says.** "primarily
+>   oriented toward destructive actions (delete, force-push, network calls to
+>   private endpoints)" names three operations the guard cannot see: it
+>   classifies by **tool name** only, and `isDangerous` is exactly
+>   `shell_commands`, `write_files`, `edit_files`, `deploy`
+>   (`guard/guard.go:329-334`). The argument for adding a second category is
+>   fine; the first category is not what it describes.
+> - 🟡 Minor: the "file-level harness components (engine/, tools/, memory/,
+>   registry/, guard/)" list is wrong on one of five — there is no root
+>   `registry/`; it is `agent/registry/`.
+>
+> The one claim that **held**: `conversation/summarize.go` is what performs
+> compaction ("Compress"), and its selection really is positional recency
+> (`conversation/summarize.go:39` → `conversation/message_utils.go:52-65`).
+>
+> ### The finding this file produced is not in any of its proposals
+>
+> Checking the LCM/Volt claim that "inber already stashes truncated content in
+> the session DB and exposes a retrieval handle" found that claim was **read out
+> of `docs/smart-truncation.md`, which was itself false**. That document
+> specified `session.SaveFullContent` / `session.GetFullToolResult` — neither
+> has ever existed — and promised "complete output always available", while
+> `session/truncate.go:19-27` and `session/session_logging.go:79-96` record that
+> the retained-copy mechanism was **deliberately removed**. `smart-truncation.md`
+> is corrected in the same commit as this banner.
+>
+> **Generalise: a stale doc does not only waste its own reader — it becomes a
+> citation.** This paper file inherited a false premise from another doc in the
+> same repo and carried it for three months. When a research note asserts a
+> capability, check the code, not the doc the note was written from.
+
 ## Agentic Harness Engineering: Observability-Driven Automatic Evolution of Coding-Agent Harnesses
 
 [arXiv:2604.25850](https://arxiv.org/abs/2604.25850) — submitted 2026-04-28,
@@ -24,7 +104,7 @@ models, suggesting they encode general engineering experience rather than
 benchmark overfitting.
 
 **What inber should consider:** Inber's harness components are already
-file-level (engine/, tools/, memory/, registry/, guard/), so the
+file-level (engine/, tools/, memory/, agent/registry/, guard/), so the
 "component observability" precondition is largely met. The missing piece is
 **experience observability** — a structured way to roll up trajectory traces
 from `trace/` and `logs/` into evidence usable by an evolution loop. Worth
@@ -138,10 +218,11 @@ A factorial ablation isolates +10.3 F1 attributable to learned admission
 alone (vs. random storage), so the win is the policy, not the embedding
 choice.
 
-**What inber should consider:** Inber's `create_memory` tool currently
+**What inber should consider:** Inber's `memory_save` tool currently
 delegates the admission decision to the agent itself — the model picks an
 `importance` score in [0,1] when it chooses to call the tool
-(`memory/tools.go:121`). This is the LLM-decoder-per-turn pattern MemRouter
+(`memory/tools.go:98`, default applied at `:117-119`). *(Corrected 2026-08-07:
+this passage said `create_memory`, a tool that does not exist.)* This is the LLM-decoder-per-turn pattern MemRouter
 argues against, just paid in the parent agent's tokens instead of a side
 call. There are two ways to read MemRouter for inber:
 (1) *defensive* — keep the create_memory tool but score its `importance`
@@ -149,7 +230,7 @@ arg with a small classifier post-hoc, demoting low-confidence stores to a
 cheaper tier (or refusing them) so the agent can be sloppy about importance
 without polluting the store; (2) *aggressive* — strip the admission burden
 off the agent entirely and run a write-side classifier over every assistant
-turn, removing create_memory from the tool list. The former is a one-shot
+turn, removing `memory_save` from the tool list. The former is a one-shot
 experiment compatible with current behaviour; the latter is the bigger
 architectural bet but would also free up an agent-visible tool slot. Worth
 sketching in `docs/memory-extraction-evaluation.md` alongside the
@@ -209,9 +290,13 @@ orchestration-trace schema so traces are usable as evaluation input later
 without a re-export pass — currently inber logs spawn/completion events
 (line 175 of multi-agent-design.md) but doesn't tag them with the
 sub-problem each event belongs to; (2) the stopping-decision gap is
-actionable today as a heuristic — `spawn_agent` returns when the child
-agent decides it's done, so a parent has no rubric for "did I get enough
-back to commit?" beyond model judgement. Worth a `BACKLOG.md` entry on a
+actionable today as a heuristic — nothing validates a child's output. *(Corrected
+2026-08-07: this said `spawn_agent` "returns when the child agent decides it's
+done". It returns immediately with an acknowledgement — `server/spawn.go:445-448`
+— and the result is delivered later. The gap itself is real: `SpawnResult.Status`
+is derived purely from mechanics at `server/spawn.go:309-320`, never from
+content.)* A parent has no rubric for "did I get enough back to commit?" beyond
+model judgement. Worth a `BACKLOG.md` entry on a
 sufficiency-check before the parent acts on a child's return value, since
 the paper flags this as the place where every existing system is winging
 it.
@@ -261,8 +346,14 @@ Pro and an internal SWE-Bench C# variant — and the 4B subagent sometimes
 exceeds Claude Sonnet/Opus and GPT-5.3-Codex on the narrow execution
 slice it was trained for.
 
-**What inber should consider:** Inber's `spawn_agent` is currently
-same-model — a child invocation runs on whatever the parent runs on.
+**What inber should consider:** ⚠️ *Corrected 2026-08-07 — the premise below
+is false.* `spawn_agent` takes a `model` parameter
+(`server/spawn_tools.go:90-93`) and honours it (`server/spawn.go:174-176`);
+absent an override the child runs on **its own agent config's** model
+(`server/spawn.go:170`), never inherited from the parent. The experiment this
+passage proposes is therefore a config change, not a code change. Original text:
+Inber's `spawn_agent` is currently same-model — a child invocation runs on
+whatever the parent runs on.
 Terminus-4B argues the model tier should itself be a delegation knob: the
 subagent that summarises a 50KB build log doesn't need a frontier model,
 and putting a small model there saves money and keeps the parent's
@@ -385,9 +476,13 @@ baseline). The interesting bit isn't the absolute numbers — it's that the
 gain comes from **adding a tool the agent didn't have**, not from prompt
 or model changes.
 
-**What inber should consider:** Inber's current code-understanding surface
-is the standard CC-style trio (Read/Grep/Glob) plus `codeindex/`. Grep is
-syntactic; codeindex gives lookup-by-symbol. Neither answers "where do
+**What inber should consider:** ⚠️ *Corrected 2026-08-07.* inber's
+code-understanding surface is `read_files` plus `codeindex/`. There is **no glob
+tool** anywhere, and ripgrep is **deliberately unregistered**
+(`tools/tools.go:38-40`: it "encourages grep-then-read two-turn pattern when
+reading the file directly is one turn"), reachable only as
+`shell_commands "rg …"`. codeindex gives lookup-by-symbol — in principle;
+`engine/engine_types.go:75` records it as a wired-in no-op. Neither answers "where do
 the values flowing into this variable come from?" — the agent has to
 reconstruct that by reading multiple files into its context (the
 SWE-Edit problem this sweep already flagged). ARISE says: don't make the
@@ -494,8 +589,11 @@ Findings worth flagging:
 **What inber should consider:** Inber's permission/guard layer
 (prehook in bridge-server, the per-agent tool allowlist in agent-store)
 is positioned for exactly this hardening, but today it's primarily
-oriented toward **destructive** actions (delete, force-push, network
-calls to private endpoints). RHB argues for a second category:
+oriented toward **destructive** actions. *(Corrected 2026-08-07: the three
+examples originally given here — delete, force-push, network calls to private
+endpoints — are all sub-tool operations the guard cannot see. It classifies by
+tool NAME; `isDangerous` is exactly `shell_commands`, `write_files`,
+`edit_files`, `deploy` — `guard/guard.go:329-334`.)* RHB argues for a second category:
 **verification-bypass guards**, which are not "dangerous" in the
 classical sense but corrupt the trustworthiness of the agent's
 output. Two concrete moves the paper supports:
@@ -503,9 +601,14 @@ output. Two concrete moves the paper supports:
 1. For agents that operate against an evaluator (test runs, lint
    checks, grading rubrics), the guard layer should refuse Read on
    evaluator source and refuse Edit on evaluator state. This is
-   already partially true in inber (workflow_build.go runs the build,
-   the agent doesn't), but the principle should be explicit in the
-   guard rules.
+   ⚠️ *Corrected 2026-08-07: this said it was "already partially true in
+   inber (workflow_build.go runs the build, the agent doesn't)". Nothing runs
+   the build.* `buildAndTest`'s only caller (`engine/workflow_hooks.go:91`) sits
+   behind a guard matching the pre-rename names `write_file`/`edit_file`
+   (`:67`), so the whole auto-workflow hook has been dead since the tools became
+   plural — open todo `af237d64`, now pinned by
+   `engine/workflow_hooks_toolname_test.go`. The principle should still be
+   explicit in the guard rules.
 2. For agents with metadata-rich tool returns (file timestamps, git
    blame, issue labels), the harness should consider whether
    metadata-only inference is a valid task completion or a shortcut —
@@ -577,13 +680,17 @@ band. Two action-items the paper sharpens:
   injectors disguised as tools). Inber doesn't do this today, but
   the proposed memory-tool surface in the harness-layer set
   (`docs/cache-optimization.md` cross-refs to `HARNESS-LAYER.md`)
-  should keep tool definitions stable across the session.
+  should keep tool definitions stable across the session. *(Corrected
+  2026-08-07: `HARNESS-LAYER.md` is llm-bridge-server's doc, not inber's, and
+  `docs/cache-optimization.md` contains no reference to it.)*
 - The "naive caching can increase latency" warning is the empirical
   reason behind opencode's 2026-05-11 default flip to `cache: 'auto'`
   with a *placement policy* rather than `cache: 'all'`. See
   `docs/comparisons/opencode.md` 2026-05-11 entry — pair this paper
   with that PR sequence as the joint citation when retargeting BP3
-  to the latest user message in `engine/build_prompts.go`.
+  to the latest user message. *(Corrected 2026-08-07: this said
+  `engine/build_prompts.go`, split away by `3d3625c`. BP3 placement now lives in
+  `engine/lifecycle.go:142`, `engine/build.go:42` and `engine/turn_prompt.go:128`.)*
 
 ## Sweep note (2026-05-11)
 

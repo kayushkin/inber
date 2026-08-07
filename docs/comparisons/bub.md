@@ -60,7 +60,9 @@ Every builtin (CLI channel, Telegram channel, model runner, tool dispatcher, ski
 
 ### 1. Pipeline Hooks for the Turn Loop (HIGH PRIORITY)
 
-Refactor `engine/turn.go` so each stage of a turn (resolve session, load state, build prompt, call model, save state, render output) is dispatched through a hook list. Builtins register the default behavior; agents or plugins can override individual stages.
+Refactor the turn loop — `RunTurn` at `engine/engine.go:245` *(corrected 2026-08-07: this
+said `engine/turn.go`, which does not exist; the split proposed in `ENGINE_REFACTOR_PLAN.md`
+was never carried out)* — so each stage of a turn (resolve session, load state, build prompt, call model, save state, render output) is dispatched through a hook list. Builtins register the default behavior; agents or plugins can override individual stages.
 
 This unblocks:
 - Per-agent prompt customization without touching engine code

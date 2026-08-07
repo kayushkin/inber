@@ -196,8 +196,10 @@ which is exactly inber's target regime.
 > The shell half is fixed too, one layer down from where this section looked:
 > `tool-store/internal/childprocess` now owns command construction — `processgroup_unix.go:15-18`
 > sets `SysProcAttr.Setpgid`, and `childprocess.go:40,62` sets `WaitDelay`, with tests for the
-> grandchild-holds-the-pipe case. `tools/shell.go` calls `childprocess.NewCommand`, not
-> `exec.CommandContext`.
+> grandchild-holds-the-pipe case. `tool-store/tools/shell.go:76` calls
+> `childprocess.NewCommand`, not `exec.CommandContext`. *(Path corrected 2026-08-07: this
+> read `tools/shell.go`, which resolves to inber and does not exist. The shell tool is
+> tool-store's, wrapped by `inber/tools/tools.go:49`.)*
 > **Still open from this section:** the auto-proceed cap (a per-command wall-clock bound that
 > returns partial output plus "still running" rather than blocking) and `OnToolProgress`. Both
 > are features, neither is a defect.
