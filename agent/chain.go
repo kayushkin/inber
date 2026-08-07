@@ -217,6 +217,17 @@ type toolCallOutcome struct {
 	// primaryOutput is the primary tool's own output, with nothing prepended or
 	// appended.
 	primaryOutput string
+	// primaryRan reports that the primary call was dispatched to a tool — that
+	// tool.Run was entered, whether it then succeeded or returned an error. It
+	// is false when the gate refused the call, when the block named no such
+	// tool, and when the read cache answered in the tool's place.
+	//
+	// It exists for the caller's cache bookkeeping, which has to tell "this
+	// call did not happen" from "this call happened and went wrong". Only the
+	// first means the files it named are untouched; a tool that fails partway
+	// may have written some of them already. chainTool answers the same
+	// question for the chained call, by being assigned only after it runs.
+	primaryRan bool
 	// chainTool names the tool the chain actually ran. It is empty when the
 	// block carried no chain, or named a tool that does not exist.
 	chainTool string
@@ -403,6 +414,10 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 			notRunWithPrimary(fmt.Sprintf("the call it was attached to names no tool %q", name))
 			return outcome, true
 		}
+		// Set before the error is read, not after: a tool that fails may have
+		// done some of what it was asked to, and the caller's cache
+		// bookkeeping needs to hear that it ran either way.
+		outcome.primaryRan = true
 		primaryOutput, err := tool.Run(ctx, cleanInput)
 		if err != nil {
 			outcome.combined = fmt.Sprintf("error: %s", err)

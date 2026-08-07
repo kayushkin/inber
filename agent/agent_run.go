@@ -336,23 +336,42 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 					}
 				}
 			}
-			// Write/edit invalidates the cache for that file.
-			if paths := isFileWrite(block.Name, rawInput); len(paths) > 0 {
-				for _, p := range paths {
-					a.readCache.Invalidate(p)
-				}
+		}
+
+		// Execute tool with optional chain ("then" field).
+		outcome, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks, cachedPrimaryOutput, a.ToolRefusal)
+
+		// The primary call's cache evictions, now that the gate has answered.
+		//
+		// This asks outcome.primaryRan rather than isError, because "refused"
+		// and "failed" are different answers and only one of them means the
+		// files went untouched. A tool that ran and returned an error may have
+		// written part of what it was asked to, so it still evicts — that is
+		// the conservative reading this block has always taken, and the two
+		// controls in refused_call_read_cache_test.go hold it in place.
+		//
+		// It used to run BEFORE the call, where the gate's verdict was not yet
+		// available. Observe mode refuses every write, so an Observe session
+		// paid to re-read every file it ever attempted to write. Asking the
+		// gate a second time here is not the alternative: in Assist,
+		// guard.CheckTool invokes the approval callback, so a second ask is a
+		// second prompt to a human.
+		//
+		// isFileWrite reads the primary call's own arguments, the same ones the
+		// tool was handed. It is the chained call's rule (outcome.chainInput,
+		// below) applied to the primary, and the chained half has read that way
+		// since it was written.
+		if a.readCache != nil && outcome.primaryRan {
+			for _, p := range isFileWrite(block.Name, outcome.primaryInput) {
+				a.readCache.Invalidate(p)
 			}
 			// A call that can write files its input does not name takes the
-			// whole cache with it. This runs before the tool does, so a shell
-			// command that fails still costs a re-read rather than leaving an
-			// entry whose freshness nobody checked.
+			// whole cache with it.
 			if invalidatesEverything(block.Name) {
 				a.readCache.InvalidateAll()
 			}
 		}
 
-		// Execute tool with optional chain ("then" field).
-		outcome, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks, cachedPrimaryOutput, a.ToolRefusal)
 		output := outcome.combined
 		if isError {
 			// The dispatcher reports a result it produced itself; the ones it
