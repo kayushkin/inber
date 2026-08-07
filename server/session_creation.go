@@ -23,6 +23,9 @@ import (
 func (g *Server) getOrCreateSession(ctx context.Context, key, agentName string, ac AgentConfig, req RunRequest, onEvent func(StreamEvent)) (*Session, error) {
 	if val, ok := g.sessions.Load(key); ok {
 		sess := val.(*Session)
+		if err := reportModeNotAppliedToLiveSession(key, sess, req); err != nil {
+			return nil, err
+		}
 		sess.setOnEvent(onEvent)
 		return sess, nil
 	}
@@ -41,6 +44,64 @@ func (g *Server) getOrCreateSession(ctx context.Context, key, agentName string, 
 		return actual.(*Session), nil
 	}
 	return sess, nil
+}
+
+// reportModeNotAppliedToLiveSession says out loud that a mode arriving on a
+// request for a session that already exists is not going to be applied.
+//
+// applyRequestOverrides is reached only from createSession, so every
+// per-request override is read exactly once, when the session is born. On the
+// second and every later POST /run for the same key, getOrCreateSession returns
+// the live session before it looks at req at all, and mode is parsed by the
+// JSON decoder, accepted, 200'd and dropped. A caller tightening a running
+// autonomous session to observe got no error and no effect.
+//
+// ⚠️ This function does NOT change that, and must not be read as a step towards
+// changing it. Whether mode — or any of the eleven fields applyRequestOverrides
+// copies — becomes per-turn on a live session is an open question with a real
+// blast radius: re-applying all of them every run would let one request
+// silently reshape a live conversation's model and system prompt. See noteboard
+// todo c14cd190. What is closed here is only the silence.
+//
+// Two things are wrong today and neither needs that question answered:
+//
+//  1. An unreadable mode is a hard error on the first request of a session and
+//     a silent success on the second. NewEngine refuses to build a session whose
+//     mode it cannot parse, on the stated reasoning that "the only default
+//     available is the one that trusts it with everything" — and then the same
+//     typo against the same key, one turn later, is not parsed at all. That is
+//     the same input answered two ways by the same endpoint, so it is settled
+//     here the way session creation already settles it: loudly.
+//
+//  2. A readable mode that differs from the one in force is dropped without a
+//     word. It stays dropped; it is now reported. The line states only what was
+//     asked and what is enforced, and claims nothing about what that costs —
+//     Unset and Autonomous, for instance, are both allow-everything at
+//     CheckTool, and this function deliberately does not carry a second copy of
+//     that table to decide which differences are worth mentioning.
+func reportModeNotAppliedToLiveSession(key string, sess *Session, req RunRequest) error {
+	if req.Mode == "" {
+		return nil
+	}
+
+	asked, err := guard.ParseMode(req.Mode)
+	if err != nil {
+		return fmt.Errorf("execution mode: %w", err)
+	}
+
+	if sess == nil || sess.Engine == nil || sess.Engine.Guard == nil {
+		log.Printf("session %s: request asked for execution mode %q; the live session has no guard to report a mode, so what it is enforcing is unknown", key, req.Mode)
+		return nil
+	}
+
+	inForce := sess.Engine.Guard.Mode()
+	if asked == inForce {
+		return nil
+	}
+
+	log.Printf("session %s: request asked for execution mode %q; the live session is enforcing %q and a live session's mode is not changed — the request field was dropped (noteboard todo c14cd190)",
+		key, asked, inForce)
+	return nil
 }
 
 // applyRequestOverrides copies the per-request overrides a caller sent with a
