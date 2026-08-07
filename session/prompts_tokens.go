@@ -1,60 +1,28 @@
 package session
 
-import (
-	"encoding/json"
-
-	"github.com/anthropics/anthropic-sdk-go"
-)
-
-// estimateTokens is a coarse char-to-token approximation (~3 chars/token)
-// used only to render token counts inside human-readable prompts/*.md files.
-// Kept local so the session package does not depend on the memory layer;
-// budget enforcement uses memory-store's estimator at call sites that matter.
-func estimateTokens(text string) int {
-	if text == "" {
-		return 0
-	}
-	return (len(text) + 2) / 3
-}
-
-// estimateToolTokens estimates the token count for tool definitions.
-func estimateToolTokens(tools []anthropic.ToolUnionParam) int {
-	total := 0
-	for _, tool := range tools {
-		total += 50
-		if tool.OfTool != nil {
-			desc := tool.OfTool.Description.Or("")
-			total += estimateTokens(desc)
-			// Rough schema estimate from JSON size
-			if data, err := json.Marshal(tool.OfTool.InputSchema); err == nil {
-				total += estimateTokens(string(data))
-			}
-		}
-	}
-	return total
-}
-
-// estimateSystemTokens estimates the token count for system prompt blocks.
-func estimateSystemTokens(blocks []anthropic.TextBlockParam) int {
-	total := 0
-	for _, b := range blocks {
-		total += estimateTokens(b.Text)
-	}
-	return total
-}
-
-// estimateMessageTokens estimates the token count for message content.
-func estimateMessageTokens(messages []anthropic.MessageParam) int {
-	total := 0
-	for _, msg := range messages {
-		total += 4
-		for _, block := range msg.Content {
-			if block.OfText != nil {
-				total += estimateTokens(block.OfText.Text)
-			} else if block.OfToolUse != nil || block.OfToolResult != nil {
-				total += 50
-			}
-		}
-	}
-	return total
-}
+// The four token estimators that used to live here — estimateTokens,
+// estimateToolTokens, estimateSystemTokens and estimateMessageTokens — are
+// gone. They were a second, and worse, copy of the estimator in package
+// conversation, and the prompts/*.md breakdown they rendered is the one place
+// a human goes to find out where a turn's context went.
+//
+// The message walk counted a text block's characters and charged a flat 50
+// tokens for a tool_use or a tool_result. A tool result is the largest thing
+// in an agentic conversation, so the breakdown under-reported exactly the
+// sessions that most need reading. Measured 2026-08-07 over the 92 persisted
+// transcripts under ~/.inber/server/sessions: the honest estimator is a
+// median of 1.35x the old walk, and up to 6.89x — one sub-agent transcript
+// was reported as 7,895 tokens against an honest 54,415, hiding 46,500. On a
+// single 20KB read_files result the old walk answers 117 against 7,066.
+//
+// This is the same bug conversation.estimateMessageTokens' doc comment
+// describes having already been fixed once, surviving in a copy nothing
+// walked.
+//
+// Their replacements are conversation.EstimateMessageTokens,
+// EstimateSystemTokens / EstimateSystemBlockTokens and EstimateToolsTokens /
+// EstimateToolTokens, all of which price a value by marshalling it the way it
+// will be sent, and conversation.EstimateRequestTokens for the whole request.
+// Do not reintroduce a local copy: session already imports conversation, so
+// the "kept local so the session package does not depend on the memory layer"
+// reason the old file gave was not true when it was written.
