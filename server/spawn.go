@@ -182,7 +182,7 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 	if err != nil {
 		return nil, err
 	}
-	defer g.releaseChildSessionKey(childKey)
+	defer g.releaseSessionKeyReservation(childKey)
 
 	// Create ephemeral workspace if agent has projects configured.
 	var ws *forge.Workspace

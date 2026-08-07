@@ -99,13 +99,14 @@ func sessionKeyForChild(parentKey string) string {
 	return parentKey + childKeySeparator + suffix
 }
 
-// childKeyMintAttempts bounds how many keys are proposed before a spawn is
-// refused. Each attempt reads the clock afresh, and on this host time.Now
-// advances every ~70ns, so consecutive proposals differ; the bound is there for
-// the case the loop cannot solve — a suffix space so full that drawing from it
-// keeps landing on a taken key — where the honest answer is an error, not a
-// loop that never returns.
-const childKeyMintAttempts = 100
+// sessionKeyMintAttempts bounds how many keys are proposed before minting is
+// refused. Each attempt reads the clock afresh, and every proposal is also
+// handed its attempt number so a proposal whose only variation is a coarse
+// clock can disambiguate itself rather than offering the same taken key a
+// hundred times. The bound is there for the case the loop cannot solve — a
+// suffix space so full that drawing from it keeps landing on a taken key —
+// where the honest answer is an error, not a loop that never returns.
+const sessionKeyMintAttempts = 100
 
 // mintChildSessionKey returns a child session key that nothing else is using.
 //
@@ -132,9 +133,9 @@ const childKeyMintAttempts = 100
 //     sibling's results are delivered against a session nobody can look up.
 //
 // A caller holds the returned key until the session it built is in g.sessions,
-// then releases it with releaseChildSessionKey — the reservation is what keeps
-// two concurrent spawns from passing the same check before either has stored
-// anything.
+// then releases it with releaseSessionKeyReservation — the reservation is what
+// keeps two concurrent spawns from passing the same check before either has
+// stored anything.
 func (g *Server) mintChildSessionKey(parentKey string) (string, error) {
 	return g.mintChildSessionKeyFrom(parentKey, sessionKeyForChild)
 }
@@ -143,32 +144,140 @@ func (g *Server) mintChildSessionKey(parentKey string) (string, error) {
 // from the checking, so a test can script the collision the clock only produces
 // once in tens of thousands of spawns.
 func (g *Server) mintChildSessionKeyFrom(parentKey string, propose func(parentKey string) string) (string, error) {
-	for attempt := 0; attempt < childKeyMintAttempts; attempt++ {
-		candidate := propose(parentKey)
-		if _, reserved := g.pendingChildKeys.LoadOrStore(candidate, struct{}{}); reserved {
+	return g.mintUnusedSessionKey("a child of "+parentKey, func(int) string {
+		return propose(parentKey)
+	})
+}
+
+// detachedSessionKey proposes the key for a one-off `detach` run. It is a
+// proposal and not an answer, for the same reason sessionKeyForChild is: the
+// suffix is a clock reading, so two detached runs of one agent inside the same
+// millisecond are handed the same key. Everything that mints a key goes
+// through mintUnusedSessionKey, which is what checks.
+//
+// The first attempt is the bare millisecond, which is the key shape this has
+// always produced and the shape anyone reading a session list recognises. Only
+// a retry — i.e. only a genuine collision — adds the attempt number, so the
+// disambiguator appears in the rare case that needs it and nowhere else.
+//
+// A detached key deliberately does NOT use childKeySeparator. Counting those
+// separators is how backfillSessionLineageFromChildKeys derives spawn depth, so
+// a one-off run wearing one would be repaired into a child of an agent it has
+// no parent in.
+func detachedSessionKey(agentName string, attempt int) string {
+	key := fmt.Sprintf("agent:%s:detach-%d", agentName, time.Now().UnixMilli())
+	if attempt > 0 {
+		key = fmt.Sprintf("%s-%d", key, attempt)
+	}
+	return key
+}
+
+// mintDetachedSessionKey returns a key for a one-off run that nothing else is
+// using.
+//
+// `detach` mints a key of its own precisely so the run cannot touch the agent's
+// main session — and it used to mint it from a bare millisecond with no check,
+// which is the one way that promise breaks. Two detached runs inside one
+// millisecond, or a detached run landing on a key some earlier run left on
+// disk, inherit each other exactly as two children did before there was a
+// checked mint: restoreGuardState puts the recorded caps AND the spend against
+// them onto the new session's guard, UpsertSession keeps the first run's agent
+// and lineage on conflict, and g.sessions.Store replaces a still-running
+// sibling in the map. See mintChildSessionKey for the measured version of each.
+func (g *Server) mintDetachedSessionKey(agentName string) (string, error) {
+	return g.mintDetachedSessionKeyFrom(agentName, detachedSessionKey)
+}
+
+// mintDetachedSessionKeyFrom is mintDetachedSessionKey with the proposal
+// separated from the checking, so a test can hold the millisecond still. The
+// collision this guards against needs two runs inside one clock tick, which is
+// not something a test can wait for.
+func (g *Server) mintDetachedSessionKeyFrom(agentName string, propose func(agentName string, attempt int) string) (string, error) {
+	return g.mintUnusedSessionKey("a detached run of "+agentName, func(attempt int) string {
+		return propose(agentName, attempt)
+	})
+}
+
+// resolveSessionKey answers which session key a run belongs to, and returns
+// the release for any reservation it had to take. The release is always
+// callable, so a caller defers it once rather than branching on which arm ran.
+//
+// This lives out of run() because the detach arm is the only one that mints,
+// and a mint that is not reached is a mint that is not protecting anything:
+// keeping the choice in one named function is what lets a test drive it
+// without a live agent behind it.
+func (g *Server) resolveSessionKey(agentName string, req RunRequest) (string, func(), error) {
+	noReservation := func() {}
+
+	if req.Detach {
+		// One-off run: a key of its own, so it cannot touch the agent's main
+		// session. That promise is only kept if the key is genuinely unused, so
+		// it is minted and held rather than stamped from the clock — a bare
+		// millisecond collides with a second detached run in the same
+		// millisecond, and with any earlier run that left its key on disk. See
+		// mintDetachedSessionKey for what a collision inherits.
+		minted, err := g.mintDetachedSessionKey(agentName)
+		if err != nil {
+			return "", noReservation, err
+		}
+		// Held for the whole request rather than until the session is stored:
+		// run() blocks on the turn anyway, and a reservation dropped early is a
+		// reservation that stopped protecting anything.
+		return minted, func() { g.releaseSessionKeyReservation(minted) }, nil
+	}
+
+	if req.NewSession {
+		// Fresh session: use the main key. The session already sitting under
+		// that key is released inside the queue, not here — the queue's
+		// per-session lock has by then serialized this request behind any turn
+		// still running on that key, which is what makes closing it safe.
+		return mainSessionKey(agentName), noReservation, nil
+	}
+
+	if req.SessionKey == "" {
+		return mainSessionKey(agentName), noReservation, nil
+	}
+	return req.SessionKey, noReservation, nil
+}
+
+// mintUnusedSessionKey returns a session key that nothing else is using. It is
+// the checking half shared by every mint; propose supplies the shape.
+//
+// subject names what the key is for and appears in the refusal, so a caller
+// reading a failure learns which spawn or run could not be given a key.
+//
+// A caller holds the returned key until the session it built is in g.sessions,
+// then releases it with releaseSessionKeyReservation — the reservation is what
+// keeps two concurrent callers from passing the same check before either has
+// stored anything.
+func (g *Server) mintUnusedSessionKey(subject string, propose func(attempt int) string) (string, error) {
+	for attempt := 0; attempt < sessionKeyMintAttempts; attempt++ {
+		candidate := propose(attempt)
+		if _, reserved := g.pendingSessionKeys.LoadOrStore(candidate, struct{}{}); reserved {
 			continue
 		}
 		inUse, err := g.sessionKeyInUse(candidate)
 		if err != nil {
-			g.pendingChildKeys.Delete(candidate)
-			return "", fmt.Errorf("mint a session key for a child of %s: %w", parentKey, err)
+			g.pendingSessionKeys.Delete(candidate)
+			return "", fmt.Errorf("mint a session key for %s: %w", subject, err)
 		}
 		if inUse {
-			g.pendingChildKeys.Delete(candidate)
+			g.pendingSessionKeys.Delete(candidate)
 			continue
 		}
 		return candidate, nil
 	}
-	return "", fmt.Errorf("mint a session key for a child of %s: %d proposed keys were all taken",
-		parentKey, childKeyMintAttempts)
+	return "", fmt.Errorf("mint a session key for %s: %d proposed keys were all taken",
+		subject, sessionKeyMintAttempts)
 }
 
-// releaseChildSessionKey drops a reservation taken by mintChildSessionKey. It is
-// safe to call once the session is in g.sessions — which is itself one of the
-// things sessionKeyInUse reads — and it must be called when the session could
-// not be built, or the key is held out of circulation until the process exits.
-func (g *Server) releaseChildSessionKey(key string) {
-	g.pendingChildKeys.Delete(key)
+// releaseSessionKeyReservation drops a reservation taken by one of the mints.
+// It is safe to call once the session is in g.sessions — which is itself one of
+// the things sessionKeyInUse reads — and it must be called when the session
+// could not be built, or the key is held out of circulation until the process
+// exits.
+func (g *Server) releaseSessionKeyReservation(key string) {
+	g.pendingSessionKeys.Delete(key)
 }
 
 // sessionKeyInUse reports whether a key already names a session somewhere that

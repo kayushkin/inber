@@ -163,7 +163,7 @@ func TestAMintedKeyIsFreeAgainOnceItIsReleased(t *testing.T) {
 		t.Fatalf("mint: %v", err)
 	}
 	// The session could not be built, so nothing was ever stored under the key.
-	server.releaseChildSessionKey(minted)
+	server.releaseSessionKeyReservation(minted)
 
 	again, err := server.mintChildSessionKeyFrom(mintParentKey, proposing("30001"))
 	if err != nil {
