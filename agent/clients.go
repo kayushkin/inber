@@ -162,6 +162,32 @@ func envKeyForProvider(provider string) string {
 }
 
 // defaultBaseURL returns the default API base URL for known providers.
+//
+// The google entry has been read as a bug twice and filed as one once, so the
+// measurement is written down here rather than re-derived a fourth time.
+// agent/openai.go appends "/chat/completions", giving
+// https://generativelanguage.googleapis.com/v1beta/chat/completions. Google's
+// docs describe the OpenAI-compatible surface as /v1beta/openai/..., which
+// reads like a missing path segment. It is not: Google serves both spellings.
+//
+// Probed 2026-08-07 without a key. An unknown path under this host answers 404
+// with an empty body; a known one gets far enough to answer 400 with a
+// structured google.rpc.BadRequest. Both /v1beta/chat/completions and
+// /v1beta/openai/chat/completions answer 400 and reject the same unknown field
+// with a byte-identical transcoding error, so both are registered routes onto
+// the same request proto. It is not a wildcard segment matching anything:
+// /v1beta/BOGUSSEG/chat/completions and /v1beta/openai/openai/chat/completions
+// both 404. So this URL is reachable and nothing here 404s.
+//
+// Not proven: a completion with a valid key. No Google credential exists on
+// this host, so the round trip is untested. What is ruled out is the 404 —
+// which matters because engine/failover.go would have recorded it against the
+// model in the host-shared model-store, blaming Google for inber's URL.
+//
+// Google documents only the /openai spelling, so moving to it is defensible
+// hardening against the undocumented alias being withdrawn. That is a change
+// to a working URL, not a fix, and it belongs with the open decision about
+// whether provider transport lives here at all.
 func defaultBaseURL(provider string) string {
 	switch provider {
 	case "openai":

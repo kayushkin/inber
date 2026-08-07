@@ -3528,11 +3528,17 @@ was found by hand-probing a memory-store DB instead. **The transferable artifact
 regression**: a test that cannot be shown to catch the bug you already shipped is a test you cannot
 trust to catch the next one.
 
-### 2. inber's provider contract is four hardcoded tables that must agree and do not — Google's base URL is wrong, ollama is unreachable, and zhipu exists in exactly one of them
+### 2. inber's provider contract is four hardcoded tables that must agree and do not — ollama is unreachable and zhipu exists in exactly one of them
 
 > **FILED 2026-08-07 as todos `95e1f1aa` (the Google base URL) and `7ec4c2da` (the four
 > disagreeing tables). Do not re-file.** They are separate because their fixes are different
 > sizes; they share the decision in the last paragraph and should be decided together.
+>
+> **UPDATE 2026-08-07, same day: `95e1f1aa` is CLOSED — its claim was measured and is false.**
+> Google serves the base URL this entry called broken; see the withdrawn bullet below. The
+> heading no longer names it. `7ec4c2da` stands: the four tables still disagree, and ollama and
+> zhipu are still half-declared. One of the three "live consequences" below was never live, so
+> weigh the remaining two on their own rather than on a count of three.
 
 #11022's `CacheSemantics` is one declared table replacing scattered per-provider copies. inber has
 the copies and no table. `agent/clients.go` answers four separate per-provider questions in four
@@ -3547,19 +3553,25 @@ separate switches, and **no two of them list the same providers**:
 
 Three live consequences, each verified in code:
 
-- **Every Google model 404s.** `defaultBaseURL` returns `https://generativelanguage.googleapis.com/v1beta`
-  (`agent/clients.go:170`) and `agent/openai.go:52` appends `/chat/completions`. Gemini's
-  OpenAI-compatible endpoint is `https://generativelanguage.googleapis.com/v1beta/**openai**/chat/completions`
-  ([Google's own docs](https://ai.google.dev/gemini-api/docs/openai)); `/v1beta/chat/completions`
-  is not an endpoint on that host at all. The auth half is fine — Gemini's compat endpoint takes
-  `Authorization: Bearer <key>`, which is what `agent/openai.go:58-59` sends — so the whole break is
-  one missing path segment. It costs more than a 404: `ChatCompletion` returns
-  `API error 404: ...` (`agent/openai.go:73`), `engine/turn_execute.go:56` hands it to
-  `recordModelHealth`, and `errorIsEvidenceAboutTheModel` (`engine/failover.go:127-160`) excludes
-  only a cancel, inber's own deadline and `ErrMaxAPICallsExceeded` — so `modelStore.RecordError`
-  fires and **every Gemini model is marked unhealthy in the host-shared model-store**, blaming
-  Google for a typo in inber's URL, for every other harness on this box. Third instance of that
-  compounding shape (`df1de352`, `25b91c78`).
+- ~~**Every Google model 404s.**~~ **WITHDRAWN 2026-08-07 — measured false, and the todo it
+  produced (`95e1f1aa`) is closed.** This entry claimed `defaultBaseURL` (`agent/clients.go:170`)
+  plus `agent/openai.go:52` builds `https://generativelanguage.googleapis.com/v1beta/chat/completions`,
+  that Google serves the OpenAI-compatible surface only at `/v1beta/**openai**/chat/completions`
+  ([their docs](https://ai.google.dev/gemini-api/docs/openai)), and so that the URL "is not an
+  endpoint on that host at all". **Google serves both spellings.** Probed against the live host
+  without a key: an unknown path 404s with an empty body, a known one reaches a 400 carrying a
+  structured `google.rpc.BadRequest`, and `/v1beta/chat/completions` and
+  `/v1beta/openai/chat/completions` both answer 400 and reject the same unknown field with a
+  byte-identical transcoding error — the same registered route onto the same request proto. Not a
+  wildcard: `/v1beta/BOGUSSEG/chat/completions` and `/v1beta/openai/openai/chat/completions` both
+  404. Nothing 404s, so the compounding consequence this entry built on top — `API error 404`
+  reaching `recordModelHealth` (`engine/turn_execute.go:56`) and `modelStore.RecordError` marking
+  **every Gemini model unhealthy in the host-shared model-store** — never fires from this cause.
+  That mechanism is real and stays filed as `df1de352` / `25b91c78`; it just has no trigger here.
+  Untested: a completion with a valid key, because no Google credential exists on this host. The
+  measurement is kept at `agent/clients.go`'s `defaultBaseURL` so this is not re-derived a fourth
+  time. **The entry was wrong because it reasoned from documentation to "therefore the other path
+  404s" and never sent a request** — one unauthenticated `curl` would have caught it.
 - **ollama is named at `:92` and reachable by nothing.** It has no entry in `defaultBaseURL`, so it
   gets `baseURL == ""`, and no entry in `envKeyForProvider`, so a local server that needs no key
   is rejected at `agent/clients.go:59-60` with *"no credentials found for provider"* before it ever
