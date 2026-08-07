@@ -65,4 +65,21 @@ type OpenAIUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// PromptTokensDetails breaks PromptTokens down. Every OpenAI-compatible
+	// endpoint that caches reports the cached part here and nowhere else, so
+	// leaving it off the struct dropped it at the JSON boundary: nothing
+	// downstream could see it, and no measurement of this path's cache
+	// behaviour was possible even in principle.
+	PromptTokensDetails OpenAIPromptTokensDetails `json:"prompt_tokens_details"`
+}
+
+// OpenAIPromptTokensDetails is the breakdown of OpenAIUsage.PromptTokens.
+type OpenAIPromptTokensDetails struct {
+	// CachedTokens is the part of PromptTokens the provider served from its own
+	// cache. It is a SUBSET of PromptTokens, not a figure beside it — which is
+	// the opposite of Anthropic's convention, where input_tokens excludes the
+	// cached span and cache_read_input_tokens counts it separately. Anything
+	// that prices this number has to say which of the two conventions it is
+	// working in; see agent.APICallUsage.CachedTokensIncludedInInputTokens.
+	CachedTokens int `json:"cached_tokens"`
 }
