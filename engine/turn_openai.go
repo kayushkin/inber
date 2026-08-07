@@ -82,10 +82,29 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 		}
 		
 		anthropicResp := agent.ConvertOpenAIResponseToAnthropic(resp)
-		
-		result.InputTokens += int(anthropicResp.Usage.InputTokens)
-		result.OutputTokens += int(anthropicResp.Usage.OutputTokens)
-		
+
+		// One record per API call, in call order, the way the Anthropic path
+		// keeps them (agent/agent_run.go, processResponse). This loop kept only
+		// the running totals, so nobody could tell a turn of one expensive call
+		// from a turn of ten cheap ones, and reportCallsThatBoughtNoCache had
+		// nothing to walk. The totals stay exactly the sum of these records.
+		//
+		// The cached count is read off resp — the raw wire object — rather than
+		// off anthropicResp, because anthropic.Usage has no honest home for it.
+		// Its cache fields carry Anthropic's convention, where the cached span
+		// is disjoint from input_tokens, and OpenAI's cached_tokens is a subset
+		// of prompt_tokens. Putting it there would be a claim about how it
+		// should be priced, which is the open half of todo 0d052752.
+		call := agent.APICallUsage{
+			InputTokens:                       int(anthropicResp.Usage.InputTokens),
+			OutputTokens:                      int(anthropicResp.Usage.OutputTokens),
+			CachedTokensIncludedInInputTokens: resp.Usage.PromptTokensDetails.CachedTokens,
+		}
+		result.APICalls = append(result.APICalls, call)
+
+		result.InputTokens += call.InputTokens
+		result.OutputTokens += call.OutputTokens
+
 		// Ends the turn in the session, logs the response, and clears the
 		// consecutive-error count when a response arrives clean. This loop used
 		// to call EndTurn by hand and do neither of the other two, so an

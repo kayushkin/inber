@@ -28,11 +28,11 @@ import (
 type Server struct {
 	config     Config
 	sessions   sync.Map          // sessionKey → *Session
-	// pendingChildKeys holds the keys mintChildSessionKey has handed out and
-	// whose sessions are not in sessions yet, so that two concurrent spawns
-	// cannot both be told the same key is free. Entries live for the length of
-	// one spawn; see releaseChildSessionKey.
-	pendingChildKeys sync.Map // sessionKey → struct{}
+	// pendingSessionKeys holds the keys the mints have handed out and whose
+	// sessions are not in sessions yet, so that two concurrent callers cannot
+	// both be told the same key is free. Entries live for the length of one
+	// spawn, fork or detached run; see releaseSessionKeyReservation.
+	pendingSessionKeys sync.Map // sessionKey → struct{}
 	queue      *Queue
 	store      *Store            // session/request persistence
 	events     *EventPublisher   // bus event publisher (nil = disabled)
@@ -292,19 +292,11 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 	}
 
 	// Resolve session key.
-	sessionKey := req.SessionKey
-	if req.Detach {
-		// One-off session: unique key, won't affect main session.
-		sessionKey = fmt.Sprintf("agent:%s:detach-%d", agentName, time.Now().UnixMilli())
-	} else if req.NewSession {
-		// Fresh session: use the main key. The session already sitting under
-		// that key is released inside the queue below, not here — the queue's
-		// per-session lock has by then serialized this request behind any turn
-		// still running on that key, which is what makes closing it safe.
-		sessionKey = mainSessionKey(agentName)
-	} else if sessionKey == "" {
-		sessionKey = mainSessionKey(agentName)
+	sessionKey, releaseKey, err := g.resolveSessionKey(agentName, req)
+	if err != nil {
+		return nil, err
 	}
+	defer releaseKey()
 
 	// Prepare input (prefix with author if present).
 	input := req.Message
@@ -323,7 +315,7 @@ func (g *Server) run(ctx context.Context, req RunRequest, onEvent func(StreamEve
 	var resp *RunResponse
 
 	// Enqueue the work (serialized by session, capped by lane).
-	err := g.queue.Enqueue(ctx, "main", sessionKey, func(ctx context.Context) error {
+	err = g.queue.Enqueue(ctx, "main", sessionKey, func(ctx context.Context) error {
 		// A fresh session replaces whatever is under this key. Release it here,
 		// inside the queue: the per-session lock is held, so any turn that was
 		// running on this key has finished, and the engine can be closed

@@ -297,6 +297,28 @@ type APICallUsage struct {
 	// which is why this reads "had tools and did not send them" rather than
 	// "sent no tools".
 	ToolsWithheld bool
+	// CachedTokensIncludedInInputTokens is what an OpenAI-compatible provider
+	// reported as prompt_tokens_details.cached_tokens: the part of InputTokens
+	// above that it served from its own cache. Zero on the Anthropic path,
+	// which reports its cache figures in CacheReadTokens instead.
+	//
+	// ⚠️ It is deliberately NOT CacheReadTokens, and moving it there is the one
+	// change this field exists to keep somebody from making by accident. The
+	// two providers disagree about what an input count contains: Anthropic's
+	// input_tokens EXCLUDES the cached span, so CacheReadTokens is disjoint
+	// from InputTokens and CalcCostWithCache prices them separately; OpenAI's
+	// prompt_tokens INCLUDES it. Handing this number to CalcCostWithCache
+	// beside an unadjusted InputTokens therefore bills the cached span twice —
+	// the same class of error as the one recorded at session/timeline_cost.go
+	// :30-43 and closed as todo 00093e48, with the sign flipped.
+	//
+	// So this field is a measurement and nothing prices it yet. Where the
+	// inclusive/exclusive normalisation belongs — in the response conversion,
+	// or in CalcCostWithCache once it is told which convention it was handed —
+	// is the open half of todo 0d052752 and is the owner's call. What is
+	// settled is that the number has to survive the wire to be decidable at
+	// all, which is what this field does.
+	CachedTokensIncludedInInputTokens int
 }
 
 // incompleteResponseNotice marks a stored assistant message as cut off, so a

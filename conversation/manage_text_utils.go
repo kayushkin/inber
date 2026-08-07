@@ -98,11 +98,7 @@ func extractTextBlockContent(content []anthropic.ContentBlockParamUnion) string 
 func estimateMessageTokens(msg anthropic.MessageParam) int {
 	total := 0
 	for _, block := range msg.Content {
-		encoded, err := json.Marshal(block)
-		if err != nil {
-			continue
-		}
-		total += memory.EstimateTokens(string(encoded))
+		total += estimateMarshalled(block)
 	}
 	return total
 }
@@ -114,4 +110,90 @@ func EstimateTokens(messages []anthropic.MessageParam) int {
 		total += estimateMessageTokens(msg)
 	}
 	return total
+}
+
+// EstimateMessageTokens is estimateMessageTokens for callers outside this
+// package. It exists so that anything reporting a per-message number reports
+// the same one the prune gates weigh, rather than walking the content blocks
+// again with a different rule.
+func EstimateMessageTokens(msg anthropic.MessageParam) int {
+	return estimateMessageTokens(msg)
+}
+
+// estimateMarshalled prices one value the way it will be sent: marshalled to
+// the JSON the SDK puts on the wire, then measured with memory-store's
+// estimator. Every estimator in this file is this function with a different
+// argument, which is what keeps a system block, a tool definition and a
+// content block from being counted by three different rules.
+//
+// A value that fails to marshal is counted as zero because it cannot be sent
+// either.
+func estimateMarshalled(v any) int {
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return 0
+	}
+	return memory.EstimateTokens(string(encoded))
+}
+
+// EstimateSystemBlockTokens prices one system prompt block.
+func EstimateSystemBlockTokens(block anthropic.TextBlockParam) int {
+	return estimateMarshalled(block)
+}
+
+// EstimateSystemTokens prices a request's whole system prompt.
+func EstimateSystemTokens(blocks []anthropic.TextBlockParam) int {
+	total := 0
+	for _, block := range blocks {
+		total += EstimateSystemBlockTokens(block)
+	}
+	return total
+}
+
+// EstimateToolTokens prices one tool definition — its name, description and
+// the whole of its input schema.
+//
+// Marshalling rather than adding up a flat per-parameter constant is what
+// makes this survive the schema injection inber does to every tool: the
+// `then` chain and the sideband fields are added to a tool's schema on the
+// way out (agent.AddChainAndSidebandFields), so a count derived from the
+// registered parameter list prices a schema that is not the one being sent.
+func EstimateToolTokens(tool anthropic.ToolUnionParam) int {
+	return estimateMarshalled(tool)
+}
+
+// EstimateToolsTokens prices a request's whole tools block.
+func EstimateToolsTokens(tools []anthropic.ToolUnionParam) int {
+	total := 0
+	for _, tool := range tools {
+		total += EstimateToolTokens(tool)
+	}
+	return total
+}
+
+// EstimateRequestTokens prices everything a request puts in front of the
+// model: its system prompt, its tools block and its messages.
+//
+// This is the number the message-list estimators cannot produce. The system
+// blocks, the memory blocks folded into them and the tools block are several
+// thousand tokens that no gate in the tree could see, so "does this prompt
+// fit in the context window" was not a question inber could ask about itself.
+//
+// ⚠️ The prune gates deliberately do NOT call this yet. ShouldPrune's token
+// branch and engine.pruneIfNeeded's emergency flush both compare against
+// thresholds (TokenBudget, TokenBudget*2) that were tuned against the
+// message-list number; feeding them a number several thousand tokens larger
+// would move every one of those thresholds without anyone choosing to. What
+// the gates should do once they can see the whole request is the open half of
+// noteboard todo `939d5fdc` and is the user's call.
+//
+// MaxTokens and the thinking budget are not counted: both bound the model's
+// OUTPUT, and this measures what is sent.
+func EstimateRequestTokens(params *anthropic.MessageNewParams) int {
+	if params == nil {
+		return 0
+	}
+	return EstimateSystemTokens(params.System) +
+		EstimateToolsTokens(params.Tools) +
+		EstimateTokens(params.Messages)
 }

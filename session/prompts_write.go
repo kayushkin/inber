@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/conversation"
 	"github.com/kayushkin/inber/internal/textutil"
 )
 
@@ -48,8 +49,8 @@ func (s *Session) WritePromptBreakdown(turn int, params *anthropic.MessageNewPar
 	sb.WriteString(fmt.Sprintf("**Timestamp:** %s\n", time.Now().Format(time.RFC3339)))
 	sb.WriteString(fmt.Sprintf("**Model:** %s\n\n", params.Model))
 
-	systemTokens := estimateSystemTokens(params.System)
-	toolTokens := estimateToolTokens(params.Tools)
+	systemTokens := conversation.EstimateSystemTokens(params.System)
+	toolTokens := conversation.EstimateToolsTokens(params.Tools)
 
 	if turn == 1 {
 		writeAllMessages(&sb, params.Messages, 0)
@@ -63,15 +64,18 @@ func (s *Session) WritePromptBreakdown(turn int, params *anthropic.MessageNewPar
 		writeAllMessages(&sb, params.Messages, newStart)
 	}
 
-	// Token summary
-	messageTokens := estimateMessageTokens(params.Messages)
+	// Token summary. The total is asked of EstimateRequestTokens rather than
+	// added up from the three rows above it: that function is what prices a
+	// whole request everywhere else, so a section this breakdown forgets to
+	// list would still be counted here and show up as rows that do not sum.
+	messageTokens := conversation.EstimateTokens(params.Messages)
 	sb.WriteString(fmt.Sprintf("\n## Tokens\n\n"))
 	sb.WriteString(fmt.Sprintf("| Section | Tokens (est) |\n"))
 	sb.WriteString(fmt.Sprintf("|---------|-------------|\n"))
 	sb.WriteString(fmt.Sprintf("| [System prompt](system.md) | ~%d (%d blocks) |\n", systemTokens, len(params.System)))
 	sb.WriteString(fmt.Sprintf("| [Tools](tools.md) | ~%d (%d tools) |\n", toolTokens, len(params.Tools)))
 	sb.WriteString(fmt.Sprintf("| Messages | ~%d (%d messages) |\n", messageTokens, len(params.Messages)))
-	sb.WriteString(fmt.Sprintf("| **Total** | **~%d** |\n", systemTokens+messageTokens+toolTokens))
+	sb.WriteString(fmt.Sprintf("| **Total** | **~%d** |\n", conversation.EstimateRequestTokens(params)))
 
 	s.prevMessageCount = len(params.Messages)
 	return os.WriteFile(path, []byte(sb.String()), 0644)
@@ -94,7 +98,7 @@ func writeSystemFiles(promptsDir string, blocks []anthropic.TextBlockParam, bloc
 
 	totalTokens := 0
 	for i, block := range blocks {
-		tokens := estimateTokens(block.Text)
+		tokens := conversation.EstimateSystemBlockTokens(block)
 		totalTokens += tokens
 
 		// Determine block name/slug
@@ -151,7 +155,7 @@ func writeToolsFile(promptsDir string, tools []anthropic.ToolUnionParam) {
 		}
 	}
 
-	totalTokens := estimateToolTokens(tools)
+	totalTokens := conversation.EstimateToolsTokens(tools)
 	sb.WriteString(fmt.Sprintf("---\n**Total:** %d tools, ~%d tokens\n", len(tools), totalTokens))
 	os.WriteFile(filepath.Join(promptsDir, "tools.md"), []byte(sb.String()), 0644)
 }
@@ -163,7 +167,7 @@ func writeSystemPrompt(sb *strings.Builder, blocks []anthropic.TextBlockParam, b
 	}
 	sb.WriteString("## System Prompt\n\n")
 	for i, block := range blocks {
-		tokens := estimateTokens(block.Text)
+		tokens := conversation.EstimateSystemBlockTokens(block)
 		label := ""
 		if i < len(blockNames) && blockNames[i].ID != "" {
 			label = " — " + blockNames[i].ID
@@ -184,19 +188,21 @@ func writeAllMessages(sb *strings.Builder, messages []anthropic.MessageParam, st
 	for i := startFrom; i < len(messages); i++ {
 		msg := messages[i]
 		role := string(msg.Role)
-		msgTokens := 4
+		// The row's number comes from the shared estimator, so a row and the
+		// Messages line of the turn's token summary answer with the same
+		// rule. The loop below chooses a preview and nothing else — it names
+		// three block kinds out of the eighteen the SDK carries, which is
+		// tolerable for a preview string and was not tolerable for a count.
+		msgTokens := conversation.EstimateMessageTokens(msg)
 		var contentPreview string
 
 		for _, block := range msg.Content {
 			if block.OfText != nil {
 				text := block.OfText.Text
-				msgTokens += estimateTokens(text)
 				contentPreview = strings.ReplaceAll(textutil.TruncateWith(text, 80, "..."), "|", "\\|")
 			} else if block.OfToolUse != nil {
-				msgTokens += 50
 				contentPreview = fmt.Sprintf("[tool_use: %s]", block.OfToolUse.Name)
 			} else if block.OfToolResult != nil {
-				msgTokens += 50
 				contentPreview = "[tool_result]"
 			}
 		}

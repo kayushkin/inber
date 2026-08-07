@@ -607,7 +607,7 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 		jsonError(w, fmt.Sprintf("fork failed: %v", err), http.StatusInternalServerError)
 		return
 	}
-	defer g.releaseChildSessionKey(childKey)
+	defer g.releaseSessionKeyReservation(childKey)
 
 	agentName := parent.AgentName
 	ac, _ := g.GetAgentConfig(agentName)
