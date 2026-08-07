@@ -42,15 +42,24 @@ import (
 //	context window / overflow       build.go:113-114    NO           df1de352
 //	context pruning                 build.go:48         NO           df1de352
 //	thinking budget / effort        build.go:85-87      NO           e68b05e0
-//	per-call usage record           agent_run.go:273    NO           see below
-//	cached-token accounting         (wire)              NO           0d052752
+//	per-call usage record           agent_run.go:273    yes          — (closed)
+//	cached-token accounting         (wire)              carried,     0d052752
+//	                                                    not priced
 //	reasoning-model parameter       turn_openai.go:70   WRONG        25b91c78
 //
-// `result.APICalls` is the one row with no todo of its own, and it is not worth
-// one: its only reader is `reportCallsThatBoughtNoCache`
-// (`turn_postprocess.go:107`), a log line that prices the calls which sent no
-// tools block. That diagnostic can never fire on this path, but the numbers it
-// would print are the same ones `0d052752` is about, so it closes with that one.
+// `result.APICalls` was the one row with no todo of its own, and it closed with
+// `0d052752`'s wire half as predicted: `runOpenAITurn` now appends one record
+// per call and the turn totals are their sum.
+//
+// The cached-token row is HALF closed, and the halves are different kinds of
+// thing. `agent.OpenAIUsage` gained `PromptTokensDetails.CachedTokens`, so the
+// number survives the JSON boundary and rides
+// `APICallUsage.CachedTokensIncludedInInputTokens` to a report in
+// `recordTurnUsage`. Nothing prices it. That is not an oversight to port: OpenAI's
+// `prompt_tokens` INCLUDES the cached span where Anthropic's `input_tokens`
+// excludes it, so where the normalisation belongs is the open decision on
+// `0d052752` and it is the owner's. The test below now pins the pricing half
+// only, and asserts the wire half as PRESENT so it cannot silently regress.
 //
 // Three rows of `buildAgent` are deliberately absent from that table, because
 // they are not gaps: `SetRepoRoot` feeds `agent.Agent`'s read cache, `FrozenIdx`
@@ -64,10 +73,15 @@ import (
 // open, and a tenth hook cannot be added to one loop in silence.
 
 // rawOpenAI serves canned response BODIES rather than typed responses, which is
-// how a test reaches a field the Go type does not have. `agent.OpenAIUsage`
-// carries three counters and no cache figures, so a typed fake cannot put
-// `prompt_tokens_details.cached_tokens` on the wire at all — the very drop one
-// of these tests is about.
+// how a test reaches a field the Go type does not have, and how it holds a
+// provider's wire shape rather than inber's picture of it.
+//
+// It used to be the only way to put `prompt_tokens_details.cached_tokens` on the
+// wire at all, because `agent.OpenAIUsage` had no home for it. It has one now,
+// so a typed fake can carry that field — but a typed fake shares the struct tag
+// with the code under test and therefore agrees with itself when the tag is
+// wrong. Measured while landing that change: breaking the tag leaves every
+// typed-fake test green. Raw bodies stay the right rig here.
 type rawOpenAI struct {
 	bodies   []string
 	status   int
@@ -276,24 +290,29 @@ func TestTheOpenAILoopSendsMaxTokensToEveryReasoningModelItDoesNotNameByPrefix(t
 	}
 }
 
-// TestTheOpenAILoopPricesEveryCachedTokenAsFreshInput. `agent.OpenAIUsage` has
-// a home for three counters and none for `prompt_tokens_details.cached_tokens`,
-// the field every OpenAI-compatible endpoint that caches reports, so it is
-// dropped at the JSON boundary. `CalcCostWithCache` is then called with
-// `cacheRead=0` by construction and every cached token is billed at the full
-// input price.
+// TestTheOpenAILoopPricesEveryCachedTokenAsFreshInput. The row this test owns
+// is now half closed, and the two halves want opposite assertions.
 //
-// The second consequence is the one that blocks other work: there is no number
-// on this path that could say whether a cache change did anything, so the
-// volatile-context placement decision in `ec9c7122` cannot be measured here
-// until this is fixed.
+// **Carried.** `agent.OpenAIUsage` gained `PromptTokensDetails.CachedTokens`, so
+// the field every OpenAI-compatible endpoint that caches reports is no longer
+// dropped at the JSON boundary; `runOpenAITurn` records it per call on
+// `APICallUsage.CachedTokensIncludedInInputTokens`. That is asserted as PRESENT
+// below, which is the opposite of what the rest of this file does, and on
+// purpose: it is what unblocks the volatile-context placement decision in
+// `ec9c7122`, and a regression would put that back where it was.
 //
-// ⚠️ Note what is NOT asserted: which of `prompt_tokens` and `cached_tokens` a
-// fix should subtract from which. OpenAI's `prompt_tokens` INCLUDES the cached
-// span and Anthropic's `input_tokens` EXCLUDES it, and getting that backwards
-// double-charges — the same class of error as `00093e48`, sign flipped. That is
-// the open decision on `0d052752` and this test deliberately does not prejudge
-// it.
+// **Still not priced.** `CalcCostWithCache` is called with `cacheRead=0` on this
+// path by construction, so every cached token is still billed at the full input
+// price and the turn's cost is an overstatement. `recordTurnUsage` now says so
+// on stderr rather than reporting it silently, which is the most an unpriced
+// measurement can do.
+//
+// ⚠️ Note what is STILL NOT asserted, and must not be: which of `prompt_tokens`
+// and `cached_tokens` a fix should subtract from which. OpenAI's `prompt_tokens`
+// INCLUDES the cached span and Anthropic's `input_tokens` EXCLUDES it, and
+// getting that backwards double-charges — the same class of error as
+// `00093e48`, sign flipped. That is the open decision on `0d052752`, it is the
+// owner's, and this test still does not prejudge it.
 func TestTheOpenAILoopPricesEveryCachedTokenAsFreshInput(t *testing.T) {
 	body := `{
 		"id": "chatcmpl-1",
@@ -318,17 +337,23 @@ func TestTheOpenAILoopPricesEveryCachedTokenAsFreshInput(t *testing.T) {
 	if result.InputTokens != 1000 {
 		t.Fatalf("input tokens %d, want the 1000 the provider reported — the fake is not being read", result.InputTokens)
 	}
+	// 800 of those 1000 were cached and are still billed as if they were not:
+	// CalcCostWithCache is handed cacheRead=0 because nothing fills these.
+	// Whichever way the normalisation lands, it changes this assertion.
 	if result.CacheReadTokens != 0 || result.CacheCreationTokens != 0 {
-		t.Errorf("cache tokens reached the result (read=%d write=%d) — the wire gained a cache field and the table above is stale",
-			result.CacheReadTokens, result.CacheCreationTokens)
+		t.Errorf("Anthropic cache counters reached the result (read=%d write=%d) — the cached span is being priced "+
+			"and the table above is stale", result.CacheReadTokens, result.CacheCreationTokens)
 	}
-	// 800 of those 1000 were cached and are billed as if they were not.
-	if len(result.APICalls) != 0 {
-		t.Errorf("per-call usage reached the result (%d entries) — this path grew the APICalls record and the table above is stale", len(result.APICalls))
+
+	// The half that closed. Asserted PRESENT, unlike everything else here.
+	if len(result.APICalls) != 1 {
+		t.Fatalf("%d per-call usage records, want 1 — this path stopped recording usage per call and "+
+			"reportCallsThatBoughtNoCache has nothing to walk again", len(result.APICalls))
 	}
-	// With APICalls empty, reportCallsThatBoughtNoCache has nothing to walk, so
-	// the one diagnostic that could have shown this turn's cache behaviour is
-	// silent for the same reason the counters are zero.
+	if got := result.APICalls[0].CachedTokensIncludedInInputTokens; got != 800 {
+		t.Errorf("cached tokens on the record %d, want the 800 the provider reported — the wire drop is back, "+
+			"and with it the reason ec9c7122 could not be measured on this path", got)
+	}
 }
 
 // TestTheOpenAILoopAnswersAContextOverflowWithNoGuardAtAll. `buildAgent` is the
