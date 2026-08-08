@@ -3657,3 +3657,244 @@ refactor, and it is the thing the open blast-radius question is currently missin
   `run_commands`) — inber's mode gate is `guard.CheckTool` and the live gap there is the Assist
   denylist failing open, counted and re-counted on the existing todo. A second blocklist would
   fragment it.
+
+## Harness-watch — 2026-08-08: a lossy transform has to name what it loses, a recreate path is a second constructor nobody maintains, and two of this sweep's own findings died on contact with the code
+
+Four upstream repos converged this window on one shape: **a path that runs less often than the main
+path, and therefore silently does less.** cline flattens a schema and has to decide what `required`
+means afterwards; goose finds an LRU-recreated agent missing a tool the constructor adds; codex
+splits "kill the tree" from "wait on the child" because termination and completion are different
+events. inber has an instance of each.
+
+**Two findings this sweep produced were wrong, and are recorded as retracted rather than deleted** —
+both were argued from a plausible reading and killed by one `sed`:
+
+- ~~Fleet status pastes another session's *entire* first user message, unbudgeted.~~ **False.**
+  `SetTask` truncates to 200 characters at `session/db_sessions.go:32` (`textutil.TruncateWith`).
+  The docstring at `:30` saying "truncated" is telling the truth. The unbounded-growth half of this
+  finding does not exist; what survives is the *escaping* half, below.
+- ~~Every successful file write runs `go build ./...` + `go test ./...` synchronously with no
+  timeout.~~ **Not live.** `engine/workflow_hooks.go:67` gates on `write_file`/`edit_file` and the
+  real tools are `write_files`/`edit_files`, so `OnToolResult` returns `""` before reaching
+  `buildAndTest`. Already filed as `af237d64`. The *properties* of that dead code are still worth
+  one line: `engine/workflow_build.go:60,75,87,98` use bare `exec.Command` with no
+  `CommandContext`, no `Setpgid` and no `WaitDelay`, and the repo has **zero** occurrences of any of
+  the three. Whoever fixes the tool-name match ships codex's #37527 bug in the same commit.
+
+### 1. Flattening a schema union is lossy, so the loss must be chosen — and inber deletes without choosing
+
+[cline #12948](https://github.com/cline/cline/pull/12948) → [#12950](https://github.com/cline/cline/pull/12950)
+→ [#12951](https://github.com/cline/cline/pull/12951) → [#12952](https://github.com/cline/cline/pull/12952).
+Not the ship-then-revert it looks like from the log: cline shipped the flattener, reverted it,
+un-reverted it hours later, then **refined it**. Anthropic and several OpenRouter-routed providers
+hard-400 a tool whose `input_schema` carries a top-level `oneOf`/`anyOf`/`allOf`, which Zod- and
+TypeBox-generated MCP tools emit constantly. #12948 flattened branch `properties` upward and deleted
+the keyword, at the single provider boundary, as an advertisement-only transform. It shipped with a
+hole — branch-level `required` was dropped — and #12952 supplied the missing semantics: for
+`allOf`, `required` is the **union** across branches; for `anyOf`/`oneOf`, the **intersection**;
+top-level `required` siblings survive either way.
+
+**inber performs the deletion half with none of the merge half, on the wrong layer.** `injectFields`
+(`agent/chain.go:75-78`) and `injectChainField` (`agent/chain.go:95-99`) each return a freshly
+constructed `anthropic.ToolInputSchemaParam{Properties: …, Required: …}`. The SDK's
+`ExtraFields map[string]any` — the only place `$defs`, `additionalProperties`, `description`,
+`oneOf`, `anyOf`, `allOf` can live — is not copied. `AddChainAndSidebandFields` runs at
+`agent/agent_run.go:26` inside `buildRequest`, so this is the **Anthropic** path on every turn, not
+a provider edge. Measured against the repo with a compiled probe: a schema carrying
+`$defs`/`additionalProperties`/`description`/`oneOf` comes out as bare `properties`+`required`, and
+`properties.who.$ref: "#/$defs/Person"` **survives while `$defs` does not** — a dangling `$ref`,
+worse than keeping or dropping both.
+
+This falsifies a contract inber wrote on purpose. `server/oneshot_schema.go:154-164` collects
+unnamed keywords into `ExtraFields` precisely because, in its own comment at `:91-95`, *"a
+translation layer that silently drops `$defs`, `additionalProperties` or a description is a lossier
+contract than the one the caller was promised."* Two layers downstream, it is dropped. It is also
+why `normalizeSchemaForOpenAI` (`agent/openai_conversion.go:57-79`) can never fire on a top-level
+union — the union was deleted upstream of it — and why the test at
+`agent/openai_schema_normalize_test.go:136-167` has kept this invisible: it calls the converter
+directly with a *nested* `oneOf`, bypassing `AddChainAndSidebandFields`.
+
+**What a fix would have to decide:** whether copying `ExtraFields` through is even safe, because
+doing so makes inber's Anthropic path newly capable of emitting the exact top-level union that 400s
+cline's users — which makes adopting #12952's intersection rule mandatory rather than optional. The
+alternative is refusing a top-level union at ingest, coherent for `server/oneshot_schema.go` (which
+already prefers 400-over-repair, `:97-102`) and unanswerable for MCP servers whose schemas inber does
+not control. Third and separate: whether `done`/`note`/`split`/`then` are semantically legal to add
+to a union-typed schema at all, since they belong to no branch. Filed.
+
+### 2. An eviction path is a second constructor, and inber's throws away the record that prevents editing the wrong repository
+
+[goose #10793](https://github.com/block/goose/pull/10793): after LRU eviction goose recreated the
+agent and reloaded only MCP extensions, so the recipe's response schema was never reapplied and
+*"the `recipe__final_output` tool never appeared in requests sent to the model."* The patch is one
+line; the observation is that an eviction path is written by whoever added eviction, and every
+setter added to the real constructor afterwards is invisible to it. The failure is silent by
+construction — the recreated object is valid, just less capable.
+
+**inber's version is worse than a missing tool.** `server/session_reaper.go:86` calls
+`g.store.DeleteSession(sessionKey)`, which runs exactly two statements — `requests` and `sessions`
+(`server/store.go:207-211`). `messages.json` and `guard_state.json` under `<DataDir>/sessions/<key>/`
+are untouched. So a reap destroys the durable *metadata* and keeps the durable *transcript*. The
+reaper matches on `strings.Contains(sessionKey, ":bridge-")` (`:59`), which a `:sub:` child of a
+bridge parent satisfies (`childKeySeparator`, `server/session_forking.go:92`). Chain, each link read:
+
+1. Caller resumes the reaped child via `POST /run`; `resolveSessionKey` passes the key verbatim.
+2. `server/server.go:342` runs `UpsertSession(key, agent, "main", SessionLineage{}, nil)`. Its doc
+   comment (`store.go:240-245`) promises lineage and workspace roots are *"left alone on conflict"* —
+   but the reaper removed the row, so there is no conflict and the `INSERT` fires clean, writing
+   empty lineage and empty `workspace_roots` for a session that is neither.
+3. `SessionWorkspaceRoots` hits `sql.ErrNoRows` → `nil, nil` (`store.go:288-290`).
+4. `workspaceRootsForSession` sees `len(recorded) == 0` (`server/session_creation.go:230`) and
+   returns `ac.Workspace, ac.WorkspaceRoots` — **the agent's live checkout**.
+5. The child's full worktree transcript is loaded from disk and restored (`session_creation.go:142,172`).
+
+That is the exact outcome the code was written to prevent. `workspaceRootsForSession`'s own comment
+(`session_creation.go:213-217`) says: *"nobody can handle a turn that has already edited the wrong
+repository."* `ErrWorkspaceGone` and the matching 409 at `server/api_bridge.go:556-560` are both
+unreachable after a reap, because they require a *recorded* workspace whose path is missing, and what
+went missing is the record. Secondary losses on the same row: `SpawnDepth` resets to 0 so the
+depth/children caps reset, and `kind` flips from `spawn` to `main`.
+
+**What a fix would have to decide:** whether eviction may delete durable metadata at all. The
+reaper's job is bounding *memory*, which `LoadAndDelete` alone achieves. Three materially different
+directions — (a) stop deleting the row, leaving the `sessions` table to grow without its own reaper;
+(b) delete the row *and* the transcript directory together, making a reap a real forget, which
+discards subagent history a parent may still be waiting on; (c) keep the split but refuse a key that
+has a transcript on disk and no row, the fail-closed reading, which turns today's silent misroute
+into an error some caller must now handle. Filed.
+
+### 3. Sanitizing untrusted text belongs at the one chokepoint every ingress passes — inber has the chokepoint and no sanitizer
+
+[goose #10746](https://github.com/block/goose/pull/10746): model-bound content evaded goose's
+existing Unicode-tag restrictions by arriving as an MCP *text resource* or UTF-8 blob rather than a
+text block, because the resource extractor never ran the sanitizer. The fix routes all seven
+provider formatters through one shared extractor and sanitizes text resources, decoded blobs,
+malformed-base64 fallbacks and document bytes. Scoping is deliberately narrow and stated as such —
+only Unicode tag code points, binary stays byte-preserving. The transferable part is the *placement*:
+one chokepoint, because the bug was a consumer that didn't have one.
+
+**inber has no character-level filter on untrusted text anywhere.** The only `strings.Map` in the
+tree is a filename slugifier (`session/prompts.go:14-29`); `internal/toolid/toolid.go:24` rewrites
+tool *ids*, never content; `redact/redact.go` is outbound-only. The live ingress: a NATS message from
+si/matterbridge becomes `Message: msg.Text` (`server/bus.go:96`) untransformed, `server/server.go:331`
+prepends the relayed platform display name unescaped (`fmt.Sprintf("[%s] %s", req.Author, input)`),
+that string becomes `sessions.task` (`session/session_logging.go:21`), and
+`engine/fleet_status.go:47` emits it for **every other running session** as `"\n  Task: %s"` — raw.
+`engine/turn_prompt.go:134,153` makes it the first element of `volParts` under a literal `[Context]`
+header. So text a stranger typed in a Discord channel routed to agent A appears in agent B's prompt
+under a header that reads system-authored, separated by a `\n` the same text can forge.
+
+Two aggravations, both verified. `[Context]` is injected into the last user message and persisted, so
+a poisoned block is permanent and is deep-copied into every fork — `docs/fork-inheritance-audit.md:33-49`
+counts 1,218 baked blocks across 84 of 95 live transcripts, and its inventory at `:41` does **not**
+name the `Task` line, so this ingress is outside that audit. And the codebase already contains the
+escaping decision and applies it on two of three paths: `server/status_tools.go:86` and
+`server/session_context.go:76` both render the same field through `%q`; `fleet_status.go:47` does
+not. Bounded at 200 characters by `SetTask`, per the retraction above — this is an injection finding,
+not a budget one.
+
+**What a fix would have to decide:** escaping, provenance framing, or not carrying the field.
+Escaping (`%q`, matching the two siblings) is one line and defeats a forged separator, but still
+hands B a stranger's instructions as unattributed context. Framing the span as *another agent's first
+message, external origin* is honest and adds bytes to `VolatileContext` — the block the whole
+cache-stability thread is trying to hold still. Dropping `Task` from cross-agent fleet status is
+fail-closed and removes something an orchestrator plausibly uses. Prior question left open: whether
+`sessions.task` should be the raw first user message at all — `session_logging.go:21` stores it
+because it is a convenient handle, not because anyone decided a chat message is a task description.
+Filed.
+
+### 4. Retryability is a classification made once, and inber makes it on one provider path out of two
+
+Three repos, one window. [opencode #40718](https://github.com/sst/opencode/pull/40718) emits the
+structured SSE error object rather than its message string so a **midstream failure under HTTP 200**
+becomes retryable at all; [#40707](https://github.com/sst/opencode/pull/40707) widens the retryable
+set to server, gateway, transport, DNS and timeout classes; [#40694](https://github.com/sst/opencode/pull/40694)
+simplifies the matcher and routes serialized `rate_limit` through the common path.
+[codex #37485](https://github.com/openai/codex/pull/37485) classifies connection failures separately
+and retries them 5s→60s **without consuming the budget other errors share** — losing the socket says
+something about the path, not the model. [cline #13052](https://github.com/cline/cline/pull/13052)
+supplies the precondition that makes it safe: retry a dead stream **only while zero output has been
+emitted**, because replaying past that point replays text the user already read.
+
+**inber's two turn loops disagree by accident.** The Anthropic path gets 2 retries free from the SDK
+(`anthropic-sdk-go@v1.35.0/internal/requestconfig/requestconfig.go:173`, covering 408/409/429, all
+5xx, connection errors and `x-should-retry`). The OpenAI-compatible path issues one
+`c.client.Do(httpReq)` (`agent/openai.go:62-65`) and returns the error at `engine/turn_openai.go:80-82`
+— and that path serves openai, google, openrouter, ollama and the catch-all
+(`agent/clients.go:82-100`). So one 429 ends the turn on one branch and is invisible on the other.
+inber also already holds cline's precondition and never reads it: `agent/agent_run.go:191-196`
+catches `streamResp.Err()` and stores `partial = &accumulated`, and `accumulated` being empty is
+exactly the proof that a replay is safe; the only retry there (`:206-217`) is gated on
+`isContextLengthError`, a four-substring text match (`agent/agent.go:23-32`).
+
+**Not filed, because the mechanism is already filed three times** and this is a fourth *cause*
+reaching it: a connection error is none of the three things `errorIsEvidenceAboutTheModel`
+(`engine/failover.go:167-174`) excludes, so it falls to `default: return true` → `RecordError` →
+model marked down host-wide with no threshold. That is `df1de352`, `69f05f89` and `f0e2034f`. What is
+new is the *retry* half, and the honest framing is that inber cannot decide "is this evidence about
+the model" until it decides where retryability lives — client, turn loop, or a shared classifier both
+loops consult. That is the same fork already named for `maxAPICalls` at
+`agentic-design-patterns.md:3106-3114` and should be settled once for both.
+
+### 5. Checked and NOT worth a finding — recorded so the next sweep does not re-walk them
+
+- **[codex #37527](https://github.com/openai/codex/pull/37527) / [#37498](https://github.com/openai/codex/pull/37498)
+  / [#37366](https://github.com/openai/codex/pull/37366)** (kill the process *group* on timeout, spare
+  it on clean completion; detach the child *waiter* during termination so the exit status survives;
+  same containment for stdio MCP servers) — the rule is good and inber's only two exposures are both
+  dead code today: `engine/workflow_build.go` (retraction above) and `tools/mcp/client.go:467-472`,
+  which kills `cmd.Process` not the tree and whose `Close()` can never return nil because
+  `Kill()`+`Wait()` always yields `signal: killed` (measured, not reasoned). `MCPToolRegistry` still
+  has no caller outside `tools/mcp/`, re-verified. Both are traps for whoever wires MCP, not costs.
+- **[codex #37424](https://github.com/openai/codex/pull/37424)** (one aggregate byte budget consumed
+  in order, not a per-source cap that multiplies) — the literal form does not apply, inber loads no
+  project doc. The transferable half looked live and is weaker than it appeared: `volParts`
+  (`engine/turn_prompt.go:133-151`) is genuinely unbudgeted while `engine/turn_context.go:8-39` feeds
+  only the memory lookup, but with `Task` capped at 200 the remaining unbounded contributors are
+  `renderWorkspaceRoots` and the context injectors, which scale with host state. Worth a number
+  before it is worth a finding.
+- **[goose #10831](https://github.com/block/goose/pull/10831)** — the "never execute a tool call whose
+  arguments were truncated by the output limit" half is already satisfied: both loops return before
+  dispatch on `MaxTokens` (`agent/agent.go:415`, `engine/turn_openai.go:107`). The other half —
+  `mapOpenAIFinishReason`'s `default: return EndTurn` (`agent/openai_conversion.go:253`) reporting
+  `content_filter` as a clean completion — is a correction that belongs on existing todo `6b4a9ab5`,
+  not a new filing.
+- **`agent/chain.go:64-66`** (held back for slot reasons, not merit): `props, ok :=
+  schema.Properties.(map[string]any); if !ok { return schema }` returns the schema **unchanged**, so a
+  zero-arg tool spelled `{"type":"object"}` (nil `Properties`) is silently denied the sideband and
+  chain fields while the same tool spelled with an empty map gets them. Reachable through
+  `tools/mcp/client.go:45`. This is the failure `agent/chain.go:102-113` says the design exists to
+  prevent — "the model finds out by writing one and getting nothing back."
+- **`tools/mcp/client.go:45`** (held back, latent): `ToolInfo.InputSchema` is
+  `anthropic.ToolInputSchemaParam`, whose `ExtraFields` is `json:"-"` and never populated on
+  unmarshal, so an MCP tool whose whole argument shape lives in union branches arrives as
+  `{"type":"object"}`. A second, independent drop point from §1, and worse than cline's pre-#12952
+  state — cline at least merged branches upward.
+- **[cline #13074](https://github.com/cline/cline/pull/13074)** (a queued prompt that fails must still
+  emit a terminal event) — inber's `server/session_release.go:90-93` answers an injection with HTTP
+  200 and *"agent will see it during current work"*, a promise made before the outcome is known; on
+  failure `server/session.go:171` requeues to a turn that may never be requested. Real, but it is the
+  admission-contract question already open as `5320b48f`.
+- **[goose #10747](https://github.com/block/goose/pull/10747)** (bind MCP routing to authoritative
+  metadata, don't reparse a delimiter-bearing public name) — inber already does this on its one
+  composite name and says why at `agent/sideband.go:20-28`.
+- **[goose #10991](https://github.com/block/goose/pull/10991)** (an explicit "reasoning off" must be
+  sent, not omitted) — sharpens existing todo `e68b05e0`; no new filing.
+- **[goose #10620](https://github.com/block/goose/pull/10620) / [#10189](https://github.com/block/goose/pull/10189)
+  / [#10773](https://github.com/block/goose/pull/10773)** — already written up at `:3057-3114`,
+  `:2811-2860`, `:2862-2876`. Listed because this sweep's own inputs called them new.
+- **[goose #10933](https://github.com/block/goose/pull/10933)** (dispatch the *edited* queued message)
+  — a React render-staleness bug; inber's `pendingMessages` has no edit surface.
+- **[codex #37489](https://github.com/openai/codex/pull/37489) / #37488 / #37446 / #37492 / #37513**,
+  the whole codex skills-consolidation family, and **goose #10930 / #10934 / #10929 / #10963 / #10985
+  / #10678 / #10327 / #10665 / #10766 / #10838** — surfaces inber has no counterpart to (no skills
+  layer: zero Go files in the repo contain the string `skill`; no recipes, ACP, Bedrock, desktop
+  renderer, or CLI projects).
+- **[opencode #40800](https://github.com/sst/opencode/pull/40800)** (orphaned-compaction serialization
+  for Gemini's "function call cannot lead a turn") — `runOpenAITurn` does not summarize; no scaffold
+  to strip. **#41006 and the chronological-ordering family** — inber's transcript is an ordered slice
+  with no ID-range comparison; the bug class does not exist here. **#40987 / #40603 / #40781 / #40764**
+  — mtime cleanup, UI, packaging.
+- **[dexto #902](https://github.com/truffle-ai/dexto/pull/902)** (host-injected model registry) —
+  already inber's architecture; the open question there is the missing transport/capability column,
+  filed as `7ec4c2da`.

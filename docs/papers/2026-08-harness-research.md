@@ -1098,3 +1098,62 @@ CMS field, not a post date; the newest actual article remains the 2026-04-23 ite
 recorded. Written down so the next sweep does not chase it. HuggingFace daily papers surfaced no
 agent-harness item not already in the arXiv sweep — it did independently feature 2608.03836,
 corroborating the first pick. DeepMind, Meta AI and Microsoft Research published nothing in window.
+
+## 2026-08-08 sweep — three papers, and the middle one is a measurement inber can run on itself
+
+### [arXiv:2608.00101](https://arxiv.org/abs/2608.00101) — Agentic Coding in the Wild (2026-07-30, Microsoft)
+
+Production characterization of GitHub Copilot: 3.2M users, 13M sessions, 761M LLM calls, 95T tokens
+sampled over June 2026. The number that matters here: **KV cache hit rate averages 90% *within* a
+turn but falls to 55% *across* turn boundaries**, and is "drastically invalidated" by a model switch
+or a context compaction. User idle at turn boundaries runs to minutes while agent turnaround is
+fast, so the gap that kills the prefix is human think-time, not agent work.
+
+**What inber should consider:** inber already records the ground truth and has never compared it to
+its own prediction — `agent/agent_run.go:269-270` captures real `CacheCreationTokens` /
+`CacheReadTokens` per call, and `engine/prompt_blueprint.go` predicts BP1/BP2/BP3 behaviour. Report
+observed cache-read ratio split by within-turn vs first-call-of-turn and diff it against the
+blueprint. This is the measurement the whole 2026-08-02/06/07 cache-stability thread has been
+arguing about without data. Adjacent and cheap: no breakpoint in `engine/` or `agent/` requests a
+1-hour cache TTL, so every one rides the 5-minute default that the paper's minutes-long boundary
+idle will routinely outlive.
+
+### [arXiv:2608.01507](https://arxiv.org/abs/2608.01507) — Deep Agentic Search for Repository-Level Code QA (2026-08-02)
+
+Semantic search over a prebuilt repo index beat deep agentic search (planner delegates to a
+context-isolated subagent that returns a condensed result — the Claude Code / Codex pattern) on
+SWE-QA: **65.2% vs 46.2% correct, at less than half the cost per correct answer**. The hand-coded
+failure taxonomy is the useful part: delegation did not remove failures, it *added a class* —
+**41.8% of the agentic arm's failures occurred at the planner↔subagent hand-off**, and they were
+typically silent, ending in a fluent, confident, wrong answer.
+
+**What inber should consider:** `agent/registry/spawn_tool.go:92` sells spawn as "Delegate a task to
+another agent. Always async — returns immediately." Async makes the measured failure mode worse, not
+better: the parent has already moved on when the condensed result lands, so an empty-handed hand-off
+is indistinguishable from a thorough one. Instrument before redesigning — have the spawn result
+carry enough provenance (what the subagent actually read, whether it found nothing) that the parent
+can detect a hand-off that returned nothing rather than confabulating over it.
+
+### [arXiv:2608.06370](https://arxiv.org/abs/2608.06370) — The Bitter Lesson of Tool Calling (2026-08-06)
+
+Programmatic tool calling — tools exposed as typed Python stubs the model invokes by writing code,
+executed inside one agent turn — against native JSON tool calling on BFCL v4 across 14 models. PTC
+matches or beats JSON in 11/14 models, 13/14 under parallel fan-out, and **stays stable under
+context-rot conditions where the JSON baseline degrades 2.3%**. The authors argue the gain tracks
+raw model code capability, so it compounds with model upgrades rather than being a prompt trick.
+
+**What inber should consider:** inber's tool surface is JSON-only by construction —
+`tools/interface.go:24` has every tool return `anthropic.ToolInputSchemaParam` — so an N-call fan-out
+costs N schema blocks plus N `tool_result` blocks in permanent history, which is exactly the
+material the paper's context-rot arm degrades on. Worth a prototype that renders the existing
+`tools.Registry` as typed stubs behind one code-exec tool and measures the collapse against
+`engine/prompt_blueprint.go`'s token accounting. Note the standing tension: this is a *second*
+execution path, and inber's recurring finding is that its second path is where invariants go missing.
+
+### Leads recorded, not read past the abstract
+
+2608.01326 *Context Compaction Theory*, 2608.01347 *Prompt-Induced Waste in Coding Agents*,
+2608.02670 *Permission Denied: Policy-Graded Evaluation in Hardened Environments*, 2607.29658 STAIR,
+2608.05886 CodeGrep, 2608.02650 HyperAgent, 2608.04843 MemoryCPT. Out of window and passed over:
+2607.06906 *The Harness Effect* (2026-07-08, one day early). The Anthropic engineering blog
+published nothing in window, consistent with the 2026-08-07 note above.
