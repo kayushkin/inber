@@ -168,12 +168,45 @@ func TestTruncateToolResult_PreservesContent(t *testing.T) {
 // Head and tail are cut at byte offsets derived from a token budget, so a
 // multibyte rune can straddle either cut. What comes back is tool output the
 // model reads.
+//
+// Two properties of the fixture are load-bearing, and the version this replaced
+// had neither, so it passed against a raw s[:n] and pinned nothing:
+//
+//   - The runes are three bytes wide. The budget is always headTokens*4, so a
+//     two-byte rune can never straddle it — every cut lands between runes. The
+//     old fixture was "héllo wörld\n" repeated, whose only wide runes are
+//     two-byte, and not one of its five budgets cut inside a rune at the head.
+//   - The fixture carries no newline. truncateHeadTail follows each cut with a
+//     newline-break step — head back to its last newline, tail forward past its
+//     first — and either step discards the partial rune a byte cut leaves
+//     behind. The old fixture's one straddling budget was laundered that way, so
+//     even the cut that did land mid-rune came back valid.
+//
+// len(content) is a multiple of three, which makes a budget divisible by three
+// land on a rune boundary at both ends — that is the known-negative control, and
+// the counters below fail the test rather than let either case go unexercised.
 func TestTruncateHeadTailCutsOnRuneBoundaries(t *testing.T) {
-	content := strings.Repeat("héllo wörld\n", 400) + "🦀 tail"
-	for _, headTokens := range []int{5, 6, 7, 8, 50} {
+	const maxTokens = 60
+	content := strings.Repeat("日本語", 200) + "🦀ab"
+
+	straddled, aligned := 0, 0
+	for headTokens := 1; headTokens <= maxTokens; headTokens++ {
+		budget := headTokens * 4
+		if utf8.RuneStart(content[budget]) && utf8.RuneStart(content[len(content)-budget]) {
+			aligned++
+		} else {
+			straddled++
+		}
 		got := truncateHeadTail(content, headTokens, headTokens)
 		if !utf8.ValidString(got) {
 			t.Fatalf("truncateHeadTail(head=tail=%d) is not valid UTF-8", headTokens)
 		}
+	}
+
+	if straddled == 0 {
+		t.Fatalf("no budget in 1..%d cut inside a rune — the fixture would pass against a raw byte cut", maxTokens)
+	}
+	if aligned == 0 {
+		t.Fatalf("no budget in 1..%d landed on a rune boundary — the control proved nothing", maxTokens)
 	}
 }
