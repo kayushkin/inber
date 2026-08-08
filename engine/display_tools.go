@@ -198,7 +198,11 @@ func formatToolResult(name, output string) string {
 			ID string `json:"id"`
 		}
 		if err := json.Unmarshal([]byte(output), &result); err == nil && result.ID != "" {
-			return fmt.Sprintf("saved %s", result.ID[:8])
+			// The id comes from the tool's own JSON result, so its length is
+			// whatever memory_save returned. A raw result.ID[:8] panics on
+			// anything shorter than eight bytes, in the display path of an
+			// interactive run.
+			return fmt.Sprintf("saved %s", textutil.Truncate(result.ID, 8))
 		}
 		return fmt.Sprintf("saved (%d bytes)", bytes)
 
