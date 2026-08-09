@@ -1157,3 +1157,74 @@ execution path, and inber's recurring finding is that its second path is where i
 2608.05886 CodeGrep, 2608.02650 HyperAgent, 2608.04843 MemoryCPT. Out of window and passed over:
 2607.06906 *The Harness Effect* (2026-07-08, one day early). The Anthropic engineering blog
 published nothing in window, consistent with the 2026-08-07 note above.
+
+# 2026-08-09 sweep
+
+**The paper channel is saturated, and that is the headline.** A fresh multi-band arXiv sweep
+(caching · coding-agent harnesses · compaction · memory/orchestration · tool schemas) over
+2026-07-10 → 2026-08-09 returned fourteen candidates that cleared the date and mechanism bar.
+**Thirteen were already documented here, in `2026-07-harness-research.md`, or in
+`docs/cache-optimization.md`** — Ledger 2608.00808, CAPC 2607.15516, Copilot traces 2608.00101,
+ARC 2607.25066, PTC 2608.06370, When History Lies 2608.06057, coordination-mode 2607.27877,
+ACM 2607.23809, filesystem memory 2607.26637, Skill-Use 2608.04828, online KV compaction
+2608.00902, and the two leads below. One was new, and it is not inber's. Recording the ratio so
+the next sweep can decide whether this channel still earns a full pass, or should drop to
+fortnightly and spend the budget on upstream code.
+
+## Two leads from 2026-08-07 promoted out of "not read past the abstract"
+
+The 2026-08-07 entry parked both as ids with no summary. Both are now read; neither changes a
+decision, and both are recorded so they are not parked a third time.
+
+**[arXiv:2608.01326](https://arxiv.org/abs/2608.01326) — Context Compaction Theory (2026-08-02).**
+Tirmazi, Markelon, Bishop, Mitzenmacher. First formalization: a Context *Selection* Game (retain a
+subset) and a Context *Generation* Game (emit a bounded summary), with a proof that the minimum
+compaction budget to answer a query set within a target error equals the **one-way communication
+complexity** of the induced problem. The useful part is the separation theorem — generation can
+require strictly less budget than selection for some query sets, so trimming and summarizing are
+provably *not* interchangeable. Includes a case study benchmarking Anthropic's context-compaction
+endpoint against the theoretical optimum.
+
+**What inber should consider:** this is the theory under a choice inber has already made by
+default. `conversation.SummarizeConversation` (`engine/lifecycle.go:95`) is generation-only; there
+is no selection policy to pick between. The paper does not say generation is wrong — it says the
+right primitive is query-class-dependent, which means the honest inber question is whether it knows
+its query classes well enough for a second policy to pay for itself. Nothing to change today; worth
+citing the moment someone proposes "just drop old messages" as a cheaper compaction, because that
+proposal is exactly the selection game and the separation theorem is the reason it can be worse.
+
+**[arXiv:2608.01347](https://arxiv.org/abs/2608.01347) — Same Task, Different Work: Prompt-Induced
+Waste in Coding Agents (2026-08-02).** Preregistered, 4,644 valid runs, 24 deterministic tasks, 7
+reasoning models, 2 real harnesses. "Consider multiple approaches" phrasing costs 2.4–7.4× more
+reasoning tokens and ~3 discarded branches per run with **zero** success improvement; "maximum
+certainty" phrasing costs 18× the clean-run median, 2.5× tool calls and 3× wall-clock, again with
+no success gradient. Harness design amplifies the effect 5×–30×.
+
+**What inber should consider — checked, and inber is clean.** A case-insensitive scan of
+`session/`, `engine/`, `agent/` and `prompts/` for the paper's intensifier families ("consider
+multiple/several/different approaches", "maximum certainty", "be absolutely certain/thorough",
+"exhaustively", "explore all/every", "think hard/deeply") returns **zero** matches outside tests.
+Recorded as a negative result so the next sweep does not re-run it. The standing rule this implies
+is cheap and worth keeping: an intensifier added to a system prompt is a cost change, and should be
+justified by a measured success delta rather than by reading well.
+
+## [arXiv:2608.00997](https://arxiv.org/abs/2608.00997) — Registry descriptions go stale unevenly (2026-08-02)
+
+The one genuinely new find. 120 observations over 88.6 days across 19,099 MCP servers. Only 8.6% of
+servers ever rewrote a description; the top 5% produce 61% of all change events; 11.9% of
+descriptors change within 30 days against 35.8% under a naive uniform model. The negative result is
+the sharp one: **re-auditing by prior drift catches only ~20% of changers at a 5% budget**, i.e. a
+"re-check the churny ones" heuristic performs about as well as picking at random, because churn
+does not predict itself at the server level. The authors' recommendation is content-binding
+verification — store a hash of the description and revalidate when the hash changes — plus a
+periodic full-catalog audit, rather than a prioritization heuristic.
+
+**What inber should consider: nothing — and that is the finding.** inber's own tool descriptions are
+compiled in (`tools/root.go`), so they cannot drift between reads, and its MCP client still has no
+caller outside `tools/mcp/` (re-verified 2026-08-09), so inber consumes no third-party descriptor it
+would need to re-audit. The actionable half belongs to **tool-store** (`:8302`), which is the
+canonical registry that does hold third-party MCP descriptors, and the concrete advice there is to
+key revalidation on a stored description hash and to *not* build the drift-prioritized re-audit
+heuristic the paper measured as ineffective. Filed here rather than as an inber todo because it is
+another repo's defect surface and this job files against inber; whoever next touches tool-store's
+ingest should read it. No inber change.

@@ -3898,3 +3898,127 @@ loops consult. That is the same fork already named for `maxAPICalls` at
 - **[dexto #902](https://github.com/truffle-ai/dexto/pull/902)** (host-injected model registry) —
   already inber's architecture; the open question there is the missing transport/capability column,
   filed as `7ec4c2da`.
+
+## Harness-watch — 2026-08-09: a harness spawns children of its own, and those are the ones nobody contains
+
+The upstream containment work so far has been about the child the *model* asks for — the shell
+call, the MCP server. This window codex went after the other kind: the child the *harness* spawns
+on its own behalf, during teardown, in a directory the model has spent the session writing to.
+inber has exactly one of those, it is on by default, and it is uncontained in three ways at once.
+
+### 1. Strip the launch context before spawning anything — codex does it at every spawn site, inber does it at none
+
+[codex #37607](https://github.com/openai/codex/pull/37607) makes `OPENAI_FEDERATION_RULE_ID` and
+`OPENAI_IDENTITY_TOKEN_FILE` non-inheritable: removed after shell environment policy overrides and
+before spawning commands, matched case-insensitively, across **direct execution, MCP, git hooks and
+helpers, and remote helper processes** — with tests asserting absence for inherited and
+explicitly-configured mixed-case variants. The transferable claim is the enumeration, not the two
+variable names. codex did not scrub the one spawn site it thought was risky; it scrubbed every site
+that can reach model-influenced code, and it named *git hooks and helpers* as one of them, which is
+the site a harness is most likely to overlook because the harness wrote the argv itself.
+
+**inber's `h.git()` helper hands a model-writable hook the whole credential environment.**
+`engine/workflow_git.go:11-15` is five lines: `exec.Command("git", append([]string{"-C",
+h.repoRoot}, args...)...)` then `CombinedOutput()`. `cmd.Env` is never assigned, and Go's contract
+for a nil `Env` is that the child receives the parent's `os.Environ()` entire. The repository-wide
+count of `cmd.Env` assignments is **zero**.
+
+The path is live and on by default, which is what separates this from the two dead `exec.Command`
+sites the 2026-08-08 sweep looked at. `Engine.Close()` (`engine/engine.go:481`) →
+`FinishSession()` (`engine/workflow_hooks.go:125`) → `finishSessionGit()`
+(`engine/workflow_git.go:82`), gated **only** on `if !h.autoCommit` (`:87-89`). `AutoCommit`
+defaults `true` (`engine/workflow_hooks.go:165`) and is applied whenever `cfg.AutoWorkflow` is the
+zero value (`engine/engine_new.go:603-607`) — which it always is for server sessions, measured
+already in todo `321d7d49`. It then runs `git add -A` (`:98`) and `git commit -m "auto: session
+work"` (`:104`), then `git push` (`:117`). Nothing stops the model from having planted what those
+execute: `write_files` is a real tool (`tools/root.go:41`), and inber has **no path denylist on
+writes anywhere** — the same absence todo `51822d74` records for `read_files`. The only `.git/*`
+strings in the tree are glob *exclusions in a search tool* (`engine/build_tools.go:58,72`), which
+shape search results and deny nothing.
+
+Be precise about *which* vector, because one of them is weaker than it looks. `.git/hooks/pre-commit`
+is the obvious one and it needs the **executable bit**, which a plain content write may not be able
+to set — whether `write_files` can chmod is not answerable from this repo, since `tools/root.go:41`
+only declares the tool. The vectors that need no bit at all are the ones to reason from: git runs
+`filter.<driver>.clean` through `sh -c` during `git add -A` when a worktree `.gitattributes` selects
+it, and runs `core.sshCommand` through the shell on `git push`. Both are configured by writing
+`.git/config`, an ordinary file. So the credential inheritance is reachable through a pair of plain
+content writes, independent of the hooks question.
+
+What makes this a defect rather than an ambient risk is that **inber already computed the answer and
+uses it in the opposite direction**. `redact.NewFromEnvironment(os.Environ())`
+(`agent/redaction.go:28`) walks the process environment and keeps every variable whose name matches
+`IsSecretVariableName` — `key`, `token`, `secret`, `password`, `passwd`, `credential`, `apikey`,
+`auth`, `session_key`, `private` (`redact/redact.go:173-198`) — precisely so those values can be
+scrubbed out of text on its way to a provider. The same process then passes those same variables,
+unmodified, to a script the model authored. inber redacts `ANTHROPIC_API_KEY` from a sentence and
+exports it to a hook.
+
+**What a fix would have to decide:** which variables leave. Reusing `IsSecretVariableName` is the
+obvious move and it is a *denylist*, so it inherits that list's misses; an allowlist (`PATH`,
+`HOME`, `GIT_*`, `SSH_AUTH_SOCK`) is fail-closed and will break a hook that legitimately reads
+something else. Note this decision is genuinely **easier** than the one already parked in
+`51822d74` item 2 for `shell_commands`, and should not be folded into it: stripping credentials
+there breaks `gh`, `aws` and authed `curl`, which is why that one is still open, whereas nothing
+inber asks `git` to do needs an LLM API key. Separately and further up: whether `write_files` may
+write inside `.git/` at all, which is a denylist question `51822d74` item 1 owns for reads.
+
+### 2. Same five lines, second gap — no deadline, no process group, and no answer to a credential prompt
+
+⛔ **Correction to the 2026-08-08 entry, §5.** It recorded codex
+[#37527](https://github.com/openai/codex/pull/37527) / [#37498](https://github.com/openai/codex/pull/37498)
+as not worth a finding because *"inber's only two exposures are both dead code today"* —
+`engine/workflow_build.go` and `tools/mcp/client.go`. That enumeration missed
+`engine/workflow_git.go`, which is neither dead nor optional, and the miss is instructive: the
+sweep checked the sites that *look* like they run untrusted commands and skipped the one whose argv
+is a hardcoded `"git"`.
+
+`h.git()` uses bare `exec.Command`, not `CommandContext`; sets no `Setpgid` and no `WaitDelay`; and
+the repo contains **zero** occurrences of any of the three. `GIT_TERMINAL_PROMPT` and `GIT_ASKPASS`
+appear nowhere in the tree either, so `git push --set-upstream origin <branch>`
+(`engine/workflow_git.go:117`) against a remote that wants credentials blocks on a terminal prompt
+with no reader — forever, inside `Engine.Close()`. `Session.close()` (`server/session.go:339-344`)
+calls it outside the mutex, so the blast radius is not the session lock but the *caller's
+goroutine*: `server/session_reaper.go:85` (one hung push and the reaper stops evicting anything
+again) and `server/server.go:169` (shutdown never completes). The function's own doc comment at
+`engine/workflow_git.go:139-146` says the session "ends unattended" — that is the argument for a
+deadline, written down next to the code that has none.
+
+**What a fix would have to decide:** what a timeout *means* here. Killing a `git push` mid-transfer
+is safe; killing `git commit` between index and ref update is the partial-state class todo
+`321d7d49` already fought in this exact function, so one deadline for all six call sites is the
+wrong shape and a per-verb budget is a judgement about which verbs may be interrupted. Filed
+together with §1 — one helper, one `cmd`, one fix site.
+
+### 3. Checked and NOT worth a finding — recorded so the next sweep does not re-walk them
+
+- **[cline #13086](https://github.com/cline/cline/pull/13086) / [#13067](https://github.com/cline/cline/pull/13067)**
+  (a hung MCP server must not take down session creation; give an unconfigured stdio server a 30s
+  initialize budget) — inber already has both halves: `defaultResponseTimeout = 30 * time.Second`
+  (`tools/mcp/client.go:50`) is applied to any call whose context carries no deadline (`:347`), and
+  `initialize()` (`:226-228`) goes through the same `call`. Numerically identical to cline's choice,
+  arrived at independently. Still latent either way — `tools/mcp` has no caller outside itself,
+  re-verified this window.
+- **[codex #37497](https://github.com/openai/codex/pull/37497)** (bound payload traces in diagnostic
+  logs) — inber logs no request or response bodies at any level; the only `Log.*` calls near the
+  wire carry counts and limits (`engine/engine_new.go:484`, `engine/turn_stashing.go:63`). Nothing
+  to bound.
+- **[cline #13090](https://github.com/cline/cline/pull/13090) / [#13061](https://github.com/cline/cline/pull/13061)
+  / [#13100](https://github.com/cline/cline/pull/13100) / [codex #37622](https://github.com/openai/codex/pull/37622)**
+  (preserve, drain and re-admit queued prompts across an abort) — inber's `pendingMessages`
+  (`server/session.go:66,155-162,243,257,312`) is the same mechanism, and its gap is the admission
+  contract already open as `5320b48f`. A fourth upstream repo arriving at it does not change the
+  question.
+- **[goose #11022](https://github.com/block/goose/pull/11022) / [#9574](https://github.com/block/goose/pull/9574)**
+  — written up in full on 2026-08-07 (`:3482`, `:3602`). Listed because this sweep's inputs
+  presented them as new.
+- **codex skills consolidation** (#37439/#37440/#37444/#37452/#37457/#37461/#37466/#37503/#37505),
+  **code-mode gRPC** (#37510/#37530/#37483/#37504), **Guardian review** (#37511/#37513/#37518),
+  **hooks** (#37533/#37538/#37644), **workload identity** (#37610) — surfaces inber has no
+  counterpart to. The hooks family is the closest call and still does not land: codex is making
+  *user-configured* hooks async, and inber's hook layer is compiled-in Go callbacks with no user
+  configuration and no listing surface.
+- **opencode** — the whole window is i18n, project-picker, desktop packaging and the
+  message-ordering family already dismissed on 2026-08-08 (inber's transcript is an ordered slice).
+  **goose** — dependency bumps plus #10994 subrecipe validation, a surface inber lacks.
+  **cline desktop/vscode/UI** rows, and **aider** and **roo-code**, which had no commits at all.
