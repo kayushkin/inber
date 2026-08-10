@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kayushkin/inber/agent/registry"
 )
 
 func tempStore(t *testing.T) *Store {
@@ -15,6 +17,25 @@ func tempStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+// skipUnlessThisHostCanConfigureAnInberAgent skips when agent-store holds no
+// agent for the inber orchestrator. That is the one environmental reason
+// engine construction fails on a box that is otherwise working, so it is the
+// only reason a test that builds an engine may decline to run.
+//
+// It asks agent-store directly instead of inferring the answer from a
+// createSession call that came back with an error. Those two questions look
+// alike and are not: "this host is not configured" and "the code under test is
+// broken" both surface as a non-nil error, and a guard that cannot tell them
+// apart reports a real defect as `--- SKIP` and leaves the package green. Every
+// caller of this helper therefore treats a later failure as fatal.
+func skipUnlessThisHostCanConfigureAnInberAgent(t *testing.T) {
+	t.Helper()
+	if _, err := registry.LoadFromAgentStore(""); err != nil {
+		t.Skipf("this host has no inber agent registered in agent-store (%v); "+
+			"engine construction cannot be exercised here", err)
+	}
 }
 
 func TestStoreSessionCRUD(t *testing.T) {

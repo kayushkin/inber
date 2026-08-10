@@ -146,10 +146,14 @@ func TestAChildUnderTheCapIsNotStoppedByIt(t *testing.T) {
 // survived a green suite three separate times, so the rebuild itself is pinned
 // here.
 //
-// Building an engine needs a workspace and the host's agent configuration, so
-// this skips where it cannot run rather than failing; an assertion below it
-// never skips.
+// Building an engine needs a workspace and the host's agent configuration. The
+// workspace is supplied here; the agent configuration is the host's, so that
+// one condition is checked up front and everything after it is fatal. Asking
+// agent-store first rather than reading createSession's error is the point: an
+// error means either "unconfigured host" or "the rebuild is broken", and those
+// must not share an outcome.
 func TestARebuiltSessionComesBackKnowingWhoseChildItIs(t *testing.T) {
+	skipUnlessThisHostCanConfigureAnInberAgent(t)
 	workspace := t.TempDir()
 	server := &Server{store: tempStore(t), config: Config{DataDir: t.TempDir()}}
 	if err := server.store.UpsertSession(childKey, "brigid", "spawn",
@@ -160,7 +164,7 @@ func TestARebuiltSessionComesBackKnowingWhoseChildItIs(t *testing.T) {
 	rebuilt, err := server.createSession(context.Background(), childKey, "brigid",
 		AgentConfig{Workspace: workspace}, RunRequest{}, nil)
 	if err != nil {
-		t.Skipf("no engine can be built here (%v); the recorded lineage is pinned by the tests above", err)
+		t.Fatalf("rebuild the recorded child: %v", err)
 	}
 
 	if rebuilt.ParentKey != parentKey {
@@ -174,6 +178,7 @@ func TestARebuiltSessionComesBackKnowingWhoseChildItIs(t *testing.T) {
 // The same rebuild for a session that is nobody's child: it must come back a
 // root, not inherit anything.
 func TestARebuiltTopLevelSessionComesBackARoot(t *testing.T) {
+	skipUnlessThisHostCanConfigureAnInberAgent(t)
 	workspace := t.TempDir()
 	server := &Server{store: tempStore(t), config: Config{DataDir: t.TempDir()}}
 	if err := server.store.UpsertSession(parentKey, "claxon", "main", SessionLineage{}, nil); err != nil {
@@ -183,7 +188,7 @@ func TestARebuiltTopLevelSessionComesBackARoot(t *testing.T) {
 	rebuilt, err := server.createSession(context.Background(), parentKey, "claxon",
 		AgentConfig{Workspace: workspace}, RunRequest{}, nil)
 	if err != nil {
-		t.Skipf("no engine can be built here (%v)", err)
+		t.Fatalf("rebuild the top-level session: %v", err)
 	}
 
 	if rebuilt.ParentKey != "" || rebuilt.SpawnDepth != 0 {
@@ -196,6 +201,7 @@ func TestARebuiltTopLevelSessionComesBackARoot(t *testing.T) {
 // goroutine that runs the child's first turn against a live model client, so
 // what covers Spawn is the recorder both callers share, exercised here.
 func TestAForkIsRecordedAsAChildOfTheSessionItBranchedFrom(t *testing.T) {
+	skipUnlessThisHostCanConfigureAnInberAgent(t)
 	workspace := t.TempDir()
 	server := &Server{
 		store: tempStore(t),
@@ -218,7 +224,8 @@ func TestAForkIsRecordedAsAChildOfTheSessionItBranchedFrom(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/sessions/"+childKey+"/fork", strings.NewReader("{}"))
 	server.handleBridgeFork(recorder, request, childKey)
 	if recorder.Code != http.StatusCreated {
-		t.Skipf("the fork endpoint did not run here (%d: %s)", recorder.Code, recorder.Body.String())
+		t.Fatalf("the fork endpoint returned %d, want %d: %s",
+			recorder.Code, http.StatusCreated, recorder.Body.String())
 	}
 
 	var forked struct {
