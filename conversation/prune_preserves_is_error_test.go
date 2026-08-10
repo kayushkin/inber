@@ -99,8 +99,13 @@ func TestDedupStubKeepsIsError(t *testing.T) {
 		}},
 	}
 
+	// Fail rather than skip: the fixture is declared right here, so nothing
+	// superseded means the code under test stopped stubbing failed reads, and
+	// this test is the only one that covers that. Measured 2026-08-10 — make
+	// DeduplicateFileRefs pass over a result carrying is_error and this test
+	// reported --- SKIP while the package reported ok. (noteboard f0453cc6)
 	if n := DeduplicateFileRefs(messages); n == 0 {
-		t.Skip("no ref was superseded in this fixture; the flag test needs a stub to be written")
+		t.Fatal("nothing was superseded in this fixture, so the is_error claim below was never exercised; fix the code or rewrite the fixture")
 	}
 	value, present := isErrorOf(t, messages[1].Content[0])
 	if !present {
@@ -165,7 +170,7 @@ func TestASecondDedupPassStubsNothing(t *testing.T) {
 
 	first := DeduplicateFileRefs(messages)
 	if first == 0 {
-		t.Skip("no ref was superseded in this fixture")
+		t.Fatal("the first pass stubbed nothing, so the second-pass claim below was never exercised; fix the code or rewrite the fixture")
 	}
 	if second := DeduplicateFileRefs(messages); second != 0 {
 		t.Fatalf("a second pass re-stubbed %d already-stubbed results", second)

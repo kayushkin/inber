@@ -67,8 +67,13 @@ func TestAFailureSurvivesTruncationOfItsOutput(t *testing.T) {
 	content := repeatLines("compiling module %d ... ok", 40) + "\nmake: *** [all] Error 2"
 	text := messagesToText(failedResultMessages(content))
 
+	// Fail rather than skip. Surviving "Error 2" means the renderer's limit
+	// moved past this fixture, and the sharp case — losing the failure with the
+	// truncated tail — stops being asserted by anything. Measured 2026-08-10:
+	// raise the 200-character limit in messagesToText and this test reported
+	// --- SKIP while the package reported ok. (noteboard f0453cc6)
 	if strings.Contains(text, "Error 2") {
-		t.Skip("the fixture no longer truncates; the truncation case needs longer output")
+		t.Fatalf("the renderer no longer truncates this fixture, so the truncation case was never exercised; lengthen the fixture to outrun the current limit: %q", text)
 	}
 	if !strings.Contains(text, "failed") {
 		t.Fatalf("truncation removed the only trace that the call failed: %q", text)
