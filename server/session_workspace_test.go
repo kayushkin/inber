@@ -252,17 +252,21 @@ func TestARebuildIsRefusedWhenAnySecondaryWorktreeIsGone(t *testing.T) {
 // session whose roots and repo root disagree, so that sabotage failed
 // construction — and "construction failed" was the skip condition.
 //
-// So the environment is probed first with a session that has no workspace at
-// all. Once that has succeeded, every later failure here is the change under
-// test rather than the host, and is fatal.
+// This used to probe the environment by building a session with no workspace
+// at all and skipping if that failed. Better than a blanket skip, and still the
+// same shape: the probe asks the code under test whether the host is at fault,
+// so a sabotage breaking construction for every session — the probe's included
+// — is silenced exactly as before. The host is now asked directly instead, and
+// every construction failure below is fatal.
 func TestARebuiltSessionComesBackInItsOwnWorktree(t *testing.T) {
+	skipUnlessThisHostCanConfigureAnInberAgent(t)
 	roots := worktreeRoots(t)
 	liveCheckout := t.TempDir()
 	server := &Server{store: tempStore(t), config: Config{DataDir: t.TempDir()}}
 
 	if _, err := server.createSession(context.Background(), "agent:brigid:probe", "brigid",
 		AgentConfig{Workspace: liveCheckout}, RunRequest{}, nil); err != nil {
-		t.Skipf("no engine can be built here at all (%v); the recorded workspace is pinned by the tests above", err)
+		t.Fatalf("build a session with no workspace at all: %v", err)
 	}
 
 	if err := server.store.UpsertSession(childKey, "brigid", "spawn",
@@ -296,6 +300,7 @@ func TestARebuiltSessionComesBackInItsOwnWorktree(t *testing.T) {
 // The same caller for a session that was never in a workspace: it must come back
 // in its agent's repository, with nothing added.
 func TestARebuiltOrdinarySessionStaysInItsAgentsRepository(t *testing.T) {
+	skipUnlessThisHostCanConfigureAnInberAgent(t)
 	liveCheckout := t.TempDir()
 	server := &Server{store: tempStore(t), config: Config{DataDir: t.TempDir()}}
 	if err := server.store.UpsertSession(parentKey, "claxon", "main", SessionLineage{}, nil); err != nil {
@@ -305,7 +310,7 @@ func TestARebuiltOrdinarySessionStaysInItsAgentsRepository(t *testing.T) {
 	rebuilt, err := server.createSession(context.Background(), parentKey, "claxon",
 		AgentConfig{Workspace: liveCheckout}, RunRequest{}, nil)
 	if err != nil {
-		t.Skipf("no engine can be built here (%v)", err)
+		t.Fatalf("rebuild the ordinary session: %v", err)
 	}
 
 	if len(rebuilt.WorkspaceRoots) != 0 {
@@ -321,6 +326,7 @@ func TestARebuiltOrdinarySessionStaysInItsAgentsRepository(t *testing.T) {
 // ~/repos/<repo> holding a transcript about ~/forge/work/<id>/<repo>,
 // immediately, in a live process.
 func TestAForkStaysInTheWorktreeItsParentWorksIn(t *testing.T) {
+	skipUnlessThisHostCanConfigureAnInberAgent(t)
 	roots := worktreeRoots(t)
 	liveCheckout := t.TempDir()
 	server := &Server{
@@ -343,7 +349,8 @@ func TestAForkStaysInTheWorktreeItsParentWorksIn(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/sessions/"+childKey+"/fork", strings.NewReader("{}"))
 	server.handleBridgeFork(recorder, request, childKey)
 	if recorder.Code != http.StatusCreated {
-		t.Skipf("the fork endpoint did not run here (%d: %s)", recorder.Code, recorder.Body.String())
+		t.Fatalf("the fork endpoint returned %d, want %d: %s",
+			recorder.Code, http.StatusCreated, recorder.Body.String())
 	}
 
 	var forked struct {
@@ -368,6 +375,7 @@ func TestAForkStaysInTheWorktreeItsParentWorksIn(t *testing.T) {
 
 // A fork of an ordinary session must not acquire a workspace it never had.
 func TestAForkOfAnOrdinarySessionRecordsNoWorkspace(t *testing.T) {
+	skipUnlessThisHostCanConfigureAnInberAgent(t)
 	liveCheckout := t.TempDir()
 	server := &Server{
 		store: tempStore(t),
@@ -386,7 +394,8 @@ func TestAForkOfAnOrdinarySessionRecordsNoWorkspace(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/sessions/"+parentKey+"/fork", strings.NewReader("{}"))
 	server.handleBridgeFork(recorder, request, parentKey)
 	if recorder.Code != http.StatusCreated {
-		t.Skipf("the fork endpoint did not run here (%d: %s)", recorder.Code, recorder.Body.String())
+		t.Fatalf("the fork endpoint returned %d, want %d: %s",
+			recorder.Code, http.StatusCreated, recorder.Body.String())
 	}
 
 	var forked struct {
