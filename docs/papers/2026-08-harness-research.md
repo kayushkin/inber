@@ -1228,3 +1228,35 @@ key revalidation on a stored description hash and to *not* build the drift-prior
 heuristic the paper measured as ineffective. Filed here rather than as an inber todo because it is
 another repo's defect surface and this job files against inber; whoever next touches tool-store's
 ingest should read it. No inber change.
+
+## 2026-08-10 sweep — nothing new in window, and two KV-cache papers ruled out for a structural reason
+
+No paper dated inside the 7-day window turned up on any of the searched channels, which is the
+second consecutive empty week and supports the 2026-08-09 note's suggestion that this channel drop
+to fortnightly. Two older-but-uncovered papers surfaced and are recorded here **with the reason they
+cannot apply**, because both look directly on-topic for inber's standing cache-prefix problem and
+the next sweep will otherwise find them again and read them again.
+
+- **[arXiv:2606.01065](https://arxiv.org/abs/2606.01065) — Leyline: KV Cache Directives for Agentic
+  Inference (2026-05-31).** Ma, Eitzinger, Koestler. Argues that agentic conversations evolve by
+  *editing* — retried tool calls, dropped stale outputs, pivoted trajectories — which breaks the
+  append-only assumption prefix caching is built on, and that harnesses therefore re-prefill on
+  every edit. Introduces a serving-side directive that splices a span out of the cache in place,
+  restoring attention math with a closed-form RoPE rotation: +11.2 pp replay cache-hit, up to 241 ms
+  saved, and +14.3 pp solve rate on debug-gym from a ten-line truncation rule routed through it.
+- **[arXiv:2607.21604](https://arxiv.org/abs/2607.21604) — AgentKVShift: Efficient KV Cache Reuse
+  for Agentic Memory Systems.** Pandey et al. Per-memory-unit KV residual correction: the reuse
+  residual decomposes into a shared memory-level offset plus token-wise noise, so a probe set
+  estimates the offset and corrects every reused token rather than only the recomputed ones. Near
+  full-recompute quality refreshing 10–30% of the cache; 2–3.5× prefill speedup.
+
+**What inber should consider: nothing, and the reason generalizes.** Both papers act *below* the
+prompt — they are serving-stack mechanisms that require owning the KV cache. inber reaches its
+models through the Anthropic Messages API and the OpenAI-compatible path, where the only cache
+control it has is `cache_control` breakpoint placement on a prefix it must keep byte-identical.
+There is no interface through which inber could issue a splice directive or a residual correction,
+so neither result is actionable at any effort level. Recorded as a **standing filter**: a
+KV-cache-mechanism paper is only actionable here if inber ever serves a model itself. Leyline's
+*framing* is still the one worth keeping — that a conversation which edits its own history is a
+different cache workload from a chat — and that framing is already what the 2026-08-07 prefix work
+and the open BP2-prefix-instability todo are about, arrived at independently.

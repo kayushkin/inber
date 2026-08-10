@@ -4022,3 +4022,122 @@ together with §1 — one helper, one `cmd`, one fix site.
   message-ordering family already dismissed on 2026-08-08 (inber's transcript is an ordered slice).
   **goose** — dependency bumps plus #10994 subrecipe validation, a surface inber lacks.
   **cline desktop/vscode/UI** rows, and **aider** and **roo-code**, which had no commits at all.
+
+## Harness-watch — 2026-08-10: a refusal that returns no error is not a refusal, and the fork path is the one door of seven with no lock on it
+
+The 2026-08-09 sweep dispositioned almost the whole window, so this pass only walked what landed
+after it (codex #37645–#37773, cline #13126, goose #11018/#11071, opencode #41411). Three of those
+turn into findings against inber's own code; the rest are recorded below so the next sweep does not
+re-derive them.
+
+### 1. codex bounds a project-path resolution; inber *detects* the bad root and then returns it as the empty string with a nil error
+
+[codex #37747](https://github.com/openai/codex/pull/37747) bounds how far Cursor project-path
+resolution may walk. inber has the same shape and refuses the same case — and the refusal is where
+the defect is. `setupRepoRoot` (`engine/engine_new.go:29-43`) resolves a root by walking up from
+`os.Getwd()` for a `.git` (`internal/fsutil/fsutil.go:10-27`), falls back to the cwd itself when
+that fails (`:35`), and then at `:39-42` notices the answer is `$HOME`, logs
+`"repo root resolved to home directory, refusing"`, sets `repoRoot = ""` — and returns
+**`("", nil)`**. Nothing downstream treats `""` as an error, and there is no central guard.
+
+What `""` actually buys, traced through every consumer: file tools are handed to the model
+**unrooted** (`engine/engine.go:419` → `tools/root.go:78-81` returns the tool set unchanged when
+`root == ""`), so `read_files`/`write_files`/`shell_commands` resolve relative paths against the
+daemon's cwd; the memory DB, the session DB, the workspace transcript and the JSONL logs are all
+`filepath.Join("", …)`, i.e. written relative to that same cwd (`engine/engine_new.go:105,157,203,224`);
+and `Engine.Close` still runs `finishSessionGit` unconditionally (`engine/engine.go:481`), whose
+helper is `git -C "" …` (`engine/workflow_git.go:12`). **Measured on this host: `git -C ""
+rev-parse --show-toplevel` succeeds** — git ignores an empty `-C` — so `git add -A`, `git commit`
+and `git push` (`workflow_git.go:98,104,117`) run against whatever repository the daemon's cwd sits
+in. The safety check refuses `$HOME` and lands on something with a wider blast radius than `$HOME`
+would have had, because at least `$HOME` was a root the tools would have been scoped to.
+
+Two local guards exist and prove the author knew (`engine/build_tools.go:89,94` and
+`engine/build.go:92` both test `e.repoRoot != ""` before wiring the tools that write a
+repoRoot-derived path), which is exactly why the absence of a central one reads as an oversight
+rather than a policy.
+
+**What inber should consider — and what a fix would have to decide:** whether an unresolvable root
+is a *session-creation failure* (return the error `setupRepoRoot` already has a slot for, and let
+`createSession` refuse) or a *degraded mode* that is explicitly modelled — in which case the
+degradation has to be enforced, not implied: no auto-commit, no unrooted file tools. Do not pick by
+default. Refusing loudly will break any agent whose config has no `workspace` and which today runs
+on cwd inference, and how many of those exist on a given host is a fact about deployment, not about
+this repo. Filed.
+
+### 2. goose sends session setup after *both* the new and the fork response; inber's fork is the one call site of seven that discards the agent lookup's ok
+
+[goose #11018](https://github.com/block/goose/pull/11018) fixes a fork path that skipped a setup
+step the create path performed. inber has the same asymmetry, one layer down.
+`g.GetAgentConfig` (`server/server.go:200-203`) returns `(AgentConfig, bool)` and is called from
+seven places. Six check the bool — `server/api_bridge.go:144-146` (the bridge *create* path, which
+answers 400 `unknown agent`), `:547`, `spawn.go:170`, `spawn_delivery.go:106`,
+`workspace_tools.go:220`, `server.go:318`. The seventh, `handleBridgeFork`, is
+`ac, _ := g.GetAgentConfig(agentName)` (`server/api_bridge.go:613`), and it hands the result
+straight to `forkSession` → `createSession` (`:615`).
+
+This is reachable, not theoretical: `reloadRegistry` (`server/api_agent_config.go:176-198`) rebuilds
+`g.config.Agents` wholesale from agent-store at runtime, from an HTTP handler, so an agent named by
+a live session in `g.sessions` can leave the map underneath it. When it has, the fork is built from
+a **zero** `AgentConfig`: `Model: ""` and `Thinking` zeroed reach `EngineConfig`
+(`server/session_creation.go:120-124`), so the child silently resolves the default model instead of
+its parent's, and answers 201 while doing it. The create path 400s on the identical input.
+
+**What inber should consider:** make the seventh site check, and decide what a fork of a
+now-unknown agent *means* — 404/409 (the parent's agent no longer exists, so the fork cannot be
+configured) or inherit the parent's live `Engine` config rather than the registry's. That is a real
+choice: the second option keeps a long-running parent forkable across an agent rename, which is
+plausibly the case the endpoint exists for. Filed.
+
+### 3. That same reload writes `Server.config` with no lock, while every request reads it
+
+Found while verifying §2 and separable from it. `Server.config` is a plain `Config` value
+(`server/server.go:29`) with no mutex anywhere in the package, and `reloadRegistry` mutates two of
+its fields in place — `g.config.Agents = newAgents` (`server/api_agent_config.go:194`) and
+`g.config.DefaultAgent = cfg.Default` (`:196`) — from the `PATCH` agent-config handler (`:170`),
+concurrently with `GetAgentConfig` (`server.go:201`) and `g.config.DefaultAgent` reads on every
+run, spawn and fork goroutine. The map swap is a single pointer store and will in practice hand a
+reader one whole map or the other; the **string** store is two words, and a reader that catches the
+new data pointer with the old length gets a garbage slice. `go test -race` will flag both.
+
+**What inber should consider — and what a fix would have to decide:** the mechanism, because it
+sets the semantics. An `atomic.Pointer[Config]` swapped whole gives every in-flight request a
+consistent snapshot of the registry it started with; an `RWMutex` around the two fields is smaller
+but lets one request read a pre-reload agent map and a post-reload default. Todo `54a046c8` already
+asks the neighbouring question — whether a running session should see a config edit at all — and
+whichever way that lands constrains this. Filed.
+
+### 4. Checked and NOT worth a finding
+
+- **[cline #13126](https://github.com/cline/cline/pull/13126)** (remove the YOLO-mode setting,
+  migrate existing users onto auto-approve-all) — inber has the same two-names-for-full-access
+  shape, `Unset` and `Autonomous` (`guard/guard.go:47-56`), and it is deliberate and documented at
+  the declaration: `Unset` is the zero value so that a config naming no mode reads as "nobody said"
+  rather than as the strictest mode. The hazard cline's migration guards against — a *typo*
+  resolving to full access — does not exist here: `ParseMode` (`guard/mode.go:16-27`) errors on
+  anything that is not one of the three names and returns `Observe` on that error so a caller who
+  ignores it still gets the strictest mode, `engine.go:201-204` fails session creation on it, and
+  `RestoreState` (`guard/state.go:88`) leaves the guard in `Observe` and reports. Nothing to do.
+- **[codex #37757](https://github.com/openai/codex/pull/37757) / [#37758](https://github.com/openai/codex/pull/37758)**
+  (preserve CRLF through `apply_patch`, behind a flag) — inber owns no file-editing tool to get
+  this wrong. `write_files`/`edit_files` are tool-store's (`tools/root.go:41`), and every file inber
+  writes itself is one it also authored (session JSONL, prompt blueprints, workspace markdown).
+  The finding, if there is one, belongs to tool-store, and this job files against inber.
+- **codex #37745/#37773/#37723/#37709/#37654/#37645** (code-mode gRPC TCP transport, plugin install
+  attempt IDs and analytics, I/O subtypes on config-import failure, composer whitespace, advertising
+  environment-config read support), **goose #11071** (a pnpm dep), **opencode #41411** (stats sync
+  fallback) — surfaces inber has no counterpart to.
+
+### 5. Held back from the queue this pass
+
+One finding, verified, unfiled because the three slots went to §1–§3. **The bridge session API
+accepts a `display_name`, echoes it back, and never stores it.** `POST /sessions` reads
+`req.DisplayName` into the response record (`server/api_bridge.go:155`, defaulted to the agent name
+at `:162-163`) and `POST /sessions/{id}/fork` does the same (`:631,639`), but the only persistence
+either performs is `UpsertSession(key, agent, kind, lineage, roots)`
+(`:150`, `session_forking.go:82`), which has no column for it. Every subsequent read rebuilds the
+field from `sessionInfoToBridge` as `DisplayName: s.Agent` (`:109`). So a client names a session,
+gets a 201 confirming the name, and sees the agent name in the very next list. Echoing a value you
+did not store is the specific defect — it makes the write look accepted. A fix has to decide where
+the name lives (a column on `sessions`, versus an in-memory map that a restart drops) and whether a
+fork inherits its parent's.
