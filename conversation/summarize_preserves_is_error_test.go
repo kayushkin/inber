@@ -59,16 +59,44 @@ func TestSummaryTextLeavesASuccessUnmarked(t *testing.T) {
 	}
 }
 
+// renderedToolResultLimit measures the renderer's own cut length instead of
+// assuming it. The cut is a bare literal inside extractToolResultText, so a
+// fixture sized against a remembered number stops truncating the moment that
+// literal is raised — and this test used to answer that by skipping, which
+// reported a change in the code under test as drift in its own data and left
+// the package green.
+//
+// A renderer that does not truncate at all has no length to find. That is a
+// failure and not a reason to skip: the case below would go unexercised.
+func renderedToolResultLimit(t *testing.T) int {
+	t.Helper()
+	const probeLength = 1 << 16
+	probe := anthropic.NewToolResultBlock("toolu_probe", strings.Repeat("x", probeLength), false)
+	rendered := extractToolResultText(probe)
+	if len(rendered) >= probeLength {
+		t.Fatalf("the renderer no longer truncates: a %d-character result rendered to %d characters, so the truncation case cannot be exercised",
+			probeLength, len(rendered))
+	}
+	return len(rendered)
+}
+
 // The sharp version, and the one arXiv:2607.13071 describes: a command that
-// prints a lot and then fails. The renderer truncates to 200 characters, so the
-// error text at the end is cut off and the partial stdout is all that survives.
-// Truncation is fine; losing the fact of the failure with it is not.
+// prints a lot and then fails. The renderer cuts the output, so the error text
+// at the end is lost and the partial stdout is all that survives. Truncation is
+// fine; losing the fact of the failure with it is not.
+//
+// The stdout is built to overrun whatever the live cut length is, so the error
+// text is always past it. That makes reaching the truncation branch guaranteed
+// rather than lucky.
 func TestAFailureSurvivesTruncationOfItsOutput(t *testing.T) {
-	content := repeatLines("compiling module %d ... ok", 40) + "\nmake: *** [all] Error 2"
+	limit := renderedToolResultLimit(t)
+	stdout := strings.Repeat("compiling module ... ok\n", limit/len("compiling module ... ok")+2)
+	content := stdout + "make: *** [all] Error 2"
 	text := messagesToText(failedResultMessages(content))
 
 	if strings.Contains(text, "Error 2") {
-		t.Skip("the fixture no longer truncates; the truncation case needs longer output")
+		t.Fatalf("stdout of %d characters did not overrun the %d-character cut, so truncation never happened and the case was not exercised: %q",
+			len(stdout), limit, text)
 	}
 	if !strings.Contains(text, "failed") {
 		t.Fatalf("truncation removed the only trace that the call failed: %q", text)

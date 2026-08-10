@@ -99,8 +99,16 @@ func TestDedupStubKeepsIsError(t *testing.T) {
 		}},
 	}
 
+	// A count of zero cannot mean the fixture drifted: the fixture is the
+	// literal slice above, two whole-file read_files of the same path, and
+	// nothing outside this function can change it. Zero means the code under
+	// test stopped superseding — which is the regression this test exists to
+	// catch, so it fails rather than skipping. Skipping here reported "no
+	// stub was written" as a fixture problem and left the package green: a
+	// change making pass 3 leave failed results alone silences this test and
+	// no sibling covers the is_error path.
 	if n := DeduplicateFileRefs(messages); n == 0 {
-		t.Skip("no ref was superseded in this fixture; the flag test needs a stub to be written")
+		t.Fatal("nothing was superseded, so the is_error path was never exercised: a later whole-file read_files of /tmp/x must stub the earlier failed one")
 	}
 	value, present := isErrorOf(t, messages[1].Content[0])
 	if !present {
@@ -163,9 +171,12 @@ func TestASecondDedupPassStubsNothing(t *testing.T) {
 		}},
 	}
 
+	// As above: the fixture is literal, so zero means the first pass stopped
+	// superseding, not that the data drifted. Without a first stub there is
+	// no second pass to test, and skipping said so where nobody reads it.
 	first := DeduplicateFileRefs(messages)
 	if first == 0 {
-		t.Skip("no ref was superseded in this fixture")
+		t.Fatal("nothing was superseded on the first pass, so the second-pass property was never exercised: a later whole-file read_files of /tmp/x must stub the earlier one")
 	}
 	if second := DeduplicateFileRefs(messages); second != 0 {
 		t.Fatalf("a second pass re-stubbed %d already-stubbed results", second)
