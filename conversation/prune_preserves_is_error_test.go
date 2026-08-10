@@ -168,6 +168,9 @@ func TestASecondDedupPassStubsNothing(t *testing.T) {
 		}},
 	}
 
+	// As above: the fixture is literal, so zero means the first pass stopped
+	// superseding, not that the data drifted. Without a first stub there is
+	// no second pass to test, and skipping said so where nobody reads it.
 	first := DeduplicateFileRefs(messages)
 	if first == 0 {
 		t.Fatal("the first pass stubbed nothing, so the second-pass claim below was never exercised; fix the code or rewrite the fixture")
