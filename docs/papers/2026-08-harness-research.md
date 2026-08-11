@@ -1260,3 +1260,138 @@ KV-cache-mechanism paper is only actionable here if inber ever serves a model it
 *framing* is still the one worth keeping — that a conversation which edits its own history is a
 different cache workload from a chat — and that framing is already what the 2026-08-07 prefix work
 and the open BP2-prefix-instability todo are about, arrived at independently.
+
+## 2026-08-11 sweep — four papers from the Aug 7–10 band, and one of them names a field inber's memory schema is one key short of
+
+Dedupe base for this sweep: 221 distinct arXiv ids already cited across `docs/papers/*.md` and
+`docs/comparisons/*.md`. The highest `2608.*` on file was **2608.06370**, so the unswept band was
+**2608.065xx → 2608.099xx**. All four keepers come from it. Everything below was read from its
+`arxiv.org/abs/` page — title, authors, v1 date, category, abstract — and **no PDFs were read, so
+every number here is abstract-grade.**
+
+### 1. [arXiv:2608.08654](https://arxiv.org/abs/2608.08654) — the scaffolding matters more than the interface (2026-08-09)
+
+Alier Forment, Casañ Guerrero, García-Peñalvo, Pereira. cs.AI. Holds one task family (git repository
+operations) fixed and crosses **7 agent scaffoldings × 5 models × {MCP, CLI}**, measuring dollar
+cost. The interface turns out to be the wrong variable: **scaffolding drove up to 139× cost
+variation** on smaller models, while the MCP:CLI ratio ran **0.43× to 29× with no stable
+direction**. Two scaffoldings finished the task with no MCP support at all, 5–28× cheaper. MCP runs
+burned **12.9% of spend on failed runs against CLI's 2.2%**. The methodological result is the
+sharpest: **agents frequently ignored the interface they were assigned**, so any MCP-vs-CLI
+comparison that does not verify which path was actually taken is measuring noise. Harness and
+measurement code released GPL-3.0.
+
+**What inber should consider:** a design input for `tool-store`'s `POST /provision`, not a defect —
+re-verified this pass that `tools/mcp` still has no importer outside `tools/mcp/`, the same absence
+`agentic-design-patterns.md` recorded on 2026-08-10. It argues that a third-party capability
+reachable as a CLI through `shell_commands` should be preferred over the same capability mounted as
+an MCP server unless MCP is measured to win *on inber's scaffolding*, and it gives a second reason
+to have stayed off MCP beyond the browser-MCP OOM. The transferable discipline is negative: **if
+inber ever A/Bs MCP against CLI, log which interface the model actually used per call**, because
+defection from the assigned interface is the paper's own headline. Scope: one task family, and the
+outcome measured is cost, not success.
+
+### 2. [arXiv:2608.06953](https://arxiv.org/abs/2608.06953) — explicit, not longer: stance survives compression when it is a labelled field (2026-08-07)
+
+Alex Kwon. cs.CL. Asks what makes a claim's epistemic standing — "unconfirmed", "assumed",
+"reported by X" — survive being written into agent memory, given that compressors are built to drop
+qualifiers. Matched pairs: identical claim, identical stance, differing only in **where the stance
+sits** — a labelled field versus a bracketed aside — compressed by one model under one budget among
+identical filler notes, scored by a blind reader. Writing stance as a **labelled field** raises
+retention ~15 points on two models (37→2 and 30→8 claims lost, permutation p=0.00005), with a
+**pre-registered replication** on Haiku giving +15.6 (38→1). The ablation is the load-bearing part:
+**labels help on both models (+9.7, +12.8); length helps on neither.** The paper prints nine
+withdrawn claims, three of them former title claims.
+
+**What inber should consider:** this is the general form of a fix inber already shipped narrowly in
+`efafc69`, which rendered `is_error` into the summarizer's view so a failed tool call stops reading
+as a result. The same argument applies to memory. ⚠️ **Correcting the scan that surfaced this
+paper:** it reported `memory_save` as having "`content`, `tags` and `importance`" at
+`memory/tools.go:100-103`. Measured — the schema is `:100-105` and carries a **fourth** key the scan
+stopped one line short of: **`source`** (`:104`, "'user', 'agent', 'system'"). That changes the
+recommendation from "add the first label" to something cheaper and better founded: **the labelled-
+field mechanism already exists in this schema and is already rendered as a label** — `memory_search`
+prints `source: %s` per hit at `:80` — so adding a `stance`/`confidence` key beside it is one more
+entry in an existing `props(...)` map plus one more field in the same `Sprintf`. What `source` does
+*not* carry is the thing the paper measures: it says **who** said it, never **how confident** they
+were, so "the build passes (unverified)" still reaches the store as prose with the qualifier inside
+the sentence, which is exactly the position the paper shows gets dropped. Two further notes: the
+paper explicitly finds that **padding the text does not work**, which kills the obvious alternative
+of instructing the model to write longer memories; and a labelled field composes with 2607.12161 on
+file, being a few appended bytes rather than a prefix rewrite. Scope: 60 claims, single author,
+small-n, and the authors concede the mechanism behind the label effect is model-dependent.
+
+### 3. [arXiv:2608.07952](https://arxiv.org/abs/2608.07952) — persistent semantic entities, and contamination compounding along a spawn chain (2026-08-08)
+
+Zhaohui Wang. cs.LG. Formalizes implicit state that survives sessions and crosses agent boundaries
+via three ingredients — **name binding, event triggering, cross-boundary propagation** — measured
+across **24 models from 11 families (1.5B–1T)**. Three results. **Name binding is necessary and
+dominant: without it contamination is 0%**, with it 20–100% susceptibility across a 20-model panel.
+**Persistence depends on contamination type, not scale** — preference contamination persists
+undecayed (100% at t=10), persona-style injection decays 90%→10%. And **contamination compounds
+1.9× along a four-stage agent pipeline, 40%→75%**, while context-isolated self-verification recovers
+a median 36.5% with no oracle and **keyword detection produces systematic false positives**.
+
+**What inber should consider:** the compounding result is the one aimed here, because
+`agent/registry/spawn_tool.go` builds exactly such a chain and the Twin Agent entry on file
+(2607.19595) proposes routing untrusted reads *through* a spawned agent — this paper says the chain
+**amplifies** rather than dilutes, which is an argument against that shape, not for it. The
+name-binding result is the CLAUDE.md rule "join on ids, never on names" arriving from an unexpected
+direction: contamination needs a **name** to bind to. Worth saying plainly that inber is on the
+right side of this one already — `memory_search` prints the row **id** first (`memory/tools.go:80`,
+`"%d. [%s] ..."`) and carries the source alongside, which is the id-primary shape the rule asks for.
+The adoptable item is the stop-doing: **do not build keyword-based contamination detection**;
+context-isolated self-verification is the mechanism that measured. Scope: single author, controlled
+injection rather than a live harness. It overlaps the memory-poisoning thread already on file
+(SPORE 2607.23444, self-state 2607.17986, MemSecBench 2607.27080) — the genuinely new increments are
+the name-binding necessity result and the 1.9× four-stage factor.
+
+### 4. [arXiv:2608.06984](https://arxiv.org/abs/2608.06984) — HarnessSafe: score where the chain stopped, not whether it succeeded (2026-08-07)
+
+Zhang, Wang, Fei, Li, Liang, Xiang, Gu, He. cs.CR. **328 executable cases across seven
+persistent-carrier families** — memory, skills, tools, shared artifacts — against most mainstream
+harnesses. The part that is not benchmark boilerplate is the **Persistent-Risk Lifecycle**: each
+case traces attacker influence from entry, through persistence and boundary crossing, to a **later
+benign trigger** and an observable violation, and scoring is **stage-resolved** — how far the chain
+got and where it stopped — rather than a scalar attack-success rate. Findings: containment is
+carrier-specific and depends jointly on harness **and** model backend, and **ASR cannot distinguish
+distinct lifecycle progression patterns**.
+
+**What inber should consider:** the measurement shape, not the benchmark. inber runs all four
+carrier families in production — `memory.db`, skill-store SKILL.md text, tool-store tool
+definitions, session artifacts — with no per-carrier containment measurement. Scoring inber's
+boundary per carrier **and per lifecycle stage** (entry / persisted / crossed a boundary /
+triggered / violated) is a natural extension of the 39-boundary `harness-control-matrix.md`, and it
+replaces "did the attack succeed" with "where did it stop", which is the same upgrade that matrix
+already made over a pass/fail table. The harness-model coupling finding also warns that a
+containment result measured on Opus does not transfer to the compact executor tier that 2607.03048
+calls the dominant quality lever. **Included with a caveat:** this is a benchmark paper, the class
+this doc set usually rejects, and it shares a slot with the isolation taxonomy (2607.12406) on file.
+It earns its place on the carrier decomposition and the stage-resolved scoring, not on any number.
+
+### Checked and rejected — 2026-08-11
+
+- **2608.02113 MemArbiter** (decision-time memory salience, five Memory Banks, +20.9/+25.4 pp on
+  ALFWorld at 500/750-token budgets) and **2608.06745 MemPrism** (task-conditioned relational memory
+  views) — both **embodied, not coding**, and both occupy the slot already held by 2607.08716 ("when
+  to inject beats what is stored") and 2607.17545 (budget-dependent operator choice).
+- **2608.06663 The Horizon Gap** — survey of 1,547 papers separating long-horizon (task) from
+  long-context (model) from long-term memory (system). Useful vocabulary, no measurement.
+- **2608.08282 Stateful CARS** — exact constrained decoding with cross-history invalidity
+  certificates. Needs logit-level control inber structurally cannot reach, **and the paper's own
+  matched comparison is negative** (0.942 against plain CARS; the Qwen comparison is null).
+- **2608.07855 CommitKV** — serving-side KV compression. Falls under the standing filter recorded in
+  the 2026-08-10 entry: a KV-cache-mechanism paper is only actionable here if inber ever serves a
+  model itself.
+- **2608.08793, 2608.09253 SkillSentry, 2608.09096 Evo-Bench, 2608.02276 Harness-R1, 2608.07545
+  DarwinX, 2608.09885 SHE** — harness-evolution and skill-observability. The evolution cluster stays
+  governed by the 2607.12227 critique on file (unmatched compute budgets, evaluation on the tuning
+  tasks).
+
+### Blogs: empty for the fourth consecutive sweep
+
+Anthropic engineering's index shows nothing since **2026-04-23**; the featured *How we contain
+Claude across products* is **2026-05-25**, outside window. HuggingFace surfaced only undated
+evergreen posts. DeepMind and OpenAI: nothing on harness design, context, caching or memory in
+window. Fourth empty sweep running — the 2026-08-09 suggestion to drop this channel to fortnightly
+now has four data points behind it and should just be done.
