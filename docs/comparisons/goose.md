@@ -1028,3 +1028,64 @@ caller outside `tools/mcp/`, so it is a trap for whoever wires MCP, not a cost t
 (`engine/turn_prompt.go:22-51`) and fleet status, context injectors and volatile memories all route
 to `e.Turn.VolatileContext` (`:128-152`), which is injected after BP2 and — checked against the
 2026-08-02 correction — is written into the message array once, not recomputed on replay.
+
+## Harness-watch — 2026-08-11: a thinking signature is bound to the *model*, not just the credential — and inber's failover swaps the model under a live conversation
+
+[goose #10007](https://github.com/block/goose/pull/10007) fixes an unrecoverable Anthropic 400 —
+``messages.N.content.M: `thinking` or `redacted_thinking` blocks in the latest assistant message
+cannot be modified`` — with a cause this doc has not recorded before. A signature is issued by, and
+valid only for, **the model that produced it**. Switch model or thinking-effort mid-conversation
+(goose's case: two `set_config_option` calls) and the stored history still replays the *previous*
+model's signed blocks against the new one, which Anthropic rejects direct and through Bedrock,
+Vertex and Databricks. Observed in the wild at message index 3, so not a compaction artifact. The
+fix is targeted rather than blunt: when serializing history, drop signed thinking blocks whose
+originating model — read from `message.metadata.inference` — differs from the model this request
+targets. Text and tool content still go. When provenance is unknown (older rows, no metadata) the
+old behaviour stands, so single-model conversations are untouched.
+
+The generalization: **credential rotation is not the only thing that invalidates a signature, and
+provenance is what lets you drop the right blocks instead of all of them.** A harness that stores
+history as a bare provider message array has no way to answer "which model wrote this?", so its only
+available remedy is the sledgehammer.
+
+**What inber should consider:** inber is the configuration this bug needs, and it produces the model
+switch *by itself*. `engine/failover.go:21-60 selectModel` runs at the top of every turn
+(`engine/turn_execute.go:18`) and, for any session that did not pass `--model`
+(`modelExplicitlySet`, `:30-33`), silently swaps to a fallback the moment model-store health says the
+preferred model is unhealthy — `meta-harness.md:108` already records inber's model as "selected per
+turn". The history it carries into that new model holds the old one's signed thinking for any
+session with extended thinking on.
+
+⛔ **Correcting this doc's own 2026-07-13 entry while citing it.** That entry says
+"`agent/clients.go:103` sends `interleaved-thinking-2025-05-14`". Two things are off, measured
+this pass: the header is at **`agent/clients.go:119`**, and it is sent **only on the OAuth branch**
+— `newAnthropicClient` splits on a `sk-ant-oat01-` key prefix (`:114`), and the API-key branch
+(`:126-130`) sends `prompt-caching-2024-07-31` alone. So the cross-message duplicate cause that
+entry describes, and the interleaving that spreads one turn's signed thinking across several
+assistant messages, are **OAuth-only**. The signature-versus-model problem here is wider than that
+branch — any thinking-enabled session produces signed blocks — but it is at its worst on OAuth,
+where there are more of them per turn.
+
+Three consequences, in order of how much they cost:
+
+- **inber's guard will not fire.** The strip-and-retry at `engine/turn_execute.go:45-50` is gated on
+  `apiutil.IsThinkingSignatureError`, which is `msg == "Error"` in full
+  (`internal/apiutil/apiutil.go:6-13`). The 400 goose quotes is a long, specific sentence, not the
+  word `Error`, so the predicate returns false and the turn dies. This half is already filed as todo
+  `cf3b6b4c`; what is new is a second, automatic way to reach it that nobody chose.
+- **The failure is then recorded against the wrong model.** `recordModelHealth`
+  (`turn_execute.go:58`) marks the turn's outcome as evidence about `modelUsed` — the model inber
+  just failed *over to*, which did nothing wrong. So one poisoned history marks the fallback
+  unhealthy too, and the next turn fails over again, walking the chain down.
+- **inber cannot implement goose's fix as written.** `Engine.Messages` is a bare
+  `[]anthropic.MessageParam` (`engine/engine.go:67`); there is no per-message record of which model
+  produced it, and `resp.Model` is never persisted at all (`harness-control-matrix.md:81` already
+  says so, from the audit side). Provenance has to exist before a targeted drop can.
+
+**What a fix would have to decide**, and this is a real choice rather than an oversight: whether
+inber gains per-message model provenance (a wrapper type or a parallel array — it changes the type
+that every conversation repair, prune and summarize function takes, so the blast radius is the whole
+`conversation/` package), or whether failover simply refuses to swap models when the history carries
+signed thinking, keeping the sledgehammer for the credential case it was written for. The second is
+far cheaper and costs availability exactly when a model is down. Do not fold this into `cf3b6b4c`'s
+dedupe work without saying which was chosen.

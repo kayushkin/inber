@@ -4141,3 +4141,136 @@ gets a 201 confirming the name, and sees the agent name in the very next list. E
 did not store is the specific defect — it makes the write look accepted. A fix has to decide where
 the name lives (a column on `sessions`, versus an in-memory map that a restart drops) and whether a
 fork inherits its parent's.
+
+## Harness-watch — 2026-08-11: a subsystem that builds its own provider handle instead of taking the session's is a second configuration nobody keeps in sync — and inber's compaction takes a handle that is nil
+
+### 1. cline #13137 — compaction went out on a config the user's setting never reached
+
+[cline #13137](https://github.com/cline/cline/pull/13137) fixes "Compaction skipped", reported
+against every OpenAI-compatible local model. Three compounding parts, and the shape is worth more
+than any of them. `resolveSummarizerConfig` defaulted the summarizer's `maxOutputTokens` to a
+hardcoded 1024 whenever the provider config carried none. The VSCode host never set
+`maxOutputTokens` on `providerConfig` at all — the user's "Max Output Tokens" setting becomes a
+*top-level* `maxTokensPerTurn` that only the main loop reads — and both auto and manual compaction
+build their summarizer handler straight from `providerConfig`. So every compaction request went out
+at `max_tokens: 1024` no matter what the user set. Then the failure mode hid itself: reasoning
+models emit thinking as `reasoning` chunks, which `generateSummary` discards, so the model spent the
+whole 1024 on thinking, zero summary text arrived, and an empty result mapped to a generic
+"Compaction skipped" with no diagnostic. The CLI host never had the bug, because its
+`toProviderConfig` maps the setting through.
+
+The generalization, which is not about token counts: **a background subsystem that assembles its own
+provider handle from a config object, rather than being handed the session's, is a second
+configuration — and it drifts silently, because the main loop keeps working.** cline's two hosts
+disagreeing is the tell.
+
+### 2. inber's compaction takes the session's handle, and on an OpenAI-compatible session that handle is `nil`
+
+inber does not have cline's bug. It has the worse end of the same axis: compaction is handed the
+session's client, and for a whole class of session that client was never built.
+
+`createModelClient` (`engine/engine_new.go:271-291`) fills its `*anthropic.Client` return **only**
+from `modelClient.AnthropicClient` (`:285-288`). For an OpenAI-compatible provider that field is
+nil, so `:589` assigns nil to `Engine.Client` (`engine/engine.go:62`) and it stays nil for the life
+of the session. Three consumers read it, and they fail three different ways:
+
+- **`engine/lifecycle.go:95-97` — a panic.** `summarizeIfNeeded` passes `e.Client` to
+  `conversation.SummarizeConversation`, which reaches `generateSummary` and calls
+  `client.Messages.New` (`conversation/summary_generation.go:74`). `Messages` is a struct *field* on
+  `anthropic.Client` (SDK v1.35.0, `client.go:24`), so a nil receiver is a nil-pointer dereference,
+  not an API error. It fires the first time the conversation crosses `TriggerMessages` — 40 messages
+  for the coder role, 60 default, 80 orchestrator (`conversation/summarize_config.go:31-55`). The
+  call site is `_ = e.summarizeIfNeeded(ctx)` (`engine/turn_prepare.go:66`), whose comment reads
+  "best effort: a failed summarization has already logged and left the conversation whole" — that
+  describes an *error*, and a panic is not one. There is no `recover` on this path: `engine/`,
+  `server/` and `conversation/` hold exactly two, `server/bus.go:51` and `conversation/extract.go:34`,
+  and neither covers it.
+- **`engine/turn_postprocess.go:37` — a panic that is caught.** `BackgroundExtractMemories` takes
+  the same nil client and dereferences it at `conversation/extract.go:81`, but that function opens
+  with a `defer recover()` (`:33-37`). So on an OpenAI session — whenever extraction is on at all,
+  which `turn_postprocess.go:33` gates on `e.extractCfg.Enabled && e.MemStore != nil` — inber logs
+  `memory extraction panic` per turn and stores nothing: degraded but alive. That asymmetry is the
+  evidence this is an oversight, not a decision: the same nil was anticipated one file over and not
+  in compaction.
+- **`agent/registry/registry.go:206` — every spawned subagent.** `createAgent` calls
+  `agent.NewAnthropicProvider(r.client)` unconditionally, from the same nil handed in at
+  `engine/engine_new.go:616` → `registry.New` (`:33`). The OpenAI-capable `r.modelClient` is right
+  there and read two lines below at `:209`, for the OAuth flag.
+
+**This is not the `5902f7b9` cluster and answering that decision does not fix it.** Those nine todos
+are all about governance wired into `buildAgent` never reaching `runOpenAITurn`. All three sites
+above are *outside* the turn loop — the shared prepare phase, the shared post-turn phase, and
+session construction — so splitting `buildAgent` leaves every one of them exactly as it is. Scope is
+the same though, and should be said: every enabled agent in agent-store runs an Anthropic model, so
+this is reachable only by naming an OpenAI-compatible model on a `RunRequest`. **TRUE in code,
+LATENT on this host.**
+
+Noted in passing at the same site: `engine/lifecycle.go:91-93` falls back to a hardcoded
+`"claude-sonnet-4-5-20250929"` when `e.Model` is empty, where model-store is the source of truth.
+Unreachable today — `engine_new.go:587` always sets `e.Model` from `resolvedModel` — but it is a
+hardcoded model ID sitting in the compaction path.
+
+**What a fix would have to decide.** Three answers with different blast radii, and picking one
+unattended would be picking for all three sites at once. **(a)** Guard each consumer — smallest
+diff, and it turns the panic into "compaction silently never runs on this provider", which is the
+failure mode cline #13137 spent a PR making visible. **(b)** Never leave `Engine.Client` nil: give
+compaction, extraction and the registry the `*agent.ModelClient` and let each pick its provider the
+way `engine/turn_execute.go:29` already does for the main loop — correct, and it changes the
+signature of `conversation.SummarizeConversation`, which is `conversation/`'s widest public entry
+point. **(c)** Refuse at construction: fail session creation for a provider whose subsystems cannot
+run, which is honest and takes the OpenAI path from degraded to unavailable. Whichever is chosen,
+cline's third part is the one to copy regardless — **an empty summary must report why**, not map to
+a generic skip.
+
+### 3. Checked and NOT worth a finding — recorded so the next sweep does not re-walk them
+
+- **[goose #10546](https://github.com/block/goose/pull/10546)** (bound recursive `@file` expansion in
+  hint files to 64 operations and 1 MiB, shared across nested and repeated references) — inber has
+  no reference expansion to bound. Nothing in `engine/` or `tools/` expands a file path the model or
+  a context file names; context is assembled from memory recall and the fixed blocks in
+  `engine/turn_prompt.go`. No amplification surface.
+- **[goose #10874](https://github.com/block/goose/pull/10874)** (index messages by
+  `(session_id, created_timestamp, id)` so the read path stops sorting on disk) — inber has the same
+  *shape* and not the same cost. `session/db_turns.go:46` reads `WHERE session_id = ? ORDER BY turn`
+  while `session/db_migration.go:78` indexes `turns(session_id)` alone, so SQLite uses the index for
+  the filter and sorts what is left. But the table is turns, not messages: tens to hundreds of rows
+  per session against goose's per-message table. Recorded because the composite is a one-line
+  migration if that table ever holds messages.
+- **[goose #10596](https://github.com/block/goose/pull/10596)** (a subagent must not load hooks or
+  fire `SessionStart` — plugin banners were running mid-conversation) — inber already has the
+  contract goose was restoring, by construction rather than by choice. Workflow hooks live on the
+  Engine (`engine/workflow_hooks.go`); `agent/registry` builds bare `agent.Agent` instances with no
+  hook loading and no lifecycle emission anywhere in the file. Nothing to skip.
+- **[codex #37807](https://github.com/openai/codex/pull/37807)** (store model-visible tool specs as
+  `Arc<[ToolSpec]>` so prompt construction clones a pointer) — a Rust allocation fix whose Go
+  equivalent inber gets for free: `e.agentTools` (`engine/engine.go:95`) is a slice passed by header,
+  never deep-copied per prompt.
+- **[codex #37867](https://github.com/openai/codex/pull/37867)** (reject patches whose paths resolve
+  to the same file, e.g. `duplicate.txt` and `./duplicate.txt`) — inber owns no patch or file-editing
+  tool; `write_files`/`edit_files` are tool-store's (`tools/root.go:41`). Same disposition as the
+  2026-08-10 entry gave codex #37757/#37758: the finding, if any, is tool-store's.
+- **[goose #11042](https://github.com/block/goose/pull/11042)** (compaction extracted into a
+  standalone crate with a `Message[] -> Message` interface, exposed through the GDK) — the same
+  extraction inber's `docs/papers/2026-07-harness-research.md:592` already names, and it needs a
+  decision about package boundaries rather than a sweep finding.
+- **[codex #37878](https://github.com/openai/codex/pull/37878)** (a configurable ceiling on per-goal
+  token budgets, enforced on create and update) and **[#37882](https://github.com/openai/codex/pull/37882)**
+  (parse safety-buffering from typed `response.metadata` SSE events, top-level field still wins) —
+  a config knob for a goals feature inber has no counterpart to, and provider-specific SSE parsing
+  for a field inber never reads.
+
+### 4. Filed this pass
+
+- §2 (the nil `Engine.Client` family, all three sites, one decision) → todo `36de2cf9`.
+- The 2026-08-10 entry's §5 held-back finding — the bridge session API echoes a `display_name` it
+  never stores — was **re-verified against the code this pass**, not carried on trust, and is now
+  todo `3324f9ad`. That entry's "unfiled" line is settled; do not re-file.
+
+One finding was **not** filed, on purpose. goose #10007 (this window's `goose.md` entry) shows that
+inber's failover manufactures the mid-conversation model switch that invalidates a signed thinking
+block, and that `recordModelHealth` then blames the model it failed *over* to. The file:lines it
+lands on — `internal/apiutil/apiutil.go:6-13`, `engine/turn_execute.go:45-50`,
+`conversation/repair.go` — are already named by open todo `cf3b6b4c`, so a second card would split
+one fix across two. The new cause and the provenance prerequisite are written up in `goose.md`;
+whoever picks up `cf3b6b4c` should read that section before choosing between per-message provenance
+and a failover that refuses to swap under signed thinking.
