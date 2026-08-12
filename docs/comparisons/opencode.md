@@ -458,6 +458,27 @@ the declared root) and composes with the existing per-session permission gating.
 > injection mutates `&e.Messages`, which `engine/lifecycle.go:251-268` marshals to `messages.json`,
 > and `session/resume.go:178-187` prefers that snapshot over reconstructing. So the decoration is
 > replayed on every later turn and every resume.
+>
+> ⚠️ **NARROWED 2026-08-12 (harness-watch). "Durable" is true of one artifact and false of the
+> other — do not cite this paragraph as blanket durability.** `saveResumableState`
+> (`engine/lifecycle.go:258-277`) does write `messages.json` to both the workspace and the session
+> log dir, so that half stands. But (a) the cited preference for the snapshot,
+> `session.LoadMessagesFromDir` (`session/resume.go:179`), has **no production caller** — the only
+> one is `session/resume_pairing_test.go:213`, which is what open todo `875aa19e` is about, so the
+> sentence describes a function nothing runs; and (b) the injection never enters `session.jsonl` at
+> all. `agent/agent.go:344-361` appends it to `(*messages)[lastIdx].Content` in memory, and the
+> `agent` package holds no `Session` reference to log through; `Session.LogUser`
+> (`session/session_logging.go:10`) has exactly two callers, `engine/engine.go:264` (the turn's
+> *opening* input) and `engine/lifecycle.go:280`, neither on the injection path. `session.jsonl` is
+> what the live timeline endpoint serves — `server/api_sessions_history.go:244` →
+> `session.ReadTimelineFromJSONL` — so the rendered history shows the agent changing course with no
+> visible cause, and the same is true of the sub-agent results `server/spawn_delivery.go:101`
+> delivers over that channel. Filed as a todo. A fix has to decide whether an injection logs as a
+> `user` entry (it is user-authored, but it does not open a turn, and `LogUser` also fires
+> `store.SetTask` on turn 0) or gets its own role, and whether agent-authored traffic on the same
+> channel logs under the same role as a human steer. Exposed by
+> [codex #38047](https://github.com/openai/codex/commit/d6ca19d9).
+>
 > **REFUTED — the cache argument.** It assumes the wrap perturbs bytes after the live breakpoint.
 > Inber's history breakpoints are the frozen boundary and the **turn anchor**, and the anchor is
 > set at `agent/agent.go:279` to the turn's opening message; the injection appends to

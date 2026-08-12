@@ -4274,3 +4274,79 @@ lands on — `internal/apiutil/apiutil.go:6-13`, `engine/turn_execute.go:45-50`,
 one fix across two. The new cause and the provenance prerequisite are written up in `goose.md`;
 whoever picks up `cf3b6b4c` should read that section before choosing between per-message provenance
 and a failover that refuses to swap under signed thinking.
+
+## Harness-watch — 2026-08-12: durable harness state is written when work *starts*, not when it *succeeds* — three upstreams converged on it in one week, and inber loses a fork to the gap
+
+Three unrelated harnesses shipped the same correction in the same window, which is the signal worth
+recording: **the durable record must be written at the moment state is created, not at the moment a
+turn ends well.** Persisting on success is an availability bug disguised as an optimization, because
+the window it leaves open is exactly the window in which processes die.
+
+- [opencode #41800](https://github.com/sst/opencode/pull/41800) inverts *when* the mark is written.
+  A shutdown finalizer used to mark active sessions just before exit, so any death without teardown
+  (SIGKILL, OOM, crash) skipped it. Now the claim is written **when execution starts, in the same
+  transaction as `Execution.Started`**, and terminal events release it on commit — "a claim with no
+  terminal is the signature of a dead process, regardless of how it died." Two sub-invariants are
+  separable and worth stealing on their own: a durable `resume_attempts` counter incremented
+  *before* resuming, so a crash inside the resumed turn cannot dodge the budget; and orphaned
+  *child* claims are cleared rather than resumed, because a resumed parent re-runs its tool call and
+  spawns fresh children.
+- [cline #13078](https://github.com/cline/cline/pull/13078): sessions started with `initialMessages`
+  — forks, mode switches, prior recoveries — kept that seeded history **memory-only until the first
+  completed turn**. Recovery rebuilt from an empty on-disk transcript while the UI still showed the
+  old chat: a silent context wipe that presented as a cheerful "ready to help" on a long
+  conversation. Fix: seeded sessions persist immediately; brand-new empty sessions stay lazy.
+- [codex #38047](https://github.com/openai/codex/commit/d6ca19d9) +
+  [#37926](https://github.com/openai/codex/commit/722784e9): injection persists atomically with the
+  user input under one thread-operation lock, and `PersistContext` splits `TurnStart` (async, before
+  sampling) from `Standard` (synchronous — steered input, admission acks, metadata). A steer becomes
+  a first-class durable record rather than a side effect.
+
+**inber has cline's exact bug, on the path where it knows the history is inherited.**
+`handleBridgeFork` (`server/api_bridge.go:614-624`) calls `forkSession`, stores the child in
+`g.sessions`, records the DB lineage row via `recordChildSession`
+(`server/session_forking.go:80-84`, which writes lineage only) and returns `201`. It never calls
+`persistSessionState`. The inheritance itself is memory-only: `server/session_forking.go:58` hands
+the child the parent's whole history through `RestoreSession`, and `engine/lifecycle.go:47-54`
+assigns `e.Messages`, sets the counter and flushes the staging boundary without writing anything.
+Every live `persistSessionState` call site is post-turn — `server/server.go:379,406`,
+`server/spawn.go:420`, `server/api_bridge.go:797`, plus `server/session_management.go:77` on
+interrupt. So between the fork and the child's first *successful* turn,
+`loadPersistedSession` (`server/session_creation.go:381-385`) hits `fs.ErrNotExist` and returns
+`(nil, 0, nil)` — the branch whose own comment reads "A session with nothing persisted yet is the
+ordinary case" — and the rebuild produces a child with zero inherited messages and turn counter 0,
+silently: `server/session_creation.go:146` and `:171` both gate their log line and `RestoreSession`
+on `len(msgs) > 0`. Filed as a todo. Note the spawn path is *not* affected — `server/spawn.go:420`
+persists the child after its run — so this is specific to fork.
+
+**What inber should consider:** adopt the write-ahead half only. The claim-and-release protocol in
+full requires deciding what a terminal event *is* for an inber session and where it commits, which
+is a larger design question (see the held-back findings below); but "persist the transcript at the
+moment a session is created carrying inherited state" is decision-light and closes the fork hole on
+its own. The one thing it changes, and the reason it is not free, is the meaning of
+`messages.json`'s existence: today it means "this session has completed a turn," and
+`loadPersistedSession` leans on that to tell a first-turn session from a corrupt one.
+
+### Held back from the queue this run (findings 4-6, real but each gated on a bigger decision)
+
+- **A turn that fails before emitting text persists nothing.** `server/server.go:376-379` snapshots
+  only inside `if result.Text != ""`; `engine/engine.go:280-284` applies the same gate before
+  `postProcessResult`, and `engine/turn_postprocess.go:52` (`saveResumableState`) is reachable only
+  from there. Worse, `engine/engine.go:255-258` (guard limit breach) and `:269-272`
+  (`buildTurnContext` error) return *before* `executeAgent` and so reach no persist path even in
+  principle — while `engine/engine.go:264` has already written the user's line to `session.jsonl`.
+  Result: `messages.json` holds the previous turn's array while `session.jsonl` holds a user line
+  that array does not contain. Not filed because it is the same decision as the write-ahead claim
+  above and would split one fix across two cards.
+- **Crash recovery is a PID probe, not a durable claim.** `session/db_sessions.go:182-197`
+  (`DetectInterrupted`) and `:163-180` (`ListActive`) decide liveness via `isProcessAlive`
+  (`session/active.go:103-109`: `os.FindProcess` + signal 0). A recycled PID pins a dead session at
+  `running` forever; conversely nothing ever *resumes* an interrupted session — `EndSession(...,
+  "interrupted", ...)` is the whole recovery story. Lower severity: this is status bookkeeping, and
+  no consumer was found making a correctness decision on `status = 'running'`.
+- **`tools/mcp/adapter.go:74-89` (`GetAllTools`) ranges a map**, so it returns a fresh permutation
+  per call — which would move the `cache_control` breakpoint `agent/agent_run.go:33-36` anchors on
+  the last tool definition, re-keying the cached prefix every request. `GetTool` at `:92-103` picks
+  a random winner on a cross-server name collision. Both unreachable today (`MCPToolRegistry` has no
+  production callers), so this is a trap for whoever wires MCP, not a defect — and `e29c5c62`
+  already owns the wire-or-delete decision. The fix is the sort `tools/interface.go:57-75` applies.

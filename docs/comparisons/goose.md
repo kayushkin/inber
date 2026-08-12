@@ -1089,3 +1089,40 @@ that every conversation repair, prune and summarize function takes, so the blast
 signed thinking, keeping the sledgehammer for the credential case it was written for. The second is
 far cheaper and costs availability exactly when a model is down. Do not fold this into `cf3b6b4c`'s
 dedupe work without saying which was chosen.
+
+## Harness-watch — 2026-08-12: a path that cannot enforce a declared tool policy must refuse, and a durable transcript is a second sanitizer chokepoint
+
+Three small permission/injection fixes landed this week whose *shapes* are worth naming even where
+inber has no counterpart.
+
+- [#11128 — enforce review check tool policy](https://github.com/block/goose/pull/11128). The legacy
+  single-prompt review path *advertised* per-check tool allowlists but delegated through Summon
+  **with the parent session's full developer toolset in Auto mode**, so repository-controlled check
+  content could reach capabilities outside the declared policy. The fix refuses the run outright
+  when a check declares a `tools` policy the path cannot enforce — including an *explicitly empty*
+  list, which is the case a permissive reading would silently treat as "no restriction." The rule:
+  **a path that cannot enforce a declared capability policy fails closed, it does not downgrade to
+  the ambient toolset.**
+  *Not a defect in inber* — subagent construction already has this shape:
+  `agent/registry/registry.go:219-226` registers exactly `cfg.Tools` and returns an error on an
+  unknown tool name rather than substituting an ambient set. Worth recording because open todo
+  `83e084f8` ("an empty tool allowlist means ALL tools") is the *permissive* reading of the same
+  empty-list case, one layer up, and #11128 is upstream evidence for which way to resolve it.
+- [#10609 — sanitize nested tool responses](https://github.com/block/goose/pull/10609). Extends
+  Unicode-tag sanitization to tool-response text, resources and errors — but the architecturally new
+  half is that it also sanitizes the direct `Vec<MessageContentBlock>` deserialization used by
+  **SQLite session reloads**, "preventing persisted history from bypassing the control." Ingress
+  sanitization alone is insufficient once history is durable: the reload path is a second chokepoint,
+  and content written before the sanitizer existed re-enters through it forever. This sharpens open
+  todo `657601a9` (a pruning marker is plain text, so any tool output can forge one): whatever
+  sentinel or block type that todo picks, the resume path needs the same check, not just the write
+  path.
+- [#10455 — match extension owners exactly](https://github.com/block/goose/pull/10455). Stored
+  permissions were removed by namespace **prefix** match, so resetting extension `foo` also deleted
+  `foobar`'s rules. The canonical "a prefix is not an identity" bug. No inber counterpart — guard
+  state is per-session (`session/guard_state.go`), not a namespaced rule store — but it is the same
+  failure the repo directive about joining on ids rather than names exists to prevent.
+
+**What inber should consider:** nothing here is a live defect. The one concrete carry-over is to
+resolve `83e084f8` in the fail-closed direction and to give `657601a9` a resume-path check, since
+both now have upstream precedent rather than only a preference behind them.

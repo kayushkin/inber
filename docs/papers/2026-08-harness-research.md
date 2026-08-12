@@ -1395,3 +1395,99 @@ Claude across products* is **2026-05-25**, outside window. HuggingFace surfaced 
 evergreen posts. DeepMind and OpenAI: nothing on harness design, context, caching or memory in
 window. Fourth empty sweep running — the 2026-08-09 suggestion to drop this channel to fortnightly
 now has four data points behind it and should just be done.
+
+---
+
+## Harness-watch — 2026-08-12
+
+Swept the 2608.09xxx–2608.11xxx band (everything past the 2026-08-11 sweep's high-water mark of
+2608.09885) plus targeted searches on caching, compaction, tool contracts and memory. ~20
+candidates, 2 clear. Both were verified against inber's live state, and the weaker of the two turned
+up a hard defect independent of the paper — which is the argument for keeping the read-against-code
+step even when a candidate looks thin.
+
+### Why Does CLAUDE.md Keep Growing? Catastrophic Remembering in Agentic Coding
+
+[arXiv:2608.11095](https://arxiv.org/abs/2608.11095) — Kushal Chakrabarti, 2026-08-11.
+
+Names the inverse of catastrophic forgetting: agentic instruction files accumulate because
+*deletion risks a correctness regression*, so nobody deletes. Measures 247,694 instruction lifetimes
+across 1,867 repos — prompts more than triple over their lifetime (+226%), gaining +4.9 net
+instructions per commit, and the deletion hazard *falls* with instruction age (log-hazard
+−0.032/commit), i.e. old instructions become permanent. The useful half is the mitigation, not the
+diagnosis: on an inverted-IFEval setup with known-optimal prompts, comments encoding latent
+reasoning removed **99.3% of excess instructions** (+211.3% excess → +1.4%), and carried +23.1% on
+WildIFEval.
+
+**What inber should consider:** inber's CLAUDE.md analogue is the `identity` always-load memory,
+assembled at `agent/registry/config.go:100-117` by concatenating four free-prose fields (`Soul`,
+`Principles`, `Values`, `UserContext`) with no size accounting at all. That string lands in a slot
+with two exemptions — `memory-store/builder.go:202` skips truncation when `m.AlwaysLoad`, and
+`:207-210` appends an always-load row **even when it blows the token budget** — and it sits at the
+front of the cached system prefix `engine/turn_prompt.go:130` builds. So there is no cap, no
+truncation and no measurement on the one block that can only grow. The bypass *mechanism* is already
+on file at `agentic-design-patterns.md:2513-2518`; what is new here is the growth law and the
+mitigation.
+
+**Counter-measurement, reported because it changes the priority — do not file this as urgent.** The
+growth is **latent, not realized**: in the live agent-store every agent's `principle` (4,185 chars),
+`value` (1,029) and `user` (597) block is byte-identical across all 11 agents and untouched since
+**2026-04-05**. Totals run 6,639–9,376 chars/agent (~1,659–2,344 tokens), of which 5,811 chars is
+that shared frozen boilerplate — 88% of dagda's identity, 62% of claxon's. The ask is therefore a
+cap plus a growth monitor *before* someone starts editing those fields, not a rewrite; the paper's
+own hazard curve is the argument for putting it in early. The 4-month freeze is itself weak evidence
+for the thesis — nothing has been removed either.
+
+### From Faulty Memories to Corrected Actions: Dependency-Guided Rollback Repair for Memory-Augmented Agents
+
+[arXiv:2608.10502](https://arxiv.org/abs/2608.10502) — Yu, Wang, Zhang, Duan, Zheng, Wu, Shi, Cai,
+2026-08-11.
+
+Persistent memory makes errors durable — a poisoned, stale or misattributed row alters reasoning,
+tool use, answers, *and subsequent memory writes*. The method builds a typed memory→action graph and
+selectively replays only the affected computation: 85.3% recovery vs 77.3% for the best competing
+method (150 cases, 3 tool-use domains, 4 failure types).
+
+**The paper is weak** — 150 synthetic cases, and the same author cluster shipped a second memory
+paper (MAP-Graph, 2608.10509) the same day. On its own merits it belongs beside the memory-poisoning
+thread already on file (SPORE 2607.23444, MemSecBench 2607.27080, 2608.07952). It earns a slot only
+because reading it against the code exposed a verified dead seam.
+
+**What inber should consider:** the memory→action edge the paper's graph is built from is **already
+designed into inber and never written.** `TrackMemoryUsage(memoryID, sessionID, turnNumber,
+usageType)` is on the `MemoryStore` interface inber re-exports (`memory/memory.go:11`; backing decl
+`memory-store/memory.go:92`), and the `memory_usage` table exists with two indexes
+(`memory-store/sessions.go:27-37`) — but the whole inber tree has **zero production call sites**,
+only three test mocks (`agent/registry/registry_test_mocks.go:80`,
+`conversation/summarize_failure_test.go:55`, `engine/volatile_context_test.go:44`). Confirmed live:
+`select count(*) from memory_usage` returns **0** in both the 404-row inber store and the 35,764-row
+openclaw store. Consequently `memory_forget` (`memory/tools.go:189-206`) only zeroes importance via
+`Store.Forget` — it cannot know which turns consumed the memory, so a retracted memory leaves every
+conclusion derived from it standing. The cheap, non-speculative action is to fill the existing seam
+(call `TrackMemoryUsage` from the `BuildContext` consumer at `engine/turn_prompt.go:90-124`), not to
+build the paper's replay engine. Filed as a todo: an interface method with an indexed table and no
+caller is a lie in the schema regardless of what this paper says.
+
+### Channel note — blogs, fifth consecutive empty sweep
+
+Anthropic engineering's index still shows nothing after **2026-04-23**; the featured *How we contain
+Claude across products* remains 2026-05-25, outside window either way. HuggingFace, DeepMind and
+OpenAI: nothing on harness design, context, caching or memory in window. **The 2026-08-09 suggestion
+to drop this channel to fortnightly now has five data points behind it and should just be done.**
+
+### Rejected this sweep (all grep-clean, rejected on merit)
+
+2608.10934 Ark (descriptive taxonomy, inber is past it) · 2608.11166 Agentic Configuration
+Management (the store family already implements typed versioned config with id joins; adds
+vocabulary, no measurement) · 2608.10319 Do Personalized Skills Help Coding Agents? (genuine null
+result, but per-*developer* personalization; inber's memory is per-repo-workspace siloed) ·
+2608.10509 MAP-Graph (slot already held by 2608.07952, CapLease, Provenact) · 2608.10450 EvoX
+Genesis (whole-architecture replacement offered as one demo run, no controlled comparison) ·
+2608.10743 Mitigating Context Interference (refiner trained into the RL loop; inber cannot reach
+logits) · 2608.10906 GitSkills (dataset, no method) · 2608.08311 Ouroboros and 2608.10299
+Co-Evolution (governed by the standing 2607.12227 critique) · 2608.10669 REDAgentBench (superseded
+by HarnessSafe) · 2608.09799, 2608.09072, 2608.08950, 2608.08413, 2608.09068 (benchmark papers, the
+class this doc set routinely rejects) · 2608.09278, 2608.08968, 2608.09290, 2608.09181, 2608.11110
+(out of domain). Every caching hit surfaced — Leyline 2606.01065, IntentKV 2606.09916, KV Packet
+2604.13226, Don't Break the Cache 2601.06007, CommitKV 2608.07855 — falls to the standing 2026-08-10
+filter (KV-mechanism papers are non-actionable unless inber serves a model) or is out of window.
