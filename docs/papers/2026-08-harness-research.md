@@ -1491,3 +1491,161 @@ class this doc set routinely rejects) · 2608.09278, 2608.08968, 2608.09290, 260
 (out of domain). Every caching hit surfaced — Leyline 2606.01065, IntentKV 2606.09916, KV Packet
 2604.13226, Don't Break the Cache 2601.06007, CommitKV 2608.07855 — falls to the standing 2026-08-10
 filter (KV-mechanism papers are non-actionable unless inber serves a model) or is out of window.
+
+## 2026-08-13 sweep — five papers, and the strongest is a price list for a bullet this repo has carried unquantified since May
+
+Two of the five sit in id-ranges earlier sweeps walked past (`2607.19214`, `2608.06503`) rather than
+outside the window, so the id-range walk is leaving gaps and deserves a second pass. Every id below
+was fetched and its numbers checked against the abstract; every one was greped against all five
+`docs/papers/*.md` files and is absent.
+
+### 1. [arXiv:2607.19214](https://arxiv.org/abs/2607.19214) — Keeping the Cache Warm Pays: Keepalive Economics for Agentic Workloads (Khailo, 2026-07-21, rev 07-24)
+
+Agentic workloads destroy prompt-cache benefit in a way chat does not: the agent sends a request,
+then runs a tool or blocks on approval for minutes, and by the follow-up the cached prefix has been
+evicted, so it pays full prefill again. A client-side keepalive that replays the prefix on a timer
+during the pause cuts post-pause request cost **by up to 12.5x** across Anthropic, OpenAI, Google and
+DeepSeek. The strategy result is the useful part, because keepalive cost falls monotonically in the
+ping interval: the optimum is the **largest interval safely under the TTL — about 4 minutes against
+Anthropic's 5-minute TTL, not the 30-second convention** — and keepalive stops beating a plain
+re-prefill past an idle of roughly **46 min for Anthropic, 36 min for OpenAI and DeepSeek**.
+
+**Be precise about what is new here.** `docs/cache-optimization.md:280` has carried
+"**Cache keepalive pings** (Aider-style): prevent 5-min expiration during idle" as a Future
+Considerations bullet since May. The idea is not new to this repo; the **economics** are, and they
+are what turn a bullet into something implementable — an unquantified "ping during idle" invites the
+30-second convention the paper measures as strictly worse, and has no stopping rule at all.
+
+What *is* confirmed absent from the code: `grep -rn -iE "keepalive|cache.?warm|refresh.*cache"
+--include=*.go .` returns nothing on the cache path. And inber's exposure is maximal, because all
+four breakpoints are 5-minute ephemeral with no TTL override —
+`engine/turn_prompt.go:218` and `:224` (system/stable prefix), `agent/agent_run.go:36` (last tool
+definition), `agent/agent.go:549` (history), each via `NewCacheControlEphemeralParam()`, which sets
+`Type: "ephemeral"` and no `ttl` (`anthropic-sdk-go@v1.35.0/message.go:469-473`), so the provider
+default of 5 minutes applies to all of them.
+
+**What inber should consider:** implement the bullet at the paper's numbers, not the convention —
+replay at ~4 min, and stop at the ~46-min break-even rather than pinging a dead session forever. Two
+inber-specific notes before anyone builds it. (a) The server-mode idle gap *between* user turns is
+the expensive case and it is unbounded, so the stopping rule is load-bearing, not a refinement;
+`server/session_reaper.go` already knows which sessions are live and is the natural place to hang
+the timer. (b) A keepalive is a real API request that inber will bill and, more importantly, will
+route through `recordModelHealth` if it errors — see the 2026-08-13 entry in
+`comparisons/agentic-design-patterns.md`, where an unclassified error marks a model unhealthy
+host-wide. A keepalive ping must not be able to demote a model. Not filed as a defect: an absent
+optimization is not a defect, and the existing bullet already owns the idea.
+
+### 2. [arXiv:2608.06503](https://arxiv.org/abs/2608.06503) — Toward Reliable Context Compression for Long-Horizon Agents: An Empirical Study of Execution Instability (Min et al., 2026-08-06)
+
+Recurrent context compression **weakens the influence of recent interactions**, showing up as more
+blocked actions, repeated exploration, and run-to-run instability — a *behavioral* cost distinct
+from the information-loss framing these docs already carry. TRACE evaluates individual compaction
+events by running paired closed-loop continuations from the same environment state, then uses the
+resulting summary preferences to optimize the natural-language compression prompt **with all models
+frozen**. Reports gains on AppWorld in task performance, multi-run reliability and efficiency.
+
+**The diagnosis does not transfer to inber, and the method does.** inber does not do uniform
+recurrent compression: `conversation/summarize.go:18` states it "keeps the most recent turns in full
+and replaces older ones with a summary", `:40` computes `keepFrom` from `cfg.KeepRecentTurns`, `:47`
+slices `recentMessages` off that boundary, and the default is `KeepRecentTurns: 15`
+(`conversation/summarize_config.go:36`). So inber already has, structurally, the recency protection
+whose absence the paper measures. Any writeup claiming inber needs to "give recent turns weight"
+would be wrong about this repo.
+
+**What inber should consider:** take the evaluation harness, not the fix. The paired-continuation
+experiment is buildable here because both halves already exist — the compaction prompt is
+configurable (`conversation/summarize_config.go`) and the session fork path is real
+(`server/session_forking.go`). At a genuine compaction boundary, fork twice from identical state,
+one compacted and one not, and diff the next N actions. That gives inber a number for a question it
+currently answers by assertion: whether `KeepRecentTurns: 15` is protecting enough, and whether
+frozen-model prompt edits move it. Worth pairing with the standing thesis in
+`comparisons/agentic-design-patterns.md:1580` that summarizer *wording* barely matters and *timing*
+carries the saving — this paper is evidence that wording moves *stability* even if it does not move
+tokens, which is a different axis and does not contradict it.
+
+### 3. [arXiv:2608.10037](https://arxiv.org/abs/2608.10037) — DOCSCHISEL: Adaptive Tool Documentation Optimization for LLM Agents (Lu, Zhang, Chen, Peng — Fudan, 2026-08-10)
+
+Which *information fields* a tool's documentation should carry is highly dependent on task domain,
+LLM backbone and agent paradigm, so no fixed tool doc generalizes. DocsChisel analyzes a target
+agent's **failed execution traces** to find documentation-related causes, then iteratively adds,
+removes and refines fields per tool. Task success rate improves **95.89% over the original tool
+documentation** and **75.15% on average over EasyTool and DRAFT**, at limited token and time cost.
+
+**What inber should consider:** every inber tool description is a hardcoded `Description() string`
+(`tools/interface.go:20-21`) — the fixed input the paper says leaves roughly 2x success on the
+table — and the same holds for tool-store's canonical rows on `:8302`. inber has the missing
+ingredient the method needs: failed traces, in `trace/` and `logs/`. A first step that decides
+nothing architectural is a batch job that mines failed calls per **tool-store id** (never name — two
+tools can share one) and proposes description edits against the owning row. One hard constraint to
+carry into any such job: tool definitions hold inber's cache breakpoint
+(`agent/agent_run.go:34-36`), so every description rewrite invalidates the entire tools prefix.
+Edits must be **batched and applied between sessions**, never dripped — the same batching rule
+`comparisons/agentic-design-patterns.md:1418-1420` already derives for stale-read rewrites.
+
+### 4. [arXiv:2608.11888](https://arxiv.org/abs/2608.11888) — Agent Skills Can Be Harmful: An Empirical Study of Skill-Induced Failures (Dong et al., 2026-08-12)
+
+Differential analysis of skill-guided vs. baseline runs over **307 skill-induced failures** (125
+functional, 182 efficiency) across two benchmarks. The counterintuitive headline: functional
+failures come mostly from **seemingly relevant skills** making the agent implement task elements
+incorrectly or omit them — not from obviously incompatible ones. Efficiency regressions are **not**
+explained by prompt length; within "Excessive Procedure" the two largest sources are excessive
+verification (67 cases) and heavy implementation pipelines (30), i.e. a skill turning optional
+validation into mandatory procedure.
+
+**What inber should consider:** the nearest thing on file is `2608.09253` SkillSentry, and it was
+*named and rejected* rather than covered — it sits in the 2026-08-11 rejection list at `:1386` under
+the harness-evolution cluster. So skill *retrieval* aside, nothing here covers benign, well-matched
+skills making things worse, and this is the first paper in the corpus that measures it. This
+lands directly on bundle-store's `/resolve` (`:8307`), which selects skill-store ids by repo tags
+plus task tags — selection by **relevance**, which is precisely the filter this paper shows is
+insufficient. Two concrete moves: A/B a resolved bundle against a no-skill baseline per repo-tag set
+and demote skills with a negative delta; and measure "excessive verification" as turn count and
+tool-call count inflation rather than trusting token count, since the paper's own finding is that
+token length does not explain the regression. This is also a caution for the standing instruction in
+`~/CLAUDE.md` to query skill-store before any non-trivial task — the paper's result is that a
+relevant-looking hit is not free.
+
+### 5. [arXiv:2608.11977](https://arxiv.org/abs/2608.11977) — Retry, Switch, or Abstain? Strategy-Aware Tool-Use Policies via Controlled Error Injection (Chen et al., 2026-08-12)
+
+BENCH2ROBUST converts failure-free tool-use benchmarks into stochastic environments with
+scenario-controlled solvability, so an episode explicitly requires retrying, switching to an
+alternative, or stopping once paths are exhausted. Across 7 models from 4 families, injected tool
+failures produce a near-universal robustness gap. **Bayesian Tool Memory** — a structured runtime
+recovery context, **no retraining** — buys up to **+16.8 points** on held-out retail tasks; BTM plus
+RL reaches 40.8–45.5% under injection while preserving failure-free performance.
+
+**What inber should consider:** BTM is the retraining-free half and it maps onto the memory store as
+a durable per-tool prior keyed by tool-store id — "this tool has failed transiently N times recently,
+so retry is warranted" versus "switch" versus "stop asking". inber already preserves the raw signal
+through compaction (`conversation/prune_preserves_is_error_test.go`,
+`summarize_preserves_is_error_test.go` pin `is_error` surviving both paths), so what is missing is
+only the aggregation step, not the data. The paper's actual point is that **undifferentiated retry
+is itself the failure mode**, so *abstain* has to be a first-class outcome rather than what happens
+after retries run out — which is the same question `comparisons/agentic-design-patterns.md:3834-3837`
+already parks: inber "cannot decide 'is this evidence about the model' until it decides where
+retryability lives — client, turn loop, or a shared classifier both loops consult." Read them
+together; do not build the prior before that fork is settled.
+
+### Channel note — blogs, sixth consecutive empty sweep
+
+anthropic.com/engineering surfaces nothing newer than the 2025 context-engineering post.
+huggingface.co/blog in window has a model release and two security disclosures, none of it harness
+research. DeepMind and Meta AI: nothing in domain. **The 2026-08-09 suggestion to drop this channel
+to fortnightly now has six data points and should just be done** — it was already overdue at five.
+
+### Rejected on merit this sweep (all grep-clean)
+
+`2608.12282` VAKRA (8,000-API enterprise benchmark; the finding that failures concentrate at
+language-mediated reasoning rather than invocation mechanics is a model-capability claim a harness
+cannot act on) · `2608.11552` Trajectory-Adapted Uncertainty Quantification (requires resampling
+whole trajectories; cost prohibitive at inber's usage) · `2608.07169` Agent Memory Distillation
+(+27.2pp on AppWorld, but scoped to 4B–8B students with a larger teacher, and inber runs frontier
+models — the three-way Workflow/Subtask/Function typing is mildly interesting for the memory-store
+schema and nothing else) · `2608.10504` MEGA/Wisdom Graph (three-layer self-evolving architecture,
+abstract carries no numbers) · `2608.10039` FlowScout, `2608.09316` MemeMind, `2608.10366`
+DSAgentBench, `2608.10042` UserToolBench (workflow synthesis, out of domain, benchmark-only).
+
+**Coverage caveat, stated rather than hidden:** export.arxiv.org rate-limited (429/503) on several
+queries this run and the gap was backfilled through the cs.SE listing and targeted search, so
+**cs.CL coverage is thinner this sweep than cs.SE**. The next sweep should re-walk cs.CL for the
+Aug 6–13 band rather than assume it was covered.

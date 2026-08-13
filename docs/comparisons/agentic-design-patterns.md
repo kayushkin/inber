@@ -4350,3 +4350,165 @@ its own. The one thing it changes, and the reason it is not free, is the meaning
   a random winner on a cross-server name collision. Both unreachable today (`MCPToolRegistry` has no
   production callers), so this is a trap for whoever wires MCP, not a defect — and `e29c5c62`
   already owns the wire-or-delete decision. The fix is the sort `tools/interface.go:57-75` applies.
+
+## Harness-watch — 2026-08-13: tolerance has a boundary — coercing a value is not rebuilding a truncated one — and the byte a request is too long by is not a token
+
+### 1. cline draws the line this doc's "liberal in what you accept" left undrawn — and inber's Anthropic stream loop sits on the wrong side of it
+
+[cline #13015](https://github.com/cline/cline/pull/13015) stops the runtime silently repairing
+truncated tool-call JSON. This is the boundary case for the rule recorded at
+`agentic-design-patterns.md:1896-1902` ([cline #12641](https://github.com/cline/cline/pull/12641),
+"liberal in what you accept, unchanged in what you promise"), which this doc recommended to inber
+with no limit stated. The limit is: coercing a **well-formed value of the wrong type** (`"3"` for an
+integer) recovers what the model meant. Reconstructing a **truncated structure** invents arguments
+the model never emitted, and the tool then runs on them. The first is tolerance; the second is
+inber's first directive — never silently produce wrong results — read backwards.
+
+**inber crosses it in the one loop that assembles every Anthropic response.**
+`agent/agent_run.go:176-178`:
+
+```go
+if err := accumulated.Accumulate(event); err != nil {
+	continue
+}
+```
+
+`Accumulate` (`anthropic-sdk-go@v1.35.0/messageutil.go:20-88`) returns an error from five places,
+and two are reachable from an ordinary bad stream rather than a programming mistake:
+
+- `ContentBlockStartEvent` appends the block **before** unmarshalling into it (`messageutil.go:33`,
+  error at `:36`), so a start event that fails to decode leaves a **zero** `ContentBlockUnion` in
+  `acc.Content` — and every later delta writes into that zero block, because the delta case always
+  targets `acc.Content[len(acc.Content)-1]`.
+- `ContentBlockDeltaEvent` with `len(acc.Content) == 0` (`messageutil.go:40`) — a delta arriving
+  before any start event, which is what a dropped SSE frame or a reconnecting gateway produces.
+  Because `continue` skips the rest of the loop body, that delta is dropped from the accumulator
+  **and** never reaches `a.hooks.OnTextDelta` at `agent_run.go:187-191`, so the model's output
+  vanishes with no trace on screen, in the transcript, or in any error.
+
+Neither failure reaches `streamResp.Err()`, so `agent_run.go:196-197` takes the success branch and
+the turn returns a message it was told is malformed. The existing curative test for this loop
+(`agent/agent_stream_error_test.go`, `TestStreamErrorKeepsTextTheUserSaw`) covers transport errors
+only; it replays events that all accumulate cleanly.
+
+**The zero block is not merely wrong, it is fatal — measured, not reasoned.**
+`ContentBlockUnion.AsAny()` (`message.go:1520-1548`) has no case for `Type == ""` and falls through
+to `return nil`; `Message.ToParam()` calls `.toParamUnion()` on that nil interface. Run against the
+pinned SDK, a `Message` carrying one zero block panics on `ToParam()` with a nil pointer
+dereference — which is `agent/agent.go:412`, `*messages = append(*messages, resp.ToParam())`. The
+only `recover()` anywhere in `agent/`, `engine/`, `server/` or `session/` is `server/bus.go:51`, so
+on every other entry point this takes the process down. Filed as noteboard `fb3d8e62`.
+
+**What inber should consider:** the decision a fix has to make is what a discarded event means, and
+it is a blast-radius choice, not an oversight. Three answers are defensible — fail the turn on the
+first `Accumulate` error (loud, but a single mangled frame late in a good response throws away work
+the user watched arrive); keep the partial and mark the turn `Incomplete`, which is the shape
+`agent/agent.go:203-214` already uses for the cancel and max-calls paths; or drop only the affected
+block and record it. What is not defensible is the current `continue`, which picks none of them and
+returns the result as a success. Whichever is chosen, the zero-block-then-`ToParam` crash is
+separate and should be closed regardless, because it converts a stream anomaly into a process exit.
+
+### 2. goose adds a class inber's overflow classifier provably cannot see: the request that is too many *bytes*
+
+[goose #11173](https://github.com/block/goose/pull/11173) extends
+`is_context_length_exceeded_message` to recognize byte-oriented phrasing — "content length",
+"request size", "payload size", "request body", "body size" paired with "exceed"/"too large" — as
+context-length exhaustion. The reported symptom: image-heavy sessions on byte-capped gateways got a
+400 that nothing classified, so automatic compaction never fired and the session stuck in a retry
+loop. Anthropic's own limit is the same shape — a 32MB `request_too_large` on `/v1/messages`,
+returned as **413** by Cloudflare before the request reaches the API
+([docs](https://docs.anthropic.com/en/api/errors)).
+
+**inber's classifier is four token-shaped substrings and nothing else.** `agent/agent.go:23-32`
+matches `"prompt is too long"`, `"context_length_exceeded"`, `"maximum context length"`,
+`"too many tokens"`. No byte-limit wording matches any of them, and grepping the tree for `413`,
+`request_too_large` or `too large` outside `docs/` returns nothing. Two consequences, and the second
+is the expensive one:
+
+1. The prune-and-retry at `agent/agent_run.go:206-218` never arms, so a request inber could have
+   shrunk fails outright.
+2. The error falls through `errorIsEvidenceAboutTheModel` (`engine/failover.go:166-175`) to
+   `default: return true` → `recordModelHealth` → `modelStore.RecordError` (`failover.go:121`). Per
+   that function's own doc at `:98-104` the health table is host-shared, persistent, thresholdless
+   and decay-free. So one oversized request marks a **healthy model unhealthy for every session on
+   the box**. This is the identical compounding already written up at `agentic-design-patterns.md:2798-2805`
+   for the *recognized* overflow string; the byte-size class reaches it by a shorter path, because it
+   does not even get the retry that might have avoided the error.
+
+Filed as noteboard `70ae784b`.
+
+**What inber should consider:** goose's phrase list is the cheap half and it is not the decision. The
+decision is what the recovery does once the class exists, because **pruning to `contextWindow/2` is
+denominated in tokens and a 413 is denominated in bytes** — the usual cause is a base64 image or
+document part, which a token-based head-drop may not touch at all. goose's own answer was to have
+compaction replace images with text placeholders. inber has no modality-aware shedding step and, per
+`agentic-design-patterns.md:1576`, no model-store modality field to build one on. So the honest
+sequencing is: classify the error (cheap, and stops the host-wide demotion on its own), and treat
+"what to shed for a byte overflow" as its own question rather than pointing the token pruner at it
+and calling it handled. This also connects to open todo `939d5fdc` — that one asks whether a retry
+that still cannot fit should be sent; a byte overflow is the case where inber cannot even *ask*,
+since `conversation.EstimateTokens` prices tokens and never bytes.
+
+### 3. codex routes network egress through the approval pipeline it already had, instead of building a second one
+
+[codex #38299](https://github.com/openai/codex/pull/38299) moves network access onto the shared
+approval pipeline, and [#38256](https://github.com/openai/codex/pull/38256) settles the merge rule
+when several network reviews disagree: report the **latest** rejection. `claude-code.md:337` already
+records the gap as open for inber — "egress is a policy axis separate from command approval; inber
+has no egress axis at all" — and inber's exposure is concrete: `tools/tools.go:42-44` registers
+`Browser`, `WebSearch` and `WebFetch` into the default registry, and `shell_commands`
+(`tools/tools.go:49`) can reach the network by any means the host has. What is new here is the
+*architectural* answer rather than the gap: codex declined to build egress as a parallel axis, which
+means one gate, one rule language in permission-store, one audit trail.
+
+**What inber should consider:** if an egress axis is ever built, build it as inputs to
+`guard.CheckTool` rather than beside it. Note that #38256's "latest rejection wins" is **not** the
+deny-dominates lattice `goose.md:749` recommends elsewhere in this doc; the two answer different
+questions (which verdict to *report* vs. which to *enforce*) and adopting one does not settle the
+other. No finding filed — inber has nothing here to be wrong about yet.
+
+### 4. codex makes a delegate's approval policy explicit rather than inherited
+
+[codex #38205](https://github.com/openai/codex/pull/38205) forces a non-interactive approval policy
+for Codex delegates: a delegated turn has no human channel, so an inherited "ask" policy is a prompt
+nobody will ever answer. This is the complement of codex #23763, already recorded at
+`agentic-design-patterns.md:668`, which fixed headless mode *silently* forcing `approval_policy =
+never`. The rule that reconciles them: a delegate's policy is **set explicitly at spawn and
+recorded**, never inherited-or-defaulted, and never silently widened.
+
+inber's version of the hole is already written up at `agentic-design-patterns.md:2681-2688` and open
+as noteboard `9e31d359` — `server/spawn.go:224` and `server/session_forking.go:47` pass a zero
+`RunRequest`, `guard.ParseMode("")` yields `Unset`, and `guard/guard.go:38-44` documents `Unset` as
+full access. Not re-filed; that todo owns it. What #38205 adds is the contract to fix it *to*, which
+the existing entry lacked: **the failing behaviour is the default, not the inheritance** — so the fix
+is to make spawn state a policy, not to make it inherit the parent's.
+
+Read it alongside `claude-code.md:335-339`, which measures the layer beneath: `guard.CheckTool` has
+zero non-test callers and the mode is hardwired `guard.Autonomous` at `engine/engine.go:169-171`. A
+delegate policy contract has nothing to attach to until that is wired, so #38205 is a design target
+for `9e31d359` rather than work of its own.
+
+### 5. Checked and NOT worth a finding — recorded so the next sweep does not re-walk them
+
+- **[opencode #41939](https://github.com/sst/opencode/pull/41939)** (cap session retries, add
+  jitter). Jitter appears nowhere in this corpus and the gap is real, but it is a refinement of a
+  mechanism inber does not have: per `agentic-design-patterns.md:3813-3819` the OpenAI-compatible
+  path issues exactly one `c.client.Do` with no retry at all, and the Anthropic path's retries come
+  from the SDK, which already jitters (`anthropic-sdk-go@v1.35.0/internal/requestconfig/requestconfig.go:376-377`,
+  a uniform subtraction of up to 25% of the delay). Jitter is downstream of the retryability fork
+  that entry names; filing it now would prejudge that fork.
+- **[opencode #42045](https://github.com/sst/opencode/pull/42045)** (compaction instructions
+  restructured for smaller models like dsv4 flash). Live for inber, since `SummarizeConfig.Model` may
+  differ from the active model — but it argues against a thesis this doc has stated twice
+  (`:1580`, `:1599` (c): the summarizer *wording* barely matters, the *timing* is where the 30-70%
+  saving comes from). One PR restructuring a prompt is not evidence enough to overturn a measured
+  result; note it and wait for a second.
+- **codex #38303** (interrupted turn recovery), **#38197/#38204** (LRU baseline and recency⊕lexical
+  fusion in skill shadow selection), **#38217** (lazy cached MCP start for subagents),
+  **#38281/#38282** (estimated thread usage in `/status`) — all four are already covered:
+  `:1536-1545`, `:1555-1566` (the shadow selector as a bake-off substrate, where an LRU baseline and
+  a recency⊕lexical fusion are simply two more entries), `:1621` (b), and `:961-963` respectively.
+- **cline #13137, #13086, #13090/#13100, goose #10596, #11042, #10968** — all six were triaged in
+  the last four sweeps and four of them sit in earlier "NOT worth a finding" lists (`:3995`,
+  `:4006`, `:4239`, `:4252`). goose #10968's principle is `:3815` verbatim. Re-surfacing them is the
+  sweep re-walking ground it already fenced.
