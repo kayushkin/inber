@@ -34,7 +34,26 @@ func containsTag(tags []string, want string) bool {
 //
 // This is the assertion that was missing when the compaction archive tagged
 // itself `conversation`/`history` and the reader excluded `session-summary`.
+// excludedTagFloor is how many tags the reader excludes. The loop below is a
+// search that stops at its first hit, so a tag no writer here produces is a row
+// nothing in this test visits: measured 2026-08-14, deleting TagSessionSummary
+// from memory.TagsExcludedFromAutomaticContext left conversation and memory
+// green, while deleting either of the other two went red. The tag that can
+// disappear in silence is the one this test's own comment is about.
+//
+// The floor makes the list getting shorter a failure. It does not prove
+// session-summary memories are actually withheld -- the writer for those is
+// inline in engine/lifecycle.go and out of this package's reach, so no writer
+// in the map above produces that tag. That gap is filed separately.
+const excludedTagFloor = 3
+
 func TestArchiveWritersTagThemselvesExcluded(t *testing.T) {
+	if n := len(memory.TagsExcludedFromAutomaticContext); n < excludedTagFloor {
+		t.Errorf("the reader excludes %d tags, want at least %d: a tag has been dropped from "+
+			"memory.TagsExcludedFromAutomaticContext, so whatever writes it is now injected back "+
+			"into the prompt it was written to remove", n, excludedTagFloor)
+	}
+
 	writers := map[string][]string{
 		"conversation archive": ConversationArchiveTags("sess-1"),
 		"stashed content":      StashedContentTags("sess-1", ContentTypeCodeBlock),
