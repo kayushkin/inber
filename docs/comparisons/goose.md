@@ -1126,3 +1126,31 @@ inber has no counterpart.
 **What inber should consider:** nothing here is a live defect. The one concrete carry-over is to
 resolve `83e084f8` in the fail-closed direction and to give `657601a9` a resume-path check, since
 both now have upstream precedent rather than only a preference behind them.
+
+## Harness-watch — 2026-08-14: a cache write is a bet that the prefix recurs — which qualifies this file's own advice about `/oneshot`
+
+[goose #11179](https://github.com/block/goose/pull/11179) stamps `disable_prompt_cache` on the
+fast-model config behind `complete_fast` — compaction, session naming, tool-pair summaries,
+orchestrator routing — and every breakpoint site honours it: the Anthropic format skips the tools,
+system and last-two-user-message breakpoints, the three `apply_chat_payload_breakpoints` callers
+(Databricks-Claude, OpenRouter, LiteLLM) skip theirs, Bedrock skips `cachePoint`. These calls
+summarize a payload that never recurs, so the entry written can never be read back and only bills
+the 1.25× write rate. Measured against `api.anthropic.com`: the compaction request drops from 2
+`cache_control` markers and 11,633 cache-creation tokens to 0 and 0, while the next main-loop
+request keeps all four breakpoints and an 87.8% read share.
+
+⚠️ **This qualifies the unfiled note at `:1017-1019` of this file.** That note records
+`server/api_oneshot.go` setting no `cache_control` as a cost — *"Every one-shot call pays full
+price, including repeated classifier calls that share a system prompt and schema."* The missing
+precondition is recurrence: a write only pays off if the prefix comes back, and for a one-shot call
+carrying a transcript it is a guaranteed 1.25× loss. Re-verified 2026-08-14 that inber does not have
+goose's bug — `conversation/summary_generation.go:62-71`, `conversation/extract.go:81-87` and
+`server/oneshot_schema.go:34-43` stamp nothing.
+
+**What inber should consider:** if `/oneshot` ever gets caching, make it a declared field on
+`OneShotRequest` — the caller asserts its prefix recurs — rather than a stamp the handler applies to
+everything, since that endpoint serves both repeated classifier calls and transcript-bearing
+one-shots. The same rule pins `generateSummary` closed: it embeds the whole conversation in a fresh
+user prompt every call, so it can never earn a read. Full write-up, including how this bears on open
+todo `8754300f` (the force-summary call that withholds tools yet still marks its breakpoints), in
+`agentic-design-patterns.md` under 2026-08-14 §1.

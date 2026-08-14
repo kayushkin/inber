@@ -4512,3 +4512,187 @@ for `9e31d359` rather than work of its own.
   the last four sweeps and four of them sit in earlier "NOT worth a finding" lists (`:3995`,
   `:4006`, `:4239`, `:4252`). goose #10968's principle is `:3815` verbatim. Re-surfacing them is the
   sweep re-walking ground it already fenced.
+
+## Harness-watch — 2026-08-14: a cache write is a bet that the prefix recurs, a child's authority is the *meet* of its parent's with read-only, and two records need a field they do not have
+
+### 1. goose prices the cache *write* as a bet — and it qualifies this corpus's own advice about inber's one-shot path
+
+[goose #11179](https://github.com/block/goose/pull/11179) stamps `disable_prompt_cache` on the
+fast-model config behind `complete_fast` (compaction, session naming, tool-pair summaries,
+orchestrator routing), and every breakpoint site honours it: the Anthropic format skips the tools,
+system and last-two-user-message breakpoints, the three `apply_chat_payload_breakpoints` callers
+(Databricks-Claude, OpenRouter, LiteLLM) skip theirs, and Bedrock skips `cachePoint`. The reasoning
+is the idea worth keeping: these calls summarize a payload that **never recurs**, so the entry
+written can never be read back and only bills the 1.25× write rate on the whole request. Measured
+against `api.anthropic.com`, the compaction request goes from 2 `cache_control` markers and 11,633
+cache-creation tokens to 0 and 0, while the next main-loop request keeps all four breakpoints and an
+87.8% read share. A separable half: `is_goose_internal_request_param()` filters harness-internal
+knobs out of the OpenAI-chat and Databricks pass-throughs, so the new flag never reaches the wire as
+an unrecognized parameter.
+
+**This corrects a recommendation this corpus already made.** `goose.md:1017-1019` files
+`server/api_oneshot.go` setting no `cache_control` as a cost — *"Every one-shot call pays full
+price, including repeated classifier calls that share a system prompt and schema."* #11179 supplies
+the missing precondition: paying for a write is only a saving when the prefix **recurs**, and for a
+one-shot call carrying a transcript it is a pure 1.25× loss. Re-verified this sweep that inber does
+not have goose's bug — `conversation/summary_generation.go:62-71`,
+`conversation/extract.go:81-87` and `server/oneshot_schema.go:34-43` stamp nothing.
+
+**What inber should consider:** if `/oneshot` ever gets caching, make it a **declared field on
+`OneShotRequest`** — the caller asserts its prefix recurs — not a stamp the handler applies to
+every call, because that endpoint serves both repeated classifier calls (shared system prompt and
+schema, caching wins) and transcript-bearing one-shots (pure loss). The same rule pins
+`generateSummary` *closed*: it builds a fresh user prompt embedding the whole conversation text on
+every call (`conversation/summary_generation.go:55-71`), so it structurally cannot earn a read, and
+a later "let's cache the summarizer too" is a regression, not an optimization.
+
+Note inber's own acknowledged instance runs the other way. The force-summary call withholds the
+tools block (`agent/agent_run.go:78`) yet still marks the system block
+(`engine/turn_prompt.go:218`) and up to two history breakpoints (`agent/agent_run.go:134`), so the
+longest prompt inber sends both misses every cached prefix and pays the write premium on one nothing
+can read. That is already open as todo `8754300f`, and `engine/turn_postprocess.go:93-116` already
+prices it per call rather than letting it average away. #11179 is upstream choosing one side of
+exactly that open question — evidence for the decision, not the decision.
+
+### 2. A subagent's authority is the *meet* of its parent's with read-only, and an unenforceable profile costs it the exec tools
+
+[codex #38377](https://github.com/openai/codex/pull/38377) replaces the reviewer's
+`PermissionProfile::read_only()` — a global constant unrelated to what the parent could reach —
+with `parent_config.permissions.permission_profile().intersect_with_read_only()`. The intersection
+walks the parent's filesystem entries downgrading `Read|Write → Read` while **preserving `Deny`
+verbatim**, collapses `Unrestricted → read_only()`, forces network to `Restricted`, and returns
+`None` for `ExternalSandbox`, because filesystem enforcement belongs to someone else and the
+intersection is therefore not computable — which the caller turns into a fully-restricted profile
+rather than a permissive default. The sharper half is in `spec_plan.rs`: `add_core_tool_sources`
+returns early unless the profile is `Managed`, so a reviewer that cannot be sandboxed is offered
+**no** `exec_command`/`write_stdin`/`view_image` at all. Separately, the sorted `environment_ids`
+join the review-session reuse key, so a pooled session is never reused across environment sets —
+the same rule as `:2499` ("a cached prefix is defined by its *inputs*") applied to session reuse.
+
+**inber's spawn does the opposite, and it is already filed.** `server/spawn.go:224` builds the
+child with `RunRequest{}`, so `cfg.Mode` is empty, `guard.ParseMode("")` returns `Unset`
+(`guard/mode.go:17-19`) and `CheckTool`'s `default:` returns `Allowed`
+(`guard/guard.go:185-187`). `spawn_agent` is in neither classification list
+(`guard/guard.go:319-334`), so a parent in **assist** mode — where `shell_commands`, `write_files`,
+`edit_files` and `deploy` each need approval — reaches all four through a child that needs none,
+with one tool call the model makes itself. Verified this sweep and **not re-filed**: it is the open
+todo *"nine tool names reach the model unclassified, and spawn_agent is a door out of the Assist
+gate"*, which todo `c14cd190` explicitly hands it to.
+
+**What inber should consider:** derive a child's mode from the parent's rather than from a default,
+preserving denials rather than recomputing them; and adopt the harder half with it — if inber cannot
+enforce the intersected profile, the child gets no execution tools rather than the tools plus a
+policy nothing applies. **A fix has to decide which authority the child inherits** — the parent's
+mode as-is, the meet of the parent's with read-only, or the agent-store row's — and those are three
+different blast radii, not three spellings of one answer. Do not settle it unattended.
+
+### 3. Two records that need a field they do not have: who authored a message, and where a tool ran
+
+[codex #38445](https://github.com/openai/codex/pull/38445) makes survival through compaction a
+function of **authorship**. A `client_authored` bit stamped on the envelope at write time decides
+retention through both remote compaction v2 and local token-budget resets, and
+`is_client_authored_developer_message` requires *both* that bit and `role == "developer"`, so a
+harness-authored message with identical text does not survive. Two supporting details make it
+honest: a client-authored notice is **detached** from the group it rode in on, so it is retained
+independently of that item; and its cost is measured with the full `estimate_item_token_count`
+rather than the text-only estimator, with a re-truncate-and-re-measure loop that skips an item
+rather than overshooting the 64k retained budget.
+
+[cline #13075](https://github.com/cline/cline/pull/13075) makes the *execution site* a durable
+field. `ModelTool` is typed as "a tool executed by the model provider as part of inference. Unlike
+an AgentTool, it has no local executor or approval lifecycle" — so provider-executed calls never
+enter the local approval loop, consent moves to enable-time, `ToolCallRecord` gains
+`execution?: "client" | "provider"`, and the capability is declared in the provider **manifest**
+resolved through `normalizeProviderId`, so `openai-native` declares native search and the generic
+`openai`-compatible alias does not inherit it.
+
+**inber has neither field.** Messages persist as raw `anthropic.MessageParam` with no authorship
+anywhere, so a standing constraint injected mid-session is indistinguishable from model chatter when
+`conversation/summarize.go:46` hands `messages[:keepFrom]` to the summarizer — it is condensed by
+age like everything else. And `web_search` is a *locally* executed Brave call today
+(`tools/tools.go:71-72`, registered `agent/registry/tools.go:31`) that
+`guard.CheckTool` classifies read-only (`guard/guard.go:321-322`); the day a provider-executed
+search is enabled, that call never reaches `engine/build_hooks.go:94` and no field on the record can
+say so — the classification table silently stops describing reality, which is the failure the
+comment at `guard/guard.go:311-318` was written about after the `write_file → write_files` rename.
+
+**What inber should consider:** add an execution-site field to the tool-call record *before* adding
+any hosted tool, and resolve that capability from the **model-store provider record, never a
+model-id substring** — inber's two-prefix `HasPrefix` is already filed as a defect of that shape at
+`:3307-3315`. On the message side, the second-order lesson is the estimator: a retained class costed
+with the wrong measure blows the budget it exists to respect, and `messagesToText` has that shape.
+
+### 4. The gate sees the call; it does not see the conversation
+
+[codex #38403](https://github.com/openai/codex/pull/38403) adds `ConversationHistorySnapshot`, an
+extension-API trait whose doc comment tells implementors to **retain the host's storage rather than
+copy it** — `SharedConversationHistory` holds an `Arc<Vec<ResponseItemEnvelope>>` and hands out a
+borrowed iterator — filtering out contextual user messages (harness-injected pseudo-user text) so an
+extension cannot mistake them for the user speaking, and it is acquired lazily:
+`notify_tool_start` returns early when no contributor wants it.
+[#38409](https://github.com/openai/codex/pull/38409) is the first consumer, classifying action risk
+on a non-blocking sample with a strict schema and instructions to treat tool details as untrusted
+evidence — but be skeptical of that half: the score is currently **discarded**, so it is plumbing,
+not a working gate.
+
+**What inber should consider:** `guard.CheckTool(tool, input string)` (`guard/guard.go:165`)
+structurally cannot see history, which is why a `bash` line that is routine in one conversation and
+exfiltration in another looks identical to it. Ship the *observation* capability before any
+classifier — codex's own classifier does nothing with its score yet, and the capability is the part
+with standalone value. All three of its constraints are load-bearing: **shared, not copied** (a
+per-call transcript copy is a real cost at inber's tool volume), **injected pseudo-user text
+filtered out** so the gate cannot be steered by text the harness itself wrote — the forged-`[Context]`
+hazard at `:3785-3792`, now with a second victim — and **lazily acquired**, so a session with no
+policy contributor pays nothing.
+
+### 5. Recorded without their own entry
+
+- **[codex #38467](https://github.com/openai/codex/pull/38467) + [#38475](https://github.com/openai/codex/pull/38475)** — a
+  skill declares its model tier in `SKILL.md` frontmatter, and the enforcement is deliberately an
+  **advisory, self-limiting instruction** to the parent ("For this invocation only", "use
+  `spawn_agent` exactly once", "Ignore this instruction in child agents and on later turns", "If
+  spawning fails, continue locally"), not harness routing — because only the model knows whether the
+  work is self-contained. An unrecognized value is logged and dropped without failing the rest of
+  the skill's metadata; the target model is derived by suffix substitution within the parent's
+  provider namespace and must appear in `available_models`, with no cross-provider mapping table;
+  and the rendered block is treated as an injection surface (a skill name containing a backtick or
+  angle bracket aborts rendering, identifiers are charset- and length-checked, the block is capped at
+  2048 B or discarded). inber's skill-store rows carry no model field and `spawn_agent` takes
+  `{agent, orchestrator, task}` (`agent/registry/spawn_tool.go:72-108`) with the model coming wholly
+  from the agent-store entry. If inber ever adds it, resolve through model-store **by id**; the
+  rendering discipline is worth stealing on its own, independent of delegation.
+- **[goose #10660](https://github.com/block/goose/pull/10660)** — a once-only delivery flag is a
+  **claim**, not a boolean: commit on success, release on cancel, refusal or abandonment (a `Drop`
+  impl catches the abandoned path). The reusable part is that the ambiguous outcomes are resolved
+  in a stated direction — cancel and refusal roll back, accepting a possible duplicate, because
+  "treating an unprocessed handoff as delivered is unrecoverable." No such flag exists in inber
+  today (searched: the only `sync.Once` uses are lazy-init caches at `engine/turn_prompt.go:22` and
+  `agent/redaction.go:19`), so this is a contract to hold *before* one is added — a post-compaction
+  summary block, a resume memo, a spawn handoff. It composes with the write-at-start entry at
+  `:4278` rather than duplicating it.
+
+### 6. Checked and NOT worth a finding — recorded so the next sweep does not re-walk them
+
+- **[goose #11203](https://github.com/block/goose/pull/11203)** — when `provider.manages_own_context()`,
+  local `Stdio`/`StreamableHttp` extensions are never spawned and extension state is not persisted
+  from the filtered view. The flag is becoming a real cross-cutting capability bit upstream (it also
+  gates #10968's retry), but inber has no provider that runs its own agent loop, and the second half
+  is close to `goose.md:868`. Watch for a third use.
+- **[codex #38396](https://github.com/openai/codex/pull/38396)** (orphan reaping under `--as-pid-1`)
+  — `:3902`, 08-09, "a harness spawns children of its own."
+- **[codex #38394](https://github.com/openai/codex/pull/38394)** (a *required* managed hook that
+  fails to load kills the session; an optional one warns — identical failure, severity chosen by the
+  declaring layer) — a refinement of the fail-closed thread at `:1488` and `:4026`, not its own idea.
+- **[codex #38445](https://github.com/openai/codex/pull/38445)'s neighbours** — #38456 (thread queue
+  APIs) is `:3451-3452` and open as todo `5320b48f`; #38414 (bounded Guardian transcript) is `:4354`
+  plus `:1733`; #38424 and #38390 are instances of `:4026` and `:1623`.
+- **[cline #13230](https://github.com/cline/cline/pull/13230) / [#13231](https://github.com/cline/cline/pull/13231)**
+  — a one-sided "may I reuse this daemon?" predicate lets two peers evict each other; replace with a
+  total order and defer replacement while sessions are live. Real, but it is multi-install desktop
+  daemon arbitration with no inber counterpart.
+- **cline #13137, #13126, #12962, #13204; goose #10968, #11042, #11128, #10455; opencode #41939,
+  #42045, #42161, #41581** — all triaged in earlier sweeps at `:4145`, `:4112-4118`, `:3815`,
+  `:4492-4506`, `:3307-3315`, `goose.md:1095-1105` and `goose.md:1120-1124`, or covered by
+  `cline.md:439`. One unexamined sliver in #42045: it also deletes the character-level
+  `splitPrefix`/`splitSuffix` that could cut a single message across the head/recent boundary, so
+  compaction now always lands on a message boundary. Not enough to reopen a fenced PR.

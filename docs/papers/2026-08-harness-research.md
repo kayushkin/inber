@@ -1649,3 +1649,114 @@ DSAgentBench, `2608.10042` UserToolBench (workflow synthesis, out of domain, ben
 queries this run and the gap was backfilled through the cs.SE listing and targeted search, so
 **cs.CL coverage is thinner this sweep than cs.SE**. The next sweep should re-walk cs.CL for the
 Aug 6–13 band rather than assume it was covered.
+
+# 2026-08-14 sweep
+
+Four papers. Every id and date re-verified by hand against the arXiv Atom API over **https with
+redirects followed** — `http://export.arxiv.org` answers `301` with an empty body, which reads
+exactly like "no such paper" if the redirect is not followed. That is worth writing down: it is a
+way to conclude a real paper is fabricated.
+
+**Two candidates were dropped as already-covered**, both of which this sweep's search surfaced as
+new: `2608.10319` (Do Personalized Skills Help Coding Agents?) is already reviewed and rejected at
+`:1482-1483` — genuine null result, but per-*developer* personalization, and inber's memory is
+per-repo-workspace siloed — and `2608.00267` (LoopsBench) is already rejected at `:779-780` as
+benchmark-only. Neither should come back without a new argument. Evidence grade for all four below
+is **abstract only**; the numbers are the authors' own claims.
+
+## Tool architecture is a cost lever, and scratchpad tools are not
+
+[arXiv:2608.11386](https://arxiv.org/abs/2608.11386) — "The Devil Is in the Interface: Evaluating
+How Tool Architecture Shapes Coding Agent Behavior", published 2026-08-11. Xu, Saghir, Wu, Côté,
+Wang, Lakkaraju, Pei, Zhang.
+
+Holds the capability set fixed and varies only how tools are organized and exposed: six
+architectures, three actor models, 11,700 trajectories on repository-level issue fixing. Structured
+low-level interfaces improve run-to-run consistency over a bash-only baseline by up to **4.7×**;
+natural-language search raises access to relevant files by **>11%**; Python CodeAct-style interfaces
+reach similar task success with **41.6% fewer steps and 56.3% lower token usage**. The embedded
+negative result is the one to act on first: lightweight text-based *cognitive scaffolding* tools —
+scratchpads, record-your-reasoning tools — had **limited effect** on behaviour.
+
+**What inber should consider:** the tool surface is a tuned artifact, not plumbing, and a 56.3%
+token reduction is a direct bill reduction rather than a proxy — which matters given
+`2607.12161`'s finding that token cuts and billed cost decorrelate at r = 0.15. Note the caveat
+that follows from the same paper: a CodeAct-style single execution tool routes work *through* the
+shell, so it moves load onto the one path `guard.CheckTool` classifies by name
+(`guard/guard.go:319-334`) and would make the unclassified-name gap sharper, not milder. The
+scratchpad result argues against funding a notes/thinking tool for inber on current evidence.
+
+## ⚠️ Matched benchmark scores can hide the harness eating the command
+
+[arXiv:2608.13547](https://arxiv.org/abs/2608.13547) — "QuoteBench: How Matched Scores Can Hide
+Command-Path Failures", published 2026-08-13. Li, Zhang, Tresp, Yang.
+
+About the layer inber *is*. Coding agents emit Bash through interfaces that serialize, wrap and
+reparse model output, and the paper shows a matched benchmark score cannot separate a
+command-*generation* error from damage injected after generation by the transport. Replaying an
+identical model reply through **one added parser** drops success by **55.4–73.2 percentage points**
+across eight configurations. Disclosing the boundary to the model recovers 30.4–60.7 points for six
+configurations and zero-or-slightly-negative for two. The headline case: a matched gap of −3.6
+points concealing −64.3 points of transport damage masked by +60.7 points of model compensation.
+Deployment configuration even reorders model rankings. Evidence is 56 one-shot tasks from 14
+incident-derived families with exact final-state validation — small-n, large effects.
+
+**Checked against inber this sweep, and it is on the safe side of the line.** The shell tool passes
+the model's string to `bash -c` unsplit (`tool-store/tools/shell.go:76`, reached through
+`tools/tools.go:49`), which is the raw path the paper says to preserve, and nothing in `agent/`,
+`engine/`, `server/` or `tools/` re-parses a model-authored command — every `strings.Fields` /
+`strings.Split` there is over git output, config, session keys or display text.
+
+**What inber should consider:** keep it that way deliberately rather than by luck, because the
+failure is invisible to scores. The one added parser in the tool surface inber consumes is
+`strings.Fields(in.Flags)` in tool-store's ripgrep (`tool-store/tools/grep.go:45,60`), which
+shreds a quoted flag value containing spaces — that is a **tool-store** defect, not an inber one,
+and is recorded here rather than filed against inber's queue. The second implication is for the
+stored conformance matrix: comparing harnesses on scores without pinning the execution path can
+reorder the ranking, so the matrix should record the command path it measured through.
+
+## ⚠️ Write-conflict safety for parallel agents is currently bought by giving up the parallelism
+
+[arXiv:2608.00947](https://arxiv.org/abs/2608.00947) — "Claim Plane: Reliability Gains and the
+Limits of Selective Concurrency for Parallel Coding Agents", published 2026-08-02. Nikolaev.
+
+Confirmatory study over 30 frozen CooperBench feature pairs (15 conflicting, 15 clean), three coder
+seeds, four coordination arms, 360 executions, using deterministic pre-write admission over
+versioned change intents. Static admission raised pair-pass from 23.3% to **50.0%** (+26.7pp, 95%
+bootstrap CI 9.6–60.0) and integration success from 65.6% to 96.7% — but did it by **serializing
+96.7% of executions, including 93.3% of the clean, non-conflicting ones**. The more selective
+dynamic variant failed closed on undeclared scope in 46 of 90 executions and fell to 22.2%
+pair-pass. The author states plainly that the results **do not establish useful wall-clock parallel
+speedup**.
+
+**What inber should consider:** this is directly on inber's spawn/forge path, where children can
+share a checkout. The honest read is that the value of isolating parallel agents is *reliability*,
+not throughput — so if forge worktree isolation is extended, do not promise or design around a
+speedup. Note the failure mode of the selective variant: 45 of its 46 blocks hit files already
+declared, i.e. scope-declaration undercoverage is the hard part, which is the same problem as
+asking an agent to predeclare what it will touch.
+
+## ⚠️ Telling an agent its budget barely changes what it spends
+
+[arXiv:2608.05519](https://arxiv.org/abs/2608.05519) — "EcoAgent-Bench: Evaluating Economic
+Decision-Making in Budget-Constrained LLM Agents", published 2026-08-06. Wu, Gong, Cheng, Zhao.
+
+Every task prices its actions and states a budget, so choosing between local lookup, broad search, a
+composite research tool, a stronger model tier and human escalation *is* the task. 304 tasks over
+five families, seven agents in tool-API and workspace-CLI settings, four scripted oracle controls.
+Tool-API agents reach **3.9–24.0% micro strict success and at most 7.3% "economic consistency"** —
+a metric defined as the worse of upgrade-oriented and save-oriented accuracy, introduced precisely
+because micro-averaging rewards a degenerate always-escalate policy. The finding that matters here:
+a threshold-crossing budget sweep moved one frontier model's escalation rate from **0% to only 3%**.
+
+**What inber should consider:** do not implement model-tier selection or escalate-to-premium routing
+by stating a budget in the prompt and trusting the agent — measured near-zero responsiveness.
+Enforce it in the harness, where inber already has the machinery: `guard.CheckLimits`
+(`engine/engine.go:255-258`) and the cost recording at `engine/turn_postprocess.go:86-88`. This also
+bears on codex's skill-declares-a-model-tier design recorded in `agentic-design-patterns.md` under
+2026-08-14 §5 — codex made that delegation *advisory* prose aimed at the model, and this paper is
+the reason to expect an advisory budget signal to be ignored. It is evidence for the enforcement
+side of that trade, not against the feature.
+
+**Coverage note:** the sweep re-walked cs.SE and the arXiv listing API; the previous sweep's caveat
+that cs.CL was thin for the Aug 6–13 band was **not** cleared this run and still stands.
