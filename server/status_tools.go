@@ -32,8 +32,16 @@ func (g *Server) AgentsStatusTool() agent.Tool {
 			var in struct {
 				AgentSlug string `json:"agent_slug"`
 			}
+			// An empty AgentSlug means "the caller named no agent", so a
+			// discarded parse error would be indistinguishable from a
+			// deliberate no-argument call and would answer with the whole
+			// roster — a wrong answer that looks like a right one. Report the
+			// unreadable input instead; "" and "{}" are how a no-argument call
+			// actually arrives and stay the roster case.
 			if raw != "" && raw != "{}" {
-				json.Unmarshal([]byte(raw), &in)
+				if err := json.Unmarshal([]byte(raw), &in); err != nil {
+					return "", fmt.Errorf("parse input: %w", err)
+				}
 			}
 
 			if in.AgentSlug != "" {
