@@ -4696,3 +4696,98 @@ policy contributor pays nothing.
   `cline.md:439`. One unexamined sliver in #42045: it also deletes the character-level
   `splitPrefix`/`splitSuffix` that could cut a single message across the head/recent boundary, so
   compaction now always lands on a message boundary. Not enough to reopen a fenced PR.
+
+## Harness-watch — 2026-08-15
+
+### 1. A fast path around a gate must not be reachable on the retry of a request the gate already stopped
+
+codex spent this week building out Guardian V2, its model-backed tool-risk classifier, and two of
+the PRs are one idea in two halves. [#38592](https://github.com/openai/codex/pull/38592) gives
+extension "approval review contributors" the *first* chance to resolve an action, returning the
+extension's decision directly and falling back to Guardian only when no extension claims the review
+— an extension approval bypasses both the Guardian model call and the user prompt. That is a
+deliberate fast path, and it is fine on a first attempt. [#38616](https://github.com/openai/codex/pull/38616)
+is the correction: when an approval request carries a **retry reason**, the extension contributors
+are bypassed and the request goes to Guardian. The test they added states the invariant — Guardian
+can deny an escalated retry *even when an extension contributor would approve it*.
+
+The general rule: a cheap resolver placed in front of an expensive gate is safe only for requests
+the gate has not already ruled on. The moment a request is a retry of something that was stopped,
+the cheap resolver is no longer an optimization — it is a second opinion the first decision did not
+ask for, and taking it silently reverses a denial. Note also which way codex resolved the ambiguity:
+the escalated retry goes to the *stricter* authority, not the faster one.
+
+**What inber should consider:** nothing is broken, and the reason is worth writing down because it
+is a property to preserve rather than luck. inber's gate has no fast path — `buildToolRefusal`
+(`engine/build_hooks.go:89`) is the sole caller of `guard.CheckTool`, and it is wired identically
+into both dispatch paths (`engine/build.go:105`, `engine/turn_openai.go:120`). The `then` chain and
+the `done`/`note`/`split` riders were the obvious way around it and each is asked separately, by
+name, with the reason stated at `agent/chain.go:290-292`: "gating only the first would leave `then`
+as a way around the gate." What inber does *not* have is any notion of a retry at the gate at all —
+a refused call is refused, the model is told, and an identical call one turn later is a fresh
+request with a fresh verdict. That is the correct default while every verdict is a pure function of
+mode and tool name. It stops being correct the moment an `ApprovalFunc` exists, because then the
+second ask goes to a person who is being asked to overturn a decision without being told it is the
+second time. `guard.RecordToolCall`/`IsRepeating` (`guard/guard.go:209,305`) is the counter that
+would notice, and it still has no caller — its own doc comment says so. **Do not wire it as a fix
+for this**: what a caller should do when `IsRepeating` goes true is the undecided half, and this
+entry adds a constraint on that decision rather than settling it.
+
+### 2. Bounding a model-visible action has to preserve the trusted fields and defend the marker
+
+[codex #38586](https://github.com/openai/codex/pull/38586) caps the serialized tool action Guardian
+V2 classifies at 10,000 tokens, because "oversized tool arguments could make Guardian V2's
+model-visible action unbounded" — a tool call large enough to price or crowd out its own risk
+review. The bound is not a plain truncation, and the three refinements are the content: the
+**trusted** fields (tool name, `call_id`) are preserved rather than budgeted alongside the
+arguments; nested string values are truncated *evenly* across the remaining budget rather than
+first-come-first-served; and lower-priority fields are omitted entirely when the JSON structure
+alone exceeds the limit. Their test coverage names the two attacks that motivated it — **spoofed
+identity fields** and **omission-marker collisions**, i.e. arguments that impersonate the trusted
+metadata, and arguments containing the very marker the truncator writes.
+
+This sharpens `:4354` (codex #38414, bounded Guardian transcript) rather than repeating it: #38414
+bounded the input, #38586 says a bound is a rendering and a rendering has an attacker.
+
+**What inber should consider:** the first half does not apply — `guard.CheckTool` branches on the
+tool *name* only and never parses `input` (`guard/guard.go:165-188`), so there is no model-visible
+action to bound and no cost to cap. The second half does. inber renders markers into text the model
+reads at `chain.go:265` (`chainNote`) and `RefuseToolCall`, and tool output reaches the conversation
+unbounded — there is no truncation on that path at all, only the display-side `textutil.Truncate`
+calls in `engine/display_tools.go`. That is already the live open todo `657601a9` ("a pruning marker
+is plain text, so any tool output can forge one"), and #38586 adds one requirement to whatever
+sentinel that todo picks: it must survive being *adjacent to a truncation*, since a marker cut in
+half is a second forgery surface. Recorded against that todo, not filed again.
+
+### 3. Checked and NOT worth a finding
+
+- **[goose #11094](https://github.com/block/goose/pull/11094) / [#11139](https://github.com/block/goose/pull/11139)
+  / [#11216](https://github.com/block/goose/pull/11216)** — this is the third use of
+  `manages_own_context()` that `:4680` asked the next sweep to watch for, and goose's answer was to
+  stop writing the predicate as an `if` and instead not install the operation. Written up in
+  `goose.md` under 2026-08-15. inber's one predicate of that shape (`e.Guard == nil`) is wired at
+  both dispatch sites and has not leaked; the technique is recorded, the refactor is not proposed.
+- **[opencode #41939](https://github.com/sst/opencode/pull/41939)** (cap session retries with
+  jitter) — re-checked against inber this sweep rather than trusted from the earlier triage at
+  `:3307-3315`, and the failure mode does not exist here: there is **no session- or turn-level retry
+  loop at all**. `engine/engine.go:245` `RunTurn` is straight-line and `server/session.go:175-185`
+  marks the session `Error` and returns. The two semantic retries (`agent/agent_run.go:205-222`
+  prune-and-retry, `engine/turn_execute.go:44-50` strip-thinking-and-retry) are single-shot `if`
+  branches with no sleep. The only genuinely repeating retry on the API path is the vendored
+  Anthropic SDK's, which is bounded (2), exponential (0.5s×2ⁿ), ceilinged at 8s, jittered and
+  cancellable on `ctx.Done()`. Failover is not a retry — `engine/failover.go:22-61` `selectModel`
+  runs *before* the call and picks a different model; it does not re-run a failed one.
+- **[cline #13235, #13245, #13075](https://github.com/cline/cline/pull/13075), #13023, #13025**
+  (agent component stories, web-search settings toggle, provider-aware web search, microphone
+  transcription, model-driven image generation) — product surface, no architectural claim.
+- **[codex #38651, #38673, #38678](https://github.com/openai/codex/pull/38678)** (permission profile
+  snapshots moved into the protocol; per-environment permission profiles; environment configuration
+  ownership) — the same "carry the resolved policy rather than re-resolving it downstream" shape as
+  `guard.State()`/`ResumeState` (`guard/state.go:53,131`), which inber already does and documents at
+  length. Watch for a use that is not just plumbing.
+- **[codex #38602](https://github.com/openai/codex/pull/38602)** (isolate Guardian reviewer sessions
+  from parent extensions) — the reviewer must not inherit the parent's toolset. Already the
+  2026-08-14 conclusion about a child's authority being the meet of its parent's with read-only, and
+  now also measured externally: arXiv:2608.07556 (MasDrift) is written up in
+  `docs/papers/2026-08-harness-research.md` and finds attenuation to be the *costlier* of two
+  defences. Same thread, no new inber action.

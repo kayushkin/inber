@@ -466,3 +466,59 @@ by `timeoutFromHealth` (`:78-89`, 3× observed average, clamped 30s–5min) and 
 total-response deadline (cline's shape — only the former was raised), and whether the health-derived
 hint should drive the timeout or be deleted, since its 5-minute ceiling and the flat 120s currently
 disagree about what was intended.
+
+## Harness-watch — 2026-08-15: not all JSON repair is equal, and the line is whether content was lost
+
+[cline #13015](https://github.com/cline/cline/pull/13015) adds `hasUnterminatedString()` to
+`parseJsonStream()` and rejects truncated tool-call arguments whose string values were cut off
+mid-content — while **keeping** `jsonrepair` for single quotes, trailing commas and unclosed
+containers. That split is the whole idea. An unclosed `{` or a trailing comma is a *formatting*
+defect: every character the model emitted is still present, and closing the brace restores exactly
+what it meant. An unterminated string is a *content* defect: the value is a prefix of what the model
+was writing, and repairing it produces a syntactically valid object carrying a silently wrong
+argument, which then runs. Structural repair is lossless and safe; content repair is a guess
+presented as a fact.
+
+**inber does not have cline's bug** — there is no repair library, no bracket balancing, no schema
+coercion, and `json.Valid` is called nowhere in the repo. It has the other half of the problem: it
+never *detects* truncation either. Three sites, all verified this sweep by reading the code:
+
+- **`agent/agent.go:415`** treats `stop_reason: "max_tokens"` as identical to `end_turn` — returns
+  `nil` error, sets no `Incomplete` flag, logs nothing. `engine/turn_openai.go:107-108` is the same
+  two lines on the other turn loop. The sibling path fifteen lines up does the opposite and explains
+  why: when the *stream* errors, `deliveredText` (`agent/agent_run.go:227-242`) keeps only text
+  blocks because "carrying [a cut-off tool_use] into the conversation would leave a tool_use with no
+  matching tool_result, which makes the next request invalid", and `agent/agent.go:397-405` appends
+  `[response cut off: %v]` and returns the error. A clean stream ending on `max_tokens` is the same
+  condition and gets none of it. The damage then splits: the missing `tool_result` **is** repaired
+  loudly (`conversation/repair.go:23`, logged at `engine/turn_prepare.go:57-60`), but the truncated
+  `Input` is never touched and blows up later at `json.Marshal` with `unexpected end of JSON input`,
+  naming neither the tool nor the truncation. **Filed as `123a27c8`.**
+- **`server/status_tools.go:35-36`** discards its `json.Unmarshal` error outright, so an unreadable
+  `agent_slug` leaves the field `""` — the same value that means "no agent named" — and the tool
+  returns the entire roster as a plausible answer to a call it never parsed. The only ignored
+  unmarshal error on model-supplied input in the repo. **Filed as `9941a6aa`.**
+- **`agent/chain.go:151-155` and `agent/sideband.go:98-102`** return an unparseable input with an
+  empty `dropped` reason, the one branch in either function that reports nothing — against
+  `extractChain`'s own doc comment at `chain.go:145-150`. **Filed as `a6767846`.**
+
+**What inber should consider:** adopt cline's *distinction*, not its mechanism. inber has no repair
+step to constrain, so the carry-over is that `stop_reason` is already recorded
+(`engine/build_hooks.go:193-209`) and already returned by the oneshot API
+(`server/api_oneshot.go:102,131`) — nothing branches on it as a problem. Making `max_tokens` a
+condition the turn reports is a smaller change than it looks, and the three decisions it forces
+(error or completed turn; drop the truncated block or repair it; whether `MaxTokens: 16384` should
+come from model-store rather than being hardcoded at `agent/agent_run.go:58` and
+`engine/turn_openai.go:71-74`) are on the todo, undecided.
+
+**Held back from the queue this pass (cap is 3/run), recorded so it is not lost.** Two, both
+adjacent to the above and neither independently filed. First, `server/api_oneshot.go:117` copies
+`block.Input` straight into `out.Parsed`, and the loud check at `:123-126` fires only when there is
+*no* `tool_use` — so a *partial* one passes, and `jsonResponse` (`server/api.go:73-76`) discards the
+`Encode` error, handing the client a truncated body with a 200. That is the same finding one layer
+out, and it should be settled by whatever `123a27c8` decides rather than separately. Second,
+`agent/openai.go:62` is a single `c.client.Do` with no retry layer at all, so the openai, google,
+openrouter and ollama paths get none of the bounded, exponential, jittered, `Retry-After`-honouring
+retry the Anthropic SDK gives the other path (`MaxRetries: 2`, 0.5s×2ⁿ capped at 8s, jittered, and
+cancellable on `ctx.Done()`). That is a real asymmetry but it belongs to the standing "OpenAI turn
+loop is governed by less than the Anthropic one" decision (`5902f7b9`), not to a new todo.

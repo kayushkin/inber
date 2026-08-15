@@ -1154,3 +1154,40 @@ one-shots. The same rule pins `generateSummary` closed: it embeds the whole conv
 user prompt every call, so it can never earn a read. Full write-up, including how this bears on open
 todo `8754300f` (the force-summary call that withholds tools yet still marks its breakpoints), in
 `agentic-design-patterns.md` under 2026-08-14 §1.
+
+## Harness-watch — 2026-08-15: the third use of `manages_own_context()` arrived, and goose stopped writing it as an `if`
+
+`agentic-design-patterns.md:4676-4680` closed the 2026-08-14 sweep by fencing
+[goose #11203](https://github.com/block/goose/pull/11203) with a standing instruction: the
+`provider.manages_own_context()` flag "is becoming a real cross-cutting capability bit upstream …
+**Watch for a third use.**" It arrived the next day.
+
+[goose #11094](https://github.com/block/goose/pull/11094) makes `/clear` and `/compact` return an
+error when the active provider owns the conversation, because "when a provider owns the
+authoritative conversation context, Goose cannot clear or compact that context by changing its local
+transcript." That is the third call site — after the compaction gate and the extension-spawn filter
+— and it is where goose changed technique. The legacy agent gets an ordinary check, but the state
+machine gets something else: it **does not add `CompactionOperation` at all** for a context-owning
+provider, so proactive and reactive local compaction cannot run because the operation is not
+installed, not because a flag was consulted. Unhandled slash commands then fall through to provider
+inference, letting the provider implement `/clear` itself. [#11139](https://github.com/block/goose/pull/11139)
+and [#11216](https://github.com/block/goose/pull/11216) are what made that possible: the unrolled
+agent loop became a state machine generic over session and effect, with a `StateMachineRuntime`
+abstracting session loading, effect persistence and usage accounting, and then moved into its own
+`goose-agent` crate.
+
+The general lesson is about capability predicates, not about context ownership. A predicate checked
+at each site leaks — you find the missed site when a user reports orphaned processes, which is
+literally how #11203 was found. A predicate that decides **which operations exist** cannot leak,
+because there is no second site to forget.
+
+**What inber should consider:** nothing to fix — inber has no provider that runs its own agent loop,
+and its one predicate of this shape is clean. `e.Guard == nil` short-circuits the gate in
+`buildToolRefusal` (`engine/build_hooks.go:89-92`), and it is wired at **both** dispatch sites
+(`engine/build.go:105` for the Anthropic path, `engine/turn_openai.go:120` for the OpenAI one), so
+the leak this pattern warns about has not happened. The carry-over is a shape to reach for the next
+time a capability bit is added, and one honest caveat about applying it here: inber's turn is a
+straight-line function (`engine/engine.go:245`) with its two semantic retries written as inline
+`if err != nil` branches (`agent/agent_run.go:205-222`, `engine/turn_execute.go:44-50`). Getting
+goose's guarantee would mean restructuring that loop, which is a far larger change than the
+guarantee is currently worth — record the technique, do not start the refactor for it.

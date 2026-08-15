@@ -1760,3 +1760,113 @@ side of that trade, not against the feature.
 
 **Coverage note:** the sweep re-walked cs.SE and the arXiv listing API; the previous sweep's caveat
 that cs.CL was thin for the Aug 6–13 band was **not** cleared this run and still stands.
+
+## ⚠️ Attenuating a policy down the delegation chain is the *worse* of the two defences — re-anchor to the original request instead
+
+[arXiv:2608.07556](https://arxiv.org/abs/2608.07556) — "MasDrift: Benchmarking Authorization
+Preservation Across Multi-Agent Architectures", v1 2026-08-02 (v2 08-11). Xu, Zhang, Luo, Jin,
+Dong, Salam.
+
+600 **benign** productivity tasks, each pairing required work with a reserved action, testing
+whether a delegated goal still carries the authorization boundary of the request that spawned it.
+Centralized hierarchies complete 93.9–98.6% of tasks against 85.7–87.0% for peer networks, but take
+unauthorized actions in **2.7–19.8%** of tasks against 0.6–0.8% — and the gap widens with hierarchy
+depth. The paper measures two defences and they do not come out level: **re-anchoring every pending
+call to the original user request** cut unauthorized actions in every configuration for 1.6 points
+of completion, while **propagating an attenuated policy down the chain** blocked required work and
+forfeited up to **36.3 points**.
+
+**What inber should consider:** this lands on an open design question rather than a defect. The
+2026-08-14 sweep concluded that a child's authority should be the meet of its parent's with
+read-only — that is the attenuation shape, and this paper is the measured argument that attenuation
+alone is the expensive half. It does not say attenuation is wrong; it says attenuation *without* a
+re-anchor check pays for its safety in refused legitimate work. inber has the material for the
+re-anchor: `spawn_agent` carries `{agent, orchestrator, task}` (`agent/registry/spawn_tool.go:72-108`)
+and the guard gate is a single function (`engine/build_hooks.go:89`), so the original request is
+reachable at the point of the check. Whether the gate should see it — and what a supervisor does
+when a child's call is in-policy but off-request — is the decision, not a change to make.
+
+## ⚠️ A rule written in a tool or skill description is on the weakest surface measured
+
+[arXiv:2608.11727](https://arxiv.org/abs/2608.11727) — "Harness-IF: Evaluating Instruction Following
+Across Instruction Surfaces in Coding Agents", 2026-08-12. Huang, Que, Zeng, Zhang et al. (11
+authors).
+
+Scores operational rules one at a time from execution evidence across the five configurable surfaces
+a deployed agent actually reads, and introduces **Against-Prior Accuracy** to isolate rules that
+oppose the model's unprompted default — because, as the abstract puts it, "when a coding agent obeys
+a rule, it may simply have been going to do that anyway." Across 12 frontier models, plain accuracy
+is 72.1–85.9% but AP-Acc only 66.1–78.6%; **every model is worse on against-prior rules, by 3.6 to
+7.4 points**, so an aggregate compliance number overstates obedience by a model-specific margin. A
+conflict pilot found precedence does **not** follow prompt depth: system prompts, project files and
+user instructions all outrank tool and skill descriptions.
+
+**What inber should consider:** two things, and the second is the sharper one. First, the placement
+rule — anything inber needs actually enforced belongs in the system prompt or a project file, not in
+a tool description. inber's own `then`-chain instruction lives in a tool schema description
+(`agent/chain.go:46-56`), which is the weakest surface in this study, and the one measured `then`
+chain on this host arriving as a JSON *string* rather than an object is consistent with that.
+Second, and more important: an against-prior rule needs enforcement in code, not text. That is the
+same conclusion EcoAgent-Bench reached about budgets above, from a different direction, and it is
+an argument for keeping the guard a gate rather than a prompt.
+
+## Requested / handled / denied / committed — a four-state permission event, not a boolean
+
+[arXiv:2607.17780](https://arxiv.org/abs/2607.17780) — "ETAS: An Effect-Typed Language for Agent
+Systems", 2026-07-20. Tan, Wang, Zhang, Li, Shen.
+
+Treats model-backed agents, tool calls, prompts, typed memory, **human approvals**, policies and
+execution traces as semantic program elements rather than library conventions, indexed by an
+escaping effect row and a persistent abstraction of the action trace a term may request. The part
+worth stealing is small and concrete: the dynamic semantics distinguish **requested, handled, denied
+and committed** events, and the design property is that a handler *cannot* make a request invisible
+to authorization or audit.
+
+**What inber should consider:** inber's gate answers in three values — `Allowed`, `NeedsApproval`,
+`Denied` (`guard/guard.go:96-100`) — and one of them is currently overloaded. `CheckTool` returns
+`NeedsApproval` both when an `ApprovalFunc` returned false and when there is no approver to ask
+(`guard/guard.go:177-184`), so "a person said no" and "nobody was asked" are the same value. That is
+harmless today only because nothing sets `ApprovalFunc` (`engine/build_hooks.go:85-86`), which makes
+it a latent conflation rather than a live defect — not filed. ETAS's four states are the vocabulary
+that separates them, and *requested* is the one inber has no representation for at all: a refused
+call is reported to the model (`chain.go:388-392`) and counted, but nothing records that the request
+was made and stopped. Decide that before wiring an approver, not after.
+
+## Retrying a failed subagent is only safe for tool faults
+
+[arXiv:2608.05263](https://arxiv.org/abs/2608.05263) — "OrchestraBench: Evaluating Multi-Agent
+Orchestration Failure Modes, Recovery, and Decomposition Quality", 2026-08-05. Chen, Gu, Vidra,
+Setty, Zheng.
+
+Failure-injection harness with **cascade radius** — how many downstream steps one injected fault
+corrupts — as a primary metric, probed with a real Claude agent across Sonnet, Opus and Haiku.
+Recovery falls into three tiers and they are far apart: tool faults recover fully (**1.0**),
+ambiguous delegation recovers **0.30**, and three latent/semantic modes recover **0.0**. Cascade
+radius grows with pipeline depth, mean **0.9 → 4.7 across depths 3–7**, and blind retry reproduces
+latent faults while increasing time-to-detection.
+
+**What inber should consider:** inber has no subagent retry today — verified this sweep, there is no
+session- or turn-level retry loop anywhere (`engine/engine.go:245` `RunTurn` is straight-line;
+`server/session.go:175-185` marks the session `Error` and returns). This paper is the reason to keep
+it that way by default and to make any future retry **conditional on the fault class**, since blind
+retry is measured as actively worse for the modes that never recover. The depth result also bears on
+`MaxSpawnDepth`: cascade radius rising 0.9 → 4.7 across depths 3–7 is an argument that the existing
+bound is doing real work, not just preventing runaway spawn.
+
+**Also checked and logged, no inber action:** [arXiv:2608.11879](https://arxiv.org/abs/2608.11879)
+("Total Recall at What Cost?", 2026-08-12) — serving cost of agentic memory systems cannot be
+predicted from conversation length and message size (a regression tracking the reference strategies
+misses the memory systems by 18–69%), and break-even against full-transcript resubmission ranges
+from the first tens of turns to *never within 400*. Relevant to memory-store, but the crossover has
+to be measured per backbone rather than imported.
+[arXiv:2608.11338](https://arxiv.org/abs/2608.11338) ("Better, Faster, Stronger", 2026-08-11) —
+skills-as-programs beat prose skills on cost because deterministic action sequences avoid
+trial-and-error over long horizons; it is the same argument as SIGIL ([arXiv:2607.27309], already
+covered above) and adds no new claim for inber.
+
+**Coverage note:** this sweep re-walked cs.AI, cs.SE and cs.CL for 2026-07-16 → 08-15. The Anthropic
+engineering blog published **nothing** in the window — its most recent posts are 2026-04-23,
+2026-04-08 and 2026-03-25. Two search-surfaced items did not survive checking and are recorded so
+the next sweep does not chase them: a claimed "SkillZip" at arXiv:2608.05611 is in fact *FOCUS:
+Decoupling Expert Personas in LLMs*, unrelated; and a claimed "FadeMem" memory-forgetting paper
+returned no resolvable URL at all. Both dates above were confirmed on arXiv's own abstract pages.
