@@ -4,3 +4,6 @@
 logs/
 .inber/
 .openclaw/
+
+# the sabotage scorer is a python script; its byte-code must not dirty the tree (227th)
+__pycache__/
