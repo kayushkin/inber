@@ -221,7 +221,51 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 		}
 	}
 
+	// A response carrying a block the SDK cannot convert must not leave this
+	// function unreported: the next thing done with it is resp.ToParam(), and
+	// that is a nil pointer dereference rather than an error return. Report it
+	// here, at the point of failure, and hand the response back so the caller
+	// keeps the text the user already read — the same partial-response path a
+	// mid-stream failure takes.
+	if index, blockType, found := unconvertibleContentBlock(resp); found {
+		return resp, fmt.Errorf("%w: content block %d has type %q", ErrUnconvertibleContentBlock, index, blockType)
+	}
+
 	return resp, nil
+}
+
+// unconvertibleContentBlock reports the first content block that Message.ToParam
+// would panic on, which is any block ContentBlockUnion.AsAny answers with a nil
+// interface. ToParam is AsAny().toParamUnion(), so a nil there is a method call
+// on a nil interface value, and the only recover() in agent, engine, server or
+// session is on the bus path — every other entry point exits the process.
+//
+// Two things reach that state, and neither is a discarded Accumulate error.
+// Measured against the pinned anthropic-sdk-go v1.35.0:
+//
+//   - A content block type the SDK's AsAny switch does not name. A
+//     content_block_start carrying {"type":"some_future_block"} accumulates with
+//     a nil error and then panics ToParam. This is the ordinary consequence of
+//     the API growing a block type ahead of a dependency bump.
+//   - A content_block whose JSON is not an object at all, which leaves Type
+//     empty. That also accumulates with a nil error.
+//
+// So this cannot be caught by checking what Accumulate returned, and it is
+// independent of what a discarded Accumulate error ought to mean.
+//
+// The test is AsAny rather than a list of known type names because a list is a
+// second copy of the SDK's switch, and the two would drift apart at the next
+// bump — in the direction of a name this build cannot actually convert.
+func unconvertibleContentBlock(resp *anthropic.Message) (index int, blockType string, found bool) {
+	if resp == nil {
+		return 0, "", false
+	}
+	for i, block := range resp.Content {
+		if block.AsAny() == nil {
+			return i, string(block.Type), true
+		}
+	}
+	return 0, "", false
 }
 
 // deliveredText returns the text a response managed to deliver before it

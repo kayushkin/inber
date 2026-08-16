@@ -134,6 +134,33 @@ func TestOwnAPICallCapDoesNotMarkTheModelUnhealthy(t *testing.T) {
 	}
 }
 
+// TestAnUnconvertibleContentBlockDoesNotMarkTheModelUnhealthy covers the class
+// the pinned SDK creates rather than the provider: the API grows a content block
+// type, the SDK cannot convert it, and Agent.Run reports
+// ErrUnconvertibleContentBlock. The provider answered, and the answer was valid.
+//
+// This one is worse than the cap if it is recorded, because it repeats: every
+// turn that meets the new block writes another error, so failover walks the
+// whole roster into the same wall and leaves every model on the box unhealthy.
+func TestAnUnconvertibleContentBlockDoesNotMarkTheModelUnhealthy(t *testing.T) {
+	e, store := engineWithTempModelStore(t)
+	const model = "claude-sonnet-4-5"
+	healthyModel(t, e, model)
+
+	// Exactly what Agent.executeAPICall builds, wrapper and detail included.
+	e.recordModelHealth(context.Background(), model, 900,
+		fmt.Errorf("%w: content block %d has type %q", agent.ErrUnconvertibleContentBlock, 1, "some_future_block"))
+
+	h := store.GetHealth(model)
+	if !h.LastErrorAt.IsZero() {
+		t.Fatalf("an SDK-version failure stamped LastErrorAt on %s (%q) — that row is host-shared, "+
+			"so one unknown block type fails every session on the box over", model, h.LastError)
+	}
+	if !h.IsHealthy(healthWindow) {
+		t.Fatalf("an SDK-version failure marked %s unhealthy", model)
+	}
+}
+
 // TestProviderFailureStillMarksTheModelUnhealthy is the control. Without it a
 // recordModelHealth that recorded nothing ever would pass every test above.
 //
