@@ -1870,3 +1870,207 @@ engineering blog published **nothing** in the window — its most recent posts a
 the next sweep does not chase them: a claimed "SkillZip" at arXiv:2608.05611 is in fact *FOCUS:
 Decoupling Expert Personas in LLMs*, unrelated; and a claimed "FadeMem" memory-forgetting paper
 returned no resolvable URL at all. Both dates above were confirmed on arXiv's own abstract pages.
+
+# 2026-08-16 sweep — the compaction prompt loses dates, and it is a one-clause fix with a 20x measurement behind it
+
+⚠️ **Window note, so the next sweep does not re-derive it.** arXiv's public index tops out at
+**2608.13560 (submitted 2026-08-13)**: `2608.14000` is a 404 and the Fri 14 Aug `cs.AI` announcement
+carries max id 2608.13558. Submissions from 08-14 announce Mon 08-17 and 08-15/16 is a weekend, so
+the 2608.14xxx–2608.16xxx band **does not exist yet** rather than being empty. Everything below is
+08-12 or 08-13. Re-run for the 08-14 band on Monday.
+
+## 1. [arXiv:2608.11775](https://arxiv.org/abs/2608.11775) — The Sleeping Agent: what gist-based context compression loses, and why (Kyrkewood, 2026-08-12)
+
+A diagnostic study rather than a new method, over all ten LoCoMo conversations (1,935 matched
+questions, 1,501 in the primary aggregate, temperature 0). Gist compression beats truncation
+substantially on multi-hop and single-hop factual questions, and then **temporal questions
+collapse** — and the paper pins the mechanism rather than reporting the score: the gist abstraction
+prompt preserves relational and event structure while discarding dates and times. The fix is a
+**one-sentence change to the compression prompt**, which lifts temporal-expression preservation from
+**3.05% to 62.39% (~20x)** while entity and event preservation barely move (1.02x, 1.11x), and
+recovers **+0.314 judge accuracy [0.254, 0.375]** on temporal questions. Code at
+`github.com/kyrkewood/sleeping-agent`.
+
+**This lands on a prompt inber actually runs.** `generateSummary`'s system prompt
+(`conversation/summary_generation.go:40-53`) enumerates exactly five things to capture — main topics,
+key decisions, important information, project status, unresolved questions and next steps — and
+**not one of them is temporal**. There is no instruction to keep dates, times, ordering or "what
+changed since". The summary is not a side artifact: `SummarizeConversation` reinserts it as a user
+message at the head of the conversation (`conversation/summarize.go:107`), so it is what every
+later turn in a long session reads instead of the turns it replaced. The compaction is also
+recursive — the next pass re-summarizes its own output — so a date dropped at pass 1 cannot come
+back at pass 2. The archive to memory-store (`summarize.go:83-97`) means the original text still
+exists, but only for a model that thinks to call `memory_expand`; the prompt gives it no reason to,
+because nothing in the summary says a time was ever there.
+
+This is the same defect surface `opencode.md`'s 2026-08-16 entry reaches from the other side —
+[opencode #42045](https://github.com/sst/opencode/pull/42045) rewrote its compaction prompt to state
+the discard and the conflict rule. Two independent sources, one week, one prompt.
+
+**What inber should consider:** add temporal preservation to the `generateSummary` system prompt.
+Cheap, measured, and low-risk. Two things it should not decide silently: whether to add a category
+to the numbered list or a standalone clause (the paper's gain came from a *dedicated* sentence, not
+a sixth bullet), and whether the summary block should additionally carry a machine-written time
+range — `summaryFooter` (`summarize.go:153`) already composes a footer, so a "covers <first> to
+<last>" line is available without asking the model for it, and a stamped range is not a thing the
+model can drop. **Filed as `421a8162`.**
+
+## 2. [arXiv:2608.12895](https://arxiv.org/abs/2608.12895) — a reviewer on the same model as the worker is not a second opinion (Bhardwaj, Singh, Bhardwaj, 2026-08-13)
+
+Preregistered, 18,000 missions, deterministic scoring, no LLM judge. Two instances of **one model**
+in a two-agent handoff **co-fail on 90.0% of the missions where either fails** (log OR 6.66,
+φ=0.916). Swapping in a different model reduces the association in 6/6 contrasts; swapping *vendor*
+while the model already differs does not. The authors note the error is signed against the operator:
+redundancy is over-credited exactly when the components share a model.
+
+This is the measurement behind a pattern this corpus keeps recommending. inber's spawn path builds
+children from agent config (`server/spawn.go:170` → `session_creation.go:114`), and open todo
+`2dcdb9a6` is already about a child taking its model from config rather than the parent's live one —
+that todo is usually framed as a *capability* bug (the child gets a weaker model than the parent
+escalated to). This paper says the sign can run the other way for a **reviewer or verifier** child:
+inheriting the parent's model is precisely what makes the second opinion worthless. Whoever settles
+`2dcdb9a6` should therefore not settle it as "always inherit the parent's live model" — a delegate
+that checks the parent's work wants a *different* model, and a delegate that continues the parent's
+work wants the same one. That is a distinction inber's spawn API currently cannot express.
+
+**What inber should consider:** nothing to fix yet — inber has no reviewer-subagent pattern in the
+tree, so there is no live instance. Recorded as a constraint on `2dcdb9a6`, not as new work.
+
+## 3. [arXiv:2608.12654](https://arxiv.org/abs/2608.12654) — a model-driven approval gate fails by over-refusing, 28:1 (Serdar, Mertayak, 2026-08-12)
+
+SteerBench-Work makes the *pre-commit* decision — proceed, or hold for human/policy review — its own
+measured capability, over 106 incident-anchored workplace scenarios with evidence-reversed mirrors
+and near-even proceed/hold labels. Across 30 model conditions the error is almost entirely
+one-directional: models wrongly **hold** authorized, evidence-cleared work **28.1%** of the time and
+wrongly **allow** unsafe work **1.0%**. The hardest class is "risk-resolved commits", where signed or
+structured evidence has already cleared a real risk trigger and the model holds anyway. Models score
+98.5% on the famous incidents but **63.8% on the evidence-reversed mirrors** — they are pattern
+matching the incident, not reading the evidence. Higher-capability models over-refuse *more* at the
+commit boundary.
+
+Two consequences for anyone building this gate. The design lever is not "make the gate stricter" but
+"make cleared evidence legible to the gate", and you cannot buy calibration by routing the decision
+to a stronger model. That last point contradicts the intuition behind every "use the big model for
+the risky call" design, including some of codex's Guardian tiering.
+
+**What inber should consider:** this is a note for **permission-store** — whose README still calls
+it step 1 of 7, with the rules engine unbuilt — more than for inber. inber's own gate is not
+model-driven at all: `guard.CheckTool` branches on the tool name and mode
+(`guard/guard.go:165-188`), so it has no over-refusal failure mode to calibrate. The finding is a
+reason to keep it that way for the deterministic cases, and a warning about the `ApprovalFunc` that
+does not yet exist.
+
+## 4. [arXiv:2608.11772](https://arxiv.org/abs/2608.11772) — recovery should be a *typed, pre-selected* interface, not more context (Wang et al., 2026-08-12)
+
+DARC argues that generic recovery playbooks broaden the agent's context exactly when it needs a
+*narrower* repair interface, mixing incompatible signals for invalid actions, missing procedures and
+format errors. It profiles per-task-family failure modes on a dev set, **prunes mismatched
+interventions from a shared recovery library before test time**, and freezes a verifier-selected
+policy for deployment. On ALFWorld, AppWorld and XBRL Finance the one protocol yields three
+different harnesses — action-validity, procedural fallback, format-precision retrieval — each
+beating both the base agent and broad playbooks **while reducing environment steps or retrieval
+budget**. It also explicitly separates coding agents, where compilers and tests give typed recovery
+signals, from generic agents that only see coarse task failure.
+
+This is the direct counter-argument to "on error, append the error text and re-prompt", and inber is
+closer to DARC's shape than to that one by accident rather than design: its two semantic retries are
+each matched to a specific, named failure (`agent/agent_run.go:205-222` prune-and-retry on context
+overflow, `engine/turn_execute.go:44-50` strip-thinking-and-retry), and neither is a general
+playbook. What inber lacks is the third thing DARC has — a statement anywhere that this is the
+policy, so the next failure class gets its own typed branch rather than a generic one.
+
+**What inber should consider:** no code change. This belongs on todo `4c511c8f` (what an unexpected
+stop reason *is*), which is currently the open question of whether an unhandled `pause_turn` or a
+refusal is a provider fault, a model fault or an inber gap — DARC's framing says the answer should
+be a typed recovery class, and that a class with no matched intervention should refuse to retry
+rather than retry generically.
+
+## 5. Memory: two papers that argue against the pipeline, and one that halves its write cost
+
+- **[arXiv:2608.12888](https://arxiv.org/abs/2608.12888) — ReFind** (Li et al., 08-13) is the null
+  hypothesis nobody runs. Agent-memory systems buy retrieval quality with structure — summaries,
+  embeddings, trees, knowledge graphs — all built *before any question is asked*. ReFind builds none
+  of it, gives the agent lexical search over raw conversation logs, and lets it drive: **58.2 mean
+  accuracy on MemoryAgentBench, 93.2 on LongMemEval-S**. Worth stating plainly because inber and
+  memory-store are on the other side of this bet: a vector store with importance decay and
+  compaction, written on every session. This is not evidence to tear that out, but it is the
+  baseline that should have been measured first, and it is cheap to measure now.
+- **[arXiv:2608.12847](https://arxiv.org/abs/2608.12847) — QCR** (Li et al., 08-13) names
+  *post-retrieval reuse* as a bottleneck distinct from retrieval quality: finding the right past
+  trajectory does not tell the agent how to use it once entities, constraints or environment state
+  have moved. Replacing trajectory injection with a target-bound note — reusable procedure,
+  bindings to recover, applicability conditions, verification requirements — gives **62.3% success
+  over 2,391 targets, +10.7 points over full-trajectory injection, with 48.9% fewer online tokens**.
+  Direct bearing on `SummarizeConversation`'s archive: inber stores `oldText`, the **raw rendered
+  transcript** (`conversation/summarize.go:51,87`), which is exactly the artifact QCR measures as
+  the losing one.
+- **[arXiv:2608.12990](https://arxiv.org/abs/2608.12990) — LycheeMemory V2** (Li et al., 08-13)
+  attacks the write-side cost nobody budgets: eager per-turn consolidation calls an LLM after every
+  interaction. Segment-level consolidation gives **89.22% on LoCoMo while cutting construction
+  tokens by 86.0%**. inber consolidates at compaction rather than per turn, so it is already on the
+  cheap side of this; recorded so the number is on hand if per-turn memory writes are ever proposed.
+
+## 6. [arXiv:2608.12610](https://arxiv.org/abs/2608.12610) — @skills: only *triggering* needs prompt residency (Yin et al., 2026-08-12)
+
+States the budget outright: **56,804 public agent skills exist, competing for fewer than 100
+reliable trigger slots** in a system prompt. The decomposition is the contribution — installing a
+skill bundles three separable functions, **content, persistence and automatic triggering, and only
+the third requires prompt residency**. @skills addresses any skill, subtree or collection by path;
+reading a skill is sufficient to use it, so nothing is installed or resident. A directory *is* a
+menu, so bundles are ordinary directories rather than all-or-nothing units, and there is no
+manifest, lockfile or registration; `SKILL.md` is unchanged.
+
+**A note for skill-store and bundle-store, not for inber.** bundle-store's whole job is resolving a
+curated set of skill ids for a session, which is the resident-description model this paper argues is
+what caps skill count in the first place. If the claim holds, bundle resolution changes shape from
+"pick ≤N skills to make resident" to "expose a directory tree and let the agent read". Recorded here
+because this corpus is where the sweep looks; it is not inber work.
+
+## 7. Checked and rejected this sweep
+
+- **[arXiv:2608.13228](https://arxiv.org/abs/2608.13228)** (Capability Sheaves for Compositional
+  Agent-Harness Repair) — the title is squarely on-topic and it is a **null result by the authors'
+  own conclusion**: on SWE-bench Multilingual (160 issues, 875 candidate patches) the cohomological
+  selector resolves 118 against 116 for a matched baseline, unsupported across repositories
+  (sign-flip p=0.75), the discovery gate fails and the confirmatory split stays sealed. Flagged by
+  id so a later sweep does not spend the read.
+- **[arXiv:2608.13560](https://arxiv.org/abs/2608.13560)** (AutoDesign) — a real self-improving
+  harness result (78.32 on PosterBench, +7.45 over Claude Design; the learned DesignHarness lifts
+  seven code-agent configs 54.99→67.39 average), but the entire instantiation is paper-to-poster
+  generation. The transferable part is the optimizer loop, not the harness it learns.
+- **2608.13334** (RippleMem), **2608.12428** (MindMemOS), **2608.11701** (Consolidator) —
+  incremental benchmark gains on memory architectures with no harness-level design claim.
+- **2608.12761** (provenance integrity), **2608.12880** (MCP security label leakage), **2608.12921**
+  (multi-agent topology explanation), **2608.12123** (GPU-resident agent control path), **2608.12311**
+  (Role Specialization — one case study, no numbers) — read, too narrow or too weak to act on.
+- **[arXiv:2608.12273](https://arxiv.org/abs/2608.12273)** (Convergent Detour Hijacking) and
+  **[arXiv:2608.12476](https://arxiv.org/abs/2608.12476)** (Governed Persistent Memory) — both real,
+  both held rather than rejected. The first is a text-only attack on progressive-disclosure skill
+  loading where a malicious skill's description wins selection and its body recruits benign skills
+  into a detour, raising tokens 66.91% and wall-clock 92.45% **while task completion stays
+  comparable** — the point being that correct output does not certify trajectory or cost integrity.
+  The second adds bitemporal state semantics so retrieval cannot cite superseded or retracted
+  records (2,400/2,400 vs 600/2,400 ungoverned). Neither has a live inber surface today: inber
+  ingests no third-party skills into its own loop, and its memory hints rather than justifies.
+- **[arXiv:2608.12282](https://arxiv.org/abs/2608.12282)** (VAKRA, IBM) — mostly a benchmark, kept
+  for one number: with a **fixed ReAct harness** holding architecture constant, best-model accuracy
+  is 70.4% single-hop, 50–51% on compositional APIs and **as low as 2.4% on policy-constrained
+  unanswerable queries**, with failures concentrated in entity disambiguation and cross-source
+  grounding rather than tool-invocation mechanics. Reads as: tightening the tool-call schema layer
+  buys little, and a tool-use policy written in natural language is close to unenforced by the model
+  and must be enforced by the harness. That is the same conclusion as the 2026-08-14 entry on rules
+  written in tool descriptions being on the weakest surface measured.
+
+## 8. Channel notes — blogs, seventh consecutive empty sweep
+
+**Anthropic engineering blog** — nothing since 2026-04-23 ("An update on recent Claude Code quality
+reports"); no August posts. **Google DeepMind** — nothing agentic in 08-10→08-16 (Gemini 3.7 Flash,
+sign-language AI, WeatherNext). **Meta AI** — nothing since 2026-07-27. **HuggingFace blog** — posts
+in window (OlmoEarth 08-12, LFM2.5-VL-3B 08-12, Strands Agents/LeRobot 08-13, ICML reproduction
+08-13, State of Open Models 08-14), none on harness design.
+
+**Prompt caching swept and genuinely empty.** `abs:"KV cache" OR "prompt caching" OR "prefix cache"
+OR "cache reuse"` for 08-11→08-17 returns 14 hits, all serving-infrastructure or modality-specific
+(vToken KV reclamation, HBF flash tiering, TTS and video streaming caches, TideRL rollout
+scheduling). **Zero agent-harness cache-economics papers in the window** — the 2026-08-13 keepalive
+entry is still the most recent thing on that thread.

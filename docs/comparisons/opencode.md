@@ -524,3 +524,45 @@ suffix appended after the live cache breakpoint and turns a cheap append into a 
 re-prefill. Presentation/role decoration belongs at the render edge, not baked into the
 stored message — and add a test that pins "injected prompt == normal-turn user-message
 shape" so a future wrapper can't silently regress cache hit-rate.
+
+## Harness-watch — 2026-08-16: recursive compaction is lossy *compounding*, and the model has to be told which pass is its last chance
+
+[opencode #42045](https://github.com/sst/opencode/pull/42045) rewrites the compaction prompt for
+smaller models, and three of its four changes are contract, not wording. The conversation now comes
+first in `<conversation>` tags with the prior summary second in `<prior-summary>` and the
+instructions last, pinned by ordering tests. A new `SUMMARY_UPDATE_INSTRUCTIONS` block states the
+lossiness to the model outright — "the `<prior-summary>` is discarded after this: anything you do
+not carry into the new summary is lost" — adds a conflict rule ("the conversation wins: state the
+corrected fact and drop the old claim"), and tells the model to carry objectives, constraints and
+standing user directives forward *even when the recent turns never mention them*. Separately,
+`select()` stopped splitting a single message at a byte offset into `splitPrefix`/`splitSuffix` to
+fill the token budget exactly, and now splits only on message boundaries; the tail budget went
+8k→15k and turn-size estimation became lazy "so cost stays proportional to the retained tail, not
+the whole session".
+
+The general rule is that recursive summarization compounds: pass N+1 summarizes pass N's output, so
+every compaction is the last chance for anything the model does not copy across, and a prompt
+written as though it were always the first pass never tells it so.
+
+**inber's compaction is recursive and its prompt does not say so.** `SummarizeConversation`
+reinserts the summary as an ordinary user message at the head of the new list
+(`conversation/summarize.go:107`), so the next compaction's `messages[:keepFrom]` slice
+(`:46`) contains that summary, `messagesToText` renders it into `oldText` (`:51`), and it is fed to
+`generateSummary` as undifferentiated conversation. The system prompt
+(`conversation/summary_generation.go:40-53`) asks for topics, decisions, information, status and
+next steps; it never mentions a prior summary, never says the old one is about to be dropped, and
+gives no conflict rule. Two things keep this a prompt-quality gap rather than a data-loss defect.
+The block is at least *labelled* — `[Conversation Summary — %d earlier turns condensed]`
+(`summarize.go:107`) — so the model is not blind to what it is re-summarizing; and the turns being
+replaced are archived to memory-store first (`summarize.go:83-97`), so a dropped fact is recoverable
+by `memory_expand` rather than destroyed.
+
+**What inber should consider:** state the discard and the conflict rule in
+`summary_generation.go`'s system prompt, and name standing user directives as a must-carry category,
+since those are exactly what a topic-and-decisions prompt drops on pass 3. This is one edit away
+from the same file's other measured gap — the prompt keeps no dates or times either
+([arXiv:2608.11775](https://arxiv.org/abs/2608.11775), a ~20x preservation swing for one sentence).
+The two were found in the same sweep from opposite directions and are **filed together as
+`421a8162`**; see `docs/papers/2026-08-harness-research.md` 2026-08-16 §1.
+inber does *not* have opencode's other bug: `findTurnBoundary` (`summarize.go:40`) splits on turn
+boundaries and no inber path slices a message mid-content to hit a budget.
