@@ -498,9 +498,14 @@ never *detects* truncation either. Three sites, all verified this sweep by readi
   `agent_slug` leaves the field `""` — the same value that means "no agent named" — and the tool
   returns the entire roster as a plausible answer to a call it never parsed. The only ignored
   unmarshal error on model-supplied input in the repo. **Filed as `9941a6aa`.**
-- **`agent/chain.go:151-155` and `agent/sideband.go:98-102`** return an unparseable input with an
+- ~~**`agent/chain.go:151-155` and `agent/sideband.go:98-102`** return an unparseable input with an
   empty `dropped` reason, the one branch in either function that reports nothing — against
-  `extractChain`'s own doc comment at `chain.go:145-150`. **Filed as `a6767846`.**
+  `extractChain`'s own doc comment at `chain.go:145-150`.~~ **Filed as `a6767846`, fixed 2026-08-16
+  in `29adf91`.** The report went where the card's own reasoning pointed — into `executeWithChain`,
+  which holds the raw input and can cover the chain and the done/note/split riders in one note,
+  rather than into the two extractors saying it separately. The wider half the card raised is
+  deliberately still open: an unreadable input still reaches `tool.Run`, and each tool still errors
+  in its own words.
 
 **What inber should consider:** adopt cline's *distinction*, not its mechanism. inber has no repair
 step to constrain, so the carry-over is that `stop_reason` is already recorded
