@@ -138,6 +138,18 @@ type chainedTool struct {
 	Input json.RawMessage `json:"input"`
 }
 
+// parseToolInput is the one reading of a tool_use block's arguments. Both
+// extractors and the caller that runs them ask the same question of the same
+// bytes — does this input read as a JSON object at all? — and the two
+// extractors give up on exactly the same answer. Asking it in three places
+// with three copies of the same two lines is how those answers come apart,
+// which is the drift ExecuteToolCallWithChainAndSideband documents below.
+func parseToolInput(rawInput string) (map[string]any, error) {
+	var parsed map[string]any
+	err := json.Unmarshal([]byte(rawInput), &parsed)
+	return parsed, err
+}
+
 // extractChain parses and removes the "then" field from raw tool input JSON.
 // Returns the cleaned input (without "then"), the chained tool if one parsed,
 // and the raw bytes of the field.
@@ -149,8 +161,11 @@ type chainedTool struct {
 // or it disappears without a word — which is what used to happen, and what the
 // only "then" chain on this host ran into.
 func extractChain(rawInput string) (cleanInput string, chain *chainedTool, thenRaw []byte, dropped string) {
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(rawInput), &parsed); err != nil {
+	// An input that does not parse is reported by executeWithChain, which holds
+	// the raw bytes and can say it once for the chain and the sideband riders
+	// together. It is the one reason this function does not give itself.
+	parsed, err := parseToolInput(rawInput)
+	if err != nil {
 		return rawInput, nil, nil, ""
 	}
 
@@ -363,6 +378,36 @@ func executeWithChain(ctx context.Context, toolMap map[string]Tool, name string,
 		if hooks != nil && hooks.OnToolCall != nil {
 			hooks.OnToolCall(blockID+"-chain", chainField, thenRaw)
 		}
+	} else if _, err := parseToolInput(rawInput); err != nil {
+		// Both extractors gave up on the first unmarshal, and that branch is
+		// the only one in either that returns silence: extractChain names a
+		// reason for every other way a chain is taken out, and extractSideband
+		// records an ignore for every other way a rider is dropped. So an
+		// input nobody could read is the one input whose riders are dropped
+		// without a word — against the contract extractChain's own doc comment
+		// states.
+		//
+		// It is a live path. A max_tokens cut returns as a clean turn and
+		// carries the half-written tool_use into the conversation, so a model
+		// cut mid-argument gets one error naming the primary tool and nothing
+		// saying its follow-up was never considered.
+		//
+		// Said here and not in the two extractors because this function holds
+		// the raw input: one report covers the chain and the riders together,
+		// and two parsers of one field saying the same thing separately is the
+		// drift ExecuteToolCallWithChainAndSideband documents above.
+		//
+		// This changes what the model is told and nothing about what runs. The
+		// primary tool is still handed the raw input and still errors in its
+		// own words — whether an unreadable input should reach tool.Run at all
+		// is a wider question than a note, and is left alone here.
+		outcome.chainNotRunTool = chainField
+		outcome.chainNotRunReason = `the tool input did not parse as JSON, ` +
+			`so a "then" chain or a done/note/split rider in it — if there was one — was never read`
+		// No OnToolCall to match it: the other branch announces a chain it can
+		// point at in the input, and here there is nothing to point at. The
+		// refused and no-such-tool paths below report a result without
+		// announcing a call in the same way.
 	}
 
 	// A chain that parsed still does not run unless the primary call does. The

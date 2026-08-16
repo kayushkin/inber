@@ -96,8 +96,12 @@ func sidebandSchema() map[string]any {
 // extractSideband parses and removes sideband fields from raw tool input JSON.
 // Returns cleaned input and any sideband data found.
 func extractSideband(rawInput string) (cleanInput string, sb *sidebandData) {
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(rawInput), &parsed); err != nil {
+	// An input that does not parse is reported by executeWithChain, which holds
+	// the raw bytes and can say it once for the riders and the "then" chain
+	// together. It is the one reason this function does not record an ignore
+	// for — and it cannot, because there is no sidebandData to hang one on.
+	parsed, err := parseToolInput(rawInput)
+	if err != nil {
 		return rawInput, nil
 	}
 
