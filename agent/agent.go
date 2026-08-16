@@ -19,6 +19,17 @@ import (
 // for exactly that reason.
 var ErrMaxAPICallsExceeded = errors.New("exceeded max API calls")
 
+// ErrUnconvertibleContentBlock ends a turn whose response carries a content
+// block this build of the Anthropic SDK cannot turn into a request parameter.
+//
+// It is a sentinel for the same reason ErrMaxAPICallsExceeded is: it is inber
+// reporting on inber. The provider answered, and the answer may be perfectly
+// valid — a block type newer than the pinned SDK is the ordinary way to meet
+// this — so recording the model unhealthy for it would blame the model for
+// inber's own dependency version. engine.recordModelHealth reads it for that
+// reason.
+var ErrUnconvertibleContentBlock = errors.New("response carries a content block this SDK cannot convert")
+
 // isContextLengthError checks if an API error is due to exceeding the model's context window.
 func isContextLengthError(err error) bool {
 	if err == nil {

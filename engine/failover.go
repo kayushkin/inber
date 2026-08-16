@@ -139,6 +139,13 @@ func (e *Engine) recordModelHealth(turnContext context.Context, model string, du
 //     that ran out, which is what turnContext.Err() reports. See below.
 //   - agent.ErrMaxAPICallsExceeded — inber's own runaway cap. Hitting it means
 //     the provider answered every one of those calls.
+//   - agent.ErrUnconvertibleContentBlock — the response carried a content block
+//     the pinned Anthropic SDK cannot convert into a request parameter. The
+//     provider answered, and a block type newer than the SDK is a valid answer;
+//     what failed is inber's dependency version. Recording an error here would
+//     mark a working model unhealthy in host-shared model-store on every turn
+//     that meets the new block, and failover would walk the whole roster into
+//     the same wall.
 //
 // The deadline case has to ask whose clock fired, because inber runs two kinds
 // and only one of them is its own. Its own are on the turn context: a sub-agent
@@ -166,7 +173,8 @@ func (e *Engine) recordModelHealth(turnContext context.Context, model string, du
 func errorIsEvidenceAboutTheModel(turnContext context.Context, err error) bool {
 	switch {
 	case errors.Is(err, context.Canceled),
-		errors.Is(err, agent.ErrMaxAPICallsExceeded):
+		errors.Is(err, agent.ErrMaxAPICallsExceeded),
+		errors.Is(err, agent.ErrUnconvertibleContentBlock):
 		return false
 	case errors.Is(err, context.DeadlineExceeded):
 		return turnContext.Err() == nil
