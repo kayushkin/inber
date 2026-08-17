@@ -63,6 +63,17 @@ func TestFailedSummaryLeavesTheTranscriptWhole(t *testing.T) {
 	cfg := DefaultSummarizeConfig(RoleCoder)
 	in := makeMessages(60)
 
+	// Compare against a copy taken before the call, not against `in` itself.
+	// The failure path returns the very slice it was handed, so `out` and `in`
+	// alias: an overwrite done in place changes both sides of the comparison
+	// at once and every check below passes on a transcript that was rewritten.
+	// That is the exact defect this test is named for, and it survived a
+	// mutation until the copy was added.
+	textBefore := make([]string, len(in))
+	for i := range in {
+		textBefore[i] = textOf(in[i])
+	}
+
 	out, result, err := SummarizeConversation(
 		context.Background(), unreachableClient(), in, nil, "sess-fail", cfg, "claude-sonnet-4-5-20250929")
 
@@ -72,13 +83,13 @@ func TestFailedSummaryLeavesTheTranscriptWhole(t *testing.T) {
 	if result.Summarized {
 		t.Error("result claims the conversation was summarized when no summary exists")
 	}
-	if len(out) != len(in) {
-		t.Fatalf("failed summarization changed the transcript: %d messages in, %d out", len(in), len(out))
+	if len(out) != len(textBefore) {
+		t.Fatalf("failed summarization changed the transcript: %d messages in, %d out", len(textBefore), len(out))
 	}
-	for i := range in {
-		if textOf(out[i]) != textOf(in[i]) {
+	for i := range textBefore {
+		if textOf(out[i]) != textBefore[i] {
 			t.Fatalf("message %d was rewritten by a failed summarization: %q → %q",
-				i, textOf(in[i]), textOf(out[i]))
+				i, textBefore[i], textOf(out[i]))
 		}
 	}
 	if !strings.Contains(err.Error(), "summarization API call failed") {
