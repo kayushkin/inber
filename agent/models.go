@@ -150,8 +150,9 @@ func reportCappedContextWindow(modelID string, registeredWindow int) {
 
 // reportModelWithoutContextWindow says, once per model, that the registry knows
 // the model but not how big its context is. It shares unresolvedModelReported
-// with reportUnresolvedModel: both mean "this model id is not fully answered",
-// and a model can only be in one of the two states.
+// with reportUnresolvedModel and reportCappedContextWindow: all three mean
+// "this model id is not fully answered", and a model can only be in one of the
+// three states.
 func reportModelWithoutContextWindow(modelID string) {
 	if _, alreadyReported := unresolvedModelReported.LoadOrStore(modelID, struct{}{}); alreadyReported {
 		return

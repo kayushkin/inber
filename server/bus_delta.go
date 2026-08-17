@@ -14,9 +14,11 @@ import "github.com/kayushkin/bus/messages"
 //
 // The other seam — turning Server.bus into an interface so a fake could record
 // what was published — was rejected. bus.NewClient returns a nil *bus.Client
-// when NATS is absent, and both ListenBus and the spawn-delivery path branch on
-// `bus == nil`. Stored in an interface field that nil is no longer nil, so
-// every one of those guards would silently start taking the wrong branch.
+// when NATS is absent, and four places branch on `bus == nil`: ListenBus
+// (server/bus.go), the spawn-delivery path (server/spawn_delivery.go), the
+// health endpoint (server/api_health.go) and the startup self-test
+// (server/selftest.go). Stored in an interface field that nil is no longer nil,
+// so every one of those guards would silently start taking the wrong branch.
 func busDeltaFor(agent, sessionID string, ev StreamEvent) (messages.ChatDelta, bool) {
 	// NewChatDelta panics on an empty type, and this function is called from
 	// inside a streaming callback, so the panic would surface as a failed turn.

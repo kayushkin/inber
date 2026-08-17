@@ -48,11 +48,12 @@ func (h *WorkflowHooks) commitFile(toolName, filePath string) string {
 //
 // It asks the remote rather than reading the local `refs/remotes/origin/HEAD`
 // tracking ref, because that ref is written by `git clone` and by
-// `git remote set-head`, and by nothing else: 57 of the 78 repositories on this
-// host do not have it. Reading it would answer "unknown" for repositories whose
-// default branch is perfectly well defined, which is the wrong answer in the
-// direction that matters. It is one round-trip to a remote we are about to push
-// to anyway.
+// `git remote set-head`, and by nothing else: measured 2026-08-17, 58 of the 79
+// repositories under ~/repos on this host did not have it. That fleet grows, so
+// re-measure rather than quoting the figure. Reading the ref would answer
+// "unknown" for repositories whose default branch is perfectly well defined,
+// which is the wrong answer in the direction that matters. It is one round-trip
+// to a remote we are about to push to anyway.
 //
 // Returns "" when origin does not name one (an empty remote, or a transport
 // error). That is "unknown", not "there isn't one", and callers must treat it
