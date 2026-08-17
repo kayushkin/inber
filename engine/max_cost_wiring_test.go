@@ -67,9 +67,20 @@ func TestGuardIsGivenTheCostCap(t *testing.T) {
 // g.cost stayed at zero for the life of every session and CheckLimits could
 // never find it above any cap.
 //
-// The assertion is that the guard's total moved, not that it moved to a
-// particular dollar figure: the price of a turn belongs to the model registry
-// and is pinned by the cost tests in session/, not here.
+// The assertion here is that the guard's total moved and agrees with the
+// session's, not that it moved to a particular dollar figure.
+//
+// This comment used to go on to say that the dollar figure "belongs to the
+// model registry and is pinned by the cost tests in session/, not here". That
+// was wrong, and it is why two defects sat unheld until 2026-08-17. The tests
+// in session/ hand session.CalcCostWithCache a registry themselves, so they
+// pin what the helper answers. Which registry this caller passes — e.modelStore
+// or nil — is chosen in recordTurnUsage and is invisible from there. Measured:
+// replacing e.modelStore with nil here, and replacing the cache-aware call with
+// the plain one, both left every package in this repo green.
+//
+// The dollar figure is now pinned in turn_charge_pricing_test.go, in this
+// package, where the argument is actually chosen.
 func TestTurnCostReachesTheGuard(t *testing.T) {
 	g := guard.New(guard.Config{MaxCost: 1000}) // high enough not to trip
 	e := &Engine{Guard: g, Model: "claude-haiku-4-5-20251001"}
