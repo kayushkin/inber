@@ -115,6 +115,23 @@ func aProviderThatIsPaidAndThenFails(t *testing.T) (*anthropic.Client, func() in
 		option.WithMaxRetries(0),
 	)
 
+	// Force the fallback this fixture is built on, rather than depending on the
+	// environment to provide it.
+	//
+	// The engine below carries no model client, so executeAgent asks
+	// agent.NewModelClient for one and only falls back to Engine.Client — the
+	// stub — when that fails. It fails because no credential can be resolved,
+	// and with a nil auth store the last place it looks is ANTHROPIC_API_KEY.
+	// So on a host with that variable set, the engine would build its OWN
+	// client, reach a real provider, and the stub above would be bypassed
+	// entirely. Emptying it here makes the path under test the one this fixture
+	// names, on any host.
+	//
+	// The request count is still asserted, and deliberately: this line removes
+	// the likeliest way the premise breaks, not every way. A premise that
+	// breaks anyway must fail the test rather than quietly send a real turn.
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
 	countRequests := func() int {
 		mu.Lock()
 		defer mu.Unlock()
@@ -219,6 +236,12 @@ func TestTheFailedTurnIsChargedAtTheRegisteredPrice(t *testing.T) {
 // vacuous if the row carries four zeros: $0.00 equals $0.00 at any price, so a
 // change that lost the partial result would turn both of them green forever
 // rather than failing.
+//
+// It was shown able to say "no" before being trusted to say "yes". Control run
+// 2026-08-17: the provider's first response was edited to report all four token
+// counts as zero, leaving the two-call shape intact so the request-count guard
+// above still passed. This test then failed on its own message. A guard no case
+// can redden is a comment, not a rule.
 func TestTheFailedTurnRecordsTheTokensItWasAlreadyBilledFor(t *testing.T) {
 	row := aTurnThatFailedAfterBeingBilled(t, straddlingModel, registryStraddlingTheFallback(t))
 
