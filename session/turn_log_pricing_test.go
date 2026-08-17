@@ -26,12 +26,23 @@ import (
 // The fixture registry STRADDLES the unknown-model fallback: its input price is
 // above $3.00 and its output price is below $15.00.
 //
-// That is deliberate and it is the difference between this fixture and one that
-// merely differs from the fallback. Every price on this host's real registry is
-// uniformly cheaper or uniformly dearer than the fallback, so a cost computed
-// from the fallback is the registered cost times a single constant, and an
-// assertion can be satisfied by a calculation that scaled rather than looked
-// up. Straddling removes that: no single factor carries $5.00/$2.00 to
+// That is deliberate, and it is the difference between this fixture and one
+// that merely differs from the fallback. Measured 2026-08-17 against the live
+// model-store registry, over all 56 models it carries:
+//
+//	 0 of 56 straddle the fallback. Every model is at-or-below the fallback on
+//	         both prices or at-or-above it on both, so no real model has this
+//	         fixture's shape and no real model can stand in for it.
+//	15 of 56 are priced so that the fallback is the registered price times ONE
+//	         constant. An assertion on such a model can be satisfied by a
+//	         calculation that scaled rather than looked anything up.
+//	 4 of those 15 are priced at exactly $3.00/$15.00 — every Sonnet row,
+//	         including the model this host runs by default. A fixture on Sonnet
+//	         cannot tell a registry hit from a registry miss at all: passing nil
+//	         computes the identical float, so the argument under test here would
+//	         be unpinned by a test that looked like it pinned it.
+//
+// Straddling removes all three. No single factor carries $5.00/$2.00 to
 // $3.00/$15.00, so a figure that reached the fallback is wrong in one direction
 // on input and the other on output and cannot coincide with the right answer.
 const (
