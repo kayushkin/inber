@@ -31,7 +31,7 @@ const (
 const anthropicProviderID = "anthropic"
 
 // anthropicContextWithoutTheLongContextBeta is the largest context an Anthropic
-// request can carry without the long-context beta header. clients.go:103 lists
+// request can carry without the long-context beta header. clients.go lists
 // the betas inber sends and that one is not among them, so a registry row
 // claiming a million tokens for an Anthropic model states what the *model* can
 // do, not what *this client* can ask for.
