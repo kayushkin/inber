@@ -4959,3 +4959,183 @@ against what really ran. Recorded as a shape to keep, with no action.
 - **[codex #38701](https://github.com/openai/codex/pull/38701), #38703, #38705, #38774, #38800,
   #38623** — consolidation and plumbing; the permission-request routing folds onto an existing
   `ApprovalAction` enum rather than changing the model.
+
+## Harness-watch — 2026-08-17: an agent the API reports as `Enabled` is a promise the router never made — inber advertises OpenClaw agents and drops every message sent to one, two functions earlier
+
+### 1. A setting that is accepted, advertised, and routed nowhere
+
+[codex #38919](https://github.com/openai/codex/pull/38919) makes `thread/start`, `thread/resume`,
+`thread/fork` and `turn/start` return `invalid-params` for the retired `permissionProfile` field
+instead of dropping it, while **continuing to accept unrelated unknown fields for forward
+compatibility**. The bug it names is that a client's permission setting was "discarded without
+notification". [codex #38916](https://github.com/openai/codex/pull/38916) is the same defect with
+the opposite remedy — a legacy `:project_roots` token read as unknown "can drop filesystem
+restrictions", so it is aliased rather than refused. Together they state the rule: **a setting that
+bears on behaviour must never be silently treated as absent — alias it or refuse it, but do not
+ignore it.**
+
+**inber ignores one, and then advertises the capability it did not wire.** The chain is four files
+and it is not a race, it is simply unconnected:
+
+- `cmd/inber-server/main.go:84-86` reads `OPENCLAW_URL` and `OPENCLAW_TOKEN` into
+  `cfg.OpenClawURL` / `cfg.OpenClawToken`. `server/config.go:38-40` documents them as the
+  "OpenClaw proxy — forward bus messages where orchestrator=openclaw."
+- `server/api_models.go:54-70` gates on `g.config.OpenClawURL != ""`, scans `~/.openclaw/agents`,
+  and appends one `registryAgent{Orchestrator: "openclaw", Enabled: true}` per directory. So setting
+  the env var makes `/api/models` report every OpenClaw agent as enabled.
+- `server/bus.go:70-71` drops the message: `if msg.Orchestrator != "" && msg.Orchestrator != "inber"
+  { return }`, commented "not for us — other orchestrators have their own adapters."
+- `server/openclaw.go:25` `proxyToOpenClaw` — the adapter that comment refers to, and the only code
+  that would service those agents — **has zero callers.** Its own "no OpenClaw URL configured"
+  branch at `:26` can never run.
+
+The early return at `bus.go:71` happens **before** the `processing` ack (built at `:88`, published
+at `:90`) and before the `done` delta the normal path publishes at `:174` — the only other `done`
+in the function is the panic handler's at `:61`. So the failure is not merely silent, it is
+unterminated: a client that sent to an agent `/api/models` called `Enabled` gets no delta, no error
+and no `done`, and waits. **Filed as a todo.**
+
+**What inber should consider:** this is a delete-or-wire decision and the fix must not pick it by
+accident. (a) *Delete* — drop `proxyToOpenClaw`, the two config fields and the `api_models.go`
+branch, which is the honest move if OpenClaw is served by `openclaw-bus.service`
+(`docs/openclaw-integration.md:40`) and inber was never meant to proxy it. (b) *Wire* — route
+non-`inber` orchestrators to a registered adapter instead of returning, which is a real routing
+change and needs an answer for orchestrators with no adapter. (c) *Refuse* — the codex #38919 shape:
+keep the drop but make it loud, and stop `api_models.go` reporting `Enabled: true` for an agent
+nothing can reach. Whoever takes it should note that (c) is the cheap half of (a) and (b) and can
+land first: **`Enabled` should mean "the router will accept this", not "the directory exists".**
+
+### 2. Ownership belongs to the scope that enforces, and "nobody decided" must not be representable
+
+A six-PR arc in codex ([#38651](https://github.com/openai/codex/pull/38651),
+[#38673](https://github.com/openai/codex/pull/38673),
+[#38899](https://github.com/openai/codex/pull/38899),
+[#38902](https://github.com/openai/codex/pull/38902), #38916, #38919) converges on one rule: **every
+policy decision has exactly one owner at the scope where it is enforced, is carried as an explicit
+complete value installed atomically, and where it cannot be resolved it collapses to the most
+restrictive option rather than to the caller's.** Three mechanisms are worth naming. #38651 makes
+`PermissionProfileSnapshot` a flat protocol record holding permissions, active-profile identity and
+workspace roots together "for atomic installation" — the *snapshot* crosses the boundary, not the
+resolution procedure, so no consumer can observe a profile whose three parts came from different
+resolutions. #38673 narrows an inherited profile by **intersection, not replacement** ("a read-only
+environment blocks writes even when the thread permits workspace writes"), collapses
+`selected_capability_roots` from `Option<Vec<_>>` to `Vec<_>` so `None`-means-nobody-decided stops
+being expressible, and fails closed on an unrepresentable intersection
+(`intersect_with_read_only().unwrap_or(External { network: Restricted })`). #38902 applies the same
+move to shell-variable policy and adds a custom `Debug` that redacts it, because the struct carries
+secret *values*.
+
+The intersection half is already recorded here (2026-08-14, "a child's authority is the *meet* of
+its parent's with read-only") and filed. **The new half is the tri-state**, and it is the one worth
+carrying: codex's finding is that the expensive bug was not a wrong policy but a policy field whose
+`None` meant "legacy default" on one read and "owner installed nothing" on another.
+
+**What inber should consider:** one concrete sweep, not a redesign — audit inber's policy-bearing
+optionals for a value that means both "not configured" and "configured empty". `guard.New` is
+unconditional (`engine/engine.go:205`) so the guard itself has no such state, and `resolveModelClient`
+(`engine/model_client.go:34-55`) already reports the model actually in force rather than the one
+requested. The arc's own live crack is the warning label: #38916 aliases `:project_roots` at *parse*
+time while profile inheritance merges raw TOML keys *earlier*, so both spellings survive the merge
+and an inherited `write` can outlive a child's `read` — acknowledged and shipped unfixed.
+**Canonicalize an identifier before the merge that joins on it**, which is this box's join-on-ids
+directive arriving from the other direction.
+
+### 3. When both sides may displace the other, safety must come from a total order
+
+[cline #13230](https://github.com/cline/cline/pull/13230) fixes two Cline installs killing each
+other's Hub daemon in a ~700 ms loop, sessions dying with socket code 1006. Two causes, and the
+second is the subtle one: build identity was **derived from different fields depending on whether
+you were looking at yourself or at a peer** — `coreVersion` was populated locally but omitted from
+the wire record — so the same build had two identities and each side computed itself as newer. The
+fix builds a total order (`compareHubBuilds(a, b) -> number`, epoch then core version then build id)
+and reduces the predicate to `compareHubBuilds(self, record) <= 0`. The stated reasoning is
+algebraic rather than case analysis: **"A total order is antisymmetric by construction, so at most
+one side can ever decide to retire."** Two defaults are worth copying: hubs that are unorderable but
+protocol-compatible **attach rather than retire** — cooperation is the default when the order cannot
+decide — and the `HUB_RETIRE_ATTEMPT_LIMIT` circuit breaker is explicitly a backstop the authors
+decline to call the fix.
+
+**What inber should consider:** the transferable half is the identity rule, not the daemon
+election — inber has no two-peer displacement today. **A record's identity must be computed from the
+same fields regardless of which side is observing it**; a locally-enriched struct compared against a
+wire struct that lacks the enrichment is a self-inconsistent join key that stays correct until a
+second version appears. Worth a pass over anything inber compares across the bridge boundary.
+
+### 4. A bounded incremental parser must emit its overflow, not drop it — and inber's MCP transport has a cap it never chose
+
+[goose #11108](https://github.com/aaif-goose/goose/pull/11108) bounds the `<think>`/`<thinking>`
+streaming tag parser, which buffered every delta while a tag candidate stayed ambiguous and
+re-scanned the accumulated suffix per chunk — an unterminated quoted attribute from a hostile
+*provider* (note the threat model: the upstream model API, not the user) gave unbounded heap plus
+superlinear CPU. The cap is `MAX_BUFFERED_THINK_TAG_BYTES = 8 * 1024`, and the design substance is
+the overflow behaviour: **"overflow is preserved as malformed text rather than silently discarded."**
+The cheap fix — drop the buffer at 8 KiB — would have traded a denial of service for silent content
+loss. It also releases the spiked allocation rather than leaving it at high-water mark, a trap that
+exists identically for Go slices.
+
+**inber has the inverse defect in its MCP transport, and the repo already knows the fix.** Three of
+the four `bufio.Scanner`s in this repo are explicitly resized with the same comment —
+`session/resume.go:39` and `session/timeline_jsonl.go:31` at `1024*1024` (`// 1MB lines`),
+`server/openclaw.go:94` at `256*1024`. The fourth, `tools/mcp/client.go:155`
+`bufio.NewScanner(c.stdout)`, is left at the `bufio.MaxScanTokenSize` default of **65536 bytes** —
+and it is the only one of the four reading an unbounded third-party protocol stream, where a single
+`tools/call` result over 64 KiB is ordinary. Measured, not inferred: a 100 KiB line followed by a
+valid one yields `lines delivered: 0` and `scanner.Err() = bufio.Scanner: token too long`, so the
+oversized response **and every subsequent response** are lost. The consequence is worse than one
+dropped reply, because `readResponses` records the error and closes `readerDone`
+(`tools/mcp/client.go:160-168`), which frees every waiter and makes every future `call` fail at
+`:359-368` — with no restart path anywhere in the package. One large tool result kills the MCP
+server for the process.
+
+**Not filed, because it is not live: `tools/mcp` has zero importers** — no file outside the package
+references it, and `README.md:35` / `ARCHITECTURE.md:20` list the "MCP adapter" as a built-in tool
+anyway. That gap is the same defect as §1 in a second subsystem, and it is why the scanner bug has
+never been observed. **What inber should consider:** whoever settles the §1 delete-or-wire question
+should settle this one in the same pass, and if the answer is *wire*, the scanner needs a `Buffer`
+call **and** an overflow behaviour chosen on goose's criterion — a bound that silently truncates a
+tool result is the failure this corpus already rejects at
+[codex #38621/#38645](https://github.com/openai/codex/pull/38621) (transport-layer size caps
+mangling tool errors before they reach the host). Note the framing correction the two make together:
+a cap is not automatically a layering violation — an *unbounded* incremental parser is a real denial
+of service — so the rule is that the bound must be **chosen, declared, and lossy only in a way the
+reader can see**, not inherited from a library default.
+
+### 5. Checked and not worth a finding
+
+- **[cline #13227](https://github.com/cline/cline/pull/13227)** (reclaim idle plugin sandbox
+  processes) — standard supervisor design, but two rules are worth having on hand if inber ever
+  respawns a tool subprocess lazily: bind every pending request to the **process generation** that
+  owns it, so a dying incarnation cannot reject work already dispatched to its replacement; and keep
+  a **single idle-lifecycle authority**, because two timers on the two ends of a pipe will disagree.
+  The contract change is the part with teeth and it is documented rather than merely PR'd —
+  "module-level plugin state is ephemeral and durable state must be persisted", a new obligation on
+  plugin authors that no type system catches once processes can be evicted mid-session.
+- **[goose #11113](https://github.com/aaif-goose/goose/pull/11113)** (bound action-required stream
+  admission) — cited only as a caution. **The PR body misdescribes its own diff**: it claims
+  "pre-reservation of stream capacity", and the code uses neither `reserve()` nor `try_reserve()`.
+  What shipped is a statement reorder plus `send().await` → `try_send()` on a capacity-8 mpsc. The
+  real rule is worth keeping — **fail fast on a bounded queue whose consumer you do not control**,
+  since an unbounded `await` converts consumer backpressure into an indefinitely-held resource on
+  the producer side — and so is the test's invariant, that a failed admission leaves no pending
+  state behind. Cite the diff, never the description.
+- **[codex #38830](https://github.com/openai/codex/pull/38830)** (isolate external editor buffers
+  from sandbox-writable paths) — confused-deputy containment: host-side scratch state holding
+  composer text must not land inside the sandbox's *writable* set, symlink resolution counts as
+  overlap, and no-safe-location is a hard error rather than a fallback into the writable area. No
+  inber surface today; inber writes no editor scratch buffer.
+- **[codex #38899](https://github.com/openai/codex/pull/38899)** — a 42-line type relocation with no
+  behaviour change, listed only because its one claim is the banal-but-real one: a type belongs in
+  the crate that owns the concept, not the crate that reads config.
+- **[codex #38650](https://github.com/openai/codex/pull/38650)** (canonicalize default namespaces in
+  gRPC subscription filters) — trivial, and the same shape as #38916 on a non-security path:
+  normalize **both** sides before comparing, and normalize for matching without mutating what you
+  report.
+- **[cline #13015](https://github.com/cline/cline/pull/13015)**,
+  **[goose #11094](https://github.com/aaif-goose/goose/pull/11094)** — both re-surfaced this sweep
+  and both already covered, at `cline.md:470` and `goose.md:1158` respectively. No new material.
+- **Repo move:** `block/goose` now **301**-redirects to **`aaif-goose/goose`** (measured this sweep:
+  `/block/goose` and `/block/goose/pull/11108` both return 301 to the `aaif-goose` path, which
+  returns 200). Older links in this corpus still resolve; new ones should use the new path. All three goose PRs this window are
+  remediations of findings from an automated audit bot ("Project Loupe"), which shows in their
+  shape — narrow resource-exhaustion fixes with heavy test matrices. Weight them accordingly as
+  evidence of human design judgement.

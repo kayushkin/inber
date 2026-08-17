@@ -2074,3 +2074,188 @@ OR "cache reuse"` for 08-11→08-17 returns 14 hits, all serving-infrastructure 
 (vToken KV reclamation, HBF flash tiering, TTS and video streaming caches, TideRL rollout
 scheduling). **Zero agent-harness cache-economics papers in the window** — the 2026-08-13 keepalive
 entry is still the most recent thing on that thread.
+
+# 2026-08-17 sweep — four papers, and a scoping correction: this sweep's nominal window was two-thirds empty by construction
+
+**Read this before the papers.** arXiv has announced **nothing submitted after 2026-08-14 ~20:00
+UTC**. Measured this sweep with a control, because a bare zero from a malformed query is worthless:
+`submittedDate:[202608130000 TO 202608150000]` returns **`totalResults=1823`**, and
+`submittedDate:[202608150000 TO 202608180000]` returns **`totalResults=0`**. Same query form, same
+endpoint, one returns thousands and the other returns none. 08-15 and 08-16 were Saturday and
+Sunday; 08-17 has not been announced yet.
+
+Two consequences, and the first is a correction to this file. **The 2026-08-16 sweep's heading
+claims a window it could not have had** — there was nothing after 08-14 to find, so its coverage of
+08-15 and 08-16 is vacuous rather than empty-by-search. That is not a criticism of the sweep, which
+found real work; it is a warning that a sweep dated D covers submissions up to roughly D-2 at best,
+and this corpus should stop writing headings that imply otherwise. Second, **re-run in ~48h**: the
+08-17/08-18 announcement batch is a third of this sweep's nominal window and has not appeared.
+
+Every date below was verified against the arXiv Atom API by `id_list`, not from a search snippet.
+Two candidates were dropped as already covered — **2608.12888** (ReFind, agent-controlled lexical
+search over raw chat logs) and **2608.12895** (same-model reviewers co-fail) are both already in the
+2026-08-16 sweep, the latter as §2. Headline numbers below are abstract-grade unless stated.
+
+## 1. [arXiv:2608.11392v2](https://arxiv.org/abs/2608.11392) — a degraded rule is worse than a missing one, and a presence check is not a safety check (Kwartler, Aqrawi, Abbasi; v1 2026-08-11, v2 2026-08-13)
+
+The only in-window item on compaction, and it is a **v2 update rather than a new paper** — flagged
+because a sweep that counts it as new is double-counting. After a *single* self-summarization cycle,
+a **degraded** rule residue leads the model to perform the prohibited action **more often than an
+intact rule survives it**: gaps of **+34 and +57 points** under two replay models. The second
+finding is the trap: rule-form items survive compaction *more often* than prominence-matched facts,
+so the constraint text usually is still there in some form — which is exactly why auditing for its
+presence feels adequate and is not. The authors' formulation is the one worth carrying: **a presence
+check is not a safety check.** Scope caveat the authors state themselves: one compaction cycle.
+
+**What inber should consider:** this lands on a prompt already under a filed todo. `generateSummary`'s
+system prompt (`conversation/summary_generation.go:40-53`) enumerates five things to capture and no
+standing directive among them, and `:51` — "Avoid unnecessary details while preserving important
+context" — is an explicit invitation to drop a rule the summarizer judges unimportant. **Appended to
+open todo `421a8162` rather than filed as a new one**, because that todo already names this exact
+file and line range for the *temporal* loss and the fix is one edit to one prompt. The appended
+question is whether a prompt clause is even the right instrument: a dropped date degrades an answer,
+a half-preserved prohibition degrades a decision, and 11392's result is that asking the summarizer to
+carry a constraint produces precisely the partial residue that measured worse than nothing — so
+pinning standing directives *outside* the compacted span is a different mechanism, not a stronger
+version of the same one. **Scope check that keeps this honest:** inber's agent instructions live in
+the system prompt and are not part of the `messages` slice compaction rewrites, so they are already
+safe. The exposure is only a constraint the **user stated mid-conversation**, which lives solely in
+the turns `SummarizeConversation` replaces. Verify that boundary before sizing the work.
+
+## 2. [arXiv:2608.13951](https://arxiv.org/abs/2608.13951) — HELIX: the harness as both a capability search and a training-data generator (Fan, Huang; 2026-08-14)
+
+Decomposes a harness into typed ports, reusable atoms, recipes, product shells and runtime policies
+so that each intervention is identity-preserving and auditable, then evolves harness variants against
+a SWE-bench evaluator. Code at `github.com/HKUDS/HELIX`. **Read the two numbers separately.** The
+best single evolved harness gains **+4.0% task coverage** over the Pi baseline — that is the
+deployable figure. The **58.0%** in the abstract is the *union* of a 65-candidate portfolio, an
+oracle over complementary sibling behaviour, and is not a harness anyone can run. The genuinely
+novel claim is the by-product: a 200-slot sibling slice yielded **438 verified SFT/critic/filter/
+preference records**, because running many harness variants over the same task produces matched
+successes, regressions and near-misses that a single configuration never generates.
+
+**What inber should consider:** nothing structural, and the 4.0% does not justify building an
+evolution loop. The transferable idea is cheap and separable from the rest of the paper — inber
+already varies model, thinking budget and tool set per agent, and every spawn already records what it
+ran on (`server/spawn.go:116-120` carries the child's actual model). **A/B differences across those
+existing axes are matched-pair data inber currently discards.** Worth knowing before anyone proposes
+a self-improving harness: the portfolio-union framing is how that proposal will be justified, and it
+is the number that does not survive contact with deployment.
+
+## 3. [arXiv:2608.12789](https://arxiv.org/abs/2608.12789) — PIPES: screen each *unit* of a tool result, not the result (Kariyappa, Klingler, Suh; 2026-08-13)
+
+Attack success **84.7% → 2.3%** across three VitaBench and three AgentDyn splits against adaptive
+PAIR-style attacks, with benign utility preserved (**92.5%** defended vs **90.6%** undefended) — a
+defence that does not cost accuracy is rare enough to note. The mechanism is the contribution: screen
+each *unit* of a tool response rather than the response as a whole, using static field contracts
+where the tool has a schema, and conditioning open-ended content on pre-response trajectory plus
+trusted provenance metadata. The discriminator is **informational authority** — flag units making
+environmental claims beyond what their source could know.
+
+**What inber should consider:** this is the same shape as the tool-result gating already discussed in
+this corpus, and inber has a natural chokepoint for it. The honest note is a gap, not a fix: inber's
+first-party tools have schemas, so field contracts are available cheaply, but the units most worth
+screening are the open-ended ones — shell output, fetched pages — where the schema says only
+"string". Recorded as a design shape to reach for if untrusted tool output ever reaches the loop;
+there is no action today.
+
+## 4. [arXiv:2608.13867](https://arxiv.org/abs/2608.13867) — a 206-record reliability catalog for the system around the model (Jarmak; 2026-08-14)
+
+**No new experiment**, and worth having anyway. A monograph synthesizing 164 scholarly, 100
+practitioner, 29 benchmark and 17 case records into a versioned catalog of **206 reliability
+records** (193 gated practices, 56 treated in depth). Its core claim is the one this corpus has been
+accumulating one PR at a time: **many apparent model failures originate in the harness, execution,
+retrieval and state layers**, and evaluation is a dependency chain in which weak task construction or
+a weak execution environment invalidates every downstream conclusion. The author flags it as
+"structured rather than exhaustive".
+
+**What inber should consider:** use it as a citation index and a checklist, not a reading. It is
+probably the single most useful *document* in the window for a harness author precisely because it
+contributes no measurement — when a future sweep needs prior art for a reliability practice, this is
+the place to look before searching arXiv from scratch.
+
+## 5. Tier two — real, narrower, no action
+
+- **[arXiv:2608.13667](https://arxiv.org/abs/2608.13667)** (Second Thought, Sun et al., 08-13) —
+  training-free: fork four auxiliary reasoning branches the instant the Thought phase ends, decode
+  them concurrently with the action/observation round trip, merge on observation arrival. Turn count
+  down in **all 9** (model, benchmark) pairs; main-thread decoding down **up to 43%, ~20% average**
+  in 6/9; Pass@1 unchanged in 7/9. Beats a compute-matched control. ⚠️ **It buys wall-clock with
+  tokens — total cost rises.** Relevant only if latency is the binding constraint, which for inber's
+  unattended and scheduled runs it is not.
+- **[arXiv:2608.14375](https://arxiv.org/abs/2608.14375)** (Wrong but Useful, Yang et al.,
+  Argonne/UChicago, 08-14) — cache five independently generated subagent messages, replay the
+  integrator with each available or hidden. Among **wrong-answer** messages that flip final
+  correctness, **more than 4 in 10 flips are helpful**, not explainable by replay variance
+  (p=0.0002); passing the *complete* message beats reasoning-only, which beats answer-only. The
+  actionable line: **do not filter subagent output by answer correctness before handing it to the
+  parent.** ⚠️ Math and science benchmarks, not coding. Bears on `server/spawn_delivery.go`'s result
+  hand-back if a correctness filter is ever proposed there — the point is to not add one.
+- **[arXiv:2608.13900](https://arxiv.org/abs/2608.13900)** (Agentic Transaction, Sun, Wang, Li,
+  08-14) — reinterprets ACID as semantic atomicity/consistency/isolation/durability over agent
+  workspace mutation; **10.6% over SOTA agents including Claude Code**, via transactional
+  explore-execute-validate cycles and semantic dependency-aware isolation. Relevant only if inber
+  runs parallel subagents against shared workspace state. ⚠️ "Data agent" domain, benchmarks unnamed
+  in the abstract.
+- **[arXiv:2608.12720](https://arxiv.org/abs/2608.12720)** (ERSkill, Chen et al., 08-13) — retrieval
+  strategies as executable skills over primitives, with a trained router matching query to skill;
+  **+31.3%** and **+28.1%** on two backbones. ⚠️ Requires training, and the headline averages BLEU-1
+  in, which inflates it. **Read against 2608.12888** in the 08-16 sweep, which bets the opposite way
+  — that lexical BM25 over raw logs with no learned index rivals structured memory. Two in-window
+  papers, opposite conclusions, neither refuting the other; that disagreement is the finding.
+- **[arXiv:2608.13662](https://arxiv.org/abs/2608.13662)** (Ontology-Grounded Project Memory,
+  Adam, 08-13) — **0.98–1.00** vs **6–27%** for a vector-memory baseline on supersession,
+  set-completeness and negation questions, at comparable token cost. The structural claim is sound
+  and matches the bitemporal result already held from 2608.12476: **top-k vector retrieval cannot
+  answer "what superseded X" or "what is *not* allowed"**, because the answer is an absence.
+  ⚠️ Heavy skepticism warranted and it is why this sits in tier two: single author, proprietary
+  engine, self-constructed corpus, a baseline that may be a strawman, and a live trial that is
+  pre-registered but not completed.
+
+## 6. Checked and rejected this sweep
+
+- **[arXiv:2608.13959](https://arxiv.org/abs/2608.13959)** (Repair, Not Improvement, Lee, 08-14) — a
+  **preregistered negative result** worth recording so it is not re-derived: grammar-constrained
+  decoding is negative for tool-call abstention in 4/6 cells (worst **−29.5** points) and positive
+  with a CI excluding zero in **none**; the stop-token cost (−20.0) cancels the enum gain (+19.5) to
+  −0.5. Both preregistered language claims fail. The framing is the keeper — constrained decoding
+  repairs *form* without improving the abstain *decision* (545 of 698 repaired abstentions had no
+  readable answer at all). ⚠️ Models are 0.6B–4B only, so it does not transfer to frontier harnesses.
+- **[arXiv:2608.12977](https://arxiv.org/abs/2608.12977)** (self-evolving runtime defense, Ruan et
+  al., 08-13) — contributes a harness-level taxonomy of runtime defences by which mechanism they
+  attach to (hook, wrapper, loop interception), which is useful vocabulary for a permission layer.
+  **No quantitative result in the abstract** ("improves security performance"), so no evidential
+  weight until the tables are read.
+- **[arXiv:2608.14074](https://arxiv.org/abs/2608.14074)** (Mandato, 08-14) — signed-mandate MCP
+  proxy with a hash-chained audit log, mapped to EU AI Act Art. 12/14, GDPR, NIS2, eIDAS 2. **Zero
+  results**; the abstract states an implementation status and an evaluation *plan*. Position paper.
+  The mandate schema — which tools, parameter constraints, contextual conditions, duration, on whose
+  behalf — is a usable sketch for **permission-store**, and nothing else here is.
+- **2608.13030v2** (InterSAGE, four-layer agent trust protocol), **2608.14352** (ATLAS, automata
+  learning over agent trajectories; proof-of-concept on 12 machines), **2608.14109** (RL drift
+  diagnosis on AppWorld; results "generally exploits information about the suspected drift onset" —
+  too vague to act on), **2608.13884** (33,228 PRs from vLLM/SGLang; throughput 21×/17.9×,
+  bot-authored <0.2% — descriptive and confounded by project popularity growth, no design claim).
+- **[arXiv:2608.13608](https://arxiv.org/abs/2608.13608)** (*Evaluating Agentic Learning Harness
+  Capabilities Without Labels*) — squarely on topic, and **out of window: published 2026-08-11**,
+  confirmed by Atom API. Recorded by id because the number looks in-window and this is exactly the
+  trap this file has warned about since the 08-01 sweep. It is also not covered by any earlier
+  sweep, so it is a genuine gap someone may want to read.
+
+## 7. Channel notes — blogs, eighth consecutive empty sweep
+
+**Anthropic engineering** — no August 2026 posts at all; latest remains 2026-04-23. **Google
+DeepMind** — August posts are Gemini 3.7 Flash, sign-language AI and WeatherNext; nothing on agent or
+harness design. **Meta AI** — nothing since 2026-07-27. **HuggingFace** — two posts on 08-13
+(Strands Agents/LeRobot robotics deployment; "What We Learned by Reproducing 2,200 papers from
+ICML"). The ICML reproduction post could not be verified this sweep — the guessed URL 404'd — and it
+reads as an ML-reproduction writeup rather than harness design, but it is the one item left
+unchecked; worth two minutes on the next pass.
+
+**Confirmed empty by dedicated search, not by absence of effort:** prompt caching and prefix-cache
+economics at the harness level (the sole in-window hit, 2608.12932 *FlashDrive*, is VLA
+autonomous-driving inference — GPU serving side, off-domain); tool-result compression; context
+management and compaction for **new** submissions, 2608.11392v2 above being an update; and
+sandboxing or isolation mechanisms, where the in-window security work is all provenance, prompt
+injection and protocol-level authorization. The cache thread's most recent genuine entry is still
+2026-08-13.
