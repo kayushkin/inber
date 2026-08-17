@@ -30,6 +30,16 @@ Two controls run alongside the mutations, because an instrument that cannot say
                     becomes 1.0). Must go RED, or the suite cannot see a
                     pricing change at all and no SURVIVED result means anything.
 
+The case list has moved once since it was first scored, and a score is only
+comparable to another score taken on the same list:
+
+  2026-08-17  M13 added. session/session_logging.go was carrying a nil-registry
+              row (M9) and no cache-drop row, though both defects are reachable
+              at that one call site and the second is the more expensive of the
+              two. Every before/after pair recorded after this date is over 13
+              rows; the 2/12 and 5/12 figures in card d75191e6 are over 12 and
+              cannot be compared to them directly.
+
 Usage:  python3 scripts/sabotage-money-call-sites.py [--only M3]
 """
 
@@ -114,6 +124,12 @@ MUTATIONS = [
         "tokens.CacheRead, tokens.CacheWrite, s.modelStore)",
         "tokens.CacheRead, tokens.CacheWrite, nil)",
         "session log: the per-turn logged cost priced with no registry",
+    ),
+    Mutation(
+        "M13", "session/session_logging.go",
+        "cost := CalcCostWithCache(s.model, tokens.Input, tokens.Output, tokens.CacheRead, tokens.CacheWrite, s.modelStore)",
+        "cost := CalcCost(s.model, tokens.Input, tokens.Output, s.modelStore)",
+        "session log: cache adjustment dropped from the per-turn logged cost",
     ),
     Mutation(
         "M10", "session/timeline_jsonl.go",
