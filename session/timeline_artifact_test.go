@@ -19,14 +19,19 @@ import (
 // These two tests pin both halves of that: the artifact is not written, and the
 // answer it used to hold is still available from the log.
 
+// Neither test below asserts a price, so both pass a nil registry. They used to
+// pass registryWithTwoDifferentlyPricedModels to a session running Sonnet, which
+// that registry prices at exactly the unknown-model fallback of $3.00/$15.00 —
+// so the argument returned the identical float as nil and pinned nothing. What
+// the rebuilt timeline costs is pinned in timeline_cost_test.go.
+
 // endTwoTurns logs two complete turns to a fresh session and returns the logs
 // root, the session id, and the directory holding session.jsonl.
 func endTwoTurns(t *testing.T) (logsDir, sessionID, sessionDir string) {
 	t.Helper()
 
 	logsDir = t.TempDir()
-	session, err := New(logsDir, "claude-sonnet-4-20250514", "test-agent", "",
-		registryWithTwoDifferentlyPricedModels(t))
+	session, err := New(logsDir, "claude-sonnet-4-20250514", "test-agent", "", nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -73,8 +78,7 @@ func TestEndTurnWritesNoTimelineArtifact(t *testing.T) {
 func TestTheTimelineIsStillAnswerableFromTheLog(t *testing.T) {
 	logsDir, sessionID, _ := endTwoTurns(t)
 
-	timeline, err := ReadTimelineFromJSONL(logsDir, sessionID,
-		registryWithTwoDifferentlyPricedModels(t))
+	timeline, err := ReadTimelineFromJSONL(logsDir, sessionID, nil)
 	if err != nil {
 		t.Fatalf("ReadTimelineFromJSONL: %v", err)
 	}

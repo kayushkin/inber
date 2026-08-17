@@ -24,13 +24,21 @@ import (
 // These tests assert differences rather than figures: adding cache traffic to
 // an otherwise identical session must change what the closing entry reports.
 
-// sessionWithUsage returns a closed session's final JSONL entry after logging
-// one assistant turn with the given counts.
+// closingEntryAfterTurn returns a closed session's final JSONL entry after
+// logging one assistant turn with the given counts.
+//
+// The model and registry are the straddling pair from turn_log_pricing_test.go,
+// not a real model. This fixture used to run Sonnet against
+// registryWithTwoDifferentlyPricedModels, and Sonnet is priced at exactly the
+// unknown-model fallback of $3.00/$15.00 — so the registry argument computed the
+// identical float as nil and pinned nothing at all. The straddling model is
+// above the fallback on input and below it on output, so no figure that reached
+// the fallback can coincide with the right answer.
 func closingEntryAfterTurn(t *testing.T, tokens TurnTokens) Entry {
 	t.Helper()
 
-	session, err := New(t.TempDir(), "claude-sonnet-4-20250514", "test-agent", "",
-		registryWithTwoDifferentlyPricedModels(t))
+	session, err := New(t.TempDir(), straddlingModel, "test-agent", "",
+		registryStraddlingTheFallback(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -153,14 +161,51 @@ func TestClosingEntryTokensAndCostDescribeTheSamePrompt(t *testing.T) {
 	}
 }
 
+// TestClosingEntryPricesTheModelTheSessionRanOn pins the registry argument the
+// three tests above merely carry. Each of them asserts a *difference*, and a
+// difference survives the registry never being consulted: the fallback prices
+// every model alike, so cached still costs more than fresh under a nil store.
+// Measured 2026-08-17 — replacing the registry with nil in this file left the
+// whole package green.
+//
+// A figure, not a difference, is what closes that. The straddling fixture is
+// what makes the figure meaningful: its input price is above the fallback's and
+// its output price below, so no one scale factor carries the registered price to
+// the flat rate and a cost that reached the fallback is wrong in one direction
+// on input and the other on output.
+func TestClosingEntryPricesTheModelTheSessionRanOn(t *testing.T) {
+	const inputTokens, outputTokens = 1_000, 500
+	const cacheRead, cacheWrite = 900_000, 100_000
+
+	entry := closingEntryAfterTurn(t, TurnTokens{
+		Input: inputTokens, Output: outputTokens,
+		CacheRead: cacheRead, CacheWrite: cacheWrite,
+	})
+
+	want := atTheRegisteredPrice(inputTokens, outputTokens, cacheRead, cacheWrite)
+	if entry.TotalCost != want {
+		t.Errorf("the closing entry reports $%.6f, want $%.6f from the registered "+
+			"$%.2f/$%.2f per 1M", entry.TotalCost, want, straddlingInputCostPer1M, straddlingOutputCostPer1M)
+	}
+	if fallback := theFallbackRateFor(inputTokens, outputTokens, cacheRead, cacheWrite); entry.TotalCost == fallback {
+		t.Errorf("the closing entry reports $%.6f, the unknown-model flat rate — the "+
+			"session's registry never reached the price on the line a human reads", fallback)
+	}
+}
+
 // TestClosingEntryReadsTokenTotalsUnderTheMutex is the race found beside the
 // defect, and it is the same one SaveCheckpoint already carries a named test
 // for. The closing entry took the mutex to price the session and then read the
 // four counts outside it, so a turn still logging when a session closed could
 // land in the cost and not in the counts.
+//
+// This is not a pricing test, so it passes no registry. What it needs of the
+// cost is only that it be non-zero while the counts are still zero, and the
+// unknown-model fallback supplies that. It used to hand a registry to a session
+// running Sonnet, which the registry priced at exactly the fallback — an
+// argument that read as coverage and pinned nothing.
 func TestClosingEntryReadsTokenTotalsUnderTheMutex(t *testing.T) {
-	session, err := New(t.TempDir(), "claude-sonnet-4-20250514", "test-agent", "",
-		registryWithTwoDifferentlyPricedModels(t))
+	session, err := New(t.TempDir(), "claude-sonnet-4-20250514", "test-agent", "", nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

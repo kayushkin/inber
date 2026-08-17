@@ -25,6 +25,17 @@ const (
 // registryWithTwoDifferentlyPricedModels builds the smallest registry that can
 // distinguish a real lookup from the flat rate: a cheap model and an expensive
 // one, neither priced at the unknown-model fallback.
+//
+// It carried a third row, claude-sonnet-4-20250514 at $3.00/$15.00, which is the
+// fallback's own numbers — the exact shape the comment above says a fixture must
+// not have. Eight call sites across five files then handed this registry to a
+// session running that model, so the registry argument returned the identical
+// float as nil at every one of them and pinned nothing. The row is gone rather
+// than merely unused, because a fixture that can price a model at the fallback
+// is a trap the next caller has no reason to suspect. Callers that need a
+// registry a wrong answer cannot imitate should use
+// registryStraddlingTheFallback in turn_log_pricing_test.go; callers that are
+// not pricing tests should pass nil and say so.
 func registryWithTwoDifferentlyPricedModels(t *testing.T) *modelstore.Store {
 	t.Helper()
 
@@ -43,14 +54,63 @@ func registryWithTwoDifferentlyPricedModels(t *testing.T) *modelstore.Store {
 			MaxTokens: 200_000, InputCost: haikuInputCostPer1M, OutputCost: haikuOutputCostPer1M, Enabled: true},
 		{ID: "claude-opus-4-20250514", Provider: "anthropic", Name: "Claude Opus 4",
 			MaxTokens: 200_000, InputCost: opusInputCostPer1M, OutputCost: opusOutputCostPer1M, Enabled: true},
-		{ID: "claude-sonnet-4-20250514", Provider: "anthropic", Name: "Claude Sonnet 4",
-			MaxTokens: 200_000, InputCost: 3.00, OutputCost: 15.00, Enabled: true},
 	} {
 		if err := store.AddModel(model); err != nil {
 			t.Fatalf("add model %s: %v", model.ID, err)
 		}
 	}
 	return store
+}
+
+// TestNeitherFixtureRegistryPricesAModelAtTheFallback makes the two helpers'
+// doc comments into a rule a case can redden. Both say their models are priced
+// away from the unknown-model fallback, and for months
+// registryWithTwoDifferentlyPricedModels carried a row at exactly $3.00/$15.00
+// while saying so — the comment was at the definition and the choice of model
+// was at each call site, and nothing carried one to the other.
+//
+// Checking the registry rather than the call sites is deliberate. A call site
+// can only be wrong about a model the registry offers, so removing the trap from
+// the fixture removes it from every present and future caller at once.
+func TestNeitherFixtureRegistryPricesAModelAtTheFallback(t *testing.T) {
+	for name, registry := range map[string]*modelstore.Store{
+		"registryWithTwoDifferentlyPricedModels": registryWithTwoDifferentlyPricedModels(t),
+		"registryStraddlingTheFallback":          registryStraddlingTheFallback(t),
+	} {
+		models, err := registry.Models("anthropic")
+		if err != nil {
+			t.Fatalf("%s: listing models: %v", name, err)
+		}
+		if len(models) == 0 {
+			t.Fatalf("%s carries no models, so this test would pass without looking at one", name)
+		}
+		for _, model := range models {
+			if model.InputCost == fallbackInputCostPer1M && model.OutputCost == fallbackOutputCostPer1M {
+				t.Errorf("%s prices %s at $%.2f/$%.2f, which is the unknown-model fallback — "+
+					"a test handing this registry to a session running that model computes the "+
+					"identical float as passing nil, so the registry argument pins nothing",
+					name, model.ID, model.InputCost, model.OutputCost)
+			}
+		}
+	}
+}
+
+// TestTheStraddlingFixtureStraddles pins the property that makes
+// registryStraddlingTheFallback stronger than merely differing from the
+// fallback: no single scale factor carries its registered price to the flat
+// rate, so a cost that reached the fallback is wrong in one direction on input
+// and the other on output and cannot coincide with the right answer. A fixture
+// that drifted to the same side of the fallback on both axes would still pass
+// every cost assertion in this package while quietly losing that.
+func TestTheStraddlingFixtureStraddles(t *testing.T) {
+	if straddlingInputCostPer1M <= fallbackInputCostPer1M {
+		t.Errorf("the fixture's input price $%.2f is not above the fallback's $%.2f",
+			straddlingInputCostPer1M, fallbackInputCostPer1M)
+	}
+	if straddlingOutputCostPer1M >= fallbackOutputCostPer1M {
+		t.Errorf("the fixture's output price $%.2f is not below the fallback's $%.2f",
+			straddlingOutputCostPer1M, fallbackOutputCostPer1M)
+	}
 }
 
 // TestCostDependsOnWhichModelRan is the defect this file was written for, in
@@ -211,26 +271,34 @@ func TestNilRegistryPricesEverythingTheSame(t *testing.T) {
 // history from its jsonl, and every turn in it was priced at the flat rate even
 // though the log records the model each turn ran on. This is the one cost path
 // a user reads directly.
+//
+// It was written on Haiku, and Haiku is the weaker fixture: the fallback is its
+// registered price times exactly 3.75 on BOTH axes, so an implementation that
+// scaled rather than looked anything up satisfies the assertion. Zero of the 56
+// models in the live registry straddle the fallback, which is why the straddling
+// fixture has to be invented — $5.00 in and $2.00 out is above the fallback on
+// input and below it on output, so no single factor connects the two.
 func TestRebuiltTimelinePricesTheModelTheTurnRanOn(t *testing.T) {
-	logFile := filepath.Join(t.TempDir(), "session.jsonl")
-	writeSessionLogForOneTurn(t, logFile, "claude-haiku-4-5-20251001", 1_000_000, 100_000)
+	const inputTokens, outputTokens = 1_000_000, 100_000
 
-	events, _, err := ReconstructTimelineFromJSONL(logFile, registryWithTwoDifferentlyPricedModels(t))
+	logFile := filepath.Join(t.TempDir(), "session.jsonl")
+	writeSessionLogForOneTurn(t, logFile, straddlingModel, inputTokens, outputTokens)
+
+	events, _, err := ReconstructTimelineFromJSONL(logFile, registryStraddlingTheFallback(t))
 	if err != nil {
 		t.Fatalf("ReconstructTimelineFromJSONL: %v", err)
 	}
 
 	stats := statsEvent(t, events)
-	flatRate := (1_000_000*3.00 + 100_000*15.00) / 1_000_000
-	wantHaiku := (1_000_000*haikuInputCostPer1M + 100_000*haikuOutputCostPer1M) / 1_000_000
+	want := atTheRegisteredPrice(inputTokens, outputTokens, 0, 0)
 
-	if stats.Cost == flatRate {
-		t.Fatalf("the Haiku turn is priced at $%.4f, the unknown-model flat rate — "+
+	if fallback := theFallbackRateFor(inputTokens, outputTokens, 0, 0); stats.Cost == fallback {
+		t.Fatalf("the rebuilt turn is priced at $%.4f, the unknown-model flat rate — "+
 			"the registry never saw the model id the log recorded", stats.Cost)
 	}
-	if stats.Cost != wantHaiku {
-		t.Errorf("the Haiku turn is priced at $%.4f, want $%.4f from its registered $%.2f/$%.2f per 1M",
-			stats.Cost, wantHaiku, haikuInputCostPer1M, haikuOutputCostPer1M)
+	if stats.Cost != want {
+		t.Errorf("the rebuilt turn is priced at $%.4f, want $%.4f from its registered $%.2f/$%.2f per 1M",
+			stats.Cost, want, straddlingInputCostPer1M, straddlingOutputCostPer1M)
 	}
 }
 

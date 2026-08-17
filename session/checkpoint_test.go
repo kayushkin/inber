@@ -23,11 +23,18 @@ import (
 // sessionAfterRoundTrips returns a session that has completed roundTrips API
 // round-trips, so its own counter is deliberately not the user-turn number the
 // checkpoint gate would pass in.
+//
+// No registry: nothing in this file asserts a price. It used to pass
+// registryWithTwoDifferentlyPricedModels to a session running Sonnet, and Sonnet
+// is priced at exactly the unknown-model fallback of $3.00/$15.00, so the
+// argument computed the identical float as nil. A registry argument that cannot
+// change an outcome reads as pricing coverage this file does not have; the
+// registered price of a checkpointed session is pinned in
+// closing_totals_test.go and turn_log_pricing_test.go instead.
 func sessionAfterRoundTrips(t *testing.T, roundTrips int) *Session {
 	t.Helper()
 
-	session, err := New(t.TempDir(), "claude-sonnet-4-20250514", "test-agent", "",
-		registryWithTwoDifferentlyPricedModels(t))
+	session, err := New(t.TempDir(), "claude-sonnet-4-20250514", "test-agent", "", nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
