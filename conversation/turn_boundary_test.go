@@ -9,7 +9,8 @@ import (
 
 // toolUsingTurn builds one user turn: the user's own message, then toolCalls
 // round-trips, each of which appends a user-role message carrying only tool
-// results — the shape agent.Run produces at agent.go:319.
+// results — the shape agent.Run produces where it appends a user message of
+// tool results after the tool-use branch of its stop-reason switch.
 func toolUsingTurn(label string, toolCalls int) []anthropic.MessageParam {
 	messages := []anthropic.MessageParam{
 		anthropic.NewUserMessage(anthropic.NewTextBlock("request " + label)),
