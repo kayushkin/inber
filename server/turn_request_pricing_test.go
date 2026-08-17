@@ -98,6 +98,43 @@ func registryStraddlingTheFallback(t *testing.T) *modelstore.Store {
 	return store
 }
 
+// TestTheStraddlingFixtureStraddles makes the doc comment above into a rule a
+// case can redden. It is a port of session.TestTheStraddlingFixtureStraddles
+// (session/timeline_cost_test.go), and it is here because the comment was not.
+//
+// Measured 2026-08-17: the 1405-byte comment on the constants above is
+// byte-identical to the one in session/turn_log_pricing_test.go, but only
+// session carried a guard for it. Pricing the fixture AT the fallback was
+// already caught in this package, by
+// TestTheTurnChargeOnTheRequestRowIsPricedByTheRegistry — breaking the
+// STRADDLE was not. Moving the output price to $20.00, the same side of the
+// fallback as the input price, left this package green. So the stronger
+// property the comment is written to protect was prose with nothing holding it
+// up, and a fixture that drifted to one side would pass every cost assertion
+// here while losing it.
+//
+// The two inequalities are the whole claim, not a proxy for it. Registered
+// above the fallback on input forces any single scale factor to be below 1;
+// registered below it on output forces the same factor above 1. So no one
+// factor carries $5.00/$2.00 to $3.00/$15.00, which is exactly what the
+// comment asserts and what stops a calculation that scaled from standing in
+// for one that looked a price up.
+//
+// The constants and this guard are now duplicated across session/ and server/,
+// which is how the drift this test exists to catch happened in the first
+// place. One authoring in a shared internal test-fixture package would be the
+// better fix; it is a structural call and deliberately not taken here.
+func TestTheStraddlingFixtureStraddles(t *testing.T) {
+	if straddlingInputCostPer1M <= fallbackInputCostPer1M {
+		t.Errorf("the fixture's input price $%.2f is not above the fallback's $%.2f",
+			straddlingInputCostPer1M, fallbackInputCostPer1M)
+	}
+	if straddlingOutputCostPer1M >= fallbackOutputCostPer1M {
+		t.Errorf("the fixture's output price $%.2f is not below the fallback's $%.2f",
+			straddlingOutputCostPer1M, fallbackOutputCostPer1M)
+	}
+}
+
 // theFallbackRateFor is the wrong answer, computed the way a calculation that
 // never reached a registry computes it.
 func theFallbackRateFor(inputTokens, outputTokens, cacheRead, cacheWrite int) float64 {
