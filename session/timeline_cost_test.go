@@ -91,8 +91,12 @@ func TestCostDependsOnWhichModelRan(t *testing.T) {
 }
 
 // TestCachedCostDependsOnWhichModelRan is the same assertion for the call the
-// server actually makes. All four server call sites use the cache-aware
+// server actually makes. Every server-side call site uses the cache-aware
 // function, so pinning only the plain one would leave the live path uncovered.
+// Five of them as of 2026-08-17 -- engine/turn_postprocess.go x2, server/server.go
+// x2, server/spawn.go -- and the only caller of the plain CalcCost outside this
+// package is engine/display_stats.go. The count is stated loosely on purpose: it
+// was four when this was written and the sentence does not depend on which.
 func TestCachedCostDependsOnWhichModelRan(t *testing.T) {
 	store := registryWithTwoDifferentlyPricedModels(t)
 

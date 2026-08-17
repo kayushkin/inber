@@ -62,7 +62,13 @@ func TestStashPointerNamesOnlyTheRecallToolsOnTheWire(t *testing.T) {
 			wantNotInText: []string{"memory_search"},
 		},
 		{
-			// Four of the ten agents configured on this host are this case.
+			// No agent on this host is this case as of 2026-08-17: all ten
+			// carrying memory tools have memory_expand as well as
+			// memory_search. It read four of ten when this was written. The
+			// case stays because the recall text is built from whatever tool
+			// list it is handed, and that list is configuration — what no
+			// agent happens to be configured as today is not a reason to stop
+			// pinning it.
 			name:          "search only",
 			recallTools:   []string{memory.ToolNameMemorySearch},
 			wantInText:    []string{"memory_search"},
