@@ -154,7 +154,7 @@ func TestObserveModeAllowsTheRealReadTools(t *testing.T) {
 // "should assist mode run this unattended?" while the answer is cheap.
 //
 // The set is not asserted to be empty, because emptying it is a policy call and
-// not this test's to make. Three of the eight are the sharp ones and are
+// not this test's to make. Four of the eight are the sharp ones and are
 // recorded here so the next reader does not have to re-derive them:
 //
 //   - "scheduler" creates and deletes cron jobs, and this host's scheduler runs

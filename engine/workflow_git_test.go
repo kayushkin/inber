@@ -133,8 +133,11 @@ func TestPushToDefaultBranchOptInPublishesMain(t *testing.T) {
 	}
 }
 
-// 57 of 78 repositories on this host have no refs/remotes/origin/HEAD. Reading
-// that ref instead of asking origin would call their default branch unknown.
+// 58 of the 79 repositories on this host have no refs/remotes/origin/HEAD, counted
+// 2026-08-17 excluding -wt- worktrees. Reading that ref instead of asking origin
+// would call their default branch unknown. It read 57 of 78 on 2026-07-31 and
+// drifted by exactly one repo being created, which is the rate to expect: the
+// ratio is the point, not the pair.
 func TestTheDefaultBranchIsAskedOfOriginNotOfTheLocalTrackingRef(t *testing.T) {
 	repo, _ := newRepoWithRemote(t)
 	// git init + git remote add never writes this ref; assert that rather than

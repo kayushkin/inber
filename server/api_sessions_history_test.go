@@ -60,8 +60,10 @@ func agentsOf(entries []historyEntry) map[string]string {
 // A session written before inber 6271cfa sits at logs/<agent>/<agent>/<session>
 // because both the caller and session.New joined the agent name. The reader used
 // to hand the whole relative path back as the agent, so every one of the 151
-// such sessions on this box reported agent "claxon/claxon" — a name no agent
-// has, over an API whose consumers join on it.
+// such sessions in this repo's logs root reported a doubled name — 149 of them
+// "claxon/claxon" and 2 "fionn/fionn" — names no agent has, over an API whose
+// consumers join on them. Recounted 2026-08-17; the sentence used to attribute
+// all 151 to claxon.
 func TestANestedSessionReportsTheAgentNotTheDoubledPath(t *testing.T) {
 	workspace := t.TempDir()
 	writeSessionLog(t, workspace, "claxon", "claxon", "2026-05-02_061800_1903")
