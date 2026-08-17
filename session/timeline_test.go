@@ -63,7 +63,13 @@ func TestReconstructTimelineFromJSONL(t *testing.T) {
 	}
 	f.Close()
 
-	events, startTime, err := ReconstructTimelineFromJSONL(logFile, registryWithTwoDifferentlyPricedModels(t))
+	// No registry: this test asserts event types, ordering and token counts, and
+	// never a price. It used to pass registryWithTwoDifferentlyPricedModels for a
+	// log whose turn ran Sonnet, which that registry prices at exactly the
+	// unknown-model fallback of $3.00/$15.00 — so the argument computed the same
+	// float as nil and pinned nothing. What a rebuilt timeline costs is pinned by
+	// TestRebuiltTimelinePricesTheModelTheTurnRanOn.
+	events, startTime, err := ReconstructTimelineFromJSONL(logFile, nil)
 	if err != nil {
 		t.Fatalf("ReconstructTimelineFromJSONL: %v", err)
 	}
@@ -221,8 +227,10 @@ func TestReadTimelineFromJSONL(t *testing.T) {
 	}
 	f.Close()
 
-	// Read timeline
-	content, err := ReadTimelineFromJSONL(dir, "test-session-123", registryWithTwoDifferentlyPricedModels(t))
+	// Read timeline. No registry — the assertions below are on the prompt and
+	// response text, not on a price, and the Sonnet turn in the fixture log is
+	// priced at exactly the unknown-model fallback either way.
+	content, err := ReadTimelineFromJSONL(dir, "test-session-123", nil)
 	if err != nil {
 		t.Fatalf("ReadTimelineFromJSONL: %v", err)
 	}
