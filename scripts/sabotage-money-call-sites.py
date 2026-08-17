@@ -40,6 +40,39 @@ comparable to another score taken on the same list:
               rows; the 2/12 and 5/12 figures in card d75191e6 are over 12 and
               cannot be compared to them directly.
 
+  2026-08-17  M14 added, for the same omission one call site along. The
+              failed-turn path in server/server.go carried a nil-registry row
+              (M6) and no cache-drop row. Scores over 14 rows are not comparable
+              to the 13-row pair either; the pair recorded with this change was
+              re-taken on the 14-row list.
+
+Two rows are known unscoreable through the SPAWN path, and the reason is worth
+reading before anyone tries again — it is not a weak assertion, it is a fixture
+that cannot be built without changing shipping code:
+
+  M4, M5      A spawn's model is NOT the one its caller asked for.
+              SpawnRequest.Model reaches the child only as AgentConfig.Model,
+              and Engine.initAgent overwrites that with the agent's model as
+              registered in agent-store unless EngineConfig.ModelExplicitlySet
+              is set — which only applyRequestOverrides sets, and Spawn passes a
+              ZERO RunRequest. Measured 2026-08-17: asking a spawn for
+              "a-model-priced-either-side-of-the-fallback" yields a child engine
+              running "claude-sonnet-4-5"; the same model asked for through
+              RunRequest.Model arrives intact.
+
+              So a spawn fixture cannot choose its model, and the model it gets
+              is priced at exactly the $3.00/$15.00 unknown-model fallback — on
+              which a nil registry and a live one compute the IDENTICAL figure.
+              Both mutations would be unobservable even if the turn ran.
+
+              ⛔ And driving a real spawn is not free. Measured the same day:
+              the child selected an OpenAI model at turn time and sent a live
+              request to api.openai.com on this host's stored credentials.
+              ANTHROPIC_BASE_URL does not redirect that path — agent/clients.go
+              takes the OpenAI base URL from a hardcoded constant with no
+              environment override. A spawn fixture that assumes the Anthropic
+              seam sends real traffic and cannot tell that it did.
+
 Usage:  python3 scripts/sabotage-money-call-sites.py [--only M3]
 """
 
@@ -105,6 +138,13 @@ MUTATIONS = [
         "result.CacheReadTokens, result.CacheCreationTokens, g.modelStore)",
         "result.CacheReadTokens, result.CacheCreationTokens, nil)",
         "failed-turn path: the error request row priced with no registry",
+    ),
+    Mutation(
+        "M14", "server/server.go",
+        "cost := sessionMod.CalcCostWithCache(sess.Engine.Model, result.InputTokens, result.OutputTokens,\n"
+        "\t\t\t\t\tresult.CacheReadTokens, result.CacheCreationTokens, g.modelStore)",
+        "cost := sessionMod.CalcCost(sess.Engine.Model, result.InputTokens, result.OutputTokens, g.modelStore)",
+        "failed-turn path: cache adjustment dropped from the error request row",
     ),
     Mutation(
         "M7", "server/server.go",
