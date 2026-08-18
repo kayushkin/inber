@@ -1191,3 +1191,50 @@ straight-line function (`engine/engine.go:245`) with its two semantic retries wr
 `if err != nil` branches (`agent/agent_run.go:205-222`, `engine/turn_execute.go:44-50`). Getting
 goose's guarantee would mean restructuring that loop, which is a far larger change than the
 guarantee is currently worth — record the technique, do not start the refactor for it.
+
+## Harness-watch — 2026-08-18: on an adaptive-thinking model, omitting `thinking` buys thinking — and inber only ever omits it
+
+[goose #11177](https://github.com/aaif-goose/goose/pull/11177) sends `thinking: {"type":"disabled"}`
+explicitly to every model the registry marks `thinking_mode = adaptive`, instead of leaving the
+field out. The reason is a billing one and goose states it plainly: **"Claude 5 models run adaptive
+thinking, billed as invisible output tokens, when the thinking field is omitted."** A user with
+`GOOSE_THINKING_EFFORT=off` — or with the setting untouched — was paying for reasoning that
+`thinking.display` then defaulted to hiding. Measured on `claude-opus-5` with thinking off: output
+tokens fell from **157 to 53** once the disable was sent. Two model classes are carved out, and the
+carve-outs are the substance: always-on models such as `claude-fable-5` **reject** an explicit
+disable, and pre-adaptive models such as `claude-haiku-4-5` already read omission as disabled. So
+the rule is not "always send disabled" — it is **the registry has to say which of the three
+behaviours a model has, and the request builder has to read it.**
+
+**inber has one branch where three are needed.** `agent/agent_run.go:82-88`:
+
+```go
+if a.thinkingBudget > 0 {
+    params.Thinking = anthropic.ThinkingConfigParamUnion{
+        OfEnabled: &anthropic.ThinkingConfigEnabledParam{BudgetTokens: a.thinkingBudget},
+    }
+}
+```
+
+There is no `else`. A budget of zero — the documented way to turn thinking off
+(`agent/agent.go:176`, "Set to 0 to disable"), the default for every agent whose registry config
+omits `thinking` (`agent/registry/registry.go:215`), and what `engine/build.go:85-87` passes on — omits
+the field, which on an adaptive model means thinking **on** and billed. This is live rather than
+hypothetical: **`claude-opus-5`, `claude-sonnet-5` and `claude-fable-5` are all `enabled: true` in
+model-store today** (`GET :8155/api/models`, measured this sweep), and an agent's model is a plain
+config string (`agent/registry/config.go`), so pointing one at `claude-opus-5` is a one-line edit.
+inber's defaults are safe only by accident — `agent/models.go:164` and `engine/lifecycle.go:92` name
+Sonnet 4-family ids, which are pre-adaptive. **Filed as a todo.**
+
+**What inber should consider:** the fix is blocked on a decision that is not inber's to take alone,
+and must not be taken by accident. inber reads model metadata from **model-store**
+(`agent/models.go:52` `GetModelInfo` → `Store.ResolveModel`), and that record carries a context
+window and two prices and **no thinking mode** — so there is nowhere honest to read the answer from
+today. The two options are (a) add a thinking-mode field to model-store, the owning registry, and
+have `agent_run.go` branch on it, or (b) hardcode a model-id list in inber, which this box's
+single-source-of-truth directive forbids and which would silently mis-handle every model added
+after the list was written. Whoever takes it also has to decide what a *zero* budget means on an
+always-on model like `claude-fable-5`, where the explicit disable is rejected outright: refuse the
+request, or send nothing and log that the setting cannot be honoured. Note the cost asymmetry that
+makes this worth doing rather than watching — the failure is silent in both directions, since the
+tokens are invisible in the response and show up only on the bill.

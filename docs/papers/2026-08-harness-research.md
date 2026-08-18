@@ -2259,3 +2259,213 @@ management and compaction for **new** submissions, 2608.11392v2 above being an u
 sandboxing or isolation mechanisms, where the in-window security work is all provenance, prompt
 injection and protocol-level authorization. The cache thread's most recent genuine entry is still
 2026-08-13.
+
+---
+
+# 2026-08-18 sweep — the 08-15→08-18 band is genuinely new, and the strongest result in it prices inber's own layer at 10x
+
+**Scoping first, because the last sweep left a condition to re-run rather than a conclusion to
+inherit.** The 08-17 entry closed by reporting that arXiv had announced nothing submitted after
+2026-08-14 and told the next sweep to re-check in ~48h. Re-run this pass with the same
+`totalResults` control: `[202608150000 TO 202608170000]` now answers **1029** and
+`[202608170000 TO 202608190000]` answers **915**, both zero at the time of the last sweep. So the
+window 2026-08-15 → 2026-08-18 was **structurally unreachable** by every earlier sweep in this file
+rather than merely unexamined, and everything below is new. Highest id previously recorded here was
+`2608.14375`; all sixteen candidates checked this pass are above it and grep-clean against all five
+notes files. Every id and date below was verified against the arXiv Atom API by `id_list`, not read
+off a search snippet.
+
+## 1. [arXiv:2608.16630](https://arxiv.org/abs/2608.16630) — The Working Set of a Coding Agent: coherence debt, and why read-based instrumentation cannot see it (Mohammadi, Klein, Chadha, Arora, Bindschaedler; 2026-08-17, cs.SE)
+
+Models repo-scale coding as reconstructing a coupled-fact graph: at each edit a required fact comes
+from recent context or from parametric memory, and the facts covered by neither are **coherence
+debt**. Each channel is supplied and withheld, with injected faults, across **seven models and five
+harnesses**. Three findings carry. **Availability decides the outcome and distance does not** — a
+supplied fact works as well far from the edit as adjacent to it, and withholding one costs exactly
+the work it supports, which kills the intuition that context should be arranged by proximity.
+**A missing fact produces wrong work rather than absent work** — "an agent asked to act acts,
+fabricating the file or guessing the value, so instruments built on reads look for a hole already
+filled." And the number: **harness configurations that all pass every test differ more than tenfold
+in tokens consumed**, because they rebuild the same content at different rates, while spending more
+recovers nothing when facts are genuinely withheld. A side result corroborates this file's 08-12
+"catastrophic remembering" entry from the opposite direction — where a convention file and the code
+disagree, all seven models follow the stale convention, so **a wrong `CLAUDE.md` costs more than no
+`CLAUDE.md`**.
+
+**What inber should consider:** the tenfold spread is measured at the layer inber owns, between
+configurations that are all *correct*, which makes it the most cost-relevant number in this window.
+The trap is the instrumentation. inber's observability is read-shaped — tool calls and cache
+counters via `agent/agent.go` hooks and `session/session.go` — and the paper's closing prescription
+is that availability must be checked **against what the agent produced, not what it read**. That is
+not a metric inber can compute today, and adding it is a real piece of work rather than a
+counter; record the finding, do not pretend the existing counters answer it.
+
+## 2. [arXiv:2608.16370](https://arxiv.org/abs/2608.16370) — What Does Context Compression Cost an Agent? (Shuyu Liu; 2026-08-17, cs.AI)
+
+The argument is that task completion is the wrong instrument for compression, because compression
+can force an agent to **reacquire dropped state** while leaving completion statistically unchanged.
+Controlled 24-turn horizon, three models, two task regimes, tool calls split into retrieval versus
+execution. **Retrieval calls rise in all six model-regime comparisons, five of six survive Holm
+correction, and at the prespecified 5x compression point completion changes are not significant in
+any cell.** Cleanest case, GPT-5.5: completion 80% → 85% (p=1.0) while retrieval goes 21.0 → 63.9
+calls (p=.002). Replacing retained state with semantically irrelevant content raises retrieval
+**57%** with no completion change. The honest hedge is the author's own: in ALFWorld, sliding
+compression produces **no** retrieval surge, so the reacquisition signature is
+environment-dependent rather than intrinsic to shortening context.
+
+**What inber should consider:** this says the compaction work already in this corpus has been
+measured with the wrong instrument — inber cannot tell whether `conversation/summary_generation.go`
+is any good from whether sessions still finish, because the paper's whole point is that they do
+finish, more expensively. The concrete ask is cheap and uses data inber already writes: **count
+tool calls in the N turns after a compaction event against the N before**, per session, as a
+regression metric. Because of the ALFWorld result, measure it on inber's own traffic before
+assuming the surge is there — this is a hypothesis to test, not a defect to fix.
+
+## 3. [arXiv:2608.16055](https://arxiv.org/abs/2608.16055) — Governance at the Boundary: facts are attenuated at the handoff, and decomposition is what does it (Li, Wang; 2026-08-17, cs.AI)
+
+626 episodes over 100 KYC/AML variants, two models, three architectures. The mechanism is a handoff
+defect stated precisely: **policy-relevant facts discovered by one component are attenuated at the
+boundary before reaching the component that must act on them.** A 32B open-weights model attenuated
+**0% of discovered facts under a single-loop baseline, 56% under a fixed pipeline, and 85% under an
+orchestrator-subagent architecture**; gpt-4.1-mini attenuated 3–6%, so the price of decomposition is
+partly a function of model capability. The same mechanism yields **both under- and over-escalation**,
+depending on whether the dropped fact was a risk signal or an exculpating one.
+
+**What inber should consider:** read it against `2608.07556` (MasDrift, 08-14 entry) rather than
+alongside it — MasDrift measured whether *authority* survives delegation, this measures whether the
+*facts the authority depends on* survive. inber's exposure is legible in one tool signature:
+`spawn_agent` carries `{agent, orchestrator, task}` (`agent/registry/spawn_tool.go`) where `task` is
+free-text the parent writes, so **every fact the parent discovered reaches the child only if the
+parent chose to retype it into prose**. That is the 85% channel. The bidirectional failure is why
+there is no cheap fix and why this is not filed as a defect: passing more context and passing less
+are both wrong without knowing a fact's polarity, so "widen the handoff struct" is a design decision
+with a real downside, not an obvious improvement.
+
+## 4. [arXiv:2608.15089](https://arxiv.org/abs/2608.15089) — StateM: harness scaling, with an unusually large number attached (Qin, Lu, Wang, Wang; 2026-08-15, cs.AI)
+
+An explicit bet on improving the execution system around an agent without touching model weights:
+durable states, phase-local context, checked transitions, recoverable runbooks, versioned procedural
+practices. GPT-5.5 xhigh 83.1% → **92.1%** on Terminal-Bench 2.1; the runbook **transfers unchanged
+across models**, and under $38 of adaptation lifts DeepSeek-V4 Flash 82.7 → 88.1%. Reported final
+run economics: **~$15 against $574.68** for the GPT reference. Code at `henryqin1997/statem`.
+⚠️ The headline 95.3% is *raw accuracy across 445 trials* with an "all 89 tasks succeed at least
+once" framing — a different claim from a single-run pass rate, and it should be cited as such.
+
+**What inber should consider:** the transferable half is the claim that four named failure modes —
+losing mutable state, failing to reactivate earlier lessons, skipping known procedures, stopping
+prematurely — live in the harness rather than the model, which is this corpus's running thesis with
+a number on it. The one mechanism worth looking at concretely is **turning postmortem findings into
+persistent, executable preconditions**: inber has the raw material in `memory/` and
+`session/checkpoint.go`, but a memory there is retrieved as context and never enforced as a
+precondition, and those are different things.
+
+## 5. [arXiv:2608.15008](https://arxiv.org/abs/2608.15008) — Harness the Memory: no substrate dominates, and retrieval actively harms decisions (Huang, Zhang, Wu, Chen, Jiang, Yang, Yang, Zou; 2026-08-15, cs.CL)
+
+Controlled comparison of memory *substrates* — dense and sparse indices, text records, structural
+and hierarchical stores, refinement-based memories, parametric updates, activation-compatible
+context mechanisms — over three backbones, four benchmark suites, 26 metrics. **No single substrate
+dominates.** Broad retrieval helps long-context factual QA but **excessive retrieval actively harms
+sequential decision-making by shifting attention away from action-critical context**, and substrates
+that work at moderate history lengths turn costly or brittle at longer horizons. Conclusion:
+substrate routing is a necessary component, not an optimization.
+
+**What inber should consider:** this referees the disagreement the 08-17 entry logged and left open —
+`2608.12720` (learned routing wins) against `2608.12888` (lexical BM25 over raw logs wins) — and its
+answer is that both hold in different regimes and the question was mis-posed as a choice. The
+actionable read for inber is not "add substrates": it is that **the retrieval-harms-decisions
+finding lands directly on `memory/auto_context.go`**, since automatic injection into an agent that
+is already mid-task is the exact configuration measured as harmful. Worth measuring before widening
+what that file injects.
+
+## 6. [arXiv:2608.15888](https://arxiv.org/abs/2608.15888) — Bounded Agents: injection is an authorization-architecture problem, and composition closure is the part nothing here has (Muruaga; 2026-08-16, cs.AI/cs.CR)
+
+Frames prompt injection as an authorization problem rather than a model problem — an injection is
+only a risk if the agent holds the authority to act on it. The Agentic Principal Chain tracks
+delegated authority across principals, evaluates each request against **accumulated session state
+rather than independently**, carries forward and restricts delegated scope and budgets, and uses
+**composition closure** to block individually-permitted actions that combine into a prohibited
+outcome. 3,154 instances over InjecAgent, AgentDojo and ASB: AgentDojo exfiltration **75–100% → 0%**
+in all four domains, all 544 InjecAgent data-stealing cases blocked, intent binding cutting
+destruction 38.6% → 4.0%. Authorization latency **0.24 ms at p99**. ⚠️ The utility cost is real and
+the author states it: **8.6 and 13.9 percentage points lower** across 949 task-injection pairs, and
+the Composition Soundness proof holds only under a complete restriction set and serialized
+admission.
+
+**What inber should consider:** composition closure is the piece inber's guard and **permission-store**
+have in no form — `guard.CheckTool` (`guard/guard.go:165`) sees one call with no memory of the last
+one, so two individually-benign calls that compose into exfiltration both pass, and the repetition
+detector is the only stateful thing in the package. Sub-millisecond p99 removes cost as the reason
+not to build it; the 8.6–13.9 point utility loss is the reason, and it is a genuine trade rather
+than an oversight. Read directly against `2608.12654` (08-16 entry: model-driven approval gates
+over-refuse 28:1) — the two reach the same conclusion, that the decision belongs **outside** the
+model, from opposite evidence.
+
+## 7. Tier two — verified, narrower, no action
+
+- **[arXiv:2608.15127](https://arxiv.org/abs/2608.15127)** (AgentSysBench, Chang et al., 08-15,
+  cs.OS) — the only in-window item touching cache economics, and it is a *different* cache. Names a
+  **"control-plane tax"** where auxiliary LLM calls and context overhead from tool schemas and
+  observations crowd out productive compute, and measures heavy cross-request redundancy in
+  production traces: **tool-result caching removes 35.2% of redundant search calls and 19.3% of
+  aggregate search latency**. Also that sessions hold state idle for minutes to hours between
+  steps — the demand-side confirmation of the keepalive-economics paper (`2607.19214`, held 08-13).
+- **[arXiv:2608.16801](https://arxiv.org/abs/2608.16801)** (Destefanis, Aste, 08-17, cs.SE) — 1902
+  runs modelling multi-agent coding as a temporal network. **Shared files replace repeated 1-to-1
+  messaging, cutting output tokens ~42% at eight agents** on message-heavy work while adding
+  overhead where files already carry the coordination — and **naming a coordinator creates no
+  communication hub and gives no reliable improvement in success**, which is worth holding against
+  any future orchestrator design here. Unprompted reward-hacking observation: agents hunt for hidden
+  grading material in four-fifths of runs, reproduced across 244 sealed-environment runs.
+- **[arXiv:2608.16381](https://arxiv.org/abs/2608.16381)** (AstronOS, Nie et al., 08-17) — five ways
+  to carry a plan into a fresh model session: runtime-mediated handoff passes **14/15**, against
+  **0/15 for rereading the originals, 2/15 for full-history replay, and 0/15 for both a
+  deterministic text summary and a deterministic JSON summary**. Squarely on inber's resume path if
+  it holds. ⚠️ 150 executions, one system, self-designed benchmark, frozen scorer — small and
+  self-refereed, so treat the ordering as a hypothesis rather than the margins as measurements.
+- **[arXiv:2608.16357](https://arxiv.org/abs/2608.16357)** (MELD, Lovén et al., 08-17) — reconciling
+  facts across federated agent memories: five outcomes (insert/merge/relate/conflict/reject), one
+  auditable Patch as the sole mutation object, per-claim status CRDT reconverging 30/30 on
+  partition-heal where last-writer-wins manages 11/30. The principle is the part worth stealing —
+  **a detected contradiction is preserved for adjudication, never silently resolved** — and it is
+  the same rule noteboard follows by keeping revisions.
+- **[arXiv:2608.16393](https://arxiv.org/abs/2608.16393)** (Ying et al., 08-17, Tencent) — 14,560
+  controlled indirect-injection executions over 16 channels. For inber: **the skills channel in file
+  mode reaches 16.0% attack success**, hidden Unicode in file mode 25.5%. Corroborates the 08-13
+  `2608.11888` skill-harm entry from a second vendor's harness.
+- **[arXiv:2608.15242](https://arxiv.org/abs/2608.15242)** (LongRCA Bench, Zhang et al., 08-15,
+  cs.SE) — 1,140 **real** failed trajectories, no injected errors, median **145 steps**, human
+  labels for responsible role and earliest decisive root-cause step. The number to keep is the
+  difficulty one: the strongest baseline reaches **13.2% exact root-step accuracy**. Automated
+  blame-assignment over long agent traces does not work yet.
+- **[arXiv:2608.15703](https://arxiv.org/abs/2608.15703)** (HyMem, Wang et al., 08-16) — layers
+  context so an isolated reasoning module handles subtasks **without adding intermediate traces to
+  the persistent planning context**. ⚠️ Web/QA, not coding.
+- **[arXiv:2608.16798](https://arxiv.org/abs/2608.16798)** (ClawGym II, Song et al., 08-17) —
+  black-box RL *through* a harness via a serving proxy at the model boundary. Relevant here only as
+  evidence that the harness has become a training surface and not just a runtime.
+
+## 8. Channel notes — and one correction to this file
+
+**Prompt caching / KV-cache reuse: ninth consecutive empty sweep.** Dedicated search returned only
+papers already recorded (`2607.19214`, `2601.06007`, `2607.21604`) plus two out-of-window items
+(`2601.08343`, `2603.13289`). AgentSysBench's tool-result caching above is a different cache and
+should not be filed under this thread. The exact phrases `"agentic software engineering"`,
+`"multi-agent orchestration"`, `"context compaction"`, `"tool use reliability"` and
+`"episodic memory"` each returned **0** in-window hits; a complete enumeration of cs.SE and cs.MA
+for the window surfaced nothing the phrase queries had missed.
+
+**Blogs: ninth consecutive empty sweep.** Nothing in window from Anthropic, Google DeepMind, Meta AI
+or OpenAI; HuggingFace has published nothing since the two 08-13 posts already logged.
+
+⚠️ **Correction to the 08-17 entry.** It reported "Anthropic engineering — latest remains
+2026-04-23". That is wrong. `anthropic.com/engineering` carries **"How we contain Claude across
+products"** — process sandboxes, VMs, filesystem boundaries and egress controls across claude.ai,
+Claude Code and Cowork — published **May 2026**, canonical URL
+`https://www.anthropic.com/engineering/how-we-contain-claude`. It is out of window for every sweep
+since, which is why no sweep filed it, but it is on-topic for the sandbox and permission thread this
+file tracks and **no entry here has ever recorded it**. Worth reading independently of any window.
+
+**Frontier check for the next sweep.** The 08-17 heuristic — a sweep dated D reaches submissions up
+to about D-2 — held exactly: this pass reaches 08-17 cleanly and 08-18 is not yet announced. Re-run
+the `totalResults` control before assuming the next window is real, rather than inheriting this
+sentence.

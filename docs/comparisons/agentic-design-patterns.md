@@ -5139,3 +5139,155 @@ reader can see**, not inherited from a library default.
   remediations of findings from an automated audit bot ("Project Loupe"), which shows in their
   shape — narrow resource-exhaustion fixes with heavy test matrices. Weight them accordingly as
   evidence of human design judgement.
+
+## Harness-watch — 2026-08-18: past the classifier's edge is dangerous, not unknown; a redirect is a fresh authorization decision; and a write nobody checks makes the disk lie about the conversation
+
+### 1. A bounded inspector must fail closed at its own boundary — and inber's Assist gate fails open at exactly that edge
+
+[codex #39122](https://github.com/openai/codex/pull/39122) bounds how deep the dangerous-command
+inspector will unwrap command wrappers, and changes what happens at the bound. It used to return
+*no match*; it now returns *dangerous*. The sentence is the whole finding: **"Returning no match
+after that limit could let a nested dangerous payload escape policy detection."** The integration
+test is the shape to copy — a `rm -rf` buried under enough `env` wrappers is rejected by the exec
+policy **even with approvals disabled**, so the depth bound stops being a bypass and starts being a
+refusal. [codex #39117](https://github.com/openai/codex/pull/39117) is the same rule one layer up:
+a managed filesystem profile that the legacy sandbox policy cannot represent without changing which
+paths are reachable is **rejected with an actionable error** rather than projected lossily — and,
+worth noting on its own, the rejection **keeps queued messages and retries intact** so the user can
+pick a compatible profile and carry on. A refusal that also destroys the pending work is a second
+failure.
+
+inber's classifier is bounded by enumeration rather than by depth, and the boundary behaves
+differently on the two sides. `guard/guard.go:165-186`: `Observe` answers `Denied` for anything
+`isReadOnly` does not name — fail closed, and the doc comment says so on purpose. `Assist` answers
+`Allowed` for anything `isDangerous` does not name. Measured this sweep by diffing the classifier
+lists (`guard/guard.go:319-334`) against the tool set the package's own `knownToolNames` helper
+derives (`guard/classification_test.go:13-48`), eight names sit outside both lists: `browser`,
+`end_turn`, `memory_forget`, `memory_save`, `scheduler`, `scratchpad`, `task_plan`, `web_fetch`.
+Three of those have side effects an approval gate exists for — `scheduler` writes cron jobs,
+`memory_forget` deletes memory, `browser` drives a browser. `TestClassifiedToolsExist` pins one
+direction only (every classified name belongs to a real tool) and not the other (every real tool is
+classified), so the gap is green.
+
+**Not filed — the queue already carries it twice**, as *"nine tool names reach the model
+unclassified, and spawn_agent is a door out of the Assist gate"* and *"six tools are classified
+neither read-only nor dangerous, so assist mode runs them with no approval"*. (The counts differ
+because the tool set has moved under both.) **What #39122 adds is the argument for which way to
+close it**, which is what those todos leave open: inber's two modes disagree about what an
+unclassified tool is, and codex's answer is that beyond the inspector's reach is *dangerous*, not
+*unknown*. Whoever takes those todos should note that flipping `Assist`'s default to
+`NeedsApproval` is not free in inber's current state — `buildToolRefusal` refuses `NeedsApproval`
+outright because no session sets an `ApprovalFunc` (`engine/build_hooks.go:85-99`), so a default
+flip today converts eight silently-allowed tools into eight hard refusals rather than eight prompts.
+That is the decision, and it is a real one: refuse now and build the approval channel after, or
+build the channel first. #39117's carve-out is the argument for doing it in that order anyway — a
+refusal is recoverable if it preserves the queued work, and a silent allow never was.
+
+### 2. Following a redirect is deciding to authorize a second server — inber's OpenAI-compatible client never makes that decision
+
+[codex #39046](https://github.com/openai/codex/pull/39046) confines MCP HTTP redirects to the
+configured server's origin. The threat is stated as an exposure, not a routing bug: **"MCP requests
+can contain sensitive headers and tool-call bodies. Following a cross-origin redirect could
+disclose them to another server."** Three parts to the remedy — every hop must stay on the
+configured origin, HTTPS is required for non-loopback hosts, and plaintext proxy credentials are not
+replayed across hops — plus a 10-hop cap and a shared timeout so the confinement cannot be spent by
+a redirect chain.
+
+**inber's hand-rolled OpenAI-compatible client makes no redirect decision at all.**
+`agent/openai.go:33-36` builds `&http.Client{Timeout: 120s, Transport: EgressRedactionTransport(nil)}`
+with no `CheckRedirect`; `grep -rn CheckRedirect` over the repo returns nothing, so nor does any
+other client here. Go's default follows up to ten redirects, and on a 307/308 it **replays the
+request body** — which on this path is the entire conversation
+(`agent/openai.go:52`, `POST {BaseURL}/chat/completions`). Go does strip `Authorization` once the
+host changes, so the key is not the exposure; the transcript is. It matters because `BaseURL` is not
+a constant: `NewOpenAIClient`'s own doc comment says this client "serves openai, google, openrouter,
+ollama and the catch-all for every provider inber does not name", and a plain-`http://` local or
+self-hosted endpoint gives an on-path attacker a one-response redirect to anywhere. **Filed as a
+todo.**
+
+**What inber should consider:** the fix is four lines and the choice inside it is the whole
+question, so it should be made deliberately rather than by whoever writes the `CheckRedirect`.
+(a) *Refuse all* — `func(...) error { return http.ErrUseLastResponse }`, the simplest and the one
+that breaks any provider that legitimately 30x's between regional hosts. (b) *Same origin only* —
+codex's rule, which needs an answer for whether a subdomain counts. (c) *Same origin plus require
+HTTPS off loopback*, codex's full shape, which would refuse a plain-`http://` ollama that works
+today. There is a second decision underneath: whether the confinement belongs on this client or on
+`EgressRedactionTransport` (`agent/redaction.go:63`), which is already the chokepoint every request
+through this client passes and would cover the Anthropic SDK path in the same move — the argument
+for the transport is the one its own comment makes, that a per-call-site gate is the kind you forget
+to install.
+
+### 3. The disk must not be dishonest about the conversation — inber gets the hard half right and drops the easy one
+
+[cline #13259](https://github.com/cline/cline/pull/13259) fixes a checkpoint restore where the
+workspace rolled back and the transcript did not, because two copies of the history disagreed and
+the reader preferred the stale one: **"A restore reuses the source session id and never rewrites
+that file, so the trimmed history the sidecar just computed is never the copy that gets read."**
+The companion, [cline #13175](https://github.com/cline/cline/pull/13175), fixes resume resubmitting
+the *original task text* to a session that had already done half the work — earlier terminal
+commands ran a second time — and states the principle the fix rests on: **"The preserved
+conversation history is the source of truth on resume."** Its routing tree is worth keeping whole:
+queue onto a running turn → continue a matching idle session in place → rebuild from history →
+abandon, with a bare resume sending only a neutral `[TASK RESUMPTION] Please continue where you
+left off.` rather than the initial prompt.
+
+inber passes both of these on inspection, and the second is not luck. `handleBridgeResume`
+(`server/api_bridge.go:508-532`) returns the live session untouched when one is loaded and only
+rebuilds from persisted messages when it is not — cline's tree, already. And the compaction path
+does not leave two disagreeing copies: `persistSessionStateLocked`'s doc comment
+(`server/session_management.go:138-150`) records that `handleBridgeCompact` "does its whole job
+inside one hold rather than compacting and then persisting", precisely so the compacted transcript
+and the file are written together.
+
+**The defect is one line inside that same function.** `server/session_management.go:168` is
+`os.WriteFile(filepath.Join(dir, "messages.json"), data, 0644)` with the error discarded, and
+`:161`'s `os.MkdirAll` likewise. The two writes immediately below it both log on failure, and their
+messages say exactly why this one matters — `:171` "turn counter not persisted for %s, next resume
+will start from turn 0", `:176` "safety limits not persisted for %s, next resume will rebuild it
+uncapped and unspent". So on a failed write the transcript silently does not advance while the turn
+counter and guard state do, and the next rebuild reads a turn count and a spend total against a
+conversation that never got the messages they were counted from — the state
+`session_creation.go` already names as the thing to avoid, "a turn count without its transcript
+describes messages that are not there". **Filed as a todo.**
+
+**What inber should consider:** logging is the floor, not the decision. The open question is
+ordering, and it is the same one three entries in this file have now reached from different sides:
+if the transcript write fails, should the turn counter and guard state be written anyway? Writing
+them is the current behaviour and it is the one that loses the most; skipping them keeps the three
+records consistent but silently discards a real spend, which the ceiling exists to prevent. There
+is a third answer — write the counter and guard state **first**, so a torn persist over-counts
+rather than under-counts — and that is the direction this corpus has taken before (2026-08-12,
+durable state is written when work *starts*). Pick one on purpose.
+
+### 4. Checked and not worth a finding
+
+- **[codex #39068](https://github.com/openai/codex/pull/39068)** (remove skill model delegation) —
+  a `model` field in skill frontmatter, and the delegation types and instruction generation behind
+  it, deleted outright. The PR body says what was removed and never why, so treat it as a data
+  point rather than an argument: a per-skill model override is a design at least one harness has now
+  tried and withdrawn. inber has no per-skill model and should not add one on this evidence alone.
+- **[codex #39092](https://github.com/openai/codex/pull/39092)** (queue messages for existing
+  sessions), **[#39064](https://github.com/openai/codex/pull/39064)** (restrict queued-message
+  editing to its dedicated binding) — the queued-message surface keeps growing upstream while
+  inber's injection contract is still undecided; already carried as the open todo *"pick the
+  admission contract for an injected message"*. No new material, but note the direction of travel:
+  codex is treating the queue as a first-class addressable object, not a buffer.
+- **[goose #11283](https://github.com/aaif-goose/goose/pull/11283)** (handle error code for context
+  length exceeded) — the third instalment of the classify-overflow-properly arc after #11173 and
+  #5751715d, and matching on a provider **error code** rather than a substring is the right end of
+  it. inber's substring matching is already filed (*"a byte-size request-limit error matches none of
+  the four overflow substrings"*); this only strengthens the case for keying on codes.
+- **[cline #13259](https://github.com/cline/cline/pull/13259)** applied to inber's own
+  `checkpoint/` package — no finding, because that package is a declared sketch: every method
+  returns `checkpoint.ErrNotImplemented` (`checkpoint/checkpoint.go:47-49`) and its doc lists the three
+  unanswered design questions. `session/checkpoint.go`'s `LoadCheckpoint` has no callers, so there
+  is no restore path to make dishonest.
+- **[codex #39103](https://github.com/openai/codex/pull/39103)** (drop capabilities from Linux
+  sandbox processes), **[#39083](https://github.com/openai/codex/pull/39083)** (Windows reparse
+  points) — sandbox hardening with no inber surface; inber runs tools in-process with no sandbox at
+  all, which is a larger gap than either PR and is not news.
+- **Bulk-noise note:** codex merged ~50 commits in this window and the great majority are TUI render
+  economy (`#39075`, `#39063`, `#39061`, `#39057`, `#39065`), desktop diagnostics
+  (`#39074`, `#39067`, `#39060`) and managed-policy plumbing. Nothing in that mass bears on a
+  headless Go harness. Weight the window by the four security/contract PRs above, not by its commit
+  count.
