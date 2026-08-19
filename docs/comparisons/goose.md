@@ -1238,3 +1238,88 @@ always-on model like `claude-fable-5`, where the explicit disable is rejected ou
 request, or send nothing and log that the setting cannot be honoured. Note the cost asymmetry that
 makes this worth doing rather than watching — the failure is silent in both directions, since the
 tokens are invisible in the response and show up only on the bill.
+
+## Harness-watch — 2026-08-19: a progress event's stream identity comes from the call that started the work — inber substitutes the literal `"main"` for a session id the sender supplied
+
+[goose #10772](https://github.com/block/goose/pull/10772) fixes `SummonClient` broadcasting every
+subagent notification to every active stream: it opened one notification stream per outer tool call
+but kept subscribers in a shared `Vec<mpsc::Sender>` and fanned out to all of them. The PR body
+names the consequence exactly — **"Concurrent delegate calls therefore accumulated identical
+activity and could resolve the same fallback subagent session in ACP clients."** The remedy replaces
+the shared subscriber list with a per-task `NotificationSink` that is either `Buffer` (nobody
+attached yet) or `Emitter` (bound to the one outer tool call). The principle worth keeping: **a
+progress event's stream identity must come from the call that started the work, never from a shared
+or default channel** — and a *fallback* identity is the dangerous case, because it silently merges
+rather than failing.
+
+**inber gets the spawn-forwarder half right and the bus half wrong.** The forwarder is correct and
+deliberately so: `server/spawn.go:76-100` labels every forwarded event with `session_key: childKey`
+and `parent_key`, and resolves the parent stream per event rather than once, so two concurrent
+children of one parent do not merge. The bus path throws that identity away and substitutes a
+constant.
+
+`ChatInbound` carries the field — `../bus/messages/chat.go:23`,
+`SessionID string \`json:"session_id,omitempty"\` // logical session for conversation continuity`.
+`server/bus.go:84` is `sessionID := "main"` under the comment *"use "main" for now, spawns will get
+their own"*, and `msg.SessionID` is never read anywhere in `server/`. That literal is then the
+`session_id` on the processing ack (`bus.go:88`), on every delta through
+`busDeltaFor(agent, sessionID, ev)` (`bus.go:132`), and on the terminal `done`. The `RunRequest`
+built two lines below (`bus.go:94-99`) sets four fields and **no `SessionKey`** — so
+`server/session_forking.go:237-238` resolves the empty key to `mainSessionKey(agentName)`. `msg.Model`
+and `msg.Effort` are dropped in the same statement, though `RunRequest.Model` exists
+(`server/server.go:219`) and `server/api_bridge.go:701-712` already knows how to parse effort.
+
+Two failures fall out, and they are different. **Inbound, conversations merge**: two bus clients
+addressing one agent under different `session_id`s — a Discord thread and the scheduler — are routed
+into the same `agent:<name>:main` session and their turns interleave in one transcript. The sender
+said which conversation it was in and inber discarded it, which is the single-source-of-truth rule
+inverted: the authoritative field is populated and the code prefers a literal. **Outbound, streams
+cannot be demultiplexed**: every delta published carries `session_id: "main"`, and `ChatDelta` has no
+turn-scoped discriminator to recover it — `MessageID` (`server/bus_delta.go:26`) groups deltas into
+one assistant bubble, not into a session. That is goose's "resolve the same fallback subagent
+session", verbatim.
+
+The spawn-result path repeats the constant and contains its own refutation.
+`server/spawn_delivery.go:95` publishes the completion outbound as
+`PublishOutbound(parent.AgentName, "main", summary)` and `:112` sets `sessionID := "main"` for the
+idle-parent turn — while `:141`, in the same function, correctly passes `SessionKey: parentKey` to
+`g.run`. So the turn executes on the right session and its entire delta stream is published under
+the agent's *main* session id. With `MaxSpawnDepth` defaulting to 2 a parent is routinely itself a
+spawn session, so this lands a child's progress in whatever real conversation that agent is having.
+**Filed as a todo.**
+
+**What inber should consider:** the mechanical fix is to carry `msg.SessionID` into
+`RunRequest.SessionKey` and use the *resolved* session key as the bus `session_id` at all five sites,
+but the decision underneath it is not mechanical and should not be made by whoever writes the patch.
+(a) It is **wire-visible** — anything subscribed on `session_id == "main"` today stops matching, and
+`si`, the dash chat surface and llm-bridge-adapter are all downstream. (b) It needs an answer for an
+*absent* `SessionID`, and "fall back to main" is the behaviour that caused this; the alternative is
+to mint a per-connection key so two anonymous senders still cannot merge. (c) `msg.Model` and
+`msg.Effort` are the same bug with a smaller blast radius and should be decided in the same pass
+rather than left as the next sweep's finding — note that a per-request model override arriving over
+an unauthenticated bus is a capability question, not just a plumbing one.
+
+### Also in-window, checked and not worth a finding
+
+- **[goose #11216](https://github.com/block/goose/pull/11216)** (`goose-agent` crate) and
+  **[#11139](https://github.com/block/goose/pull/11139)** (generic state machine) — the unrolled-loop
+  argument is already this file's 2026-08-15 entry, including the caveat that inber's straight-line
+  turn (`engine/engine.go:245`) would need restructuring. #11216 is a crate move on top of it.
+- **[#11283](https://github.com/block/goose/pull/11283)** — adds `error.code` and an
+  `n_prompt_tokens > n_ctx` check *on top of* the substring fallback rather than replacing it.
+  Confirms the open todo about `agent/agent.go:23-32`; no new material.
+- **[#11234](https://github.com/block/goose/pull/11234)**, **[#11125](https://github.com/block/goose/pull/11125)**,
+  **[#11310](https://github.com/block/goose/pull/11310)** — the recipe/minijinja arc has no inber
+  surface at all: no `recipe` concept and no `text/template` import in `engine/`, `agent/` or
+  `server/`.
+- **[#11263](https://github.com/block/goose/pull/11263)** (`annotations` on replayed `output_text`) —
+  inber's OpenAI path is Chat Completions only (`agent/openai.go`, `openai_conversion.go`); there is
+  no Responses-API replay to be unfaithful.
+- **Counter-precedent worth recording, not a bug.** #10772's second half buffers subagent
+  notifications until the matching `load` consumes them. That is the *opposite* of inber's
+  documented choice at `server/spawn.go:44-50`, where a child's events are dropped when the parent
+  has no current writer ("there is nobody to deliver to, and no queue that would hold the event
+  until there is"). Both start from the same premise — the subagent outlives the tool call that
+  started it — and reach different ends. inber's line is defensible because *results* are never lost
+  (`deliverResult` injects or triggers a turn), only progress; but the comment states the drop as
+  though no alternative existed, and one now ships upstream.

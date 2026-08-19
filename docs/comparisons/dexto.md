@@ -350,3 +350,44 @@ URL — and must not pay heap for bytes it is about to reference or drop.**
   bytes? This is squarely the "layers are transparent — no lossy transform, pass the
   reference through" rule at the media edge, and it caps a real memory-footprint failure
   mode, not just token count. Cheap audit, potentially large RSS win on media-heavy sessions.
+
+## Harness-watch — 2026-08-19: presentation becomes a *declared policy on the tool*, which resolves the tension the 2026-06-02 entry left open ([PR 907](https://github.com/truffle-ai/dexto/pull/907))
+
+The 06-02 section above recorded core-provided `ToolPresentation` snapshots and flagged the tension
+with this box's layers-are-transparent directive: core computing presentation looked like the edge's
+job moved inward. **[#907](https://github.com/truffle-ai/dexto/pull/907) supersedes that design and
+resolves the tension rather than deepening it**, with two mechanisms.
+
+First, a tool **declares a result-presentation policy type at its registration site** —
+`none | content | passthrough | <structured: shell, file, diff, search, record, collection, process,
+status, text>` — instead of any client parsing tool names to guess a renderer. Core computes *which
+renderer applies*; the edge still renders. That is a declarative type tag resolved by the owner, not
+a formatted string, so it satisfies the transparency rule instead of straining it.
+
+Second, the resolved metadata is carried through execution storage, context projection, events and
+TUI streaming under a guarantee the diff states twice —
+`/** Structured display metadata resolved by tool presentation, never sent to the model */` — with a
+test named `keeps explicit display metadata out of model-visible content`. The model's context never
+pays for the presentation.
+
+**inber has the drift this design eliminates: seven independent hardcoded tool-name tables.**
+`engine/display_tools.go:51-122` and `:146-218` (two switches), `agent/read_cache.go:230,245`,
+`guard/guard.go:321,330`, `tools/root.go:32-53`, `conversation/dedup_files.go:12-19`,
+`engine/workflow_git.go:20`. Three are pinned against the real tool set by tests
+(`TestClassifiedToolsExist`, `TestEveryFilesystemToolDeclaresItsPathArguments`,
+`read_cache_classification_test.go`), and the comment at `guard/guard.go:311-318` records exactly why
+— the `write_file → write_files` rename that silently unclassified the write tools.
+**`engine/display_tools.go` and `conversation/dedup_files.go` are not pinned**, and `display_tools.go`
+names only 9 of the ~20 registered tools.
+
+**No finding, and the reason is worth stating.** The two unpinned tables are display and dedup, so a
+miss degrades output rather than breaking behaviour, and the three that carry safety or correctness
+are already pinned. This is not a defect.
+
+**What inber should consider:** the pinning is *per-table*, and every new table has to remember to
+add its own test — the guard comment exists because one already failed that way. dexto's move deletes
+the class rather than testing it: the tool declares its policy once where it is registered and there
+is no second table to keep in sync. That is a better version of what the 06-02 entry recommended
+("emit a versioned transparent presentation hint blob"), and if inber ever consolidates these tables
+it should copy the declaration-at-registration shape and the never-sent-to-the-model guarantee
+together — the second is what keeps a presentation field from quietly becoming context cost.

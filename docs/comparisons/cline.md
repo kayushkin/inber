@@ -522,3 +522,112 @@ openrouter and ollama paths get none of the bounded, exponential, jittered, `Ret
 retry the Anthropic SDK gives the other path (`MaxRetries: 2`, 0.5s×2ⁿ capped at 8s, jittered, and
 cancellable on `ctx.Done()`). That is a real asymmetry but it belongs to the standing "OpenAI turn
 loop is governed by less than the Anthropic one" decision (`5902f7b9`), not to a new todo.
+
+## Harness-watch — 2026-08-19: a union-typed tool argument must be discriminated on *key presence*, and a binary must not be swapped out from under a live turn
+
+### 1. Discriminating a union on a zero value — cline fails loudly, tool-store destroys the file
+
+[cline #13336](https://github.com/cline/cline/pull/13336) fixes `run_commands`, which accepts each
+command as a string *or* as `{command, args?}`. The executor branched on
+`typeof command !== "string"` and handed `command` straight to `spawn(..., {shell:false})`, so the
+schema-valid `{"command":"echo hello"}` died with `spawn echo hello ENOENT` and *any* command
+containing a space failed. The fix is one predicate and its comment states the rule — **"Spawn
+without a shell only when the args key is present (even empty), marking input the caller already
+split"** — i.e. `directExec = typeof command !== "string" && "args" in command`. **Discriminate a
+union on key presence, never on a zero value.** Note the blast radius the PR reports: whole sessions
+became unable to run commands once the model settled on that schema shape.
+
+**inber's tool set has the same shape and its failure is silent and destructive.** `write_files` —
+registered at `tools/tools.go:35` → `agent/registry/tools.go:27`, implemented in
+`~/repos/tool-store/tools/fs.go:163-200` — declares the identical union (a single `{path, content}`
+arm or a `files[]` arm) and discriminates it at `fs.go:178-181` with `if in.Path != ""`, a zero-value
+test that cannot tell an absent `content` key from an empty one. The loop then calls
+`os.WriteFile(f.Path, []byte(""), 0644)`. Two facts make it reachable by construction rather than by
+mistake: `fs.go:166` is `schema.Props([]string{}, ...)` — **zero required fields** — and
+`schema.Parse` (`~/repos/tool-store/schema/schema.go:18-22`) is a bare `json.Unmarshal` that performs
+**no JSON-Schema validation at all**, so the `required: ["path","content"]` published on the
+`files[]` items at `fs.go:169` is decorative.
+
+Measured by running the real `WriteFile().Run` against the live tree, not inferred:
+
+```
+{"path":"victim.txt"}                           → "wrote 0 bytes to victim.txt"          file now ""
+{"files":[{v1,"content":"NEW"},{"path":"v2"}]}  → "wrote 3 bytes to v1\nwrote 0 bytes to v2"  v2 now ""
+{"path":"v3.txt","content":null}                → "wrote 0 bytes to v3.txt"              v3 now ""
+```
+
+The batch case is the one that matters: one correct write and one destroyed file, returned to the
+model as a two-line **success**. Nothing upstream catches it, because `guard.isDangerous`
+(`guard/guard.go:329-334`) classifies `write_files` by **name only** — the guard sees a
+dangerous-tool call and cannot see that the arguments are the destructive shape. That is the failure
+already named at `agentic-design-patterns.md:2015`, "fail-closed on the tool name is not fail-closed
+on the argument", now with a data-loss instance attached. `edit_files` (`fs.go:233`) has the same
+zero-value discrimination and is saved by accident: an absent `old_text` makes
+`strings.Count(content, "")` exceed 1 and the uniqueness check refuses. **Filed as a todo.**
+
+**What inber should consider:** the fix lives in tool-store, not here, and there are two of them with
+very different blast radii. Narrow — give `Content` a `*string` or `json.RawMessage` and discriminate
+on presence, which forces an answer to what an explicit `{"path":"x","content":""}` means, since
+truncating to empty is a legitimate request. Broad — make `schema.Parse` enforce the `required` list
+it already publishes, which is one function covering every tool at once and correspondingly riskier,
+since any caller relying on a tolerated partial payload starts erroring. inber's own move,
+independent of either, is that a name-only dangerous-tool classification cannot see this and never
+will.
+
+### 2. The updater must ask whether anything is live
+
+[cline #13233](https://github.com/cline/cline/pull/13233): the background auto-updater installed the
+new package while cline was running and restarted the hub, killing live sessions mid-turn with
+`code=1006`, because "the running process and the files on disk are now different builds". The rule
+is one sentence — **"never install while cline is running"** — and the implementation is the
+interesting half: defer the install into the exit sequence, gated on the hub confirming no client is
+attached, so "the new binary doesn't exist on disk until every old process has exited". Mixed-version
+processes become impossible rather than unlikely.
+
+**inber's deploy never asks.** `deploy.sh:45-46` is an unconditional `systemctl --user stop`, with no
+query of live session state anywhere in the script — although the server exposes exactly that
+(`GET /sessions`, `server/api.go:38`). The graceful path is real but bounded: a turn runs
+synchronously inside the HTTP handler, and `Queue.Enqueue` (`server/queue.go:39-56`) runs `work(ctx)`
+on the caller's goroutine, so `server.Shutdown(context.Background())` (`server/api.go:53`, unbounded)
+genuinely waits for it — until systemd's stop timeout expires. `deploy/systemd/inber-server.service.template`
+sets no `TimeoutStopSec` and no `KillMode`, so it inherits the manager default and a long turn is
+SIGKILLed: `defer g.Close()` (`cmd/inber-server/main.go:95`) never runs, `persistSessionState` never
+runs, and tool calls the turn already made leave side effects with no transcript record.
+
+Two smaller things fall out of the same read. `Server.Close()` (`server/server.go:166-172`) is the
+**one of four sites** that acts on a session without reading `Status` first — `session_release.go:44`,
+`session_reaper.go:66` and `api_bridge.go:778` all check `s.Status == Running`. And `close()` →
+`stop()` (`server/session.go:329-343`) sets `Status = Completed`, so a killed turn lands in the
+*success-shaped* terminal state. **Filed as a todo.**
+
+Worth stating what inber already gets right, because it is the half cline was missing:
+`Store.InterruptRunning()` at startup (`server/server.go:111`) means persisted requests do not sit at
+`running` forever — they reconcile to `interrupted`. The residual harm is the unrecorded in-flight
+turn and the `Completed` mislabel, not an unbounded leak.
+
+### 3. Checked and not worth a finding
+
+- **[cline #13226](https://github.com/cline/cline/pull/13226)** (fail-closed remote config) — the
+  headline failure is a network hiccup deleting company policy while reporting success. inber does
+  not have it: `reloadRegistry` (`server/api_agent_config.go:176-181`) returns early on error keeping
+  the last good map, and `LoadFromAgentStore` (`agent/registry/config.go:94-96`) **errors on an empty
+  result** rather than returning an empty map, so a reachable-but-empty store cannot wipe the
+  registry. The residual concerns are already filed at `agentic-design-patterns.md:4079-4110`. One
+  sub-idea worth holding for the day a permission-store round-trip gates a **deny**: a revocation must
+  be evaluated locally *before* any network call, so losing the network cannot silently re-grant.
+- **[cline #13293](https://github.com/cline/cline/pull/13293)** (preserve LiteLLM input token limits,
+  "avoids fabricating maxInputTokens when no provider metadata exists") — inber already reasons this
+  way and writes it down: `agent/models.go:18-27` sets non-zero unknown-model constants precisely
+  because *"a zero context window means 'no overflow guard' … answering an unknown model with zero
+  would turn a missing registry row into a silently unguarded request"*. Prices at `:94-95,102-103`
+  pass through unguarded, which looks like the same asymmetry but is correct — a zero price is
+  truthful for a local model, and `MaxCost` should never trip on something free.
+- **[cline #13310](https://github.com/cline/cline/pull/13310)** (task-scoped settings overlay
+  outliving its task view) — a scope-lifetime leak; inber's nearest analogue cleans up, since
+  `Session.turn`'s deferred block resets `Status`/`cancel` and calls
+  `requeueInjectionsTheTurnNeverReadLocked` (`server/session.go:167-173`), pinned by
+  `session_injection_requeue_test.go`.
+- **[cline #13227](https://github.com/cline/cline/pull/13227)**, **[#13230](https://github.com/cline/cline/pull/13230)**,
+  **[#13231](https://github.com/cline/cline/pull/13231)**, **[#13075](https://github.com/cline/cline/pull/13075)**,
+  **[#13245](https://github.com/cline/cline/pull/13245)** — already covered at
+  `agentic-design-patterns.md:4601`, `:4689`, `:4780`, `:4856`, `:5045`, `:5105`.

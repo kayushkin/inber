@@ -566,3 +566,29 @@ The two were found in the same sweep from opposite directions and are **filed to
 `421a8162`**; see `docs/papers/2026-08-harness-research.md` 2026-08-16 §1.
 inber does *not* have opencode's other bug: `findTurnBoundary` (`summarize.go:40`) splits on turn
 boundaries and no inber path slices a message mid-content to hit a budget.
+
+## Harness-watch — 2026-08-19: three transport-identity PRs, all checked, none live for inber
+
+- **[#43188](https://github.com/sst/opencode/pull/43188)** (restore session request headers) and
+  **[#43124](https://github.com/sst/opencode/pull/43124)** (preserve inference sessions) — a gateway
+  stripping the session header before forwarding. The two-layer cache-identity entry above
+  (2026-06-09, `:401-425`) already covers the principle. Genuinely new slivers, recorded in case this
+  thread reopens: the correlation headers must survive the **compaction** provider request too, not
+  just the turn; `x-parent-session-id` exists for child sessions; and #43124's rule that a proxy must
+  distinguish an *internal forward* from *direct provider egress* before stripping metadata. inber
+  calls Anthropic directly, so none is live today — but the first would bite the moment a local
+  gateway is put in front of it.
+- **[#43099](https://github.com/sst/opencode/pull/43099)** (fall back on oversized websocket
+  requests) — the transferable rule is that a **permanent** transport failure should downgrade
+  stickily and must not consume the retry budget reserved for **transient** ones. inber has no
+  websocket provider transport, and `agentic-design-patterns.md:4770-4785` already records that it has
+  no session-level retry loop to spend.
+- **[#43248](https://github.com/sst/opencode/pull/43248)** (ignore malformed model costs — treat
+  non-finite as zero) — **a good contrast rather than a lesson, because inber correctly chose the
+  opposite.** opencode's number is an accounting *report*; inber's is an enforcement *cap*.
+  `recordTurnUsage` (`engine/turn_postprocess.go:79-88`) prices the turn once and feeds the same
+  figure to both the session total and `Guard.RecordCost`, with a comment explaining that pricing it
+  twice would let the enforced number drift from the reported one. Zero-on-malformed would silently
+  disable a spend ceiling.
+- **[#42444](https://github.com/sst/opencode/pull/42444)** (v1 database compatibility) — dual-schema
+  migration plumbing, no design claim.

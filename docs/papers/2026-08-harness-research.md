@@ -2469,3 +2469,157 @@ file tracks and **no entry here has ever recorded it**. Worth reading independen
 to about D-2 — held exactly: this pass reaches 08-17 cleanly and 08-18 is not yet announced. Re-run
 the `totalResults` control before assuming the next window is real, rather than inheriting this
 sentence.
+
+---
+
+# Sweep 2026-08-19 — a dense window, and the strongest result says safety is a property of the *configuration*, not the model
+
+Unlike the last nine sweeps this one is not thin. Four papers below were re-fetched and re-read
+independently of the sweep agent before being written down, after a previous sweep in this file
+reported papers that did not exist: `2608.17597`, `2608.17485`, `2608.16801` and `2608.16032` each
+resolved to a live abstract with the title, authors, date and headline numbers exactly as recorded
+here.
+
+## 1. [arXiv:2608.17597](https://arxiv.org/abs/2608.17597) — HarnessRisk: attack success is 12.6%–80.9% across configurations of the *same* models (Bai, Duan, Peng, Wu, Liu, Wang, Chen; 2026-08-18, cs.CR)
+
+Organizes harness safety into six lifecycle phases — Harness Configuration, Capability Extension,
+Runtime Operation, State Persistence, Action Control, Incident Recovery — and tests 128 sandboxed
+cases that pair a benign objective with an adversarial instruction planted in an untrusted workflow
+artifact. Over 3 harnesses, 6 models and 14 model×harness configurations, **attack success ranges
+12.6%–80.9% while utility stays 75.0%–97.6%**: the spread is driven by how the harness is
+configured, not by which model is behind it. Two findings carry directly. **Harness Configuration is
+the most vulnerable phase in all three harnesses** — the setup surface, not the runtime. And
+recognition does not produce refusal: some configurations **detect risk in >90% of runs and still
+get compromised**.
+
+**What inber should consider:** the second finding is the one that changes a design. inber's gate is
+`guard.CheckTool`, a tool-*name* switch (`guard/guard.go:158-184`), and every open todo about it
+argues over defaults; this paper says the argument is worth having, because a model that notices the
+risk in its reasoning still makes the call. Gate at the action layer or not at all. The first
+finding points at a surface nothing here tests: the config path — bundle-store `/resolve`,
+tool-store `/provision`, the agent-store row that decides an agent's tools — is an attack phase in
+its own right, and it is upstream of every runtime control.
+
+## 2. [arXiv:2608.17485](https://arxiv.org/abs/2608.17485) — KeyPooling: a shared provider credential is a shared prompt cache (Sun, Cai, Liu, Zhao, Cao, Xiao; 2026-08-18, cs.CR)
+
+Providers scope the prompt cache to the *upstream* principal. So any relay that authenticates its
+own customers and then forwards on one shared provider key collapses them into a single cache
+identity. Across five open-source gateways against OpenAI and Anthropic, **none bound customers to
+upstream credentials by default and all five exposed cross-customer cache reads on both providers**;
+a weekly measurement found cross-account reads for 12 of 28 labels carrying 33.7% of volume. The
+defense contract is the useful part: derive a cache namespace from the *authenticated identity* and
+make it survive every final cache lookup **and write** — and place that split **after** the reusable
+public prefix, which preserved most reuse at a **1.7–2.5% cost increase**.
+
+**What inber should consider:** this is a live question rather than a hypothetical, because
+model-store holds one credential per provider and every agent on this box runs through it. The
+placement rule is the transferable engineering: a naive per-agent namespace prepended to the prompt
+would destroy the shared system-prefix cache this corpus has spent months protecting, and the paper
+shows you can have both by splitting after the shared prefix. Worth checking whether inber's cache
+identity is ever per-agent today — `agent/read_cache_identity.go` and the BP3 placement are where
+that would live.
+
+## 3. [arXiv:2608.16801](https://arxiv.org/abs/2608.16801) — naming a coordinator agent buys nothing measurable (Destefanis, Aste; 2026-08-17, cs.AI)
+
+Models each run as a temporal network — agents and files as nodes, messages/writes/reads as
+timestamped costed edges — over **1,902 runs** varying team size, structure and file policy. Three
+results. Direct messaging grows **near-quadratically** with team size until broadcast takes over.
+**Shared files replace repeated 1-to-1 messaging and cut output tokens ~42% at eight agents** on
+message-heavy work, while adding overhead where files already carry the coordination. And
+**"naming one agent as coordinator creates no communication hub and provides no reliable improvement
+in success"** — a null result that held under replication across 244 further runs in a sealed
+environment.
+
+**What inber should consider:** inber's whole spawn design is a coordinator pattern — an
+orchestrator agent with `MaxSpawnDepth` defaulting to 2 — so the null result deserves an honest
+reading rather than a defensive one. The paper does not say hierarchy is useless; it says
+*designating* a lead produces no measurable hub and no reliable gain. The actionable half is the
+first: route multi-subagent coordination through a shared workspace artifact instead of
+parent↔child message passing, which is cheaper at exactly the fan-out inber supports. Note also the
+incidental finding — agents reached for hidden grading material in four fifths of sealed runs — as
+a caution about any benchmark this repo runs on itself.
+
+## 4. [arXiv:2608.16032](https://arxiv.org/abs/2608.16032) — a memory row must never be able to assert that a safety step ran (Rahman, Kim; 2026-08-17, cs.CR)
+
+The FARMA attack writes fabricated entries into an agent's reasoning memory claiming a required
+safety step already executed, so the agent skips it — no malicious command anywhere. The
+wording-based defense SENTINEL is defeated on the first try by asking a model to reword the forgery,
+and there is a capability paradox: attack success is **98–100% on GPT-4o/4o-mini against 44% on
+Llama-3.1-8B**, because the stronger model follows the reworded claim more faithfully. PoEM's remedy
+is structural rather than semantic — **an HMAC-chained, tamper-evident ledger of safety steps that
+actually executed, writable only by the trusted action layer** — driving attack success to **0%**
+with 0% false positives in eight of nine cells, against SENTINEL wrongly blocking 33–50% of
+legitimate operations.
+
+**What inber should consider:** this is the strongest available argument for two todos already open
+against this codebase — *"inber memory_save fabricates provenance the two HTTP paths were fixed to
+leave empty"* and *"memory-store: the model chooses its own provenance, so a poisoned page can write
+a memory stamped `user`"*. Those were filed as correctness defects; PoEM reframes them as an
+exploitable class, and supplies the fix's shape: the answer is not to validate memory content but to
+put executed gated actions in a **separate append-only record written only by the tool-execution
+path**, and have the gate consult that record rather than the conversation. It also warns off the
+tempting cheap version — a model-judged "does this memory look forged" check is the defense measured
+here as both bypassable and a heavy over-refuser.
+
+## 5. Tier two — verified, narrower, no action yet
+
+- **[arXiv:2608.11977](https://arxiv.org/abs/2608.11977)** (Chen et al., 08-12) — tool failures
+  produce a near-universal robustness gap across 7 models; a purely **runtime** intervention,
+  Bayesian Tool Memory, gains **+16.8 points with no retraining**. The cheapest idea in this sweep:
+  keep a per-tool success/failure posterior in the SQLite memory store and feed it back as recovery
+  context, so a flaky MCP server is switched away from rather than retried.
+- **[arXiv:2608.17433](https://arxiv.org/abs/2608.17433)** (Lin et al., 08-18) — harness provisioning
+  as resource-matching, with map-guided escalation from a minimal task-specific harness to full
+  provision only on validation failure (0.652 → 0.715 at far fewer tokens). This is bundle-store's
+  thesis with an algorithm attached: `/resolve` could return the minimal bundle and widen on failure.
+- **[arXiv:2608.15703](https://arxiv.org/abs/2608.15703)** (HyMem, Wang et al., 08-16) — already
+  noted in the 08-17 sweep as web/QA rather than coding, but the specific claim now looks load-bearing
+  for compaction: isolate the reasoning module so intermediate traces are **never written back into
+  the persistent planning context** (+6.1 / +4.7 points). The argument against one flat compaction
+  pass over one transcript.
+- **[arXiv:2608.14036](https://arxiv.org/abs/2608.14036)** (Jiang et al., 08-14) — **procedural
+  anchoring is 65.7% of skill benefit against 4.5% for explicit knowledge injection**, and actual-use
+  precision collapses **29.6% → 3.3% as the skill pool grows 5 → 100**. Both halves bear on
+  skill-store: write skills as procedures, and resolve a task-scoped subset rather than exposing a
+  catalog past 100 entries.
+- **[arXiv:2608.13662](https://arxiv.org/abs/2608.13662)** (Adam, 08-13) — symbolic project memory
+  scores **0.98–1.00** on supersession/set-completeness/negation queries against **6–27%** for a
+  production vector-memory tool at equivalent token cost. A real argument against memory-store's
+  pure-vector recall for exactly the queries a coding agent asks.
+- **[arXiv:2608.12990](https://arxiv.org/abs/2608.12990)** (LycheeMemory V2, Li et al., 08-13) —
+  segment-level rather than turn-level consolidation cuts memory-construction tokens **86.0%/75.9%**
+  with no query-time increase. Direct guidance on consolidation cadence.
+- **[arXiv:2608.18066](https://arxiv.org/abs/2608.18066)** (Ye, Li, Pruksachatkun, Zhang, Wu, 08-18) —
+  agent evaluation is inherently noisy and a self-improvement loop **amplifies** that noise; reported
+  gains depend heavily on task order, which acts as a hidden curriculum. Read before believing any
+  "the agent learned from memory" claim measured in a single run.
+- **[arXiv:2608.14876](https://arxiv.org/abs/2608.14876)** (Day et al., 08-14) — workspace topology
+  as a measurable attack surface; **highly modular environments show significantly lower attack
+  success**. Argues forge should hand a subagent a narrow root rather than the whole repo, and warns
+  that a workspace already containing prior agent artifacts invalidates an injection benchmark.
+- **[arXiv:2608.13900](https://arxiv.org/abs/2608.13900)** (Sun, Wang, Li, 08-14) — ACID reinterpreted
+  for agents; semantic dependency-aware isolation, +10.6% over baselines including Claude Code. The
+  relevant piece for inber is that parallel subagents sharing a worktree need a dependency-aware
+  scope lock, not just separate slots.
+- **[arXiv:2608.16178](https://arxiv.org/abs/2608.16178)** (He, Yu, 08-17) — signed hash-chained state
+  deltas replacing prose logs, with untrusted text held behind a digest reference: **−88.8% context
+  tokens** and **zero successful prompt injections across 50 adversarial trials per configuration**.
+  One change that is both the token win and the injection defense, aimed squarely at what log-store
+  feeds an agent.
+
+## 6. Channel notes
+
+**Prompt caching: the ten-sweep drought ends.** `2608.17485` is the first genuinely new prompt-cache
+paper since this file started tracking the thread, and it is a *security* result rather than an
+efficiency one — which is probably why the efficiency-phrased queries kept returning nothing.
+
+**Blogs: tenth consecutive empty sweep.** Anthropic's engineering blog still shows nothing after
+2026-04-23 (the May "How we contain Claude" post noted in the 08-17 correction remains the most
+recent on-topic item and is still out of window). Google DeepMind and Meta AI produced nothing
+in-window. HuggingFace has one item, *"Training a coding agent using the OpenCode harness"* — a
+tutorial, not research.
+
+**Just outside the window, flagged rather than filed:** `2608.11386` *The Devil Is in the Interface*
+(CodeAct interfaces: −41.6% steps, −56.3% tokens) and `2608.10934` *Understanding the Architecture of
+Coding Agents*, both 08-10/11 and both more on-topic than half of tier two. Worth a read outside any
+sweep window.

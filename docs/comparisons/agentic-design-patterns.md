@@ -5291,3 +5291,104 @@ durable state is written when work *starts*). Pick one on purpose.
   (`#39074`, `#39067`, `#39060`) and managed-policy plumbing. Nothing in that mass bears on a
   headless Go harness. Weight the window by the four security/contract PRs above, not by its commit
   count.
+
+## Harness-watch — 2026-08-19: a retained prefix can move without being mutated — codex bounds the *cadence* of eviction, and inber already has the property from a mechanism it never advertised
+
+### 1. Evicting the minimum is what makes a sliding window a permanent cache miss — inber passes, and the reason is one predicate
+
+[codex #39315](https://github.com/openai/codex/pull/39315) makes guardian transcript eviction
+chunked. The PR states the failure in one line: **"Selecting only the newest entries changes the
+retained transcript prefix whenever a new entry arrives, reducing cache stability."** The remedy is
+to evict *half the applicable pool* on overflow rather than trimming the minimum needed, so the
+retained prefix stays byte-identical across many turns instead of shifting on every one.
+
+This is a distinct failure from anything already in this file. The cache material here — cline
+#11471's batched stale-read rewrite (`:1418`), compaction mutating `e.Messages` (`:1502`),
+`cache_control` slot budgeting (`:2090`, `:2562`) — is all about **mutating bytes already inside the
+prefix**. #39315 is about a prefix that is never mutated and still moves, because the *retention
+rule* is a sliding window. Trimming the minimum is the intuitive implementation and it is the one
+that costs you the whole cache.
+
+**inber has the sliding-window shape and does not have the bug, and it is worth recording why,
+because the code does not say so.** `engine/build.go:132-153` looks exactly like the thing #39315
+replaces — `maxMessages := cfg.KeepRecentTurns * 2`, then `dropTo := len(messages) - maxMessages`,
+the minimum trim. The hook is registered for every agent (`engine/build.go:48`) and runs once per
+**API round-trip**, not once per user turn: `agent/agent_run.go:125-133` calls `a.BeforeRequest`
+inside `buildParams` and the history breakpoint is placed on the shortened slice at `:134`. Read that
+far and the conclusion is that every request past 40 messages drops two more off the head and the
+history cache never hits again.
+
+That conclusion is wrong, and the thing that makes it wrong is the loop at `engine/build.go:135-141`
+which advances `dropTo` forward until `conversation.StartsUserTurn(msg)`.
+`conversation/message_utils.go:29-42` returns **false** for a user message whose every block is a
+`tool_result` — so the boundary can only land on a real user turn, never inside a tool loop.
+Measured rather than argued, replaying the exact block over a 12-turn session of 6 tool round-trips
+each: **72 requests, 9 head-drop events**, each dropping 13 messages at a turn boundary. The head is
+stable for the whole of every turn. inber gets #39315's property for free from a predicate that
+exists for a different reason (keeping `tool_use`/`tool_result` pairs intact), and no comment or test
+in that block mentions the cache consequence — `engine/head_drop_frozen_boundary_test.go:13-17` pins
+a different bug in the same lines.
+
+**No finding, and the near-miss is the point.** Two claims in this file have previously overstated
+what the code did; this one was checked by running it. The one behaviour worth knowing about is the
+mirror image: inside a **single** long tool loop the backstop stops firing entirely, because
+`dropTo` walks to `len(messages)` without finding a user turn and the `dropTo < len(messages)` guard
+fails — 60 round-trips in one turn leaves 121 messages against a cap of 40. That is not a defect
+either. Dropping mid-loop would orphan a `tool_result` from its `tool_use`, the token-based
+`conversation.ShouldPrune` above it (`engine/build.go:122-130`) is the real bound, and a hard message
+count is the wrong instrument anyway — note `cfg.TokenBudget` is set from the live context window at
+`:121` and then ignored by this block. **What inber should consider:** nothing urgent, but if that
+message-count cap is ever revisited, keep the user-turn snap — it is load-bearing for cache
+stability and currently looks like pair-safety bookkeeping.
+
+### 2. An out-of-band message to the user needs to be a persisted field, not a transport detail
+
+[codex #39319](https://github.com/openai/codex/pull/39319) adds `send_user_message_async` — root
+agents only, behind a default-off flag ([#39288](https://github.com/openai/codex/pull/39288)) — so
+the model can surface a user-visible update mid-turn and get an immediate "accepted" result rather
+than ending the turn. The contract's sharp edge is stated as a rule: **"Keep the user-visible update
+out of the model's input context."** The companion,
+[#39312](https://github.com/openai/codex/pull/39312), is the part worth copying: it makes the
+out-of-band-ness a **first-class data field** — an optional `delivery: "async"` on agent-message
+events, preserved "through legacy event conversion, thread history materialization, replay, and
+generated JSON and TypeScript schemas" — instead of leaving it a transport distinction that replay
+would flatten into an ordinary assistant message.
+
+inber has no analogue and the nearest thing is not one. `agent/sideband.go:13-17` rides
+`done`/`note`/`split` fields on every tool call's schema, but those are model→harness bookkeeping,
+stripped from the arguments by `extractSideband` (`agent/sideband.go:95`) and never shown to a human
+as a message. The inbound direction exists — `e.injections`, drained by `buildInjectCheck`
+(`engine/build_hooks.go:15-30`) — but there is no outbound path for the model to tell the user
+something without ending its turn. **Not a defect; an idea.** **What inber should consider:** it has
+the bus and SSE plumbing to add one cheaply, and if it does, the two invariants codex spent two PRs
+on are the ones to take — the message must not re-enter the model's input context, and its
+async-ness must be a persisted field on the event, or history materialization silently promotes it
+to a normal assistant turn on the next resume.
+
+### 3. Checked and not worth a finding
+
+- **[codex #39314](https://github.com/openai/codex/pull/39314)** (hooks run with the captured session
+  environment) + **[#39301](https://github.com/openai/codex/pull/39301)** (Node REPL auth tokens kept
+  from child processes) — the transferable claim is already filed against inber at `:3920`
+  (`engine/workflow_git.go:11-15` hands a model-writable hook the whole credential environment;
+  `cmd.Env` is never assigned anywhere in the repo). #39314 adds one refinement to that open todo
+  rather than a new finding: capture the environment **once at hook-registry creation** and replay
+  the snapshot, so a mid-session config reload cannot smuggle a variable into a hook.
+- **[#39311](https://github.com/openai/codex/pull/39311)** (bind exec approvals to shell executables),
+  **[#39372](https://github.com/openai/codex/pull/39372)** (scope approvals to their threads) — same
+  family as #28738, covered at `:1096-1115`. inber has **no approval cache to key wrongly**:
+  `guard.Config.ApprovalFunc` (`guard/guard.go:88-90`) has zero non-test setters, which
+  `engine/build_hooks.go:85-88` states outright. Nothing to collide.
+- **[#39242](https://github.com/openai/codex/pull/39242)** (safe permission-profile intersection),
+  **[#39266](https://github.com/openai/codex/pull/39266)** (fresh approval beneath denied paths) —
+  inber has no permission profiles at all; `guard.CheckTool` is a tool-*name* switch over three modes
+  (`guard/guard.go:158-184`), with no paths and no grants. No shape to check.
+- **[#39307](https://github.com/openai/codex/pull/39307)**, **[#39304](https://github.com/openai/codex/pull/39304)**
+  (Guardian v2 fail-closed, in-memory scores) — inber has no risk classifier; fail-closed as a
+  principle is already covered at `:4704-4749`.
+- **[#39299](https://github.com/openai/codex/pull/39299)**, **[#39244](https://github.com/openai/codex/pull/39244)**,
+  **[#39322](https://github.com/openai/codex/pull/39322)**, **[#39335](https://github.com/openai/codex/pull/39335)**,
+  **[#39331](https://github.com/openai/codex/pull/39331)**, **[#39296](https://github.com/openai/codex/pull/39296)** —
+  connectors, ChatGPT workspaces, environment-provided MCP policy and hook-MCP routing, none of which
+  inber has. #39299's principle (a child config may reduce capability but never expand authority) is
+  already this file's subagent-inheritance coverage.
