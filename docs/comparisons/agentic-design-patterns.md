@@ -5392,3 +5392,146 @@ to a normal assistant turn on the next resume.
   connectors, ChatGPT workspaces, environment-provided MCP policy and hook-MCP routing, none of which
   inber has. #39299's principle (a child config may reduce capability but never expand authority) is
   already this file's subagent-inheritance coverage.
+
+## Harness-watch — 2026-08-20: a git subcommand's argv is not its authority — `git status` executes model-planted config, measured; a session created as a row alone is addressable by one route of ten; and the redactor guards one of the four doors tool arguments leave by
+
+### 1. `git status` and `git ls-remote` are code-execution sites, and the filed remedy does not touch them
+
+[codex #39524](https://github.com/openai/codex/pull/39524) removes git from the known-safe command
+classification outright, on one sentence: **"Repository configuration can cause even read-only Git
+commands to execute helpers, so Git command arguments alone are not enough to establish trust."** Its
+companion [#39520](https://github.com/openai/codex/pull/39520) draws the matching remedy — run
+*automatic* plugin and marketplace git operations with repository-scoped git environment variables
+removed and a temporary trusted repository under the Codex home, preserving the caller's git
+configuration only for operations the user explicitly asked for.
+
+The 2026-08-09 entry (`:3902`) already filed inber's auto-commit helper for handing a model-planted
+git config the daemon's credential environment, and it enumerated the vectors it believed were real:
+`filter.<driver>.clean` on `git add -A`, and `core.sshCommand` on `git push` (`:3939-3945`). Both are
+on the write path. #39524 says the enumeration is short, and it is. **Measured on this host, git
+2.43.0:** a repository whose `.git/config` sets `core.fsmonitor` to a script runs that script on
+`git status --porcelain` — twice, with no executable bit on the script and no `.gitattributes`.
+
+inber runs it. `engine/workflow_git.go:94` is the *first* git command `finishSessionGit` issues —
+`status, err := h.git("status", "--porcelain")` — reached before any add, commit or push, gated only
+on `h.autoCommit`, which `engine/workflow_hooks.go:165` defaults `true`. `checkGitStatus` runs the
+same command again at `:156`. And `engine/workflow_git.go:61` is
+`h.git("ls-remote", "--symref", "origin", "HEAD")`, reached from `refuseDefaultBranchPush` (`:138`)
+whenever `pushToDefaultBranch` is false — the default (`engine/workflow_hooks.go:169`) — so the gate
+that exists to *stop* an unattended push runs the remote transport before deciding. That function's
+own comment calls it "one round-trip to a remote we are about to push to anyway" (`:56-57`), which is
+the safe-by-argv assumption #39524 deletes.
+
+**The point is not a third vector. It is that the two write-path vectors made the earlier entry's
+reachability story conditional — the session had to produce committable changes, or unpushed commits
+— and `git status --porcelain` is neither conditional nor a write.** It also breaks the filed remedy:
+todo `08f50e1f` is scoped as "spawns an uncontained child — full credential env, no deadline", and
+scrubbing `cmd.Env` does not stop `core.fsmonitor` from running. The model does not need the
+credential environment; it gets execution as the daemon user, which is a superset.
+
+**What inber should consider:** take #39520's shape, not an env denylist. The automatic git operations
+are the harness acting on its own initiative — no user and no model asked for them — so they should
+run with `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` neutralized, `GIT_DIR`/`GIT_WORK_TREE` dropped, and
+`-c core.fsmonitor=` / `-c protocol.ext.allow=never` / `-c core.sshCommand=` forced on the argv, where
+`.git/config` cannot override them. One helper, `engine/workflow_git.go:11-15`, and the same fix site
+as `08f50e1f`.
+
+### 2. A create call that writes a row and nothing else produces a session exactly one route can address
+
+[codex #39523](https://github.com/openai/codex/pull/39523) fixes a thread that is real to the creating
+call and invisible to every reader: **"New non-ephemeral threads have no persisted rollout or preview
+until their first turn, so moving them into a section could leave them absent from section-filtered
+thread lists."** The remedy is to materialize and flush the thread before applying the metadata
+operation.
+
+inber's bridge `POST /sessions` has the same gap and never gets a first turn to close it.
+`server/api_bridge.go:150` is the entire persistence the handler performs —
+`g.store.UpsertSession(sessionKey, agentName, "main", SessionLineage{}, nil)`, error discarded — and
+it stores nothing into `g.sessions`. `ListSessions` ranges `g.sessions` and nothing else
+(`server/session_management.go:37`), so `GET /sessions` (`api_bridge.go:121`) never lists what
+`POST /sessions` just returned a `201` for. Every sub-route opens `g.sessions.Load(id)` and answers
+404 on a miss: `/` (`:226`), `/events` (`:342`), `/fork` (`:593`), `/config` (`:681`), `/compact`
+(`:745`), `/messages` (`:859`). Two routes work — `/send`, because `g.run` reaches
+`getOrCreateSession`, which builds the session lazily (`server/session_creation.go:23-43`), and
+`/resume`, which rebuilds from the row (`api_bridge.go:507-568`). No test covers the handler.
+
+The request carries the field that names the fix. `AutoStart bool` (`server/api_bridge.go:133`) is the
+**only** occurrence of that identifier in the repository — decoded, then dropped. A client asking
+inber to start the session it just created is answered `201` and ignored.
+
+**What inber should consider:** #39523 materializes at create time rather than widening the readers,
+and inber has the constructor for it — `getOrCreateSession` is already the single entry point and
+already handles the create race with `LoadOrStore`. **What a fix must decide:** whether `POST
+/sessions` builds the engine eagerly, allocating a model client and a workspace for a session that may
+never be sent to, or whether the read paths fall back to the store row — the second turns `GET
+/sessions` from "live sessions" into "every session ever recorded", which is a different endpoint from
+the one that exists. `auto_start` is the caller's own vote and should be honoured or removed.
+
+### 3. The redactor was scoped to "what inber sends to a model provider", and tool arguments leave by three other doors
+
+[codex #39510](https://github.com/openai/codex/pull/39510) adds analytics for built-in control tool
+calls and pins one rule: **"Keep tool arguments out of control-tool analytics events."** Correlation
+ids, timing and outcome go out; the arguments do not. That is a claim about which field of a tool
+record is dangerous, and it holds for any fan-out path, not only analytics.
+
+inber already agrees, in one place. `agent/redaction.go:28` builds a process-wide redactor from
+`os.Environ()`, keeping every variable whose name contains `key`, `token`, `secret`, `password`,
+`credential`, `apikey`, `auth`, `session_key` or `private` (`redact/redact.go:173-183`), and installs
+it on the provider transport — `EgressRedactionRequestOption` (`agent/redaction.go:57`) and
+`EgressRedactionTransport` (`:63`). Closed todo `a6b313b8` names that scope exactly: "strip
+credentials out of what inber sends to a *model provider*".
+
+Raw tool arguments leave by three doors that gate does not cover, all fed from one producer:
+`server/session.go:103` emits `StreamEvent{Kind: "tool_call", ..., Text: input}`, where `input` is the
+argument JSON verbatim.
+
+- **NATS.** `server/bus_delta.go:37` copies it into `delta.ToolInput` (and `:39` copies tool output
+  into `delta.ToolOutput`); `server/bus.go:146` publishes the delta; `bus/client.go:110-112` publishes
+  on the plain subject `chat.stream`, which every subscriber on that server receives.
+- **logstack.** `session/logstack.go:122` sets a tool-call entry's whole `content` to
+  `string(e.ToolInput)` and ships it to the centralized log service when a logstack URL is configured
+  (`session/session.go:140-142`).
+- **SSE.** `server/api_bridge.go:314-318` marshals the bridge event, tool input included, to any client
+  on `POST /sessions/{id}/send` with `Accept: text/event-stream`.
+
+A `shell_commands` call is the case that matters: `curl -H "Authorization: Bearer $TOKEN" …`, or
+anything that echoes the environment, is a tool argument. The same bytes reaching Anthropic are
+scrubbed; the same bytes reaching `chat.stream` are not. This is the third instance in this file of one
+policy installed at one door of several — cf. `:3946` (redacted to the provider, exported to a hook)
+and `:4026` (locks on six doors of seven).
+
+**What inber should consider:** the redactor is a value with a `Redact` method, so wiring it into
+`busDeltaFor` and `toLogstackEntry` is small. **What a fix must decide:** whether tool *arguments*
+belong on these paths at all. The bus feeds chat surfaces a human reads, where a rendered tool call is
+a feature, so redacting changes what that human sees. #39510's own answer is stricter than redaction —
+carry the tool's identity and outcome, omit the arguments — and choosing between "scrub" and "omit" is
+the decision, not the wiring.
+
+### 4. Three cross-cutting patterns from this sweep's papers
+
+- **Gate composition has an order, and the order is semantics.**
+  [arXiv:2608.18360](https://arxiv.org/abs/2608.18360) names *remediation-induced control coupling*:
+  once any pre-action control can **modify** an action rather than only admit or deny it, it
+  invalidates the judgment a control that already ran had made. Finite-model checking shows the two
+  implemented remediation operators — evidence substitution and resource-budget downroute — do not
+  commute. inber already has two controls (`guard.CheckTool` at `guard/guard.go:165`, and `CheckLimits`
+  for cost and time), and permission-store would make more. **What inber should consider:** the moment
+  any gate downroutes a model or trims context rather than refusing, the composition order has to be
+  written down as semantics, not left to call order.
+- **Bind every derived view to a content hash of its source.**
+  [arXiv:2608.18050](https://arxiv.org/abs/2608.18050) formulates a workspace-state contract: parsed
+  index, file summary in context, review diff and submitted artifact must each name the version they
+  describe. Dual parsed/native access improved OfficeQA Pass@1 by 8.3–12.1 points. inber's
+  `codeindex/codeindex.go` detects change by **mtime** (`:19`, `:55`) — a timestamp, not a version
+  identity. **What inber should consider:** carry the content hash of the file an index entry was
+  parsed from, so a stale parse is detectable rather than merely unlikely. Both call sites are still
+  `// TODO: implement`, so this costs nothing to decide now and a rewrite later.
+- **Structured disagreement beats more agents, and consensus is the failure mode.**
+  [arXiv:2608.18167](https://arxiv.org/abs/2608.18167) puts a critic that audits the *reviewer* behind
+  a coding agent: three agents beat a five-agent baseline on LiveCodeBench, and naive agreement showed
+  a **false-consensus** failure the authors fixed by making disagreement explicit and
+  evidence-grounded. With `2608.12895` (a reviewer on the same model is not a second opinion) and
+  `2608.16801` (naming a coordinator buys nothing), the three say the win is not in the org chart.
+  **What inber should consider:** for `server/spawn.go`, the cheap version is a review subagent
+  required to cite specific evidence per objection, plus a pass that rejects unsupported agreement —
+  not a third agent for its own sake.

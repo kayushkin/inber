@@ -1323,3 +1323,204 @@ an unauthenticated bus is a capability question, not just a plumbing one.
   started it — and reach different ends. inber's line is defensible because *results* are never lost
   (`deliverResult` injects or triggers a turn), only progress; but the comment states the drop as
   though no alternative existed, and one now ships upstream.
+
+## Harness-watch — 2026-08-20: the model a compaction runs on and the client it runs through are two answers that must be produced together — inber takes them from two fields, and failover rewrites only one
+
+[goose #11255](https://github.com/block/goose/pull/11255) moves compaction and tool-result
+summarization off `GOOSE_FAST_MODEL` and onto the main session model, keeping the fast model for
+session naming, tool-call labels and orchestrator routing. The reasoning is an argument about *which*
+auxiliary calls deserve the discount: the compaction summary is the foundation for every token
+generated after it, compaction runs rarely, it fires when the context is at its largest, and it was
+already falling back to the main model on Anthropic — so the discount bought inconsistency and
+summary-quality risk for almost no saving. [#11207](https://github.com/block/goose/pull/11207) lands
+the other half: it makes the main-model fallback an explicit choice for every `complete_fast` caller
+rather than an ambient default, and turns thinking off for labels, because reasoning-capable models
+were spending tokens deliberating over short labels whose reasoning output was discarded. Together:
+**every auxiliary LLM call declares its own model and its own thinking policy, and neither is
+inherited by accident.**
+
+**inber does not have goose's bug and has a worse one in the same place.** It has the knob and never
+turns it: `conversation/summarize_config.go:9-10` declares `Model string // Model to use for
+summarization (empty = same as agent)`, no caller anywhere assigns it, and `conversation/summarize.go:58-61`
+therefore always falls through to the model the caller passed. Compaction runs on the session model,
+which is the answer #11255 arrives at. The defect is where that session model comes from.
+`engine/lifecycle.go:90-97` reads the model from `e.Model` and the client from `e.Client`. Those two
+fields are written by different code at different times and nothing keeps them consistent. `e.Client`
+is assigned once, at construction (`engine/engine_new.go:589`), and never again on any live path.
+`e.Model` is rewritten at the top of every turn: `engine/turn_execute.go:22-23` is
+`modelUsed := e.resolveModelClient(selected)` then `e.Model = modelUsed`, and `resolveModelClient`
+(`engine/model_client.go:39-43`) installs the new provider's client into `e.modelClient` and leaves
+`e.Client` alone. The engine's own comment at `engine/model_client.go:10-16` states the invariant this
+violates — "the string and the installed client must describe the same thing or every one of those
+readers is told something untrue" — and then names only `e.modelClient` as the installed client.
+`e.Client` is a second installed client nobody updates, and compaction is its reader.
+
+The nil-client half of this is **already filed** as todo `36de2cf9` (`Engine.Client` is nil for the
+whole session on an OpenAI-compatible model; compaction panics, memory extraction panics into a
+`recover`, the registry builds subagents on nil) and is not re-filed here. The half that todo does not
+cover is the cross-provider failover, which needs no misconfiguration at all: a session that starts on
+Anthropic has a non-nil `e.Client`, and `fallbackChain` (`engine/failover.go:63-77`) is
+`modelStore.FailoverChain()` ordered by priority — measured live this sweep, that chain crosses from
+`anthropic` into `openai` at `gpt-5` (priority 30) directly after the four Anthropic models at
+10/15/20/25. After one health-driven failover, `e.Model` is `gpt-5` and `e.Client` is still the
+Anthropic client, so every later compaction posts `Model: "gpt-5"` to `api.anthropic.com`. The call
+site is `_ = e.summarizeIfNeeded(ctx)` (`engine/turn_prepare.go:66`), so the error is discarded and
+the only trace is one `Log.Warn` at `engine/lifecycle.go:106`. **The session then never compacts again
+for as long as it holds the failover model**, and context grows against pruning alone — the same
+"permanently unresumable" shape #11204 fixed upstream, produced here by inber's own failover.
+
+**What inber should consider:** give `SummarizeConversation` the client and the model together. **What
+a fix must decide** is #11255's actual question, which inber has never answered: compaction is
+Anthropic-only machinery invoked from a provider-neutral turn loop, so "which model compacts" and "can
+this session compact at all" are the same question. Three answers cost differently — (a) make the
+summarizer provider-neutral, so a session compacts through its own client; (b) keep it Anthropic-only
+and give it a **declared** Anthropic model rather than inheriting `e.Model`, which is
+`SummarizeConfig.Model`, the field that already exists and has never been set, and which #11255 argues
+should be the *strong* model; (c) refuse to compact on a non-Anthropic session and say so, letting
+context grow until pruning alone holds it. Whoever picks (b) is also picking a second billed model per
+session and should say so.
+
+One thing for the same pass, from #11207 rather than #11255: inber's two sidecar call sites build
+`anthropic.MessageNewParams` by hand and set no thinking policy at all —
+`conversation/summary_generation.go:62-71` and `conversation/extract.go:81-87` each set `Model`,
+`MaxTokens` and `Messages` and nothing else. Per this file's 2026-08-18 entry, omitting the `thinking`
+field on an adaptive model buys thinking and bills it as invisible output tokens, so both pay for
+reasoning on a summary and on a memory-extraction JSON blob the moment either is pointed at an
+adaptive model. #11207 is upstream precedent that the auxiliary call is exactly where this is worth
+turning off explicitly.
+
+## Harness-watch — 2026-08-20: bound the handoff artifact at the sink that costs, and decide the retry by which errors *cannot* be about the prompt
+
+[goose #11204](https://github.com/block/goose/pull/11204) fixes an ACP fallback handoff that replayed
+the entire prior conversation as one unbounded text block: long sessions produced a prompt the agent
+rejected outright, and because the same memo was rebuilt on every restore, the session became
+permanently unresumable. The bounding scheme is detailed — `min(context_limit × 0.30, 64k) −
+current_prompt_tokens`, newest-first selection rendered chronologically with an explicit
+`[N earlier messages omitted]` marker, the five newest tool exchanges kept intact and older responses
+redacted, matched **by tool-call id so parallel and batched calls are protected individually rather
+than by message position**, and selection working on request/response *units* so a tight budget cannot
+orphan half an exchange.
+
+The transferable half is sharper than any of that. From the PR: the budget is only an estimate of what
+the agent will accept, so the bare prompt is retained as a fallback — if the first send with a memo
+fails it is retried once without the memo, and **no error text is matched**; errors that cannot be
+about the prompt keep the retry rather than spending it (an `AuthRequired` code, and the ACP server's
+structured `credits_exhausted` reason). That is the inversion: **you cannot reliably recognize a
+too-long-prompt error, so stop trying — retry the smaller thing by default and enumerate only the
+errors that are provably about something else.** A carve-out list is short, stable and falsifiable; a
+match list is long, provider-specific and silently incomplete.
+
+**inber has the retry and gates it on precisely the match #11204 deleted.** `agent/agent_run.go:205-218`
+prunes to half the context window and retries once, but only when `isContextLengthError(apiErr)` is
+true, and that predicate (`agent/agent.go:23-32`) is four `strings.Contains` calls against
+`"prompt is too long"`, `"context_length_exceeded"`, `"maximum context length"` and `"too many tokens"`.
+Any provider that words it differently — and inber routes to openai, google, openrouter, ollama and a
+catch-all (`agent/clients.go:92-100`) — gets no retry and a dead turn. This file's 2026-08-19 sweep
+recorded [#11283](https://github.com/block/goose/pull/11283) against the same predicate and concluded
+"no new material" because #11283 only added `error.code` *on top of* the substring fallback. #11204 is
+the new material: it removes the match entirely and inverts the polarity of the list.
+
+**And inber's one genuine handoff artifact is unbounded at the only sink where size costs anything.**
+`server/spawn.go:322` sets `summary = result.Text` — the child agent's entire final assistant message.
+That string is truncated at three sinks and not the fourth: `server/spawn.go:342` writes
+`truncate(summary, 1000)` to the request row, `:406` sends `truncate(summary, 300)` on the event,
+`server/spawn_delivery.go:212-215` cuts it to 500 before queueing it into the agent's *main* session —
+and `server/spawn_delivery.go:54-67` interpolates `result.Summary` raw into the message injected into
+the **parent's live conversation**, which is the one copy that enters a prompt and is re-sent on every
+subsequent turn until compaction reaches it. The three bounded sinks are a log row, a notification and
+a pending-message note; the unbounded one is context. The bound is inverted with respect to cost.
+
+**What inber should consider:** two things, separable.
+
+- Replace the `isContextLengthError` gate with #11204's polarity. **What a fix must decide:** inber's
+  retry is *destructive* — `a.BeforeRequest(ctx, *messages, a.contextWindow/2)` halves the conversation
+  and `*messages = pruned` assigns it back, so retrying on an error that was never about the prompt
+  costs the user half their transcript. goose can retry freely because its fallback merely drops a memo
+  it can rebuild. Adopting the inversion here requires either making the prune non-destructive on the
+  retry path (build the shortened request without assigning it back until it succeeds) or accepting
+  that a mis-triaged error destroys context instead of merely failing the turn. Do not port the
+  polarity flip without picking one.
+- Bound `deliverResult`'s injected message. **What a fix must decide:** whether the bound is a byte
+  count like the other three — in which case say why 300, 500 and 1000 are three different numbers for
+  one string — or whether the parent should get a pointer instead, since `saveSpawnToMemory`
+  (`server/spawn_delivery.go:167-172`) already writes the full text to memory and `updateMainSession`
+  (`:219`) already tells the model "Full details available via memory_search". The parent's own copy is
+  the one place that promise is not kept.
+
+## Harness-watch — 2026-08-20: the 2026-08-18 thinking-mode decision has an upstream answer — a default-off capability flag on the model record, gated on the flag and never on a provider name
+
+This file's 2026-08-18 entry ends on an open decision it declined to take: inber omits the `thinking`
+field whenever `thinkingBudget == 0` (`agent/agent_run.go:82-88`), which on an adaptive model means
+thinking *on* and billed; the fix needs a per-model thinking mode; model-store's record carries a
+context window and two prices and nothing else, so "there is nowhere honest to read the answer from
+today"; and the two options were (a) add a field to model-store or (b) hardcode a model-id list, which
+this box's single-source-of-truth directive forbids.
+
+[goose #10439](https://github.com/block/goose/pull/10439) is the same problem solved, and it picks (a)
+with a shape worth copying. goose was injecting `clear_thinking: false` — a Z.AI/GLM property, not part
+of Anthropic's `thinking` schema — into every request built by the shared `anthropic` formatter, which
+also serves Anthropic, minimax and custom Anthropic-compatible gateways, producing
+`HTTP 400 thinking.enabled.clear_thinking: Extra inputs are not permitted`. The fix adds
+`emit_clear_thinking: bool` to `DeclarativeProviderConfig`, **defaulting to false**, sets it `true` in
+`zai.json` alone, and threads it into the formatter. The PR gives the reason in one line: gated on the
+flag rather than a provider-name check, so custom providers are covered without enumeration. A name
+check is a list that is wrong the moment the next provider appears; a default-off flag is wrong only
+for a provider that forgot to opt in, which is the safe direction.
+
+`agentic-design-patterns.md:1570` already records the 2026-06-30 precedent — a context-budget decision
+moved out of a hardcoded model-name match and into a **model-record capability flag** — so this is the
+second instance of the technique upstream and the first that lands on the exact field inber is missing.
+
+**What inber should consider:** take option (a) with #10439's defaults — model-store's `Model` gains a
+thinking-mode field it owns, and `agent/agent_run.go` branches on what it reads back. **What remains
+undecided, and is not settled by #10439:** inber needs **three** states where goose needed two —
+omit-means-disabled (pre-adaptive), omit-means-enabled (adaptive), and rejects-an-explicit-disable
+(always-on) — so a boolean is not enough, and the default has to be the pre-adaptive one to leave
+today's Sonnet-4-family defaults untouched. The third state still needs the answer the 08-18 entry
+asked for: what a zero budget *means* on a model that will not accept a disable — refuse the request,
+or send nothing and log that the setting cannot be honoured.
+
+### Also in-window, checked and not worth a finding
+
+- **[#10285](https://github.com/block/goose/pull/10285)** (canonicalize mangled tool names before
+  permission inspection) — no inber counterpart, checked directly. goose's bug was two names for one
+  call: `PermissionInspector` read the raw `tool_call.name` while `resolve_tool` recovered a mangled
+  one, so a `never_allow` on `db__drop_table` missed `db.drop_table` and dispatch ran it. inber has one
+  name: `agent/chain.go:301` receives `name`, hands that same string to the gate and to `toolMap[name]`,
+  and nothing anywhere recovers, prefixes or rewrites a tool *name* (`toolid.Sanitize` at
+  `agent/openai_conversion.go:222` rewrites tool **ids**). A mangled name fails the map lookup. The
+  prefixed-MCP-tool evasion cannot happen today for the reason this file already records:
+  `MCPToolRegistry` has no caller outside `tools/mcp/`.
+- **[#11369](https://github.com/block/goose/pull/11369)** (a config migration must not widen a
+  user-configured tool allowlist) — inber has no config-migration path that rewrites agent tool lists;
+  `agent/registry/registry.go:219-226` registers `cfg.Tools` as written and errors on an unknown name.
+- **[#11362](https://github.com/block/goose/pull/11362)** (fail closed on an invalid ACP permission
+  mode) — the general rule is this file's 2026-08-12 entry (#11128). The specific shape does not
+  transfer: inber's guard mode has a deliberate documented zero value (`guard/guard.go:42-55`, with the
+  reasoning for why Observe must *not* be the zero value) and is set from a parsed request field, not
+  from a config file that can be malformed.
+- **[#11367](https://github.com/block/goose/pull/11367)** (contain `REVIEW.md` discovery) — same fix as
+  #10545, covered 2026-08-01 here and at `agentic-design-patterns.md:2466-2468`.
+- **[#11191](https://github.com/block/goose/pull/11191)** (a model-controlled memory category becomes a
+  filesystem path) — inber's memory is SQLite through memory-store; no `filepath.Join` in `memory/` or
+  `tools/` takes a model-supplied component.
+- **[#11228](https://github.com/block/goose/pull/11228)**, **[#11365](https://github.com/block/goose/pull/11365)**
+  — renderer-driven recursive directory scans and buffered retry-command stdout. No Electron renderer,
+  no retry-command feature.
+- **[#10364](https://github.com/block/goose/pull/10364)** (stdio MCP children inheriting
+  `PR_SET_PDEATHSIG` from a short-lived worker) — real and Linux-specific, but inber spawns no
+  long-lived stdio MCP children on any wired path.
+- **[#11339](https://github.com/block/goose/pull/11339)**, **[#11375](https://github.com/block/goose/pull/11375)**,
+  **[#10990](https://github.com/block/goose/pull/10990)**, **[#11233](https://github.com/block/goose/pull/11233)**,
+  **[#9650](https://github.com/block/goose/pull/9650)** — per-session extension merge, ACP audience
+  annotations, Pi transcript import, two builtin skill files, and `GOOSE_SUBAGENT_*` precedence over
+  LLM-injected delegate params. No ACP surface, no importer, no skills registry, and inber's spawn takes
+  no model or provider from the model at all (`server/spawn_tools.go`), so there is no precedence order
+  to get wrong.
+- **[#11112](https://github.com/block/goose/pull/11112)** (`working_dir` in Stop hook context) — inber's
+  hooks are in-process Go closures (`agent/agent.go:43-60`) taking typed arguments, so a missing field
+  is a compile error rather than a silent allow.
+- **[#10354](https://github.com/block/goose/pull/10354)** (`thoughtsTokenCount` folded into
+  `output_tokens` for Google) — one line only: inber's Google traffic goes through the OpenAI-compatible
+  path (`agent/clients.go:92-95`), which reads `completion_tokens` and already includes reasoning. inber
+  does not have this bug and would acquire it if a native Gemini client is ever added.

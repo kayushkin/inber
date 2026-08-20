@@ -360,3 +360,83 @@ never populated, which is moot only because `tools/mcp/` still has zero importer
 > entry above is already filed as `d967400a` (an A/B/C/D policy call), so it needs no new todo —
 > `forge` IS live in inber (`server/spawn.go`, `engine/engine_new.go` import it), so that one is
 > live rather than latent.
+
+## Harness-watch — 2026-08-20 (CC 2.1.236–2.1.237): a subscriber needs an identity and a lifetime — inber's SSE fan-out is one mutable slot, so the next turn unsubscribes the viewer and the viewer's exit mutes the turn
+
+Two releases landed in this window: [2.1.236](https://github.com/anthropics/claude-code/commit/084ca20b)
+and [2.1.237](https://github.com/anthropics/claude-code/commit/770933ea). Both are CLI features inber
+cannot use directly, but one line in each names a rule inber breaks. 2.1.236 adds `notify_when_idle`
+to cross-session `SendMessage` — "opt-in, one-shot, no polling" — and, in the same release,
+"`SendMessage` now refuses further messages to a session up front once a rapid burst would exceed
+what that session's inbox accepts, **instead of reporting them sent while they were dropped**." The
+pair states one principle twice: a subscription is a registered thing with an owner and an end, and
+delivery that cannot happen must be refused rather than silently discarded.
+
+### 1. The bridge's "persistent SSE subscription" is a single mutable callback slot — two different events unsubscribe it, and one of them mutes an unrelated live turn
+
+`handleBridgeEvents` (`server/api_bridge.go:336`, commented "persistent SSE subscription") subscribes
+by *overwriting* a field: it takes `sess.mu`, saves `origOnEvent := sess.onEvent`, installs a closure
+that calls the old one and then fans out to its own channel, and restores the saved value on exit
+(`server/api_bridge.go:364-384`). There is no subscriber list. `Session.onEvent` is one slot, and its
+own comment says what it was built for — `// current request's event callback (updated per-turn)`
+(`server/session.go:67`). `setOnEvent` (`server/session.go:72-76`) overwrites it unconditionally, and
+`getOrCreateSession` calls `setOnEvent` on **every** run and stream against a live session
+(`server/session_creation.go:26`, `:34`), after which `Session.turn` rebuilds the engine's display
+hooks from whatever is in the slot (`server/session.go:151-152`). Three producers install callbacks
+this way — the HTTP run path, the NATS bus (`server/bus.go:114`) and spawn delivery
+(`server/spawn_delivery.go:114-116`) — and each one silently evicts whoever held the slot.
+
+That gives two failures from one root cause. **A viewer goes deaf:** an SSE client attached while the
+session is idle stops receiving anything the moment any other caller starts a turn, which is the only
+moment it exists for; the HTTP connection stays open and streams nothing, so the client cannot tell
+subscription from silence. **A viewer's exit mutes someone else:** the deferred restore at
+`server/api_bridge.go:379-384` writes back the callback captured at subscribe time. If a turn started
+after that, closing the SSE tab replaces that turn's live writer with a dead closure from a finished
+request, and `updateHooks()` on the next line pushes it into the running engine — the streaming
+caller stops receiving output mid-turn, for a reason that happened in a different connection. Nothing
+logs either transition.
+
+**What inber should consider:** make the subscriber plural — a map of id → callback on `Session`,
+with subscribe and unsubscribe by that id, so a restore can never clobber a stranger. **What a fix
+must decide:** whether the per-request writer stays privileged. Today "the current request's writer"
+and "a long-lived observer" are the same field, and the run path depends on last-write-wins to point
+the hooks at the caller now streaming. A subscriber set has to say which callbacks a new turn
+replaces (the request writer) and which survive it (observers), or the bus, spawn delivery and the
+bridge start delivering each other's turns.
+
+### 2. A slow SSE client loses events silently, and the frames carry no id, so it cannot detect the gap
+
+The fan-out closure sends to a 100-deep buffer with a bare `default:` and no logging, counter or
+marker (`server/api_bridge.go:371-374`). The frames it feeds are written as `event:`/`data:` only
+(`server/api_bridge.go:397-399`), with no `id:` field, so a client that fell behind during a burst of
+deltas receives a transcript with a hole in it and no way to know. This is exactly the shape 2.1.235
+and 2.1.236 closed on `SendMessage` twice — refuse up front rather than report a delivery that did
+not occur. The neighbouring drop in this repo is not the same: `offerToTurnInFlightLocked`
+(`server/session.go:280-287`) also selects with a `default:`, but it logs a warning, returns `false`,
+and `deliver` falls the message back to the pending queue, so nothing is lost.
+
+**What inber should consider:** number the frames and let the client see the gap — an `id:` per event
+plus a drop counter in the next frame costs nothing and turns silent loss into a visible one. **What
+a fix must decide:** what to do when the buffer is genuinely full. Blocking is not free here: the
+closure runs on the token-streaming goroutine, so a stalled reader would stall the turn itself. Drop
+with a marker, coalesce deltas, or disconnect the slow client are three different answers with
+different blast radii, and this entry does not pick one.
+
+### Checked and not worth a finding
+
+- **"Fixed prompt caching for sessions using an LLM gateway or custom base URL" (2.1.237)** — inber
+  never sets a base URL on the Anthropic path (`agent/clients.go:103-129` passes auth and headers and
+  no `option.WithBaseURL`), so there is no inber-side gateway path to break. Worth recording, since it
+  is not obvious: the SDK still honours `ANTHROPIC_BASE_URL` from the environment
+  (`anthropic-sdk-go@v1.35.0/client.go:34`), so a gateway *can* be interposed on this host without a
+  line of inber config — and the OAuth branch would send its `sk-ant-oat01-` token there in a header,
+  which body-side egress redaction cannot see by construction.
+- **`ANTHROPIC_DEFAULT_MODEL` vs `ANTHROPIC_MODEL` (2.1.236)** — a two-tier default where an explicit
+  pick outranks the environment. inber resolves the model per agent through model-store already; no
+  competing environment tier exists to disambiguate.
+- **Sandbox wildcard read-deny precedence (2.1.236)** — `guard.CheckTool` is a tool-*name* switch with
+  no path rules (`guard/guard.go:158-184`). No shape to check, as previously recorded.
+- **Recap text capped at 400 characters (2.1.236)** — bounding a generated artifact so it cannot grow
+  without limit; the same rule as the compaction-prompt entry of 2026-08-16, already filed.
+- **"Concise" output style, `/model` picker sizing, fullscreen renderer fallback, spellcheck** — CLI
+  presentation, no analogue.

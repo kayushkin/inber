@@ -631,3 +631,183 @@ turn and the `Completed` mislabel, not an unbounded leak.
   **[#13231](https://github.com/cline/cline/pull/13231)**, **[#13075](https://github.com/cline/cline/pull/13075)**,
   **[#13245](https://github.com/cline/cline/pull/13245)** — already covered at
   `agentic-design-patterns.md:4601`, `:4689`, `:4780`, `:4856`, `:5045`, `:5105`.
+
+## Harness-watch — 2026-08-20: a provider's terminal states are a union inber only half-names, and a non-zero exit is not an error anywhere in the pipeline
+
+### 1. Two turn loops, opposite fail modes, for the same unmodeled stop reason
+
+[cline #13300](https://github.com/cline/cline/pull/13300) fixes a regression where `emitAiSdkEvents`
+diverted every AI-SDK part with `providerExecuted: true` off the normal pipeline, re-emitted the two it
+recognised (`web_search`, `image_generation`) as observational events, and **silently dropped everything
+else**. Because `ai-sdk-provider-claude-code` marks *every* tool the CLI runs as provider-executed, whole
+sessions read and edited the workspace with no tool activity in events, transcripts or UI. The fix routes
+all provider-executed parts onto the observational path and widens `toolName` from the closed
+`ModelToolName` union to `string`. The rule underneath: when a provider hands back a variant your
+allowlist does not name, the default branch decides whether you lose data or fail loudly — and picking
+"drop" by omission is the worst of the two.
+
+inber has no provider-executed tools, so the content-block half does not transfer. The **stop-reason**
+half does, and inber holds both wrong answers at once. `agent/agent.go:415` returns on
+`end_turn`/`max_tokens`, `:425` loops on `tool_use`, and `:441` is
+`return result, fmt.Errorf("unexpected stop reason: %s", resp.StopReason)`. The SDK inber pins —
+`anthropic-sdk-go v1.35.0`, `go.mod:6` — declares six, and `message.go:5325-5333` names the two the switch
+omits: `StopReasonPauseTurn` and `StopReasonRefusal`. `refusal` is reachable today on any request;
+`pause_turn` becomes reachable the moment a server tool is enabled, and its documented handling is
+*resume the loop*, which is the branch inber is missing rather than an error. The assistant message is
+already in history — `agent/agent.go:412` runs `*messages = append(*messages, resp.ToParam())` before the
+switch — but `result.Text` is empty, because text is extracted only inside the `end_turn` branch
+(`:416-419`) and `processResponse` (`agent/agent_run.go:263-299`) reads only usage and thinking blocks.
+Note the asymmetry with the sibling path fifteen lines up: `agent/agent.go:397-404` works to keep
+`deliveredText` when a *stream* errors. A refusal is the same condition and gets none of it.
+
+Whether that error should also mark the model unhealthy is **already an open decision** — todo
+`6b4a9ab5`, which `engine/failover.go:160-166` names in a comment beside the code, saying so outright:
+"Whether a refusal, or a pause_turn inber has no branch for, is a provider fault, a model fault or a gap
+in inber is an open question." Not re-filed.
+
+The OpenAI-served loop makes the opposite mistake in the same place. `mapOpenAIFinishReason`
+(`agent/openai_conversion.go:244-254`) is `case "stop"/"length"/"tool_calls"` and then
+`default: return anthropic.StopReasonEndTurn` — so OpenAI's `content_filter` is reported to every layer
+above as a normally completed turn. `ConvertOpenAIResponseToAnthropic` does it again at `:191-201`: zero
+choices returns a message with no content and `StopReason: anthropic.StopReasonEndTurn`. Per
+`agent/clients.go:92` that path carries ollama alongside openai/google/openrouter. One loop turns an
+unmodeled terminal state into a hard error and a model-health penalty; the other turns it into a clean
+success. Neither reports what actually happened.
+
+**What inber should consider:** name the union exhaustively in both loops rather than allowlisting three
+cases. **What a fix must decide:** whether `pause_turn` continues the loop (the provider's own contract)
+or errors, and whether `refusal` is an error at all or a completed turn carrying `result.Incomplete`,
+which `agent/agent.go:403` already sets on the stream path. On the OpenAI side the fix is smaller and
+unambiguous: a `default` that silently returns `end_turn` fabricates a canonical value where the provider
+supplied a real one.
+
+### 2. A command that exits non-zero is a success everywhere except the prose
+
+[cline #13358](https://github.com/cline/cline/pull/13358) sets `$ErrorActionPreference='Stop'` in the
+`run_commands` PowerShell wrapper. Without it a pipeline raising a non-terminating error per item emitted
+one error record per file — measured at 10,001 stderr lines and 1.3 MB on a 10,000-file tree — **and
+still resolved as SUCCESS with exit 0**. Two separable claims: a failure must terminate the command rather
+than continue through the rest of the work, and the harness must not report the result as success.
+
+inber fails the second outright and the first for multi-command calls. `shell_commands` is tool-store's
+`Shell()`, registered at `tools/tools.go:34,49` and reachable through `engine/build_tools.go:49`. At
+`~/repos/tool-store/tools/shell.go:82-86` a non-zero exit is folded into the *text* — `out, err :=
+cmd.CombinedOutput()`, then `result = fmt.Sprintf("%s\nexit: %s", result, err)` — and `Run` returns
+`(text, nil)` at `:97`. Every consumer downstream derives failure from that discarded Go error and nothing
+else. `agent/chain.go:406-410` is `primaryOutput, err := tool.Run(...)` / `if err != nil {...}`, so
+`isError` is false; `:416` calls `hooks.OnToolResult(blockID, name, outcome.primaryOutput, false)`;
+`engine/build_hooks.go:156-159` increments `e.Turn.ConsecutiveErrors` only `if isError`, so it never
+moves; and `agent/agent_run.go:421-423` writes `anthropic.NewToolResultBlock(block.ID, finalOutput, false)`,
+putting `is_error: false` on the wire. The counter that stays at zero drives the error-recovery context
+ladder at `engine/turn_context.go:12-18` (1 error → 20k recall, 3 → 35k, 5 → 50k), which
+`agent/chain.go:336-342` documents as the reason `isError` has to be truthful. So a session whose build
+has failed five times running is, to every mechanism inber has, a session in which nothing has gone wrong.
+
+The fail-fast half: `shell.go:68-96` loops `for i, c := range cmds` and the only `break` is `ctx.Err()` at
+`:70-73`, so `commands: ["./configure", "make", "make install"]` runs all three after the first fails and
+returns one aggregate string with a `nil` error.
+
+**What inber should consider:** the tool-side fix is in tool-store, and **what it must decide** is what
+"failed" means for a call carrying several commands — first non-zero stops and the tool errors (cline's
+choice, which makes `commands[]` behave like `&&`), or every command runs and the tool errors if any did,
+or a `continue_on_error` flag whose default has to be argued for. inber's own half is independent of that
+answer: `is_error` and `Turn.ConsecutiveErrors` are derived *only* from a Go-level error, so any tool that
+reports failure in-band is invisible to both. Whether the dispatcher may ever read a tool's output to
+classify it, or whether every tool must signal failure structurally, is the question — the current
+arrangement picks the second and ships a tool that does not obey it.
+
+### 3. The guard's mode reaches the model only as a refusal after the call
+
+[cline #13361](https://github.com/cline/cline/pull/13361) fixes a desktop session where
+`autoApproveTools: true` made the generated system prompt describe Yolo mode while the core runtime ran in
+Act mode — the prompt advertised a tool (`submit_and_exit`) the session did not have. The correction: the
+explicit session `mode` drives both the system prompt and the runtime tool preset, and auto-approval goes
+back to being an independent tool policy that changes neither.
+
+inber's equivalent mismatch is total and live. `engine/engine.go:205` builds the guard from the mode the
+create request asked for (`e.Guard = guard.New(e.Limits.GuardConfig(mode))`), and `guard.CheckTool`
+(`guard/guard.go:165-187`) really enforces it: Observe returns `Denied` for anything not read-only, Assist
+returns `NeedsApproval` for the dangerous set. But the mode reaches neither of the two things that tell the
+model what it can do. `buildTools` (`engine/build_tools.go:16-21`) holds no guard reference and applies no
+filter, so an Observe-mode session is handed `write_files`, `edit_files` and `shell_commands` in its tools
+array with their full descriptions; and `engine/turn_prompt.go` contains **no occurrence of the string
+`mode` at all** — `BuildSystemPrompt` (`:83`) never states which one is in force. The only path from mode
+to model is `buildToolRefusal` (`engine/build_hooks.go:93-101`), returning `"%s mode allows read-only tools
+only"` *after* the model has spent a call deciding to write.
+
+The cost compounds rather than repeating. A refusal returns `isError = true` (`agent/chain.go:390-393`), so
+unlike the shell case above it *does* increment `Turn.ConsecutiveErrors`, and `engine/turn_context.go:12-18`
+widens memory recall from 6k to 20k to 35k to 50k tokens — each step rewriting the cached system-prompt
+prefix and re-paying for the whole prompt. An Observe-mode session that keeps trying to write is charged an
+escalating cache-busting penalty for failing to guess a policy it was never told.
+
+**What inber should consider:** the mode is the session's contract and belongs where the model reads
+contracts. **What a fix must decide:** state it as a named system block, which is cheap and cache-stable
+since the mode does not change mid-session, or filter the tools array by mode, which is stronger — the
+model cannot call what it cannot see — but makes the tools hash differ per mode, and Assist has no clean
+answer because its dangerous tools are *conditionally* available. Either way, decide whether a guard
+refusal should count toward `ConsecutiveErrors` at all: it is a policy outcome, not a failure, and it is
+currently the one thing driving the recall ladder in a mode where every write is refused by design.
+
+### 4. A settled turn has no terminal state that says it failed
+
+[cline #13330](https://github.com/cline/cline/pull/13330): turns that settled through the event stream
+rather than a blocking `send()` RPC had no finalization step — `chat_done` updated the composer status but
+never cleared the streaming id or reconciled against the persisted transcript, so the last bubble shimmered
+indefinitely and only healed when an unrelated follow-up nudged the hydration path. The shape: the settle
+path and the happy path finalize differently, and only one of them was written.
+
+inber's settle path is a `defer`, and it erases the one state the failure path sets.
+`server/session.go:166-173` registers a deferred func that takes `s.mu` and sets `s.Status = Idle`;
+`:176-183` then runs the turn and, on error, sets `s.Status = Error` before returning. Deferred functions
+run after the return values are set, so `:178` is a dead store — **`Error` is written at exactly one place
+in the package and unconditionally overwritten microseconds later.** `Error` is a declared `SessionStatus`
+(`server/session.go:22`) with a `String()` case at `:33`, surfaced by `GET /sessions`
+(`server/api_sessions.go:138`), `server/api_bridge.go:236,521,576` and `server/session_management.go:43` —
+and no session has ever reported it. A turn that failed is indistinguishable from one that finished. Same
+class as the `Completed`-on-SIGKILL mislabel recorded at `:600-604`, from the other end of the lifecycle.
+
+**What inber should consider:** the mechanical fix (assign in the defer, or drop the early assignment) is
+not the decision. **What a fix must decide** is what `Error` means for a session that will accept the next
+turn regardless: a *sticky* attribute, which is what a distinct enum value implies and what a reader of
+`GET /sessions` would assume, or a transient last-turn outcome belonging on the request record. If sticky,
+the next successful turn has to clear it and nothing does. If not, the value should be deleted rather than
+repaired — a status nobody can observe is worse than an absent one.
+
+### 5. Checked and not worth a finding
+
+- **[cline #13327](https://github.com/cline/cline/pull/13327)** (skill slash commands load via the skills
+  tool instead of being pasted into the user message) — the named live angle, and inber lacks the
+  machinery. `grep -ri skill --include=*.go` returns nothing outside vendored paths, and there is no
+  slash-command parser: `redact/redact.go:226` is the only `HasPrefix(value, "/")` in the repo and it is
+  path detection. Nothing expands a command body into the user message because nothing expands commands.
+- **[cline #13331](https://github.com/cline/cline/pull/13331)** (agents create scheduled tasks) — inber
+  already ships `scheduler` (`tools/tools.go:45`), and the hazard is **already written down and pinned**:
+  `guard/classification_test.go:141-215` names `scheduler` in `unclassifiedToday` with the exact reason —
+  an assist session can schedule shell work it is not allowed to run directly, and nothing asks an
+  approver. It is not reachable today for a second reason that test does not cover: `agent_tools` in
+  `~/.config/agent-store/agents.db` holds **0 rows**, so `e.AgentConfig.Tools` is empty for every agent and
+  `buildTools` always takes the `buildDefaultTools` branch, which omits `scheduler` and `browser`. The hole
+  opens the first time any agent config names a tool at all.
+- **[cline #13336](https://github.com/cline/cline/pull/13336)** — covered 2026-08-19 §1 above (`:530`).
+- **[cline #13391](https://github.com/cline/cline/pull/13391)** (@ file mentions break on paths with
+  spaces) — inber has no mention syntax; the three `grep -i mention` hits are English prose in comments.
+- **[cline #13369](https://github.com/cline/cline/pull/13369)** (strip the `<user_input>` envelope when
+  copying a user message) — the principle, that a transport envelope is presentation and must not leak into
+  what the user takes away, is the standing entry at `opencode.md:511-535` (2026-06-19) for inber's
+  `"[New message from user while you were working]"` wrapper. No new surface: inber has no copy action, and
+  `session/prompts_write.go:203` renders `[tool_use: %s]` at the display edge, which is where it belongs.
+- **[cline #13413](https://github.com/cline/cline/pull/13413)** (work summary undercounts wall time when
+  pre-tool thinking attaches to the answer) — a webview grouping bug plus a projection-ordering fix.
+  inber's projection is already in live-stream order for the reason cline had to fix: `processResponse`
+  emits thinking (`agent/agent_run.go:290-298`) before `executeTools` (`agent/agent.go:426`) emits any tool
+  call. And no inber duration derives from timeline row timestamps — `server/api_oneshot.go:101` uses
+  `time.Since(start)` — so there is no figure to undercount.
+- **[cline #13179](https://github.com/cline/cline/pull/13179)** (stream run command output) — real gap, no
+  finding, because there is nowhere to put it. `tool-store/tools/shell.go:82` is a single buffering
+  `cmd.CombinedOutput()`, and inber's tool channel is one `OnToolResult` call at completion
+  (`agent/chain.go:416`); there is no partial-tool-output event in `agent.Hooks`. Adding one is a protocol
+  change, not a fix.
+- **opencode**, whole window — the three non-model-churn candidates (#43099 oversized websocket fallback,
+  #43248 malformed model costs, #43188 session request headers) are all covered by the 2026-08-19 entry at
+  `opencode.md:570-591`. Everything else in that repo this window is model and pricing churn.

@@ -2623,3 +2623,256 @@ tutorial, not research.
 (CodeAct interfaces: −41.6% steps, −56.3% tokens) and `2608.10934` *Understanding the Architecture of
 Coding Agents*, both 08-10/11 and both more on-topic than half of tier two. Worth a read outside any
 sweep window.
+
+## Harness-watch — 2026-08-20
+
+The 08-17 → 08-19 band is dense and mostly untouched by the 08-19 sweep, which filed papers up to
+`2608.18066`. Everything below is grep-clean against this file and against the April–July files. Every
+numbered entry was re-fetched from the arXiv abs page and matched on title, authors, date and headline
+numbers before being written down.
+
+### 1. [arXiv:2608.14380](https://arxiv.org/abs/2608.14380) — AgentRewind: a checkpoint that restores the workspace but not the context is not a checkpoint (2026-08-14, cs.AI)
+
+Early errors in a long-horizon run propagate through two channels at once — the agent's context and the
+environment's state — and later actions often cannot reverse either. AgentRewind records **aligned
+checkpoints of agent context and controlled environment together**, so a rewind returns both to the same
+earlier point and resumes carrying what the failed attempt learned. The authors build MettleBench, a
+long-horizon engineering benchmark scored on task completion *and* partial checklist progress, and report
+gains in both across models, execution strategies and harnesses. The design claim is the alignment, not
+the snapshot.
+
+**What inber should consider:** `checkpoint/checkpoint.go` is an honest sketch — every method returns
+`ErrNotImplemented` (`:50`, `:70-109`) — and its `Checkpoint` struct carries `CommitSHA`, `TurnNum`,
+`FileCount` (`:56-58`): a git snapshot of the workspace and nothing about the conversation. Implemented as
+written, `Restore(num)` rolls the repo back while the transcript still describes the edits that were
+undone, and the agent's beliefs desynchronize from the tree it is editing. This is the argument for making
+the conversation snapshot part of `Take` before any of it ships, and for the second half too: on resume,
+feed the failed attempt forward rather than discarding it.
+
+### 2. [arXiv:2608.18050](https://arxiv.org/abs/2608.18050) — StagedWorkspace: bind every view to a content hash of the file it claims to describe (2026-08-18, cs.AI)
+
+Formulates a **workspace-state contract**: the parsed views an agent searches, the native files it edits,
+the diffs it reviews and the artifacts it submits can all refer to different versions of the same work
+product, and every view should be explicitly tied to a version of the evolving state. StagedWorkspace binds
+parsed records and review diffs to **content hashes of the native files as they change**. In fixed-harness
+ablations, dual parsed/native access has the highest point estimate for every model tested, improving
+OfficeQA Pass@1 by **8.3–12.1 points** and APEX mean rubric score by **4.7–9.2 points** over the single
+view; SW-AGENT scores **63.9%** on OfficeQA with Gemini 3.1 Pro against a published same-model **29.3%**.
+The paper notes coding agents already get part of this from repository contracts — which is why the gap is
+worth checking rather than assuming.
+
+**What inber should consider:** `codeindex/codeindex.go` detects change by **mtime** (`:19`, `:55`), and
+mtime is not a version identity — it moves without content changing and fails to move when content does.
+The contract says the index entry should carry the content hash of the file it was parsed from, so a stale
+parse is detectable rather than merely unlikely. Both sites are still `// TODO: implement`, so this costs
+nothing to decide now. The second half applies to `conversation/dedup_files.go` and the read/edit path: a
+file summary in context is a parsed view, and nothing ties it to the version the agent is about to edit.
+
+### 3. [arXiv:2608.18360](https://arxiv.org/abs/2608.18360) — One Gate Is Not Enough: gate order is semantics, not implementation detail (2026-08-18, cs.SE)
+
+Agentic actions pass through more than one pre-action control — authority, resource, evidence — and each can
+admit, degrade, or **remediate** an action before it runs. The paper names the hazard
+**remediation-induced control coupling**: a remediation applied by one control changes the action, evidence
+or context another control already judged, invalidating that judgment. It gives a remediate-and-regate
+protocol restoring per-action soundness under bounded, idempotent assumptions, and shows by finite-model
+checking that the two implemented remediation operators — evidence substitution and resource-budget
+downroute — **do not commute**, with concrete counterexamples. A governed evidence buffer that trusts its
+own most recent admitted write is the same failure at the level of state. CH1–CH5 meet their registered
+decision rules across all 30 pre-registered seeds; CH6 holds under W1 but not the smaller W2, reported as
+such. The authors are explicit that this is a mechanism demonstration on synthetic metadata, not a
+prevalence claim.
+
+**What inber should consider:** inber's gate is a single verdict — `guard.CheckTool` (`guard/guard.go:165`)
+— alongside a separate `CheckLimits` for cost and time. That is already two controls, and permission-store
+plus bundle-store's resolve would make more. The transferable result: once any control can *modify* rather
+than only admit or deny, the composition acquires an order-dependent semantics that must be written down,
+and a downroute that swaps a model or trims context is exactly such a modification. Filed as a cross-cutting
+pattern in `agentic-design-patterns.md` 2026-08-20 §4. The evidence-buffer warning also lands on the
+memory-provenance thread already open here.
+
+### 4. [arXiv:2608.17718](https://arxiv.org/abs/2608.17718) — RGE: watch whether the trajectory still matches the task, not whether each step looks suspicious (2026-08-18, cs.AI)
+
+The oversight question in a long run is not per-step validity but whether the evolving prefix still
+corresponds to the task the user authorized. Drift accumulates quietly: right tool, plausible arguments,
+every step, while the prefix moves toward a broader role, an adjacent objective, or evidence the user never
+supplied. The paper defines **ontological trust** as a task-conditioned property of trajectory *prefixes*
+and instantiates it as RGE, an online monitor decomposed along **Role, Goal and Evidence**. LLMs derive the
+structured task and step representations; trust-state updates, projections and intervention decisions are
+**deterministic**, so the output is a replayable, auditable trust trajectory rather than one judge verdict.
+On a corpus from OSWorld, FinanceBench and EICU-AC covering benign runs, prefix-paired drift and
+pseudo-consistency failures, the two larger estimators exceed **93% Drift F1** at **≥95.8%** benign
+coverage. Pseudo-consistency is harder and depends on task completion being externally visible.
+
+**What inber should consider:** everything in `guard/` is per-call and stateless with respect to intent —
+`CheckTool` sees a tool name and an input string, `IsRepeating` sees a loop. Nothing asks whether turn 40 is
+still doing what turn 1 was asked to do, which is the failure mode a `MaxSpawnDepth`-2 orchestration is most
+exposed to. The engineering worth copying is the split: use the model only to *extract* Role/Goal/Evidence
+per step, then update trust deterministically, so the record is replayable and a `trace/` entry can carry
+it. Far cheaper than a judge, and unlike a judge it does not fail the competence bound in §9 below.
+
+### 5. [arXiv:2608.18389](https://arxiv.org/abs/2608.18389) — A Jagged Frontier: robustness rankings do not survive a change of scaffold (2026-08-18, cs.AI)
+
+Applies semantics-preserving transformations — control-flow rewrites, dead-code injection, identifier
+renaming — to the codebase around a SWE-bench Verified / SWE-bench Pro issue, then runs each agent
+repeatedly on clean and perturbed variants so the perturbation effect separates from ordinary stochasticity.
+Across 2 scaffolds (mini-SWE-agent, OpenCode) × 4 models, degradation is real but modest: **up to 6.7
+percentage points mean resolve-rate drop**, significant in **6 of 16** configurations. The finding that
+matters is the interaction: **no single model ranking by robustness holds across scaffolds** — Qwen is among
+the most robust under mini-SWE-agent and the most brittle under OpenCode — and **the simpler scaffold is the
+more robust one**.
+
+**What inber should consider:** the third result in this file pointing the same way (with `2608.08654` on
+scaffolding beating interface and `2608.17597` on configuration beating model), and here the mechanism is
+legible: added scaffold machinery gives superficial code variation more surfaces to perturb. Read it as a
+caution against answering a reliability complaint with another layer in `engine/`. It also warns about
+inber's own bench numbers in `agent-bench`: a resolve rate measured on one repo shape does not transfer, and
+a per-model ranking measured under inber's harness says nothing about that model under any other.
+
+### 6. [arXiv:2608.18167](https://arxiv.org/abs/2608.18167) — Adversarial Review: three agents beat five, and agreement is the failure mode (2026-08-16, cs.AI)
+
+Scaling agent count yields diminishing returns on repository-level tasks, and the fashionable alternative —
+treating agents as passive subagent tools — removes agent interaction entirely. Adversarial Review is the
+middle: a main coding agent, a reviewer that evaluates the code, and a **critic that audits the review
+through structured disagreement** before the main agent edits. On LiveCodeBench, AR gets the highest pass
+rate of the tested methods **while using three agents against a five-agent baseline**. On SWE-PRBench, naive
+AR exposes a **false-consensus failure mode** — the agents converge on agreement without sufficient evidence
+— and a single prompt iteration making disagreement explicit then achieves the highest F1 tested.
+
+**What inber should consider:** the constructive counterpart to `2608.12895` (a reviewer on the same model is
+not a second opinion) and `2608.16801` (naming a coordinator buys nothing). For `server/spawn.go`, the cheap
+version is a review subagent required to cite specific evidence per objection, plus a pass that rejects
+unsupported agreement. Filed as a cross-cutting pattern in `agentic-design-patterns.md` 2026-08-20 §4.
+
+### 7. [arXiv:2608.17188](https://arxiv.org/abs/2608.17188) — deliberately mixing low-relevance items into a prompt improved relevance judgment (2026-08-17, cs.CL)
+
+A practitioner report from a production dashboard extracting work items from meetings, email and chat. Six
+patterns — context stratification, fetch-once/process-locally, schema-contracted prompts, token-aware
+fallback chains, semantic caching, inter-agent communication compression — cut measured cold-load latency to
+**61–116 s** from an operational baseline of roughly 3.5–10.5 minutes at an **estimated 60–70% token
+reduction**. The interesting part is a controlled context-composition study: **2,420 trials across 11 model
+configurations** over 661 anonymized items, prompt held at a fixed ten items. Replacing some high-relevance
+items with same-domain *low*-relevance ones **improved** relevance-score concordance on the targets —
+**+0.077** for the 50:50 signal/noise condition over 100% high-relevance (Cohen's d = 0.49, Holm-adjusted
+p < .001, n = 220). The author calls this relevance-contrast context and is careful that the cells are not
+independent and this is a within-corpus descriptive comparison, not a population inference. A Fusion-of-N
+follow-up found learned synthesis did not beat a mechanical set union of item IDs.
+
+**What inber should consider:** every compaction and retrieval path in `conversation/` optimizes for purity
+— keep the relevant, drop the rest — and this is the first measurement in this corpus suggesting purity is
+not free, because a model calibrates relevance against contrast it can only see if the contrast is present.
+Treat it as a hypothesis worth a cheap A/B in `conversation/summarize.go`, not a rule: single author, one
+corpus, one task shape. The negative result is the safer takeaway and is directly reusable — a mechanical
+union beat learned synthesis, which argues against adding a model call to merge retrieved sets in `memory/`.
+
+### 8. [arXiv:2608.10178](https://arxiv.org/abs/2608.10178) — One Recipe, Many Harnesses: a harness closes the gap between what a policy can do and what it does (2026-08-10, cs.SE)
+
+Holds one self-evolution recipe fixed across 8 languages (Multi-SWE-Bench) × 3 base models and analyzes what
+the evolved harnesses encode, rather than reporting aggregate gain. The recipe routes every edit through a
+**typed failure signal** and records it as a **falsifiable contract**, so each modification stays
+attributable after evolution. Four findings: the loop beats both a minimal seed and the hand-designed
+mini-SWE-agent scaffold in most cells but has **two null regions**; gains compensate *recoverable execution
+defects*, and where defect mass is near zero the gain is near zero; evolved harnesses share an abstract
+playbook across languages but instantiate it with **almost disjoint ecosystem machinery**; and the shared
+core distills into one universal harness while an ecosystem margin resists transfer.
+
+**What inber should consider:** the second finding is a diagnostic inber can apply without adopting any of
+the machinery — measure the recoverable-execution-defect mass in `agent-bench` trajectories first, because
+where it is near zero no amount of harness work will move the number, and the honest conclusion is to stop.
+The third and fourth bear on bundle-store: they are evidence for exactly its split, a transferable core
+bundle plus a per-repo-signature margin that repo-store's tags select, and against a single global bundle.
+The framing — the harness as a legible compensation layer for a specific model's behavioral gaps — also
+implies inber's defaults are tuned to whichever model was in front of them when they were written.
+
+### 9. Tier two — verified, narrower, no action yet
+
+- **[arXiv:2608.18852](https://arxiv.org/abs/2608.18852)** (SkillGate, 08-19) — names **selector credit
+  starvation**: under a broadcast sequence-level advantage, the few tokens naming a chosen skill carry a
+  vanishing share of the loss and inherit increasingly wrong-signed credit as trajectories lengthen, so a
+  correct skill choice is punished whenever the execution after it fails. Splitting credit into disjoint
+  channels lifts a 9B policy **40.8% → 53.2%** on a 16-candidate slate **while reading fewer skills**. The
+  training method is not for inber; the framing is — skill *selection* is a mid-episode decision no signal
+  currently trains, another argument for skill-store resolving a scoped slate rather than exposing the
+  catalog.
+- **[arXiv:2608.18719](https://arxiv.org/abs/2608.18719)** (08-19) — a reference-free LLM judge is a latent
+  solver, so its ability to evaluate is bounded by its ability to solve. Closed-form ROC-AUC bound in judge
+  competence `c` and answer-space size `k`, a necessary condition **c > 1/k**, and the finding that
+  benchmark accuracy overstates the competence that matters. Read before putting any model-judged gate in a
+  loop here — including the tempting "does this memory look forged" check `2608.16032` already warned off.
+- **[arXiv:2608.18931](https://arxiv.org/abs/2608.18931)** (08-19) — first compute-normalised comparison of
+  five test-time-scaling families on open-ended tasks. Exploration scales fine; **exploitation breaks**:
+  reward models correlate **ρ ≈ 0.12** with true quality, making selection near-random at any budget, and
+  tree search amplifies it through diversity collapse. Only synthesis across candidates helps, recovering
+  ~40% of available quality. Anything in inber that generates N candidates and picks one is buying the
+  broken half.
+- **[arXiv:2608.17148](https://arxiv.org/abs/2608.17148)** (08-17, cs.CR) — *authorization before context*:
+  one anti-monotone audience-membership rule applied at the memory-to-context transition, each item carrying
+  the audience present when recorded, viewer set read from channel metadata and **failing closed to public
+  when ambiguous**. Proves a poisoned memory cannot widen its own audience. Evidence is **preliminary and
+  synthetic** and it is a non-archival workshop paper, but the invariant is the right shape for the
+  memory-provenance defects already open against `memory/` and memory-store.
+- **[arXiv:2608.18398](https://arxiv.org/abs/2608.18398)** (LEDGER, 08-19) — argues the bottleneck has moved
+  from producing outputs to auditing them, and raw event visibility is not enough: layered trace graphs group
+  records into evidence and workflow nodes with **typed semantic edges connecting a claim to the actions,
+  artifacts and checks that support it**. A concrete target shape for what `trace/` emits and log-store
+  stores, beyond a flat event list.
+- **[arXiv:2608.17684](https://arxiv.org/abs/2608.17684)** (08-18) — audits three self-evolution methods in
+  simulated e-banking. SkillOpt raises benign utility **0.741 → 0.837** while exposure to injected content
+  rises **0.820 → 0.943** and unauthorized state changes reach **0.685**; ASR rises even though conditional
+  attack success *after* exposure falls. Capability and attack surface grow together, and accuracy alone
+  hides it. Also records an artifact/executor mismatch costing 0.319 vs 0.756 utility — a caution for any
+  skill written against a different tool envelope than inber's.
+- **[arXiv:2608.18351](https://arxiv.org/abs/2608.18351)** (08-18) — least-privilege post-training for
+  terminal/MCP agents: **98.48% safe success across 2,896 episodes** against 64.36% for the base policy,
+  excess-authority events **4.56% → 0.79%**. Not actionable here (inber does not train), and the paper says
+  so itself: learned restraint "does not replace permission gates and sandboxing." Filed for the
+  six-dimension pre- and post-execution audit rubric, reusable as an evaluation without any training.
+- **[arXiv:2608.17588](https://arxiv.org/abs/2608.17588)** (TRUSS, 08-18) — generates skills behind a static
+  gate of nine safety properties plus a **shadow agent in a controllable execution environment with brokered
+  tools**, linking observed violations back to the responsible skill content. Reports 100% precision/recall
+  on vulnerability detection over 168 SkillInject artifacts and lifts task effectiveness 17.11% → 52.94%.
+  The transferable half for skill-store: inspecting the artifact is not enough — run it behind a broker and
+  watch what it calls.
+- **[arXiv:2608.18280](https://arxiv.org/abs/2608.18280)** (08-18) — issue-resolution difficulty is
+  **substantially predictable from static task features (AUC = 0.863)**, driven mainly by patch fragmentation
+  and repository scale. Enables difficulty-controlled benchmark construction; relevant to reading
+  `agent-bench` results, where a score change may be a task-mix change.
+- **[arXiv:2608.14711](https://arxiv.org/abs/2608.14711)** (08-11) — coding-agent benchmarks misapply pass@k
+  by setting `n` to the number of unit tests in one submission rather than the number of independent
+  rollouts. On a synthetic benchmark the misapplied metric inflates scores by **0.85–0.97 absolute**
+  (0.96–0.98 reported vs 0.00–0.12 corrected), and a single-rollout proxy does not substitute
+  (Spearman ρ = 0.417). Worth checking against whatever `agent-bench` computes.
+- **[arXiv:2608.17756](https://arxiv.org/abs/2608.17756)** (D²ACCI, 08-18) — memory's multi-stage pipeline
+  makes failures hard to localize, so end-to-end scores say an error happened but not which stage caused it.
+  A diagnostic gate promotes / feature-flags / rejects each memory change on paired evidence and
+  protected-slice monitoring; enriched traces reach **98–100% DCR@3 against 0% for results-only logs**, and
+  one component (BM25/RRF) survives only as a monitored flag — a distinction aggregate evaluation cannot
+  make. The protocol to copy if memory-store's retrieval is ever tuned.
+
+### 10. Channel notes
+
+**KV-cache: two more hits, both excluded by the standing filter.** `2608.15584` (GraniKV, 08-16) —
+asymmetric paging granularity, a contiguous HOT pool for the long shared prefix and a token-level COLD pool
+for per-request suffixes, **2.16×/1.98×/1.57×** output-token throughput at a 16K shared prefix, and **1.95×**
+under heterogeneous multi-agent serving where batch-global cascade collapses to parity. `2608.07855`
+(CommitKV, 08-08) — lifecycle-aware eviction distinguishing *dormant* pages from pages whose role has
+*completed*, by comparing a page's deletion effect before a tool-call commit and after its observation is
+incorporated. Both are serving-stack mechanisms requiring ownership of the KV cache, so the 2026-08-10
+standing filter applies unchanged: inber reaches models over the Anthropic Messages API and an
+OpenAI-compatible path, where its only lever is `cache_control` breakpoint placement on a byte-identical
+prefix. Recorded so a future sweep does not read them again. CommitKV's *distinction* is the part worth
+keeping, and it applies above the API too: `conversation/` has no notion that a tool observation whose commit
+has landed is retirable in a way a merely-unreferenced message is not.
+
+**Blogs: eleventh consecutive empty sweep.** Anthropic engineering still shows nothing dated after
+2026-04-23. HuggingFace's August posts are Strands/LeRobot deployment, ICML reproduction, distillation cost
+and voice agents — nothing on harness design. Google DeepMind, Meta AI and OpenAI produced nothing in window.
+Eleven sweeps is long enough to say this channel is not merely quiet: check it monthly, not per sweep.
+
+**Coverage, honestly.** ~995 unique arXiv records screened — a complete category pull of cs.SE (61), cs.CL
+(181), cs.CR (108), cs.AI (441) and cs.LG (393) for `submittedDate` 2026-08-17 → 2026-08-20, plus nine
+targeted keyword queries spanning 2026-08-06 → 2026-08-20. 396 keyword-matched after deduping against the 180
+arXiv ids already in `docs/papers/*.md`; 27 abstracts read in full, 12 re-verified on the live abs page. **The
+2026-08-06 → 2026-08-16 band was covered only by keyword query, not by exhaustive category listing, so misses
+there are likely** — `2608.14380` and `2608.18167` were both such misses from prior sweeps, which suggests
+more remain. cs.MA, cs.HC, cs.DC and cs.PL were never swept by category. No listing pages were used, so the
+announcement-date pagination trap did not apply.
