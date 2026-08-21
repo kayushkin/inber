@@ -18,7 +18,7 @@
 # (server/pidfile.go:26-60) does not merely refuse to start when that file names a
 # living process — it SIGTERMs it, waits 5s, then SIGKILLs it.
 #
-# DataDir defaults to $HOME/.inber/server (server/server.go:63-72) and there is NO
+# DataDir defaults to $HOME/.inber/server (server/server.go, the cfg.DataDir default in New) and there is NO
 # env var to override it. So an inber-server booted with the REAL $HOME reads the
 # LIVE server's pid out of the LIVE pid file and KILLS THE LIVE SERVER — while
 # reporting a clean, successful startup. It would look exactly like a passing test.
@@ -46,7 +46,7 @@
 #
 # READINESS IS /health, NOT /api/health. /api/health reports status=error and
 # returns HTTP 503 whenever the bus is absent (api_health.go:36-38) — which is
-# always, here, by design. /health (api_bridge.go:42) is bus-independent.
+# always, here, by design. /health (api_bridge.go, handleBridgeHealth) is bus-independent.
 #
 # Exits 0 on success, non-zero on the FIRST failing assertion, dumping the server
 # log to stderr.
