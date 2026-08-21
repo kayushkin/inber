@@ -30,7 +30,7 @@ deploy/          Agent seed data (agents-seed.db)
 Central runtime. Holds:
 - `modelClient` — unified Anthropic/OpenAI client
 - `Agent` — tool-equipped LLM agent
-- `MemStore` — semantic memory (via agent-store SQLite)
+- `MemStore` — semantic memory (via the memory-store SQLite package)
 - `Session` — turn logger + cost tracker
 - `Messages` — conversation history (`[]anthropic.MessageParam`)
 - `agentTools` — registered tools (shell, file ops, memory, spawn, etc.)
@@ -46,12 +46,17 @@ Multi-agent session manager:
 - `sessions` — `sync.Map` of `sessionKey → *Session`
 - `queue` — lane-based concurrency limiter (main / subagent lanes)
 - `store` — SQLite persistence for sessions & requests
-- `bus` — `BusClient` for inbound/outbound message routing
+- `bus` — `*bus.Client` for inbound/outbound message routing
+- `busManager` — `*server.BusManager`, routes an inbound bus message to an agent
 - `events` — event publisher for dashboard
 
-### `server.BusClient`
-WebSocket subscriber + HTTP publisher. Connects to a message bus for real-time
-chat routing between adapters (Discord, Telegram, etc.) and agent sessions.
+### `bus.Client`
+NATS subscriber and publisher. Connects to the message bus for real-time chat
+routing between adapters (Discord, Telegram, etc.) and agent sessions.
+
+Named `server.BusClient` until `127e030` moved it into its own `bus/` package as
+`bus.Client`. It spoke WebSocket-in / HTTP-out at that point; it has since been
+rewritten onto NATS, so both halves of the old sentence here were wrong.
 
 ### `agent.Tool`
 ```go

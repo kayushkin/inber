@@ -1,6 +1,7 @@
-// Package memory provides a thin wrapper around github.com/kayushkin/agent-store/memory.
-// This package re-exports types and interfaces from agent-store/memory while maintaining
-// the same API that inber expects.
+// Package memory provides a thin wrapper around github.com/kayushkin/memory-store.
+// This package re-exports its types and interfaces while maintaining the same API
+// that inber expects. The store was split out of agent-store into its own module;
+// this package named the old home for as long as it took someone to grep for it.
 package memory
 
 import (

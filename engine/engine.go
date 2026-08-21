@@ -71,7 +71,7 @@ type Engine struct {
 	Tokens      TokenTotals
 
 	// --- Subsystems ---
-	MemStore         memory.MemoryStore  // semantic memory (agent-store SQLite)
+	MemStore         memory.MemoryStore  // semantic memory (memory-store SQLite)
 	Session          *sessionMod.Session // JSONL turn logger
 	SessionDB        *sessionMod.DB      // session metadata DB
 	Guard            *guard.Guard        // execution modes, limits, repetition detection
