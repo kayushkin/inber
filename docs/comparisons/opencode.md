@@ -592,3 +592,32 @@ boundaries and no inber path slices a message mid-content to hit a budget.
   disable a spend ceiling.
 - **[#42444](https://github.com/sst/opencode/pull/42444)** (v1 database compatibility) — dual-schema
   migration plumbing, no design claim.
+
+## Harness-watch — 2026-08-21: an unattended auto-approver's authority is the session tree it created, and membership is earned transitively
+
+[opencode #43675](https://github.com/sst/opencode/pull/43675) scopes a non-interactive run's
+auto-answering: *"track child and nested child sessions created by a non-interactive run"* and
+*"auto-approve or auto-reject permission requests only for that run session tree."* The mechanism is four
+lines and is the whole point — `const sessions = new Set([sessionID])`, and on every `session.created`
+event, `if (sessions.has(event.properties.info.parentID)) sessions.add(event.properties.info.id)`.
+Membership is **derived from an observed parent link already in the set**, transitively, and never from
+the session id on the permission event itself; the handler's gate goes from
+`permission.sessionID !== sessionID` to `!sessions.has(permission.sessionID)`. Without the flag the
+default for in-tree asks is reject, and an out-of-tree ask gets no answer from this run at all.
+
+The docs already record the two neighbouring halves and not this one:
+`agentic-design-patterns.md:523-590` covers denies propagating *into* a spawned subagent, and `:1530-1534`
+covers a `disallowed` floor preserved when a sub-agent delegates upward. Both restrict the child. Neither
+scopes the *approver*.
+
+**What inber should consider:** inber cannot have this bug yet, for a reason worth writing down rather
+than celebrating — `buildToolRefusal` (`engine/build_hooks.go:89-102`) refuses `NeedsApproval` outright
+because *"no session here sets ApprovalFunc and inber emits no approval event for llm-bridge to answer"*.
+There is no approver, so there is no approver to over-scope. The moment one is wired — and
+`agentic-design-patterns.md:1490` already flags the autoworker's unattended auto-allow as the live
+exposure — the authority must be a **session-tree scope built from observed parent links**, not a
+per-process or per-agent-config flag. inber has the raw material: `child.ParentKey` and `child.SpawnDepth`
+are set at `server/spawn.go:226-227` and persisted by `recordChildSession`
+(`server/session_forking.go:81-85`), so the lineage a scope would be derived from already exists and is
+already durable. What does **not** exist is a decision input carrying it: the gate keys on the tool name
+(`guard/guard.go:165` switches on `tool`), so today it has no idea who asked.

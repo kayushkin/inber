@@ -5535,3 +5535,160 @@ the decision, not the wiring.
   **What inber should consider:** for `server/spawn.go`, the cheap version is a review subagent
   required to cite specific evidence per objection, plus a pass that rejects unsupported agreement —
   not a third agent for its own sake.
+
+## Harness-watch — 2026-08-21: a request context is cancelled when the handler returns, so every sub-agent inber accepts over HTTP is enqueued under a dead context — measured, half are refused outright; and the one delete that bounds the tool-input cache sits behind a hook a failed call never reaches
+
+### 1. `POST /api/spawn` hands the async spawn goroutine a context net/http has already cancelled
+
+Not an upstream finding — this one came out of reading `server/spawn.go` while checking codex #39792's
+subagent-settings hypothesis, and it is the sharpest thing in this sweep.
+
+`handleSpawn` calls `g.Spawn(r.Context(), req)` (`server/api_spawn.go:25`), writes a `201`-shaped
+response and returns. `Spawn` launches a goroutine (`server/spawn.go:277`) that closes over that same
+`ctx` and returns immediately (`:445`). Go's `net/http` cancels a request's context **when `ServeHTTP`
+returns** — so by the time the goroutine has done its `CreateRequest` write, its `deliverProgress`, its
+`agent_spawned` emit and its bus publish and reached `g.queue.Enqueue(ctx, "subagent", childKey, …)`
+(`:302`), the context is dead. `Queue.Enqueue` selects on `l.sem <- struct{}{}` against `<-ctx.Done()`
+(`server/queue.go:48-53`) and returns `ctx.Err()` when the latter wins.
+
+**Measured, not inferred.** Two probes:
+
+- `net/http` cancellation: a handler that captures `r.Context()`, spawns a goroutine, and returns — the
+  goroutine found the context already cancelled **200 times out of 200**.
+- `Queue.Enqueue` with an already-cancelled caller context: with a **free** lane slot both select arms are
+  ready, so Go's uniform pseudo-random choice refuses **103 of 200** runs; with the lane **saturated** it
+  refuses **every** time, because `ctx.Done()` is the only arm that can proceed.
+
+So roughly half of every sub-agent accepted over HTTP is dropped before it runs, and *all* of them are
+dropped once the `subagent` lane is busy — which is exactly when a spawn matters. That lane holds
+**8** by default (`server/config.go:22`, defaulted at `server/server.go:59-60`, wired at `:121-124`), so
+the 100% arm is not a corner case: a `fork-spawn` batch of nine, or any fleet already running eight
+children, refuses every further spawn outright. The parent is told
+`"enqueue failed: context canceled"` (`server/spawn.go:439`), which reads as infrastructure noise rather
+than as a harness bug. `POST /api/fork-spawn` inherits it whole: `ForkAndSpawn(r.Context(), …)`
+(`server/api_spawn.go:61`) passes the same dying context to every task in the batch.
+
+The protection already exists and is aimed one layer too deep. `withoutCallerCancellation`
+(`server/session.go:133`) does exactly the right thing — `context.WithoutCancel` while keeping the
+deadline — and its comment says why: *"a browser tab closing, or a proxy hitting its read timeout, must
+not abort work the session would otherwise finish and keep."* `spawn.go:41-45` repeats the claim in its
+own words. But `Session.turn` is the only caller (`server/session.go:146`), so the insulation begins
+*after* the enqueue that the cancellation kills. Once the work does start it is genuinely safe — the
+`context.WithTimeout` at `:304` carries a future deadline, and `WithoutCancel` preserves deadlines — which
+is why this has never shown up as a truncated child, only as a missing one.
+
+**What inber should consider:** derive the spawn's context at the top of `Spawn`, not inside `turn` — one
+`withoutCallerCancellation(ctx)` before the goroutine, with the existing `WithTimeout` layered on it.
+**What a fix must decide:** whether a spawn should be cancellable by its caller at all. Dropping the
+cancellation entirely means a client that asked for a sub-agent by mistake has no way to withdraw it
+before the timeout, and inber has no per-child stop route today; keeping it means naming an owner whose
+disappearance *should* kill the child, and the HTTP request is not that owner.
+
+### 2. The delete that bounds `toolInputsCache` sits inside a hook a failed tool call never reaches
+
+[codex #39779](https://github.com/openai/codex/pull/39779) is telemetry plumbing and mostly out of scope,
+but it carries one non-telemetry crumb worth the trip: it separates the **telemetry** truncation limit
+from the **model-visible output** limit so the two can no longer be conflated. Chasing whether inber's
+tool-result path has the same conflation turned up a different defect in the same code.
+
+`engine/build_hooks.go` keeps a per-engine `map[string]string` of tool inputs so that the workflow and
+forge post-hooks can see what a tool was *called with*, not only what it returned. `OnToolCall` writes it
+(`:139-141`); the single `delete` is at `:187-189`, inside `PostToolResult`. Two classes of call never
+get there:
+
+- **Failed calls.** On the Anthropic path the error branch (`agent/agent_run.go:360-377`) calls
+  `OnToolResult` and `ModifyToolResult` and then `continue`s at `:377` — `PostToolResult` is never
+  invoked. On the OpenAI-served path it *is* invoked with the real flag
+  (`engine/turn_openai.go:160-161`), and `build_hooks.go:168`'s `if isError { return "" }` returns before
+  the delete. Different routes, same outcome, on both providers.
+- **Chained calls.** `agent/chain.go:364` and `:448` register a chained call under `blockID+"-chain"`, and
+  nothing anywhere calls `PostToolResult` with a `-chain` id. Those leak unconditionally, success or
+  failure.
+
+**Measured** by driving `buildHooks` directly: one success, one failure and one chained call leave
+**2 of 3 entries resident** — `toolu_err` and `toolu_ok-chain` — with only the success cleaned up. The map
+is allocated once per engine (`engine/engine.go:159`), never swept per turn, and an inber Engine lives as
+long as its session does in `g.sessions`. Each entry holds the tool's full argument JSON, so a
+`write_files` with a large body is retained whole, and the failure case is the *common* case in a long
+session.
+
+There is a second, smaller lie in the same lines: `build_hooks.go:168`'s `isError` guard is dead on the
+Anthropic path, because the only caller there passes the literal `false` (`agent/agent_run.go:427`). It is
+live on the OpenAI path. `engine/turn_openai.go:36` says the two loops *"have to agree"*; on this argument
+they do not.
+
+**What inber should consider:** the delete belongs with the write, not with one of its readers — a
+`defer`-style sweep keyed on the block id at the end of `executeTools`, plus the `-chain` key, closes both
+classes at once. **What a fix must decide:** whether the post-hooks should see failed tool calls at all.
+Today's answer is no, twice over, by two different mechanisms; that may well be right for auto-commit and
+auto-format, and it is plainly wrong for a build/test hook that most wants to know a command just failed.
+Pick one and make both provider loops say it.
+
+### 3. Two codex context-management ideas inber has no shape for yet
+
+- **The transcript as a tool surface, addressed by ids the model can already see.**
+  [codex #39827](https://github.com/openai/codex/pull/39827) adds private `history` and `notes` tool
+  namespaces for token-budget sessions, because *"token-budget sessions need a way to recover prior
+  conversation context and preserve working state across context-window transitions."* Four moves are
+  separately stealable: items are addressed by `(window_id, short item_id)` where the short id is
+  **printed inline in the rendered transcript**, so the model can cite something it can still see and read
+  back text that has since been summarized away; every call takes *"an absolute agent name or one relative
+  to the current agent"*, so a subagent can read its parent's history with one path grammar; the storage
+  semantics are **declared in the tool description** per namespace (history *"read-only and eventually
+  consistent"*, notes *"strongly consistent"*) rather than left to be inferred from a stale read; and
+  `supports_parallel_tool_calls()` is false for exactly the two mutating note actions, making
+  parallel-safety a property of the *action*. This is adjacent to but not the same as `:1452-1454`, which
+  records cursor-paginated reads over the durable event log — that is a host-side API, this is the source
+  of truth exposed to the model. **What inber should consider:** inber's compaction leaves a
+  `memory_expand(id=…)` pointer (`memory/auto_context.go:66-85`), which is the same idea already half-built
+  — an id in the text that reaches a row. What it does not have is an id on an *item*: the pruned messages
+  are dropped from `e.Messages` positionally, so anything not archived by
+  `conversation.SummarizeConversation` is unrecoverable by construction rather than merely unexposed.
+- **Provenance by structure: an output the harness cannot trace to its own call is not the harness's
+  output.** [codex #39791](https://github.com/openai/codex/pull/39791) and
+  [#39782](https://github.com/openai/codex/pull/39782) make the **absence** of a `call_id` the trust
+  signal — *"External tool events may need to enter thread history without a preceding function call and
+  therefore do not have a `call_id`"*, and such items *"mark the thread memory mode polluted"*. Note the
+  deliberate asymmetry: the same items are still rendered into Guardian transcripts and still usable as
+  image sources. They are demoted for **persistence**, not for reasoning — a *capability* is downgraded
+  rather than content rejected. This is the concrete mechanism for the memory-poisoning ask already cited
+  at `:1478`. **What inber should consider:** inber has no representation for an unpaired tool result at
+  all. `stripOrphanedToolResults` (`conversation/message_utils.go:234`) deletes them, and it is called
+  from exactly one place — `conversation/summarize.go:121` — so outside compaction an injected result is
+  either dropped by `RepairMissingToolResults` synthesizing over it or carried as a first-class result.
+  Neither answer records that it arrived from outside. Nothing written by `SaveSessionSummary`
+  (`engine/engine.go:490`) carries a provenance field.
+
+### 4. Three cross-cutting patterns from this sweep's papers
+
+- **A standing constraint is not a fact, and summarizing it destroys its force.**
+  [arXiv:2608.11242](https://arxiv.org/abs/2608.11242) defines *Session Constraints* — "do not delete any
+  emails until I confirm" — and measures that current compactors retain **17%** of them, with **most
+  compacted runs scoring worse than not compacting at all**. A constraint-aware extractor running
+  *alongside* the compactor, touching neither it nor the model, reaches **>90%**. inber already knows this
+  failure one level down: `conversation/message_utils.go:146-153` explains that `is_error` had to be carried
+  *structurally* because the summarizer reads a failed build as a clean one. **What inber should consider:**
+  the same answer at the constraint level — a second verbatim-extraction pass into the post-compaction system
+  block, not a stronger summarizer prompt. The paper's result is precisely that prompt-tuning does not work
+  and the co-pass does.
+- **A gate's counter is only as real as its reader, and two of inber's have none.**
+  [arXiv:2608.06811](https://arxiv.org/abs/2608.06811) gets **+5.0pp** on SWE-bench Verified by driving
+  replanning off trajectory statistics — specifically reducing repeated failed actions and context
+  exhaustion — and [goose #11120](https://github.com/block/goose/pull/11120) adds `policy_evaluated` so a
+  fail-open allow is distinguishable from a considered one. Both are about a gate recording enough to be
+  acted on. inber has the repetition statistic already written and wired to nothing: `guard.RecordToolCall`
+  (`guard/guard.go:209`) has no caller outside its own tests, `IsRepeating` therefore *"has never once
+  answered true"* (`guard/guard.go:304`), and `RepetitionThreshold` has never been compared against anything.
+  **What inber should consider:** the missing piece is not the counter, it is naming what a caller should
+  *do* when it trips — which is the same gap the field's own comment identifies, and building the write
+  before naming the reader is how the pair got here.
+- **Maximizing the obvious proxy makes the real outcome worse — twice, in two different subsystems.**
+  [arXiv:2608.14838](https://arxiv.org/abs/2608.14838) shows a retriever configuration that raises gold-file
+  presence (0.878 vs 0.806) and *lowers* resolve rate by **7.6pp** (p=0.0003), and
+  [arXiv:2608.19303](https://arxiv.org/abs/2608.19303) shows the completion gain from a failure receipt lives
+  entirely in the **list of alternate tools** it names — diagnostic verbosity buys nothing. Together they say
+  the intuitive metric (recall@k, richness of the error message) is the wrong one to optimize.
+  **What inber should consider:** if `codeindex/` ever becomes a fixed-budget context pack, A/B the packing
+  policy against task success rather than recall — and when the tool-result contract of
+  `cline.md:684-712` finally gets built, make the receipt name specific recovery tools rather than describe
+  the failure well.

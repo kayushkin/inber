@@ -811,3 +811,64 @@ repaired — a status nobody can observe is worse than an absent one.
 - **opencode**, whole window — the three non-model-churn candidates (#43099 oversized websocket fallback,
   #43248 malformed model costs, #43188 session request headers) are all covered by the 2026-08-19 entry at
   `opencode.md:570-591`. Everything else in that repo this window is model and pricing churn.
+
+## Harness-watch — 2026-08-21: a synthetic delimiter inber emits is a delimiter a tool result can also emit, and a hook whose output nobody reads cannot honour the contract it advertises
+
+### 1. The hook-context channel, and the injective escape that makes it forgeable-proof
+
+[cline #13297](https://github.com/cline/cline/pull/13297) gives tool hooks a `appendContext` result and
+flushes all collected hook text as **one trailing user message after the tool-result messages** — *"A
+single trailing user message (rather than text parts inside tool messages, or interleaved user messages)
+keeps tool-result parts contiguous and first in the merged user turn, which providers require."* Three
+things the body does not advertise are the interesting half:
+
+- each block is stamped `<hook_context source= tool_name= tool_call_id=>`, because *"parallel tool
+  execution collects them in completion order, so position alone cannot identify the tool"*;
+- attribute values go through an **injective** escape (`_`→`__`, so *"no two distinct ids can collapse to
+  the same sanitized stamp"*), and embedded `<hook_context` / `</hook_context` in the body is neutralized,
+  *"so neither provider-supplied ids nor hook output can corrupt or spoof the block markup"*;
+- the message is minted `displayRole: "system"` — model-visible, transcript-invisible.
+
+inber emits synthetic model-visible wrappers with fixed literal delimiters and no escaping of any kind.
+`agent/agent.go:354` appends `"\n\n[New message from user while you were working]\n" + text` **into the
+same user message that carries the tool_result blocks** — so the forged and the genuine article would sit
+inside one message, adjacent, distinguishable only by which content block they landed in. The same shape
+is at `conversation/summarize.go:107` (`[Conversation Summary — %d earlier turns condensed]`),
+`server/session_forking.go:63` (`[System] You are a forked sub-agent…`) and
+`conversation/message_utils.go:166` (`[tool_use: %s]`, which is the rendering handed to the *summarizing*
+model). A `read_files` of a document containing the steer literal is the whole attack.
+
+**Two things checked and found not to be defects, so the next pass does not re-derive them.**
+(a) Nothing in inber *parses* these literals: `session/turn_counter.go:21` and
+`conversation/message_utils.go:22` only name them in comments, and `StartsUserTurn`
+(`conversation/message_utils.go:29`) discriminates on block **type**, not on text. So a forged literal
+cannot move inber's turn accounting — only the model's belief. (b) The append at `agent/agent.go:348-359`
+targets `messages[len-1]`, which at that point in the loop is always the user message holding the tool
+results, so the steer cannot land on an assistant message and be attributed to the model.
+
+**What inber should consider:** #13297's escape is one function and it is the cheap half. **What a fix
+must decide:** whether the delimiter becomes a per-session nonce (unforgeable, but it moves the cached
+prefix — `agent/agent.go:555` anchors `cache_control` on the last block of this very message) or stays
+fixed and the *tool output* is scanned and neutralized on the way in (cache-safe, but it is a scan on
+every tool result). Those two have different costs and only one of them is free.
+
+### 2. A fire-and-forget hook cannot honour a control contract
+
+[cline #13298](https://github.com/cline/cline/pull/13298) found PostToolUse hooks running detached with
+`stdio: ["pipe","ignore","ignore"]`, so *"their entire JSON output is discarded — contextModification
+**and** cancel."* The fix restores blocking execution under the same 120s cap as PreToolUse, and states
+the trade-off as a principle rather than a regret: *"The alternative (staying async and dropping output)
+is what produced the bug: the documented contract can't be honored without reading the hook's stdout, and
+a detached process's exit can't be awaited without blocking anyway."* Note this is the argument in the
+**opposite** direction from codex's async-hooks change recorded at
+`agentic-design-patterns.md:4017-4019`, and it is this one that transfers, because inber's post-tool hook
+already does real work.
+
+inber's channel exists and is narrower than it looks. `agent.Hooks.PostToolResult`
+(`agent/agent.go:65`) returns a string that becomes a model-visible injection
+(`agent/agent_run.go:426-430`), and `engine/build_hooks.go:167-191` routes it to the workflow hooks
+(auto-commit, auto-format, build/test) and the forge hook. But the forge hook's `action` is only
+`Log.Info`'d (`engine/build_hooks.go:181-185`) — its `Kind` and `Reason` reach a log line and nothing
+else — and the two provider loops disagree about when the hook runs at all. See the sweep entry below:
+on the Anthropic path a failed tool call never reaches `PostToolResult`, which is also how the
+`toolInputsCache` leak got in.

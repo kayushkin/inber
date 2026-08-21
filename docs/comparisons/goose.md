@@ -1524,3 +1524,85 @@ or send nothing and log that the setting cannot be honoured.
   `output_tokens` for Google) — one line only: inber's Google traffic goes through the OpenAI-compatible
   path (`agent/clients.go:92-95`), which reads `completion_tokens` and already includes reasoning. inber
   does not have this bug and would acquire it if a native Gemini client is ever added.
+
+## Harness-watch — 2026-08-21: a fail-open gate records the same thing whether it ran or not — and inber's post-tool hook is never reached by a failed call, so the entry it was supposed to delete is still there
+
+### 1. `policy_evaluated` — "nothing decided, so allow" is not "policy ran and said allow"
+
+[goose #11120](https://github.com/block/goose/pull/11120) adds `PreToolUseResult`, an observation-only
+event emitted after the PreToolUse chain resolves and before the call executes or is denied. It carries
+the final decision **and a `policy_evaluated` bit**, true only *"when at least one matching `PreToolUse`
+hook exited 0 or returned a decision"* — a hook that exits non-zero without a decision, fails to spawn,
+or times out does not count. goose's hook execution is fail-open, so until this bit existed the record
+could not tell an allow that a policy considered from an allow that happened because nothing ran. The
+PR also pins a `tool_call_id` stable across `PreToolUse` / `PreToolUseResult` / `PostToolUse` /
+`PostToolUseFailure`, because *"tool name plus input"* cannot correlate a call that repeats. This is the
+upstream implementation of the ask already recorded at `agentic-design-patterns.md:1490(b)` — persist
+`decision_source` on the approval event — one level finer, because it also records whether anything
+decided at all.
+
+**What inber should consider:** `guard.CheckTool` (`guard/guard.go:165`) returns `Allowed` from its
+`default:` arm for both Autonomous **and** Unset — the mode nobody named — and the engine records
+nothing about which arm answered. A session whose mode failed to parse and a session deliberately run
+autonomous produce byte-identical turn logs. The cheap version is not a new event: it is one field on
+whatever the guard's caller already writes, distinguishing "Autonomous allowed this" from "no mode was
+set, so the default allowed this".
+
+### 2. One knob doing two jobs — and inber's is the transcript on disk
+
+[goose #11391](https://github.com/block/goose/pull/11391) splits a read limit that had been serving two
+purposes. Its predecessor bounded confined source-file reads by reusing `max_tool_response_size()` — the
+user-facing knob for how much tool output the *model* should see — so lowering a presentation budget
+stopped legitimate recipes loading, and raising it silently widened an allocation ceiling. The fix is a
+typed two-armed `ReadLimit { Characters(n), Bytes(n) }`: characters for tool responses, because that is
+what a context budget actually measures, and an independent `MAX_SOURCE_FILE_BYTES` for trusted source
+files.
+
+inber has the same conflation on a different pair. `session/truncate.go`'s `TruncateConfig` is read by
+**both** `Session.TruncateToolResult` (`session/session_logging.go:64`), which is wired to
+`hooks.ModifyToolResult` and therefore decides what the *model* sees, and `Session.LogToolResult`
+(`session/session_logging.go:77`), which decides what the *session JSONL on disk* records. One config,
+`s.truncateCfg`, and at the `main`/`agent` role that is a 1000-token threshold cut to 500 head + 200 tail
+(`session/truncate.go:145-150`), so a 4 KB tool result is cut to ~2.8 KB in the transcript as well as in
+the context. The file's own comment (`session/session_logging.go:84-95`) argues carefully against keeping
+an in-memory copy of the untruncated output — a good argument, and a different question from whether the
+*append-only log* should hold it. The full bytes exist nowhere afterwards.
+
+**And the knob has a second problem, found while checking the first: three of its four settings are
+unreachable.** `TruncateConfigForRole(role string)` (`session/truncate.go:141`) switches on `"main"`,
+`"agent"`, `"project"`, `"run"` — but its one production caller passes an **agent name**, not a role:
+`sessionMod.TruncateConfigForRole(e.AgentName)` (`engine/engine_new.go:600`). The ten agents configured
+on this host are `bran`, `fionn`, `logstack`, `oisin`, `orchestrator`, `party`, `researcher`, `scathach`,
+`task-manager`, `worker`. None of them is spelled `main`, `agent`, `project` or `run`, so **every session
+on this host takes the `default:` arm** and gets `DefaultTruncateConfig()` — 1000/500/200. The `project`
+config (3000/1500/500, *"needs more context"*) and the `run` config (5000/2000/1000, *"expects large
+output"*) have never been selected by anything. `worker` and `researcher`, the two agents whose whole job
+is producing large tool output, are truncated exactly as aggressively as the orchestrator. This is the
+shape `session/truncate.go:20-27` already complains about in its own words — *"A config flag an operator
+can read and set, wired to nothing, is a promise the code does not keep"* — one file over from where that
+sentence is written. Not filed as a todo: the queue cap for this sweep was reached, and the fix is
+entangled with the decision below.
+
+**What inber should consider:** #11391's shape — two named limits, not one. **What a fix must decide:**
+whether the JSONL is a context artifact or an audit artifact. If resume is its only reader, today's
+behaviour is correct and the log should say so; if a human or a later analysis reads it, the context
+budget has no business truncating it. That is a real choice about what the file is for, and it should be
+made deliberately rather than inherited from a shared struct field.
+
+### 3. A normalization rule implemented on one of two ingestion paths
+
+[goose #11317](https://github.com/block/goose/pull/11317) is worth reading for its honesty about
+severity. `Conversation::push` already coalesced consecutive thinking deltas by chunk id; `collect_stream`
+— *"the default path every `Provider::complete()` call goes through"* — only had a coalescing arm for
+`Text`, so `Thinking` deltas fell to the wildcard arm and persisted one content block per streamed chunk.
+The PR states plainly that this is *"a storage/serialization defect, not a correctness or token-cost
+one"*, and then gives the number that makes it matter anyway: **12,632 fragmented content items collapsed
+to 249, a 50x reduction in `content_json` bytes.** The merge rule is the reusable part — append while the
+previous block is unsigned or shares the incoming signature, and **never merge two distinctly-signed
+blocks**, which is what keeps #10007's thinking-signature provenance (recorded at `goose.md:1032-1050`)
+working.
+
+**What inber should consider:** the transferable claim is not about thinking blocks, it is that a
+normalization implemented at one of two ingestion points holds only for the path someone remembered.
+inber has exactly that shape in `agent/agent_run.go`'s streamed accumulation versus `session/resume.go`'s
+replay, and the sweep below found a live instance of the same shape in the tool-hook pair.

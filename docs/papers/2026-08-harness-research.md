@@ -2876,3 +2876,130 @@ arXiv ids already in `docs/papers/*.md`; 27 abstracts read in full, 12 re-verifi
 there are likely** — `2608.14380` and `2608.18167` were both such misses from prior sweeps, which suggests
 more remain. cs.MA, cs.HC, cs.DC and cs.PL were never swept by category. No listing pages were used, so the
 announcement-date pagination trap did not apply.
+
+## Harness-watch — 2026-08-21
+
+Window 2026-07-22 → 2026-08-21. Dedupe was done by extracting all **358** arXiv ids already present across
+`docs/papers/*.md` and grepping every candidate below against all five files: **zero hits**. Two title
+collisions were resolved rather than assumed — `HANDBOOK.md` (`2607.25398`) is already recorded as
+*rejected, benchmark only* in the July file and is not re-filed, and the `SkillZip` below is **not** the
+`SkillZip` the docs already hold (see the caution at the end).
+
+### 1. [arXiv:2608.11242](https://arxiv.org/abs/2608.11242) — a standing user constraint is the first thing compaction throws away, and the fix is a second pass, not a better prompt
+
+Defines *Session Constraints*: standing instructions like "do not delete any emails until I confirm" that
+are stated once and must bind for the rest of the session. Measured across multi-turn chat, agentic
+trajectories and long-horizon research, current compactors retain **17%** of them on average, and **most
+compacted runs score worse than not compacting at all**. Retention varies with compactor, prompt, context
+length, constraint phrasing *and* injection location — so this is systematic, not a tuning artifact. A
+plug-in constraint-aware extractor running **alongside** the compactor, touching neither the compactor nor
+the model, reaches **>90% retention** in all three scenarios.
+
+This lands directly on `conversation/summarize.go`. inber's compaction hands the turns being replaced to a
+summarizing model as flat text (`conversation/message_utils.go:154 messagesToText`) and trusts the summary
+prompt to keep what matters. The file already knows this class of failure in one specific instance — the
+comment at `conversation/message_utils.go:146-153` explains that `is_error` had to be carried structurally
+because *"rendered without the flag, `make: *** [all] Error 2` after forty ok lines reads to the summarizer
+as a clean build"*. A session constraint is the same problem one level up: a single line of user text whose
+force does not survive being summarized.
+
+**What inber should consider:** a second extraction pass over the pre-compaction span that pulls
+session-scoped constraints out **verbatim** and re-injects them into the post-compaction system block, rather
+than a stronger instruction in the summarizer prompt. The paper's own result is that the co-pass works and
+prompt-tuning does not.
+
+### 2. [arXiv:2608.19303](https://arxiv.org/abs/2608.19303) — the recovery-tool list is the active ingredient, not the diagnosis
+
+Targets the failure inber has no defence against: a tool call that returns **well-formed but wrong** — a
+cached error page, a negative price — rather than failing. Outcome contracts mined from task-disjoint traces
+or public schemas raise ToolMaze completion from **10.9% → 28.1%** across four models in two provider
+families, and τ-bench retail by **+14.0 and +12.0 points**. The ablation is what makes it worth filing: the
+gain lives entirely in the **list of alternate tools** named in the receipt. Remove that list and the gain
+disappears; restore it and it returns. Diagnostic verbosity and timing detail change nothing.
+
+inber's version of this failure is already documented and already worse than silent: `cline.md:684-712`
+records that `tool-store/tools/shell.go` returns `(text, nil)` on a non-zero exit, so a failed command is not
+merely wrongly-shaped — it is reported as a success, and `is_error` and `Turn.ConsecutiveErrors` never move.
+
+**What inber should consider:** a post-execution check keyed off the tool's own JSON schema, appending a
+non-binding receipt on violation. **The receipt must name specific alternate tools by name** — that is the
+measured ingredient, and a receipt that only describes what went wrong buys nothing.
+
+### 3. [arXiv:2608.19662](https://arxiv.org/abs/2608.19662) — recurring tool schemas in varying order defeat prefix caching outright, and inber already gets this right
+
+The mechanism (composition-invariant per-resource KV blocks — **82.3% vs 82.4%** Inv-F1 at **3.655×** TTFT
+and **92.43%** less KV memory) is serving-side and falls under the 2026-08-10 standing filter: inber owns no
+KV cache. The **diagnosis** is above the API and does apply. Agents re-encode tool and skill schemas that
+*"recur across requests in different combinations and orders,"* and any reordering or conditional inclusion
+of a single tool invalidates the whole cached prefix behind it.
+
+**Checked, and inber is clean — recorded so a later sweep does not re-derive it.** Every path that builds the
+tool block iterates a **slice**, not a map: `buildConfiguredTools` ranges `e.AgentConfig.Tools`
+(`engine/build_tools.go:27`), `buildMemoryTools` ranges the same config slice
+(`engine/build_tools.go:123`), and `tools.All()` returns a fixed literal in a fixed order
+(`tools/tools.go:83-91`). inber also already states the rule explicitly, one layer up, in the one place a map
+range would otherwise have leaked in: `server/spawn_tools.go:64-71` sorts the agent names inside the
+`spawn_agent` description because *"Ranging a Go map gives a fresh permutation on every call, so two sessions
+of the same agent, a fork and its parent, and a session and its resume would each hash a different prefix and
+share no cache entry."*
+
+**What inber should consider:** nothing to fix; something to keep. The discipline is currently upheld by
+three independent call sites each happening to use a slice, plus one comment. `tools/registry_order_test.go`
+pins part of it — the standing risk is a future conditional inclusion (a tool added only when a workspace
+exists, say), which changes the member set rather than the order and breaks the prefix just as thoroughly.
+
+### 4. [arXiv:2608.14838](https://arxiv.org/abs/2608.14838) — maximizing retrieval recall *lowers* issue resolution, and the authors map the boundary honestly
+
+Execution-graded single-flag ablation on SWE-bench Verified with a fixed 12-slot context pack and no search
+tools. One-chunk-per-file deduplication raises gold-file presence (**0.878 vs 0.806**) and *lowers* resolve
+rate: turning it off gains **+7.6pp** (39.2% → 46.8%, n=500, McNemar exact **p=0.0003**), with a
+pre-registered open-weights replication at +3.6pp (p=0.0133). It **reverses** on BM25 (−3.2pp) and is a
+powered null under unrestricted-Read agents — the paper says so rather than burying it, which is why the
+result is usable.
+
+**What inber should consider:** the boundary condition is the finding. inber's agents have unrestricted read
+tools, which is the arm where the effect is a powered null — so this changes nothing today. It becomes
+binding the moment `codeindex/` grows into a fixed-budget context pack: do not hard-deduplicate by file, trade
+file breadth for within-file depth, and A/B the packing policy against **task success**, never against
+recall@k. Filing it now because the natural instinct when building that pack is to maximize gold-file
+coverage, and that instinct is measurably wrong.
+
+### 5. Tier two — verified, narrower, one line each
+
+- **[2608.19993](https://arxiv.org/abs/2608.19993)** — skill-document loading under a token budget as monotone-submodular benefit minus context penalty; first **(1−1/e, 1)** bicriteria guarantee, **0.73 task success vs 0.20–0.52** for released skill routers and text retrievers, on **28% fewer tokens**. → the skill-store → bundle-store `/resolve` path should use a budgeted submodular selector; the redundancy penalty is exactly what top-k lacks.
+- **[2607.27267](https://arxiv.org/abs/2607.27267) FAVA** — permission IR → evidence-backed permission graph → SMT authorizer, **90.5%** decision compliance across three benchmarks, and a denial returns a **counterexample**. → this is the shape permission-store's unbuilt steps 2–7 should copy; a denial carrying a counterexample is machine-actionable where a boolean is not.
+- **[2608.11274](https://arxiv.org/abs/2608.11274)** — position paper with four released audits behind it, including a title-level pass over all **28,560** NeurIPS/ICML/ICLR 2023–25 papers showing an **8–12×** imbalance between training-time and deployment-time safety work. Splits the contract into a preventive face and an **evidential** face. → inber has only the preventive half; the evidential half means a session cannot report "done" without an attached execution artifact — a `conversation/` and tool-result schema change, not a prompt change.
+- **[2608.03297](https://arxiv.org/abs/2608.03297)** — naive middle-drop truncation collapses monotonically (Holm-corrected p<0.05 in all eight cells) purely because answer-bearing content survives in **fewer than 1%** of samples at 25% retention. → any inber experiment measuring "does compaction hurt?" by dropping the middle is measuring middle-removal luck, not context length. Directly relevant to how `conversation/staged.go`'s head-drop would be evaluated.
+- **[2608.08389](https://arxiv.org/abs/2608.08389)** — **where** you prune dominates **which** scoring rule you use; heuristics cut tokens up to **73%** with little quality loss and a learned value model never dominates. → prune at the point a tool result **enters** the conversation, not at the compaction boundary; late pruning only cleans the final synthesis window.
+- **[2607.24882](https://arxiv.org/abs/2607.24882)** — 427 samples over 25 repos; **RepoMap wins budgeted context yield at 8K tokens**, and logged agent trajectories miss every gold file on **27–35%** of samples. → seeding a session's first window from a retriever beats blind exploration, and structure beats embeddings at inber's realistic budget.
+- **[2608.06811](https://arxiv.org/abs/2608.06811) PMCoder** — plan phase conditions memory retrieval and memory-derived trajectory statistics drive stuck detection; **+5.0pp** on SWE-bench Verified, replicated ≥+2.8pp across three models, specifically reducing repeated failed actions and context exhaustion. → memory-store retrieval should take a phase label as a query parameter, and inber should compute a repeated-action statistic as a replan trigger. Note `guard.RecordToolCall` (`guard/guard.go:209`) already computes exactly that statistic and, per its own comment, **has no caller** — the write exists and the reader does not.
+- **[2608.19564](https://arxiv.org/abs/2608.19564)** — memory-commitment benchmark (persist / in-context-only / re-verify / ask), κ=0.962. Models verify but do not ask: bare Qwen asks on **0/12** clarification items. A policy prompt cuts erroneous persistence 0.243 → 0.100 (p=0.038) while clarification recall stalls at 0.333, and **label↔tool-call agreement is only 57% (Claude) / 23% (Qwen)**. → a durable write to inber's memory store needs an explicit four-way commit decision in the **tool schema**, and any eval must grade the tool call, not the stated intent — they disagree half the time.
+- **[2607.22445](https://arxiv.org/abs/2607.22445)** — role ceilings + task-context classifier + combination prohibitions; co-developing dataset and policy cut ceiling violations **46 → 3 (93%)**, and it supports an **observe-only** mode. → the observe-only mode is the cheap first move for permission-store: log every call against a task-derived ceiling before enforcing anything, and the mismatch log is itself the tuning signal.
+- **[2608.20169](https://arxiv.org/abs/2608.20169)** — variance-weighted sampling concentrates evaluation on tasks where candidate harnesses *disagree*, with a sampling-probability correction so partial evaluations stay comparable; matches full-set search at **80% fewer evaluations**. → directly applicable to `agent-bench`.
+- **[2607.25635](https://arxiv.org/abs/2607.25635)** — 1,723 MCP-consuming applications mined from GitHub: 85.2% converge on config files and 81.1% on official SDKs, but only **37.2%** gate tool execution behind a blocking approval step. → baseline evidence that tool-store's `POST /provision` should ship approval-gating defaults **on**, because the ecosystem default is off.
+- **[2608.11632](https://arxiv.org/abs/2608.11632)** — untrusted components propose typed changes against an *exact predecessor head or typed absence*; model-checked over **2,808,230 states and 5,526,474 transitions, zero invariant violations**. → the compare-and-swap-on-predecessor-head discipline is what stops a background sub-agent stale-overwriting a session's memory record; inber's memory writes carry no such precondition. Surfaced by the `cs.MA` category pull the 08-20 sweep flagged as never swept.
+
+### 6. Screened and rejected — including one that argues against a standing intuition
+
+- **[2608.14992](https://arxiv.org/abs/2608.14992)** is worth reading *because it fails*. An exploratory arm found 14/24 false-code adoption from a tool-result record vs 0/22 from an assistant assertion; a preregistered replication reproduced the gap (7/24 vs 0/24, Fisher p=0.0047) — but the tool-result rate itself fell **14/24 → 7/24 across runs four days apart**, and a second preregistered study with a live text control found inline text sufficient in **60/60** trials vs 57/60 for the tool result, failing the registered superiority criterion (p=1). One model, one synthetic template. **File as a caution against the intuition that tool-result framing is inherently more dangerous than inline text — that is not established**, which bears directly on how much weight to put on the delimiter-spoofing finding filed this sweep.
+- **[2608.19677](https://arxiv.org/abs/2608.19677) CacheRoute** — 64.1% → 93.2% served KV hit rate, 2.3× QPS on 60 H100s. Standing serving-stack filter; inber owns no KV cache. One transferable line, from their own caveat: gate affinity changes with a shadow replay, not workload statistics.
+- **[2608.17528](https://arxiv.org/abs/2608.17528)** and **[2608.17393](https://arxiv.org/abs/2608.17393)** — agentic RL; inber does no training. One incidental observation worth keeping: both must recompute token-level logprobs *"even under harness-side compaction or re-serialization"* — i.e. compaction breaks token identity, which is also why a compacted prefix cannot be cache-hit.
+- **[2608.09802](https://arxiv.org/abs/2608.09802)** and **[2607.28587](https://arxiv.org/abs/2607.28587)** — benchmark hygiene: ~60% of unsolved SWE-bench Verified instances have flawed tests, and 13.6% PR-issue misalignment measured independently. Relevant only if inber quotes Verified numbers.
+- **[2608.03327](https://arxiv.org/abs/2608.03327)** — GUI-specific, but the context rule generalizes: dropping the screenshot made redundant by a successful tool call and halving image history reaches **37.8% vs 33.0%** at **53%** of input cost.
+- ⚠️ **[2608.11079](https://arxiv.org/abs/2608.11079) SkillZip — do not file blind.** The docs already hold a *different* paper called SkillZip at `2608.05604`. Same name, different abstract (MDL over a skill contract plus residual, vs contract-preserving graph compression). Resolve which is which before filing either.
+- **[2608.19263](https://arxiv.org/abs/2608.19263)** self-described work in progress, validation listed as future work; **[2608.12440](https://arxiv.org/abs/2608.12440)** n=1 self-reported case study with evidence published as 1,500+ pages in French — a cost datapoint, not a result. Also screened and dropped as off-target despite matching keywords: `2608.17007`, `2608.19901`, `2608.11878`, `2608.19982`, `2608.12172`, `2608.08131`, `2608.08995`, `2608.18177`, `2607.25090`, `2607.23884`, `2608.04746`, `2608.00814`, `2608.12218`, `2608.18933`, `2608.15071`, `2608.18580`, `2608.18565`, `2608.19799`, `2608.10622`. `2608.19741` (Thinkingbox) reports a good reliability number — **65.36% pass@1 vs 25.25% pass^20** — on a business-workflow benchmark; cite the pass^k gap, do not adopt the bench.
+
+### 7. Channel and coverage notes
+
+**Blogs: twelfth consecutive empty sweep.** `anthropic.com/engineering` still tops out at 2026-04-23 for
+dated posts; the undated featured "How we contain Claude across products" is 2026-05-25 and the 08-17 sweep
+already recorded that correction (line 2461). HuggingFace's `agent-glossary` harness-vs-scaffold post is
+2026-05-25, out of window. DeepMind, Meta AI and OpenAI produced nothing in window. The standing
+recommendation — check this channel **monthly, not per sweep** — holds for the twelfth time and should now be
+treated as settled rather than re-tested.
+
+**Coverage.** 86 arXiv queries plus **full category pulls of `cs.MA` and `cs.PL`**, which the 08-20 sweep's
+own coverage note flagged as never swept by category — that pull is what surfaced `2608.11632`. 847 records
+with `published ≥ 2026-07-20`, 655 surviving dedupe, 60 abstracts read in full. **`cs.HC` and `cs.DC` remain
+keyword-swept only, never category-pulled** — that is the gap this sweep did not close, and it is the same
+kind of gap that hid `2608.14380` and `2608.18167` from earlier sweeps.
