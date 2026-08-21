@@ -216,7 +216,7 @@ echo "    created memory id=$MEM_ID"
   || fail "no memory db at $WORKSPACE/.inber/memory.db — the agent's workspace was not honoured"
 
 step "GET /api/memory/{id} — read the write back out of SQLite"
-# ⚠ memory-store's Memory struct carries NO json tags (memory-store/memory.go:10),
+# ⚠ memory-store's Memory struct carries NO json tags (memory-store/memory.go:11),
 # so inber serialises it with Go FIELD NAMES: .Content, .Tags, .Importance —
 # capitalised. It is NOT the lowercase DTO that memory-store's own HTTP server
 # returns. Read the struct; never guess the wire shape.
