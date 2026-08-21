@@ -1,6 +1,6 @@
 # `/api/oneshot` — Deployment Spec
 
-Status: endpoint code is committed (`a148065`); deploy blockers 1–3 are landed in this commit. The host pin in auth-store (`intended_app='inber-server'` on the chosen credential row) is still required before oneshot calls will route to a funded key — that's the only remaining manual step.
+Status: endpoint code is committed (`a148065`); deploy blockers 1–3 are landed in this commit. **inber-server now runs on this host**, so the deploy step this document was written to track is done. Measured 2026-08-21: `ss -tlnp` shows it listening on `:8200`, launched `--addr :8200 --require=nats,workspace --api-key-from-auth-store=inber-server`, and `POST /api/oneshot` with an empty body answers 400 rather than 404, so the route is registered and validating. ⚠️ One half is **not** confirmed here: the auth-store host pin (`intended_app='inber-server'`) is what that launch flag resolves against, and reading `auth-store /api/credentials` needs a token this check did not have. So the pin is wired, not witnessed — do not read the line above as saying the key resolves.
 
 ## Goal
 
@@ -15,7 +15,7 @@ agent-job-store (future) ─▶ llm-bridge-server POST /instances/{id}/oneshot
                                         └▶ inber → Anthropic SDK (hard-forced tool_choice)
 ```
 
-All three callers (bridge-server proxy, harness binary, inber endpoint) are committed; the only thing missing is making inber-server actually run on this host.
+All three callers (bridge-server proxy, harness binary, inber endpoint) are committed, and inber-server runs on this host — see the Status line above for what was measured and for the one half that was not.
 
 ## Already done (commit a148065)
 
@@ -77,7 +77,7 @@ Per CLAUDE.md feedback memory `oss-prep-systemd`: keep `User=` / `Environment=PA
 Current unit's `ExecStart=/home/kayushkincom/bin/inber serve --addr :8200` becomes:
 
 ```ini
-ExecStart=/home/kayushkincom/bin/inber --addr :8200 --require=nats,workspace --api-key-from-auth-store=inber-server
+ExecStart=/home/kayushkincom/bin/inber-server --addr :8200 --require=nats,workspace --api-key-from-auth-store=inber-server
 Environment=AUTH_STORE_URL=http://127.0.0.1:8303
 Environment=AUTH_STORE_TOKEN=changeme
 Environment=NATS_URL=nats://localhost:4222
