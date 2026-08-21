@@ -1713,8 +1713,12 @@ transcript — whenever the summarization call failed, and **swallowed the error
 log line, no field on `SummarizeResult`, and `result.Summarized = true` set identically either
 way, under a `[Conversation Summary — N earlier turns condensed]` header that claims a summary
 in both cases. **Fixed in this commit** (`SummaryDegraded` + `SummaryError`, and a warning on
-the fallback). The rule to keep: a fallback on a *quality* path must be visible in the returned
-value, not merely in a log — and in inber's case it was not even in a log, which is the
+the fallback), and then **superseded on 2026-07-31 by `b04e998`, which deleted the fallback
+instead**: `mechanicalSummary` is gone, a failed summarization returns the error
+(`conversation/summarize.go:65`), and with no degraded path left the two fields went with it.
+So neither name is declared anywhere today, and follow-on **(a)** below is moot — nothing is
+injected in a degraded state to label. The rule to keep: a fallback on a *quality* path must be
+visible in the returned value, not merely in a log — and in inber's case it was not even in a log, which is the
 "0 `[reaper]` lines ever" failure discovered the same way. Two follow-ons: **(a)** consider
 labelling the injected block itself when degraded, so the model is told it is reading a keyword
 list and not a summary — that changes prompt content, so it is left as a decision rather than
@@ -2203,7 +2207,13 @@ decided by the order of two loops. codex's `register_trusted` would have aborted
 inber has name-load-bearing control flow with no protection: `agent/agent_run.go:33` skips
 `then`-chain injection iff `t.Name != "end_turn"`, and `engine/build_tools.go:52,114,125` swap in
 `ShellInDir` iff the name is `shell`/`shell_commands` — so an `ExtraTools` entry named `end_turn`
-replaces the turn-termination tool while the special-case still keys off the name. Every registry is
+replaces the turn-termination tool while the special-case still keys off the name.
+**[Re-walked 2026-08-21 — half of this sentence is spent, and the half that survives moved.]** The
+`ShellInDir` clause is gone with the tool: `engine/engine.go:419` now passes the whole tool set
+through `tools.ScopeToRoot(toolSet, e.repoRoot)`, which keys off a declared table of path arguments
+rather than a tool's name — the same §4 repair walked above. The `end_turn` clause still stands and
+is still name-keyed, at `agent/chain.go:127` (`t.Name != turnTerminatorToolName`), not
+`agent/agent_run.go:33`. So the argument holds on one example instead of two. Every registry is
 documented last-write-wins (`tools/interface.go:42-46`, `agent/registry/tools.go:56-58`), nothing
 dedups the final slice (`engine/build_tools.go:20-41` appends with no seen-set;
 `agent/agent_run.go:29-49` pushes *every* element into `toolParams` while `toolMap[t.Name]` keeps
