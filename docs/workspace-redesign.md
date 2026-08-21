@@ -1,5 +1,23 @@
 # Workspace Redesign — Ephemeral Multi-Repo Workspaces
 
+> **Status, measured against forge's `main` on 2026-08-21: the new workspace API
+> landed, the old slot system was NOT removed, and the two run side by side.**
+> Read "What Gets Removed" below as a proposal, not as a record.
+>
+> - **Landed.** `forge.CreateWorkspace(agent, projects)` (`workspace.go:187`) is the
+>   ephemeral multi-repo workspace this document designs, with `workspace_record.go`
+>   behind it.
+> - **Removed as planned.** `compat.go` is gone, and with it `AcquireV2`/`ReleaseV2`,
+>   `CommitSlotChanges`, `ResetSlotBranch`, `CleanSlot`, `SlotPull` and `SlotStatus` —
+>   which is why the names in "What Gets Removed" resolve to nothing today.
+> - **NOT removed.** The `slots` table is still created (`forge/schema.go:25`), the
+>   `~/forge/slots/` directory still exists on this box, and `forge/slots.go` still
+>   exports a live slot API: `OpenSlot`, `JoinSlot`, `LeaveSlot`, `CloseSlot`,
+>   `ForceCloseSlot`, `SlotAgents`, `SlotLog`, `GetSlotByNum`, `InitSlotSchema`.
+>   `forge.SlotCommit` also survives in `forge.go` and is on the unreached-function
+>   census (noteboard card `e9b0b89c`).
+> - `~/repos/.pools/` is gone.
+
 ## Overview
 
 Replace the persistent slot/worktree system with ephemeral, on-demand workspaces.

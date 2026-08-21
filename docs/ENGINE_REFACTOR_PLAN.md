@@ -2,6 +2,35 @@
 
 _Drafted April 2026. Based on direct inspection of engine/ source._
 
+> **Status, measured against `main` on 2026-08-21: the turn-loop split and both
+> deduplications shipped; the two package extractions did not.** This document was
+> never updated after the work landed, so it reads as an open plan and its
+> "Concrete violations found" table reads as a description of today's code. Two of
+> those rows are no longer true.
+>
+> **Landed:**
+> - `turn.go` is gone, split into `turn_prepare.go`, `turn_context.go`,
+>   `turn_execute.go`, `turn_prompt.go` and `turn_postprocess.go` (the plan calls
+>   the last one `turn_post.go`).
+> - `turnLifecycle.go` → `lifecycle.go`; `engine_init.go` → `engine_new.go`;
+>   `build_prompts.go` split away.
+> - `isThinkingSignatureError` is deduplicated — one declaration, **exported** as
+>   `apiutil.IsThinkingSignatureError` in `internal/apiutil/apiutil.go`, not the
+>   `internal/apiutil/errors.go` this plan names. `engine/turn_execute.go:45` is
+>   the caller.
+> - `formatDuration` is deduplicated onto `timeutil.FormatDuration`; the copy in
+>   `server/session_utils.go` is now a one-line wrapper and `engine/fleet_status.go`
+>   calls `timeutil` directly.
+> - `FindRepoRoot` moved out, to `internal/fsutil` rather than the planned
+>   `internal/gitutil`.
+>
+> **Not landed:**
+> - `engine/workflow/` and `engine/openclaw/` were never created; the five
+>   `workflow_*.go` files and `openclaw_feed.go` are still in `engine/`.
+> - There is no `engine/close.go`. `Close` and `RunTurn` both sit in `engine.go`,
+>   and `SaveSessionSummary` is still in `lifecycle.go`.
+> - The `Engine` struct still carries 46 fields, so the god-struct row stands.
+
 ---
 
 ## Background: What's Wrong
@@ -16,10 +45,10 @@ Concrete violations found:
 | God function | `RunTurn()` does: increment counter, snapshot memory, log user, stash user message, repair alternation, summarize, prune, build system prompt, select model, switch provider, filter messages, run API, record health, log assistant, extract memories async, stash assistant response, save messages, checkpoint, track tokens |
 | Wrong package | 5 `workflow_*.go` files — auto-commit, auto-format, build/test, deploy, git — live in `engine/` but have zero dependency on `Engine`. They depend on `WorkflowHooks` only. |
 | Wrong package | `openclaw_feed.go` is a standalone WebSocket client to an external gateway. Zero dependency on `Engine`. Lives in `engine/` for historical reasons only. |
-| Misnamed files | `engine_init.go` is actually a factory helpers file. `turnLifecycle.go` contains `FindRepoRoot()` and `SaveSessionSummary()` — not lifecycle functions. |
-| Duplicated helpers | `isThinkingSignatureError()` in both `agent/agent.go` and `engine/turn.go`. `formatDuration()` in both `engine/fleet_status.go` and `server/session_utils.go`. |
+| Misnamed files | ~~`engine_init.go` is actually a factory helpers file. `turnLifecycle.go` contains `FindRepoRoot()` and `SaveSessionSummary()` — not lifecycle functions.~~ **Both files renamed** (`engine_new.go`, `lifecycle.go`) and `FindRepoRoot` moved to `internal/fsutil`. `SaveSessionSummary` is still in `lifecycle.go`. |
+| Duplicated helpers | ~~`isThinkingSignatureError()` in both `agent/agent.go` and `engine/turn.go`. `formatDuration()` in both `engine/fleet_status.go` and `server/session_utils.go`.~~ **Both fixed** — see the status note above. |
 | Mixed concerns | `build_prompts.go` handles both context budget calculation (how much memory to load) and system prompt assembly (building the actual blocks). These change for different reasons. |
-| Misplaced `Close()` | `Close()` lives in `turn.go`. It has nothing to do with turns. |
+| Misplaced `Close()` | **Still misplaced, new address.** `turn.go` no longer exists; `Close()` now lives in `engine.go` beside `RunTurn`, and the planned `engine/close.go` was never created. |
 
 ---
 

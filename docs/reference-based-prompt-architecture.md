@@ -1,5 +1,23 @@
 # Reference-Based Prompt Architecture
 
+> **Status, measured on 2026-08-21: shipped in a different shape, and two of the
+> four reference kinds below are accepted but never expanded.** The API in this
+> document — `memory.NewRepoMapReference(...)`, `memory.NewToolRegistryReference(...)`,
+> `BuildRepoMap()`, `BuildToolSchemas()` — was never written and none of those four
+> names is declared anywhere on this box.
+>
+> What landed instead is **fields on `memory-store`'s `Memory` struct**, not typed
+> constructors: `RefType`, `RefTarget`, `IsLazy`, `AlwaysLoad`, `ExpiresAt` and
+> `Tokens` (`memory-store/memory.go`). `RefType` takes `"memory"` (default),
+> `"file"`, `"identity"`, `"repo-map"`, `"tools"` and `"web"`, and the agent reaches
+> a memory through the `memory_expand` tool (`inber/memory/tools.go`).
+>
+> ⚠️ **`loadLazyContent` (`memory-store/util.go:32`) has arms for `"file"` and
+> `"identity"` only.** Everything else falls to `default:` and returns whatever is
+> already in the DB. So a memory stored as `repo-map` or `tools` with `IsLazy: true`
+> is **not** regenerated on read: the "always fresh" and "ExpiresAt: 1 hour"
+> promises below are true of file references and of nothing else.
+
 ## Vision
 
 Instead of passing full content in prompts, use **references** that Sonnet can selectively expand via tool calls based on what's actually needed for the task.

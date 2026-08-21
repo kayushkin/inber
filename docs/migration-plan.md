@@ -1,5 +1,19 @@
 # Migration Plan: Bus-Centric Architecture
 
+> **Status, measured 2026-08-21: phases 1 and 2 shipped, phase 3 is partly done,
+> phase 4 was never started. Read this as a record, not as work to pick up.**
+>
+> - **Phase 1 — done.** The bus client landed in `server/`, then moved to its own
+>   package in `127e030`: what step 1 below calls `BusClient` is `bus.Client` today,
+>   and `server.BusManager` (`server/bus.go`) holds the routing this plan gave the
+>   server. ⚠️ The transport is **NATS**, not the WebSocket-subscribe / HTTP-publish
+>   pair step 1 specifies — that swap is not recorded anywhere in this plan.
+> - **Phase 2 — done.** `bus/cmd/bus-agent/` no longer exists.
+> - **Phase 3 — partly done.** `si/feed/inber_direct.go` is retired (it sits as
+>   `inber_direct_deprecated.go.bak`) and `si/feed/nats.go` is the live subscriber.
+>   `si/feed/echo.go` is still there.
+> - **Phase 4 — not started**, and the plan already marks it optional.
+
 Everything flows through bus. SI is the only user interface. Inber subscribes to bus directly (no bus-agent middleman).
 
 ## Target Architecture
