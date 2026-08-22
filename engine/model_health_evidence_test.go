@@ -296,3 +296,55 @@ func timeoutFromAProviderThatNeverAnswers(t *testing.T) error {
 	}
 	return fmt.Errorf("OpenAI API call failed: %w", fmt.Errorf("send request: %w", err))
 }
+
+// TestAnOversizedRequestDoesNotMarkTheModelUnhealthy pins the fourth exclusion,
+// and it is the one that is not an inber-raised error. The provider answered;
+// what it answered is that the request inber built was over a byte cap.
+//
+// The fixture is the whole error string the SDK produces for Anthropic's 32MB
+// limit on /v1/messages, wrapped the way callAPI wraps it, because the predicate
+// reads prose written by whichever gateway refused the request rather than a
+// sentinel. Before this exclusion the string fell through to the default and one
+// oversized request — an image-heavy session is the usual cause — marked a
+// healthy model unhealthy for every session on this host, with no threshold and
+// no decay to recover it.
+func TestAnOversizedRequestDoesNotMarkTheModelUnhealthy(t *testing.T) {
+	e, store := engineWithTempModelStore(t)
+	const model = "claude-sonnet-4-5"
+	healthyModel(t, e, model)
+
+	tooLarge := errors.New(`api call failed: POST "https://api.anthropic.com/v1/messages": 413 Request Entity Too Large ` +
+		`{"type":"error","error":{"type":"request_too_large","message":"Request body is too large"}}`)
+	e.recordModelHealth(context.Background(), model, 900, tooLarge)
+
+	h := store.GetHealth(model)
+	if !h.LastErrorAt.IsZero() {
+		t.Fatalf("a 413 stamped LastErrorAt on %s (%q) — the request was too big, which says "+
+			"nothing about the model, and that row demotes it for every session on the box",
+			model, h.LastError)
+	}
+	if !h.IsHealthy(healthWindow) {
+		t.Fatalf("a 413 failed %s over for every session on the box, possibly to a model with a "+
+			"smaller window, which cannot help", model)
+	}
+}
+
+// TestAByteCappedGatewayRefusalDoesNotMarkTheModelUnhealthy is the same
+// exclusion reached through the other client. inber's OpenAI-compatible path
+// serves openai, google, openrouter, ollama and the catch-all for every provider
+// inber does not name, and a byte-capped gateway there answers 400 in its own
+// words rather than 413 with Anthropic's error type. A predicate that only knew
+// the Anthropic string would leave every one of those providers demoting a model
+// on an oversized request.
+func TestAByteCappedGatewayRefusalDoesNotMarkTheModelUnhealthy(t *testing.T) {
+	e, store := engineWithTempModelStore(t)
+	const model = "gpt-5"
+	healthyModel(t, e, model)
+
+	e.recordModelHealth(context.Background(), model, 700,
+		errors.New("api call failed: 400 Bad Request: request body exceeds 10485760 bytes"))
+
+	if !store.GetHealth(model).IsHealthy(healthWindow) {
+		t.Fatalf("a byte-capped gateway's refusal failed %s over for every session on the box", model)
+	}
+}

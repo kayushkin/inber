@@ -20,6 +20,15 @@ import (
 var ErrMaxAPICallsExceeded = errors.New("exceeded max API calls")
 
 // isContextLengthError checks if an API error is due to exceeding the model's context window.
+//
+// Every phrase here is token-shaped on purpose. A request can also be refused
+// for its size in bytes, which says the same thing in words none of these match
+// — see IsRequestByteSizeLimitError. The two are deliberately separate
+// predicates: this one arms the prune-and-retry in Agent.callAPI, and that
+// pruner is denominated in tokens, so folding the byte class in here would
+// answer a byte overflow with a token head-drop that may not touch the base64
+// part causing it. Whether the byte class should arm this pruner is an open
+// question on todo 70ae784b.
 func isContextLengthError(err error) bool {
 	if err == nil {
 		return false
@@ -29,6 +38,85 @@ func isContextLengthError(err error) bool {
 		strings.Contains(msg, "context_length_exceeded") ||
 		strings.Contains(msg, "maximum context length") ||
 		strings.Contains(msg, "too many tokens")
+}
+
+// requestByteSizeLimitMarkers are the phrases that name a byte-size refusal on
+// their own, with no second word needed. "request_too_large" is Anthropic's own
+// error type for the 32MB cap on its messages endpoint, which Cloudflare emits
+// as a 413 before the request reaches the API; the other three are how a 413
+// renders in prose across the gateways inber's OpenAI-compatible client talks to.
+var requestByteSizeLimitMarkers = []string{
+	"request_too_large",
+	"request entity too large",
+	"payload too large",
+	"content too large",
+}
+
+// requestByteSizeNouns name the thing being measured, and
+// requestByteSizeOverLimitPhrases say it was over. A message has to carry one of
+// each to be classified, because every noun here appears in perfectly ordinary
+// error text on its own.
+var (
+	requestByteSizeNouns = []string{
+		"content length",
+		"request size",
+		"request length",
+		"request body",
+		"payload size",
+		"body size",
+	}
+	requestByteSizeOverLimitPhrases = []string{
+		"exceed",
+		"too large",
+	}
+)
+
+// IsRequestByteSizeLimitError reports whether a provider refused the request for
+// its size in BYTES rather than for its length in tokens.
+//
+// The two are different failures with different remedies and inber only had a
+// classifier for the token one, so a byte refusal fell through every branch to
+// the default and was written to model-store as a provider fault. That store is
+// host-shared, persistent, thresholdless and decay-free, so one oversized
+// request marked a healthy model unhealthy for every session on the box, and
+// selectModel then failed over — possibly to a model with a smaller window,
+// which cannot help. engine.errorIsEvidenceAboutTheModel reads this predicate to
+// stop that.
+//
+// Being over a byte cap is inber reporting on inber: the provider answered, and
+// what it answered is that the request inber built was too big to accept. It is
+// evidence about the request, not about the model.
+//
+// ⚠️ This predicate classifies. It does not recover — no pruning, no shedding,
+// no retry is armed by it, and that omission is deliberate rather than pending.
+// inber has no modality-aware shedding step and conversation.EstimateTokens
+// prices tokens and never bytes, so inber cannot currently ask whether a pruned
+// request is under a byte cap. What the recovery should be is todo 70ae784b's
+// open question.
+//
+// The match is case-insensitive because a 413 reaches inber as prose written by
+// whichever gateway refused it, not as a fixed API string.
+func IsRequestByteSizeLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range requestByteSizeLimitMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	for _, noun := range requestByteSizeNouns {
+		if !strings.Contains(msg, noun) {
+			continue
+		}
+		for _, overLimit := range requestByteSizeOverLimitPhrases {
+			if strings.Contains(msg, overLimit) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Tool defines a tool the agent can use.

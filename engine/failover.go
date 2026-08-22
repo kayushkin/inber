@@ -159,6 +159,21 @@ func (e *Engine) recordModelHealth(turnContext context.Context, model string, du
 // one would answer "no clock of mine fired" for every deadline there is, which is
 // exactly the reading this function exists to stop being automatic.
 //
+// A fourth exclusion is not an inber-raised error at all: a request refused for
+// its size in BYTES. The provider answered, and what it answered is that the
+// request inber built was over a byte cap — Anthropic's 32MB request_too_large,
+// or the same refusal from any of the byte-capped gateways the
+// OpenAI-compatible client serves. That is evidence about the request, not about
+// the model, and it used to fall through to the default below: one oversized
+// request marked a healthy model unhealthy for every session on the box, and
+// selectModel then failed over, possibly to a model with a smaller window.
+// agent.IsRequestByteSizeLimitError classifies it and carries the reasoning.
+//
+// ⚠️ Classifying it here stops the demotion and nothing else. No pruning or
+// shedding is armed by the new class, because inber's pruner is denominated in
+// tokens and a byte overflow usually is not — see todo 70ae784b, which reserves
+// what the recovery should be.
+//
 // Everything else is deliberately left to record an error, including "unexpected
 // stop reason". Whether a refusal, or a pause_turn inber has no branch for, is a
 // provider fault, a model fault or a gap in inber is an open question on todo
@@ -170,6 +185,8 @@ func errorIsEvidenceAboutTheModel(turnContext context.Context, err error) bool {
 		return false
 	case errors.Is(err, context.DeadlineExceeded):
 		return turnContext.Err() == nil
+	case agent.IsRequestByteSizeLimitError(err):
+		return false
 	}
 	return true
 }
