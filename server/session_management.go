@@ -158,14 +158,24 @@ func (g *Server) persistSessionStateLocked(s *Session) {
 	}
 
 	dir := filepath.Join(g.config.DataDir, "sessions", s.Key)
-	os.MkdirAll(dir, 0755)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Printf("[server] session dir not created for %s, none of the three writes below can land: %v", s.Key, err)
+	}
 
 	data, err := json.Marshal(msgs)
 	if err != nil {
 		log.Printf("[server] persist %s: %v", s.Key, err)
 		return
 	}
-	os.WriteFile(filepath.Join(dir, "messages.json"), data, 0644)
+	if err := os.WriteFile(filepath.Join(dir, "messages.json"), data, 0644); err != nil {
+		// The turn counter and guard state below are written regardless, so
+		// after this line the three records disagree: the counter and the
+		// spend describe messages the transcript does not hold. Whether they
+		// should be skipped, or written first so a torn persist over-counts
+		// rather than under-counts, is an open question — noteboard card
+		// d347a2fe. Saying so is the floor; the ordering is not settled here.
+		log.Printf("[server] transcript not persisted for %s, the turn counter and safety limits below still advance and will describe messages that are not there: %v", s.Key, err)
+	}
 
 	if err := sessionMod.SaveTurnCounter(dir, turnCounter); err != nil {
 		log.Printf("[server] turn counter not persisted for %s, next resume will start from turn 0: %v", s.Key, err)
