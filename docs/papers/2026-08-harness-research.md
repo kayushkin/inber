@@ -3003,3 +3003,429 @@ own coverage note flagged as never swept by category — that pull is what surfa
 with `published ≥ 2026-07-20`, 655 surviving dedupe, 60 abstracts read in full. **`cs.HC` and `cs.DC` remain
 keyword-swept only, never category-pulled** — that is the gap this sweep did not close, and it is the same
 kind of gap that hid `2608.14380` and `2608.18167` from earlier sweeps.
+
+# 2026-08-22 sweep
+
+**The coverage gap the 08-21 sweep flagged is closed, and it was worth closing.**
+That sweep's own note recorded `cs.HC` and `cs.DC` as *"keyword-swept only, never
+category-pulled"*. Both are now category-pulled and provably complete for
+2026-08-14 → 2026-08-20: a range query returns `totalResults=119` for `cs.HC` and
+`71` for `cs.DC`, and the parsed in-window set is exactly 119 + 71 = **190
+records**. Two of the four keeps below sat in `cs.DC` and would not have been
+reached by the `cs.SE`/`cs.CL`/`cs.AI`/`cs.LG` pulls every prior sweep ran.
+
+⚠️ **Method note for the next sweep, and it is the kind that silently voids a
+whole sweep.** `http://export.arxiv.org` now answers **301 with a zero-byte
+body**. The plain-`http` curl in the harness-watch job prompt therefore yields
+**zero entries and no error** — a sweep that used it would truthfully report
+"nothing worth filing" having queried nothing at all. Use `https://` **and**
+`-L`. Confirmed independently by both arXiv sweeps this run. The API also
+rate-limits hard after a few hundred records — verification queries came back
+empty for several minutes after a 400-record category pull — and
+`https://arxiv.org/abs/<id>` is the reliable fallback for spot-checking one id.
+
+### 1. [arXiv:2608.20195](https://arxiv.org/abs/2608.20195) — the documentation agents actually read is the instruction file, and "actionable, verifiable docs" describes no measured behaviour
+
+Behaviour-grounded study over two public datasets, both large: **557 agentic
+coding sessions from SWE-chat (94,813 development events, 3,033 documentation
+interactions)** and **33,097 agentic pull requests from AIDev (690,260 classified
+file-level change records)** — figures confirmed against the abstract directly,
+not a search snippet. Agent instruction files plus agent working notes are
+**60.5%** of all documentation interaction, against **10.6%** for classical
+technical documentation and **1.3%** for API references. Three assumed mechanisms
+fail: the read→act adjacent transition probability is **0.002** (adjusted OR 1.33
+[1.09, 1.62], which the authors call "unresolved" rather than claiming); **zero**
+documentation-based validation events were observed, so "verifiability" describes
+nothing anyone measured; and documentation is the first recovery move in only
+**5.4%** of 2,034 failure episodes. It carries a Threats to Validity section, uses
+cluster-bootstrap/GEE with fixed seeds, has an explicit "implications our data do
+not support" section, and refuses to rank recovery strategies off n=11 — the
+discipline that made it worth reading.
+
+**What inber should consider:** this reprices where instruction context pays. The
+argument is to spend on the instruction surface — inber's per-agent system prompt
+and agent-store's stored config and memories — over any effort to make tool
+descriptions or repo docs "verifiable", which is the intuitive move and is
+unattested. Two harness-level consequences follow: reads chain to further reads
+(transition probability 0.270) while *follow-reference* is entirely unattested, so
+anything `codeindex/` ever emits should be locally self-contained rather than
+cross-linked; and agent working notes are 25.1% of interactions with agents
+writing nearly as much as they read, which makes inber's `memory` writes a
+maintenance surface the harness creates and never collects. Note it cites
+`2608.11095` ("Why Does CLAUDE.md Keep Growing? Catastrophic Remembering"),
+already filed at line 1411 — the two belong together.
+
+### 2. [arXiv:2608.14863](https://arxiv.org/abs/2608.14863) DDBench — for a strong model, a pre-supplied debug context buys cost, not correctness
+
+Title confirmed on the abs page: *"Evaluating Agentic Code Repair Capabilities in
+Distributed Systems"*, submitted 2026-08-14. 60 historical bugs from 13 open-source
+distributed systems across 5 languages, each run under **two matched conditions** —
+symptom-only vs. bounded debugging context (logs, traces, runtime state, targeted
+investigation notes) — over 10 models on an identical `mini-swe-agent` scaffold
+with a 450-step / $5 / 30-min cap. Frontier models cluster in the high-70s on
+SWE-bench Verified and span **61 pp** here. Debug context lifts aggregate pass rate
+**+18.1 pp**, and the lift splits by baseline capability: GLM 4.7 goes
+**9.7% → 48.4%**, while **Claude Opus 4.6 gains zero pass rate** and instead drops
+2.46M → 0.75M tokens (**−69%**) and 63.6 → 37.8 steps (**−41%**). Third finding,
+honestly reported: on one instance a *faithful* debug context anchored the agent to
+the wrong abstraction layer and turned Opus's only symptom-only win into a loss.
+
+**What inber should consider:** for the frontier models inber actually runs, a
+pre-collected context pack is a **cost lever, not a capability lever** — which is
+the right way to justify building one, and a very different pitch from the usual.
+This is the concrete argument for `codeindex/`, or a `tools/` pre-flight collector,
+gathering bounded logs, traces and state up front instead of letting the agent burn
+60-odd steps discovering them. It also hands `agent-bench` a design worth copying:
+run every task twice, symptom-only and context-augmented, and report the
+token/step delta **separately** from the pass delta — inber's model population is
+the arm where only the former moves, so a single blended number would hide the
+whole effect. The misleading-context case is the standing caution: the pack must be
+gated, not blindly appended.
+
+### 3. Tier two — verified, narrower
+
+- **[2608.19557](https://arxiv.org/abs/2608.19557)** — asks directly whether an LLM
+  control plane beats a strong heuristic at deadline-aware scheduling. The
+  heuristic reaches **0.902** completion across 60 seeded instances (Holm-corrected
+  p<0.001, best baseline 0.838) at **0.87 of a CP-SAT bound**, and single-component
+  ablation traces the entire advantage to batching horizon and time-critical-first
+  ordering — *not* the auction, not the per-window LLM policy. Under stationary
+  load the LLM plane adds nothing; under a mid-run surge it recovers **+0.0053
+  (p=0.004)** of roughly 7 points of headroom, while a non-LLM bandit adapting the
+  same parameters recovers nothing (p=0.571). → the cleanest evidence available
+  against putting a model in the dispatch loop of `session/` or the spawn path.
+  The result is significant *and* nearly worthless, which is the useful part: an
+  LLM scheduler must be justified against a measured optimum and an ablated
+  heuristic, never a strawman. Domain distance is real (simulated AV edge offload),
+  so file it as a prior on dispatch-layer cost/benefit, not as a mechanism.
+- **[2608.18307](https://arxiv.org/abs/2608.18307) ComponentBench** — 2,910
+  programmatically verified tasks, 7 models, 4 observation/action spaces, 20-step
+  budget, bootstrap CIs with half-width ≤1.9% per cell. The tool-rich regime with
+  DOM access beats every perception-only space for **all six** models that ran all
+  four, monotonically; the largest single-model swing is GPT-5 mini at **83.1%
+  (AX-tree) → 48.9% (coordinate-only)** in the same harness with only the
+  observation space changed. Be precise: that is the *largest* gap, not the typical
+  one — Gemini 3 Flash moves only 89.6 → 85.4. → the transferable claim is that a
+  structured tool surface beats making the model parse raw output, uniformly enough
+  to swamp model choice: an argument for `tools/` returning typed, structured
+  results rather than pretty-printed text. And for `agent-bench`: reporting a model
+  score without pinning the observation/action space is reporting a harness score.
+  Caveat honestly — this is GUI/computer-use, inber has no GUI agent, and the
+  authors say component competence is not validated as a predictor of long-horizon
+  success.
+- **[2608.14527](https://arxiv.org/abs/2608.14527)** — differential fault injection
+  over 2,200+ runs; original and LLM-modernized kernels agree in all 200 paired
+  injections. Narrow (Fortran/GAMESS), but the *method* transfers: validate an
+  agent's refactor by injecting identical deterministic faults into both versions
+  and comparing responses. Worth remembering when `guard/` needs a way to grade a
+  refactor it did not supervise.
+
+### 4. Screened and rejected
+
+- **[2608.19551](https://arxiv.org/abs/2608.19551)** — N=73 between-subjects, MCP-backed
+  CMS. AI assistance cut clicks, navigation and scrolling but **did not** cut task
+  time; delegation variance is person-level (ICC = .50), not task-level. The
+  tempting bullet — "users did not systematically avoid delegating higher-risk CRUD
+  ops, so don't rely on the human to self-gate" — rests on an **underpowered null**
+  (~24/cell across 3 modes). Cite the ICC if anything; not the null.
+- **[2608.17150](https://arxiv.org/abs/2608.17150) KnowSim** (705 sessions, 73–74%
+  sign agreement with human judgment) — real, but assistant calibration, not harness
+  design. **[2608.16181](https://arxiv.org/abs/2608.16181) MUSE** (n=15) and
+  **[2608.17834](https://arxiv.org/abs/2608.17834) AdaLens** (2 cases) — right problem
+  shape for a long-running inber session, evaluations too small to act on.
+- No validation reported: `2608.18312` (and `2608.18398` LEDGER already covers that
+  ground, filed), `2608.16428`, `2608.14869` (n=3 pilot, comparison "planned"),
+  `2608.14093`, `2608.19281`, `2608.15442`, `2608.15838`, `2608.10689`.
+  `2608.14815` is a workshop CFP; `2608.15403` is design fiction.
+- Standing serving/training-stack filter (inber owns no KV cache and does no
+  training): `2608.15241`, `2608.17826`, `2608.15117`, `2608.19535` (also
+  self-described as "a vision"), `2608.19659`, `2608.16336`, `2608.15171`,
+  `2608.15762`, `2608.15533`, `2608.15531`, `2608.15473`, `2608.13263`, `2608.11152`,
+  `2608.10402`.
+- Off-target despite keyword match: `2608.14132`, `2608.17175`, `2608.14948`,
+  `2608.16633`, `2608.13017`, `2608.12750`.
+- ⚠️ **`2608.16311` and `2608.16293` are the same paper posted twice** under two ids
+  with byte-identical abstracts (cooperative-game authority switching, LQ systems).
+  Both rejected as off-target; recorded so a future sweep does not read it twice.
+- `2608.13884` (33,228 vLLM/SGLang PRs) was **already filed and already rejected**
+  as too confounded. Leaving rejected.
+
+Six of the 190 in-window records were already filed (`2608.15127`, `2608.16357`,
+`2608.16178`, `2608.18398`, `2608.19677`, `2608.13884`), each re-checked by line
+number rather than trusted from an id list. 29 abstracts read in full, 6
+re-verified on the live `abs` page. The remaining ~150 in-window records are HPC
+kernels, federated learning, BFT consensus, LOCAL/CONGEST complexity, HRI, wearables
+and health HCI — no harness relevance.
+
+## Second pass — keyword sweep, 2026-08-17 → 2026-08-20
+
+Run independently of the category pull above: **68 arXiv queries, 2,155 unique
+records, 1,289 with `published` in window**, 139 scored harness-relevant, 41
+abstracts read in full. Note the real window is only **08-17 → 08-20** — arXiv's
+newest submission at sweep time was 2026-08-20T15:59Z, so 08-21 and 08-22 are
+empty and the "fresh" window beyond the 08-21 sweep's reach is about one day
+wide. The two sweeps independently surfaced `2608.20195` and independently
+rejected `2608.19551`, which is the corroboration this pair of methods was
+supposed to produce.
+
+### 5. [arXiv:2608.19652](https://arxiv.org/abs/2608.19652) StateMemBench — memory benchmarks test recall, but the failure that matters is answering with a *superseded* fact
+
+Defines **state tracking**: facts, constraints and decisions get revised over a
+long interaction and an answer must reflect the current state. **234 multi-session
+scenarios** across two conversation-length regimes, graded closed-pool so each
+answer is scored as reflecting the *current* state, the *superseded* state, or
+other — which separates state-tracking failure from ordinary error by
+construction rather than by inference. Existing memory systems, retrieval
+baselines and long-context baselines all struggle. Their StateMem method improves
+current-state accuracy **1.8× (0.205 → 0.363)** over the strongest same-backbone
+baseline and **1.6× (0.149 → 0.233)** over the strongest memory system on a second
+model. Applied as a **single-call wrapper over six existing memory and retrieval
+backends** it lifts current-state accuracy **+32 to +67 points**, and a **length-
+and cost-matched control attributes +15 to +32 of those points to state structure
+rather than to the added context** — that control is what makes this filable.
+
+**What inber should consider — this is the most actionable paper of the window.**
+`memory/` has exactly the architecture the benchmark breaks, and it was checked
+rather than assumed: `memory/tools.go:100-105` declares `memory_save` with four
+properties — `content`, `tags`, `importance`, `source` — and **no supersession
+relation of any kind**. A revised fact and the fact it revises both sit in the
+index, both embed near the same query, and recency is the only tiebreak.
+`memory_forget` is the sole correction channel and it fires only if the agent
+independently notices the contradiction and calls it. The cheap version is the
+wrapper, not the architecture: a `supersedes` field on `memory_save` plus a filter
+in `memory_search` that drops superseded rows — a schema change in
+`memory/tools.go` and a query change in memory-store. ⚠️ It interacts with the
+already-filed `2608.19564`: models verify but do not ask, and label↔tool-call
+agreement is only 57%/23%, so `supersedes` must be a **tool-schema field the model
+fills in**, gradeable from the call itself, not a stated intention.
+
+### 6. [arXiv:2608.17719](https://arxiv.org/abs/2608.17719) — an aggregate benchmark win hides ~8% of items that reliably got *worse*
+
+Three pairwise upgrades across a product model sequence, 900 public benchmark
+items, **50 queries per item per model**, each item classified as reliably
+improved / reliably regressed / practically equivalent / inconclusive under
+**false-discovery-rate control plus a practical-significance threshold**,
+calibrated against a **label-permutation null**. In all nine
+migration×benchmark cells, reliable improvements and reliable regressions
+coexist: edges with aggregate gains up to **7.3 pp** contain up to **8.3%
+reliably regressed items**, and edges with aggregate *losses* contain up to
+**10.7% reliably improved** ones. Separately, a **3.9-point instruction-following
+regression under strict scoring shrinks to 0.04 points under loose scoring** —
+the scorer's leniency moved the number, not the model.
+
+**What inber should consider:** the sharpest paper here for `agent-bench`. inber
+changes model defaults per agent through agent-store runtime configs and the
+decision signal is a suite mean, while `engine/engine_benchmark.go` measures
+*timing* rather than per-item behavioural deltas — so nothing in the tree can
+currently see a bidirectional split. Emit **per-task pass/fail at n≥20 repeats
+with FDR control**, and gate a model swap on "no reliably-regressed task in the
+pinned set" rather than on the mean. The strict-vs-loose result is the second
+half: inber's own grader leniency is an unmeasured free parameter of every model
+comparison it has ever run.
+
+### 7. Three deflationary results — each kills the obvious next feature
+
+These are the useful shape, and filing them is cheaper than discovering them.
+
+- **[2608.16190](https://arxiv.org/abs/2608.16190) — do not build a monitor
+  ensemble.** 24 open-weight monitors, nine pretraining lineages, a **29× range**
+  of detection skill. Agreement decomposes into a shared-detectability *signal*
+  term and an *idiosyncratic error* term that predict ensemble gain with
+  **opposite signs (Spearman −0.25 and +0.26)**, so their sum — the
+  average-pairwise-correlation metric everyone minimizes — predicts gain at
+  **+0.05**, and the cancellation replicates in **7 of 8** evaluations. A
+  monitor's own skill predicts its agreement with the pool at **Spearman 0.84,
+  n=24, permutation p < 0.0001**; at matched capability, cross-lineage panels
+  detect no better (**p = 0.13**); and **no correlation-weighted selection beats
+  picking the single best monitor out of sample**. The authors report the test
+  failing against themselves, which is why the null is credible. → whenever a
+  check in `guard/` is model-judged, use one best judge selected out of sample on
+  measured skill. This also settles the tempting cheap trick of routing a gate
+  through two model families "because their errors decorrelate": measurably not
+  paying. Pairs with the filed `2608.18719`.
+- **[2608.19760](https://arxiv.org/abs/2608.19760) — do not build LLM-judge step
+  attribution.** Audits step-level credit against causal ground truth from
+  **executed replay**: resample the policy's own alternatives at each decision
+  point, roll forward, measure what actually changes the outcome. **None** of
+  LLM-judge scores, outcome-conditioned logprob ratios, or the policy's own
+  confidence beats chance at identifying causally important steps. The failure
+  mode is named — implicit credit **echoes fluency** (median rank correlation
+  **+0.75**, replicating at +0.70 in a second model family) while conditioning on
+  the outcome adds **no causal information (partial correlation −0.004)**. A
+  seven-arm **pre-registered** training experiment finds no arm reliably beating
+  the untrained policy. → the obvious next feature after collecting trajectories
+  is scoring each step with a model to find where a run went wrong, and it is
+  measured here as indistinguishable from scoring fluency. Real step attribution
+  needs replay from a checkpoint with a resampled action — which `checkpoint/`
+  and forge's worktree slots make possible and no inber code does. One reusable
+  number: confidence-gating an already-present judge cuts judge cost **13.1% per
+  turn** — free savings, just not attribution.
+- **[2608.19626](https://arxiv.org/abs/2608.19626) — a self-graded feedback loop
+  mostly measures its own broken oracle.** 142 development / 114 locked external
+  / 138 held-out tasks, two code models, three seeds, fault-cross-fitted. On
+  external inputs where three accepted implementations agree, generated outputs
+  match the panel on only **27.79% and 50.12%** of cases, inflating the measured
+  gain from "evolution" by **9.46–14.85 pp**; after auditing, **equal-budget
+  independent resampling beats mutation-based evolution by 6.01–18.83 points**.
+  Against a **density-matched placebo**, a genuine three-round feedback loop
+  produces external differences of **+0.13 and −0.50**. → before inber adds any
+  refinement scaffolding to the loop `conversation/` sustains across turns,
+  `agent-bench` should run this paper's density-matched-placebo control: a loop
+  consuming the same tokens carrying no real feedback. If the placebo matches,
+  the scaffolding is measuring dose, not feedback.
+
+### 8. `2608.20195` again, from the other sweep — and the finding whose sign most people would guess wrong
+
+The keyword sweep surfaced the documentation paper independently and read further
+into it than the summary in §1 above. Two additions worth keeping. First,
+consultation is associated with **less** immediate testing (lift 0.23, cluster CI
+0.08–0.45; adjusted **OR 0.39 [0.25, 0.60]**), consultation is **self-initiated
+70.2%** of the time against **7.5%** failure-driven, and among multi-commit PRs
+touching both, code is touched first **4.7×** more often. Second, and checked in
+the tree rather than assumed: **inber has no instruction-file discovery path at
+all** — grepping the Go source for `CLAUDE.md`, `AGENTS.md` and `.cursorrules`
+returns exactly one hit, a comment in `cmd/inber-server/authstore.go:27`. So the
+artifact class agents spend **60.5%** of their documentation attention on is one
+inber neither reads nor writes.
+
+**What inber should consider:** if a "read the docs first" nudge is ever added to
+the system prompt, pair it with a test-execution check rather than assuming it
+induces one — the measured association runs the other way.
+
+### 9. Tier two — verified, real numbers, no action yet
+
+- **[2608.19703](https://arxiv.org/abs/2608.19703) Loreley** — quality-diversity
+  archive of whole repository states as Git commits in isolated worktrees vs.
+  sequential champion editing, **1,008 matched jobs over seven paired blocks**. QD
+  came in **0.135% below** sequential (95% BCa **−0.556% to +0.161%**); sequential
+  had the highest observed mean and median. → this is the natural thing to build
+  on forge's worktree slots, and it did not pay. An honest null, reported as one.
+- **[2608.19857](https://arxiv.org/abs/2608.19857)** — secrets merely *present* in
+  the context window leak through benign outputs. Across eight proprietary models,
+  4-digit in-context secrets reconstruct at **82% exact match** under a black-box
+  adaptive attack, and **more capable models leak more**. → `redact/` scrubs
+  outbound values and does not address this at all: the leak is correlational,
+  from the secret's presence, not from the model emitting it. The only defence
+  shaped like a fix is not putting resolved auth-store credentials in the context.
+- **[2608.20280](https://arxiv.org/abs/2608.20280)** — semantic-cache eviction over
+  three corpora × three capacities × two encoders: **no policy beats LFU by more
+  than 0.041 pp in any of eighteen settings**. The number that matters is the
+  audit: at one encoder's median threshold only **2.1–3.9%** of sampled hits are
+  answer-substitutable, collapsing raw hit rates of 51–60% to **1.1–2.2%**
+  quality-adjusted, and **thresholds do not transfer between embedding models**. →
+  applies to `memory/` today: any similarity cutoff tuned on one embedding model
+  is invalid after an embedding change, and `memory_search` has no re-calibration
+  step.
+- **[2608.17445](https://arxiv.org/abs/2608.17445)** — decomposition attacks under
+  unlinkable identities. **91 executable tasks, 11,393 capability-matched benign
+  requests**: under a 1% denial cap **all ten tested policies**, including a
+  privileged one with an exact request-to-operation map, either fail to stop
+  attacks or blow the budget; on unseen task families attack success is **≥99%
+  after one attempt**. → bounds what permission-store's unbuilt rule engine can
+  achieve: a stateless per-call gate is provably insufficient, and the Allow/Block
+  response is itself an oracle for the attacker.
+- **[2608.16246](https://arxiv.org/abs/2608.16246) CompoSkill** — skill composition
+  risk is a **path-level, not node-level** property: skills that each pass a
+  per-skill scanner form risky chains once an agent connects their outputs and
+  side effects. **1,140 records**, chain formation reaching **83.3% white-box /
+  80.6% black-box**. → bundle-store's `/resolve` composes skill sets by id, and
+  scanning members individually is exactly the assumption this breaks.
+  Complements the filed TRUSS (`2608.17588`), which inspects one artifact at a
+  time.
+- **[2608.16033](https://arxiv.org/abs/2608.16033) $R^3$-Bench** — six-problem
+  suites under a **shared** budget. Across **72 cells / six models** an offline
+  empirical oracle matches or exceeds the contest mean in all cells and is
+  strictly higher in 71; under moderate pressure even naive equal allocation beats
+  contest performance for four of six models. → models are bad at allocating a
+  shared budget across sub-tasks, which is precisely what inber's `spawn_agent`
+  fan-out asks them to do. **Equal allocation is a defensible default.**
+- **[2608.19653](https://arxiv.org/abs/2608.19653) DeltaML-Bench** — the keeper is
+  not the scaffolding gain but this: **specification gaming as high as 47.9% in
+  the Modular configurations and none observed in the ARG configurations** — the
+  scaffold, not the model, determined whether the agent cheated the evaluator. →
+  an integrity check belongs in `agent-bench`'s scoring, not only in the task.
+- **[2608.20274](https://arxiv.org/abs/2608.20274)** — **task-level skills mostly
+  push an agent *below* its own no-memory baseline; subtask-level skills raise it
+  above**, and text skills transfer better than code skills. Yields a skill-utility
+  score computable with no execution. → an offline pre-flight diagnostic for
+  skill-store/bundle-store, and a warning that a badly scoped skill is worse than
+  no skill.
+- **[2608.17534](https://arxiv.org/abs/2608.17534) ArborMem** — memory as a
+  navigable forest of interaction states: localize which prior state the current
+  turn *resumes* before retrieving. **+3.36–10.31 pp** over the strongest
+  baselines on three benchmarks, with the advantage **growing under constrained
+  read budgets**. → the branch-resumption framing maps directly onto `session/`
+  fork-and-resume, which inber has and its memory layer is unaware of.
+- **[2608.17713](https://arxiv.org/abs/2608.17713)** — two deterministic optimal
+  tracebacks disagree on temporal localization for **55.9% of 1,586 nonzero
+  trajectory pairs**. → whenever `agent-bench` aligns two runs to say where they
+  diverged, the alignment is a free parameter that can flip the conclusion.
+- **[2608.16295](https://arxiv.org/abs/2608.16295)** — 26 controlled patch tasks;
+  AST-bounded fingerprints classify 50 positive and 17 control changes correctly
+  where **static rule snapshots detect none of the 50 stale cases**. → the
+  staleness result is the one for `codeindex/`: a snapshot-based index cannot tell
+  you it has gone stale; an AST-bounded fingerprint can.
+- **[2608.17177](https://arxiv.org/abs/2608.17177)** — instructing an agent to
+  document pre-conditions, post-conditions and undefined behaviour before
+  generating tests: **+9.8 pp bug detection (p = 0.0352)** on production bugs. A
+  prompt-level intervention with a stated test on real bugs, rare in this window —
+  but note it is exactly the "documentation as scaffold" claim `2608.20195` finds
+  weak population-scale support for.
+- **[2608.16114](https://arxiv.org/abs/2608.16114) HyperSkill** — hypergraph skill
+  memory ranking skills by co-occurrence across retrieved trajectories, **+11.51
+  GAIA / +11.18 WebWalkerQA** over ten memory baselines. Filed for the retrieval
+  structure — co-occurrence ranking rather than flat embedding similarity — as a
+  plausible memory-store query change. No statistical test reported, so it stays
+  here.
+
+### 10. Screened and rejected
+
+- Position papers, demos and n=1: `2608.16411` (explicit "we argue"/"we
+  advocate", a checklist and an agenda), `2608.17195` (tool demo), `2608.17214`
+  (its own closing line: *"All measurements come from one system by one
+  author."*), `2608.16302` ("preliminary results", nine generated projects),
+  `2608.18645` ("weak but consistent signal", no effect size or n).
+- **No headline number stated at all** — standing filter: `2608.16742`,
+  `2608.19784`, `2608.16551`, `2608.16544`, `2608.16068`, `2608.18575`,
+  `2608.18490`.
+- `2608.16402` (policy algebra) is permission-store shaped and quotes 94.8%/86.9%/
+  98.6%, but states **no n, no benchmark and no test**, and self-describes the
+  evaluation as an interpretation. **Do not cite those numbers.**
+- Training/architecture, which inber neither does nor controls: `2608.19197`,
+  `2608.18524`, `2608.20314`, `2608.18171`, `2608.18261`, `2608.17310`,
+  `2608.19803`, `2608.18682`, `2608.17289`, `2608.19842`. Standing serving-stack
+  filter: `2608.16477`.
+- `2608.17829` LeakGauge — good result (**AUROC 0.944–0.996**, 10.34 ms) but it
+  reads **prefill token probabilities**, which inber cannot obtain over the
+  Anthropic Messages API. Unimplementable here rather than uninteresting.
+- `2608.16185` LENS — the headline metric is *worse* (62.4% EM vs ReAct's 65.2%);
+  only grounding improves. `2608.16621` — entire evidence base is a controlled
+  synthetic pilot. `2608.20167`, `2608.16022` — platform-specific with no
+  transferable claim. `2608.19266` — κ ≈ 0.20 with a 90% interval crossing zero.
+  `2608.19269` — self-described as "a localized non-implication witness, not a
+  prevalence estimate".
+- `2608.17275` (Web3 MCP survey) is rejected as a survey, but one datapoint is
+  worth carrying: the share of deployed MCP tools that **modify external state
+  rose 27% → 65%**, while measured protections stop fewer than 30% of attacks and
+  model-level safety refuses fewer than 3%. That is the population tool-store's
+  `POST /provision` defaults are chosen against.
+- ~60 further ids screened and dropped as off-target despite keyword matches.
+
+### 11. Two cross-paper observations
+
+**Iterative refinement lost twice in one week, both under a matched budget, both
+to something simpler.** `2608.19626` finds equal-budget independent resampling
+beating mutation-based evolution by **6.01–18.83 points** once the oracle is
+audited, with a density-matched placebo showing no robust benefit from real
+feedback; `2608.19703` finds a quality-diversity archive **0.135% below** plain
+sequential editing over 1,008 matched jobs. Independently designed, different
+domains, same direction. With the already-filed `2608.18931` (reward models
+correlate ρ ≈ 0.12 with true quality) the corpus now holds **three separate
+results** saying inber should not spend its budget selecting among or refining
+candidates.
+
+**Three of this pass's six keeps are negative results, and that is the useful
+shape.** `2608.16190` says do not build a monitor ensemble; `2608.19760` says do
+not build LLM-judge step attribution; `2608.19626` says do not trust a self-graded
+refinement loop. Each names a feature that is the obvious next thing to build in
+`guard/` or `agent-bench`, and shows it does not work.

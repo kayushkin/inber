@@ -440,3 +440,63 @@ different blast radii, and this entry does not pick one.
   without limit; the same rule as the compaction-prompt entry of 2026-08-16, already filed.
 - **"Concise" output style, `/model` picker sizing, fullscreen renderer fallback, spellcheck** — CLI
   presentation, no analogue.
+
+## Harness-watch — 2026-08-22 (CC 2.1.238–2.1.239): a transport-shape misdetection that silently doubles billing is a shipping-priority bug, and CC has converged on the delivery-route answer inber already had
+
+Both upstream commits in this window are CHANGELOG/feed-only —
+`8a8e81d0` (2026-08-20) carries **2.1.238**, `16440d0f` (2026-08-21) carries
+**2.1.239**. Three items have a real invariant behind them.
+
+**1. A misdetected transport shape that silently re-runs the turn (2.1.239).**
+CC fixed "Bedrock streaming behind proxies that strip the response Content-Type
+header, which silently doubled billed API calls by re-running every turn
+non-streaming." The point is not Bedrock; it is that a *guess* about response
+shape, wrong in a way nothing surfaces, doubles the bill for every turn.
+
+inber's structural twin is live and already recorded — this is new upstream
+evidence for it, not a new finding. `engine/turn_execute.go:45-50` re-runs the
+**entire turn** when `apiutil.IsThinkingSignatureError(err)`, and that predicate's
+complete body is `msg == "Error"` (`internal/apiutil/apiutil.go:6-13`): a
+string-equality guess against the bare word "Error" that triggers a full duplicate
+billed turn *and* destroys all thinking in the conversation. Recorded at
+`goose.md:535,1072`. **What inber should consider:** hang this citation on that
+existing item rather than opening a new one — what it adds is that a major harness
+treated exactly this failure mode as ship-blocking, which is the argument for
+raising its priority rather than its novelty.
+
+**2. Delivery that reports refusal instead of silent success (2.1.238).** Two
+entries: sending to a session that refuses inbound messages "now reports 'refused'
+to the sender instead of a silent success", and a session whose inbox drops
+messages to a rate limit or a full queue "now tells your session, instead of the
+messages vanishing silently."
+
+**inber is ahead here and it is worth saying so.** `Session.deliver`
+(`server/session.go:302-314`) returns a `DeliveryRoute` and its own comment states
+there is "deliberately no route that means lost" — a message that cannot go
+mid-turn falls back to the pending queue rather than disappearing. The two places
+inber still genuinely drops are already documented:
+`server/spawn_delivery.go:47-51` (parent gone) and `bus/client.go:70-75` (full
+channel), at `agentic-design-patterns.md:2610,2633`. Nothing to import; a
+convergence to record.
+
+**3. Releasing subagent tool results once they leave the display window
+(2.1.238).** CC fixed "unbounded memory growth in long interactive sessions" this
+way. inber's `agent/read_cache.go:33` `files map[string]readEntry` is per-session
+and unbounded — entries leave only via `Invalidate` (`:82`) or `InvalidateAll`
+(`:96`), with no TTL and no size cap. **Not filed as a defect:** an entry is a path
+plus a line count, so the growth is kilobytes over a session, not the hundreds of
+megabytes CC was dealing with. Recorded as an idea, and as the shape to reach for
+if the cache ever starts holding content.
+
+### Screened, no inber surface
+
+- **2.1.239 "session titles disappearing after ~64KB"** is the `bufio.Scanner`
+  64KB default class, and inber's instance of it — `tools/mcp/client.go:155`
+  scanning `c.stdout` with no `.Buffer()`, while the repo's other three scanners
+  are all explicitly resized — is already at
+  `agentic-design-patterns.md:5077-5094`.
+- **2.1.239 "Esc with a prompt queued lets the next turn finish early"** touches
+  the same nerve as inber's unobservable `Error` status —
+  `server/session.go:177-179` sets `s.Status = Error` and the deferred function at
+  `:166-173` unconditionally overwrites it with `Idle` — already at
+  `cline.md:761-764`.

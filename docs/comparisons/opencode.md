@@ -621,3 +621,76 @@ are set at `server/spawn.go:226-227` and persisted by `recordChildSession`
 (`server/session_forking.go:81-85`), so the lineage a scope would be derived from already exists and is
 already durable. What does **not** exist is a decision input carrying it: the gate keys on the tool name
 (`guard/guard.go:165` switches on `tool`), so today it has no idea who asked.
+
+## Harness-watch — 2026-08-22: an unrecognized completion is not a successful one, and inber has a *second* route to that mistake that never reaches the finish-reason mapper at all
+
+[opencode #43892](https://github.com/sst/opencode/pull/43892) is a one-line diff in
+`session/prompt.ts` with a real invariant behind it. The loop-entry completion
+check listed only `["tool-calls"]` as "not finished", while the post-response path
+already treated `unknown` as unfinished. The two predicates disagreed, so a stream
+that ended without a recognized stop reason was persisted, read as complete on the
+next iteration, and the queued retry never ran.
+[#43813](https://github.com/sst/opencode/pull/43813) is the same class one layer
+down: `finish-step.rawFinishReason === "network_error"` had to be converted into a
+retryable error rather than flow through as an ordinary finish.
+**The rule: an unrecognized finish reason is not a successful completion, and
+every reader of it must agree.**
+
+The half of this inber already has is recorded — `mapOpenAIFinishReason`'s
+`default: return anthropic.StopReasonEndTurn` (`agent/openai_conversion.go:253`),
+at `cline.md:668-670` and `agentic-design-patterns.md:3859-3860`, assigned to todo
+`6b4a9ab5`. Chasing #43892's "two predicates disagreed" hypothesis turned up a
+**second and separate path to the same wrong conclusion that never calls
+`mapOpenAIFinishReason`**, and it is filed as todo `d30c5145`.
+
+`ConvertOpenAIResponseToAnthropic` opens with `if len(resp.Choices) == 0`
+(`agent/openai_conversion.go:190`) and returns a fabricated assistant message with
+**no `Content` field at all** and a hardcoded
+`StopReason: anthropic.StopReasonEndTurn` (`:200`) — returning before `choice` is
+ever read, so the finish-reason mapper is not consulted. `agent/openai.go:73`
+rejects only a non-200 status, and OpenAI-compatible proxies answer **HTTP 200
+with an empty `choices` array** on a filtered, aborted or upstream-failed
+generation. `engine/turn_openai.go:105` then appends that message to `e.Messages`
+*before* the stop-reason branch, `:107-114` iterates zero content blocks and
+returns `result, nil`, and `:86-87` still counts the tokens. A billed provider
+failure is recorded as a clean empty turn, and `:177`'s `unexpected stop reason`
+branch — the one place that could have caught it — is unreachable because the
+adapter already answered `end_turn`.
+
+Two details sharpen it. First, the repair **exists**:
+`conversation.RepairEmptyContent` (`conversation/repair.go:131-146`) drops exactly
+this message, but its three callers (`session/resume.go:131`,
+`server/session_creation.go:148`, `engine/engine_new.go:177`) are all rebuild or
+resume paths and none is the live turn loop — so the message is persisted and only
+a later rebuild silently drops it, leaving the on-disk transcript and the rebuilt
+conversation disagreeing. Second, `FilterMessagesForAnthropic` guards this shape on
+the **user** branch (`if len(newBlocks) > 0`, `agent/openai_conversion.go:339-341`)
+and omits the identical guard on the **assistant** branch (`:320-326`), so inber
+both creates content-less assistant messages and preserves them across a provider
+switch — and Anthropic rejects empty content, making this a route to a 400 whose
+cause is several turns upstream.
+
+**What inber should consider:** classify the unrecognized outcome as an error at
+the adapter boundary rather than laundering it into a normal finish — the same fix
+shape as #43813. The decisions that go with it (error vs. a sentinel stop reason;
+whether an empty-choices response is retryable, given that a content filter and a
+dead upstream both produce it and want opposite handling; and whether the missing
+`:320` guard rides along, since it changes what a provider switch does to an
+existing transcript) are on the todo and should not be picked unattended.
+
+### Also checked this window, nothing to import
+
+- **[#43821](https://github.com/sst/opencode/pull/43821)** fails the parent's Task
+  tool if *any* tool inside the subagent errored, even when the subagent recovered
+  and returned good text. That is over-strict — a subagent handling its own tool
+  failure is correct behaviour — and inber's `SpawnResult`
+  (`server/spawn.go:109-127`) already carries `Status` plus `Error` to the parent,
+  which is the right granularity.
+- **[#43915](https://github.com/sst/opencode/pull/43915)** turns `textVerbosity`
+  injection from a denylist into an allowlist. The general rule is sound —
+  provider-specific params need an allowlist of providers known to implement them,
+  not a denylist of known-bad ones — but `OpenAIRequest`
+  (`agent/openai_types.go:39-46`) has no verbosity or reasoning fields, so there is
+  no inber surface today.
+- **[#43675](https://github.com/sst/opencode/pull/43675)** is already recorded at
+  line 598 of this file.
