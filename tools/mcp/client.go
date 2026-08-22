@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"sync"
 	"time"
 
@@ -435,6 +436,11 @@ func (c *Client) ListTools() []ToolInfo {
 	for _, tool := range c.tools {
 		tools = append(tools, tool)
 	}
+	// The tools are held in a map, so ranging it yields a different order on
+	// every call. That order is what reaches the model, and the last tool in
+	// the array anchors the prompt cache breakpoint, so sort by name to make
+	// the same server produce the same list twice.
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 	return tools
 }
 
