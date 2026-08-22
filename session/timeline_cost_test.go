@@ -91,8 +91,12 @@ func TestCostDependsOnWhichModelRan(t *testing.T) {
 }
 
 // TestCachedCostDependsOnWhichModelRan is the same assertion for the call the
-// server actually makes. All four server call sites use the cache-aware
-// function, so pinning only the plain one would leave the live path uncovered.
+// server actually makes. Every live path prices through the cache-aware
+// function: five call sites in the inber-server process (engine/turn_postprocess.go
+// twice, server/server.go twice, server/spawn.go once) and three more in this
+// package. Pinning only the plain one would leave all of them uncovered — the
+// only caller left for CalcCost is DisplayStats, which nothing in this repo
+// calls.
 func TestCachedCostDependsOnWhichModelRan(t *testing.T) {
 	store := registryWithTwoDifferentlyPricedModels(t)
 
