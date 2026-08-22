@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/kayushkin/inber/agent"
 )
@@ -70,11 +71,32 @@ func (r *MCPToolRegistry) AddClient(name string, client MCPClient) {
 	r.clients[name] = client
 }
 
-// GetAllTools returns all tools from all registered MCP clients as agent.Tool slice
+// clientNamesInOrder returns the registered client names sorted by name.
+//
+// Every method below walks the clients and folds their tools into one answer.
+// Ranging the map directly would make that answer depend on Go's per-range map
+// order: the tool list would come back in a different order on each call, and a
+// name offered by two clients would resolve to a different one each time. Tool
+// order is not cosmetic here — it is the order the tools reach the model, and
+// the last definition in the array is what anchors the prompt cache breakpoint.
+// Sorting by client name makes all of that reproducible.
+func (r *MCPToolRegistry) clientNamesInOrder() []string {
+	names := make([]string, 0, len(r.clients))
+	for name := range r.clients {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// GetAllTools returns all tools from all registered MCP clients as agent.Tool
+// slice, walking the clients in name order and keeping each client's own tool
+// order within its own block.
 func (r *MCPToolRegistry) GetAllTools() []agent.Tool {
 	var tools []agent.Tool
-	
-	for _, client := range r.clients {
+
+	for _, clientName := range r.clientNamesInOrder() {
+		client := r.clients[clientName]
 		for _, toolInfo := range client.ListTools() {
 			adapter := &MCPToolAdapter{
 				name:   toolInfo.Name,
@@ -84,13 +106,19 @@ func (r *MCPToolRegistry) GetAllTools() []agent.Tool {
 			tools = append(tools, adapter.ToAgentTool())
 		}
 	}
-	
+
 	return tools
 }
 
-// GetTool returns a specific tool by name from any registered client
+// GetTool returns a specific tool by name from any registered client. When more
+// than one client offers the name, the first client in name order answers.
+//
+// Whether a duplicate name should be an error at all is an open question on
+// noteboard card e2d0b07b and is deliberately not decided here; this only makes
+// the answer the same on every call.
 func (r *MCPToolRegistry) GetTool(name string) *agent.Tool {
-	for _, client := range r.clients {
+	for _, clientName := range r.clientNamesInOrder() {
+		client := r.clients[clientName]
 		if client.HasTool(name) {
 			adapter, err := NewMCPToolAdapter(client, name)
 			if err == nil {
@@ -102,15 +130,16 @@ func (r *MCPToolRegistry) GetTool(name string) *agent.Tool {
 	return nil
 }
 
-// Close shuts down all MCP clients
+// Close shuts down all MCP clients and reports the first error, walking the
+// clients in name order so the same broken state names the same cause.
 func (r *MCPToolRegistry) Close() error {
 	var firstErr error
-	
-	for _, client := range r.clients {
-		if err := client.Close(); err != nil && firstErr == nil {
+
+	for _, clientName := range r.clientNamesInOrder() {
+		if err := r.clients[clientName].Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	
+
 	return firstErr
 }
