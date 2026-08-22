@@ -50,7 +50,7 @@ system-06-fc030247 (0.6, tags: context-memory,decision).md    (~900 tokens)
 - Complex queries (50+ words): 50K tokens → min_importance=0.3
 
 **MaxChunkSize filter:**
-- Memories > 3000 tokens are **skipped** (use `repo_map()` or `read_file()` instead)
+- Memories > 3000 tokens are **skipped** (use `repo_map()` or `read_files()` instead)
 - This prevents 10K token repo maps from eating the context budget
 
 ### 3. What Gets Excluded
@@ -175,7 +175,7 @@ Use `repo_map()` tool instead of auto-loading.
 
 **Cause:** Files are lazy-loaded (summary only, 50 tokens).
 
-**Solution:** Use `read_file()` tool to load full content on-demand. This is by design - files change frequently, storing full content would go stale.
+**Solution:** Use `read_files()` tool to load full content on-demand. This is by design - files change frequently, storing full content would go stale.
 
 ### Issue: Important memory not loading
 
@@ -217,7 +217,7 @@ Use `repo_map()` tool instead of auto-loading.
 - User context
 
 **Tools** (lazy-load on-demand):
-- File contents (use `read_file()`)
+- File contents (use `read_files()`)
 - Repo structure (use `repo_map()`)
 - Recent changes (use `recent_files()`)
 - Large documents (> 3K tokens)
