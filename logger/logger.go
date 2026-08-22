@@ -248,6 +248,26 @@ func mergeFields(fields ...map[string]interface{}) map[string]interface{} {
 // Global logger instance
 var defaultLogger = New(InfoLevel)
 
+// SetDefaultLogger installs l as the logger behind the package-level Debug,
+// Info, Warn, Error, WithContext and WithComponent functions, and returns the
+// call that puts the previous one back.
+//
+// It exists so that a caller in another package can read what it logged. A log
+// line is the whole repair for a class of defect on this box — a divergence, a
+// discarded value, a failure that was survivable in silence — and a repair
+// nothing can observe is one no test holds. Pair it with NewWithWriter:
+//
+//	var buf bytes.Buffer
+//	defer logger.SetDefaultLogger(logger.NewWithWriter(&buf, logger.InfoLevel))()
+//
+// It swaps a package-level variable, so a test using it must not run in
+// parallel with another that logs.
+func SetDefaultLogger(l *Logger) (restore func()) {
+	previous := defaultLogger
+	defaultLogger = l
+	return func() { defaultLogger = previous }
+}
+
 // Package-level convenience functions that use the default logger
 
 // SetLevel sets the global logger level.
