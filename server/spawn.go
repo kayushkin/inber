@@ -99,6 +99,34 @@ func newSubagentEventForwarder(resolveParentStream func() func(StreamEvent), age
 	}
 }
 
+// spawnModelDivergence reports what a spawn should say about the model gap
+// between a parent and the child it is about to start, or nil when there is
+// nothing to say.
+//
+// It answers only "are these two the same, and where did the child's come
+// from". It does not choose between them: the child's model is resolved by the
+// caller before this is asked, and nothing here changes it.
+//
+// An unknown model on either side is not a divergence. A parent that has not
+// taken a turn yet has an empty live model, and an agent config that names no
+// model leaves the choice to the engine's own default — in both cases the two
+// values cannot be compared, and reporting a difference between a name and a
+// blank would be a claim this function cannot support.
+func spawnModelDivergence(parentLiveModel, childModel, requestedModel string) map[string]interface{} {
+	if parentLiveModel == "" || childModel == "" || parentLiveModel == childModel {
+		return nil
+	}
+	source := "agent config"
+	if requestedModel != "" {
+		source = "spawn request"
+	}
+	return map[string]interface{}{
+		"parent_model":       parentLiveModel,
+		"child_model":        childModel,
+		"child_model_source": source,
+	}
+}
+
 // SpawnResponse is returned immediately when a sub-agent is accepted.
 type SpawnResponse struct {
 	Status   string `json:"status"`
@@ -173,6 +201,35 @@ func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, e
 	}
 	if req.Model != "" {
 		ac.Model = req.Model
+	}
+
+	// Say so when the child will not run on the model its parent is running on.
+	//
+	// A parent's model moves at runtime — SetModel from a config POST, and
+	// turn_execute.go writing back the model a failover actually selected — and
+	// the spawn path resolves the child's from the agent's stored config
+	// instead. Which of the three (req.Model, the parent's live model, the
+	// stored config) should win is noteboard todo 2dcdb9a6 and is deliberately
+	// not answered here: a differently-named delegate exists because it has its
+	// own role, and inheriting an escalation would spend the parent's rate on
+	// work the config scoped cheaper. What is not open is the silence. A user
+	// who escalates a parent and then delegates gets a child on the configured
+	// default with nothing recording the difference.
+	//
+	// The parent's model is read under parent.mu because that is the lock
+	// handleBridgeConfig holds across SetModel, and it is the convention
+	// forkSession already follows for reading a parent's live engine from this
+	// same path.
+	parent.mu.Lock()
+	parentLiveModel := ""
+	if parent.Engine != nil {
+		parentLiveModel = parent.Engine.Model
+	}
+	parent.mu.Unlock()
+	if fields := spawnModelDivergence(parentLiveModel, ac.Model, req.Model); fields != nil {
+		fields["parent_key"] = req.ParentKey
+		fields["agent"] = req.Agent
+		logger.WithComponent("spawn").Info("child model differs from its parent's live model", fields)
 	}
 
 	// Mint the child's session key, and hold it until the child is in the
