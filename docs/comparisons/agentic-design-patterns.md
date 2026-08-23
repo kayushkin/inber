@@ -5890,3 +5890,260 @@ model unclassified; `spawn_agent` is a door out of the Assist gate),
 `092e3ca8` (a sideband rider that can shell — `sideband:done` is gated under a
 name `isDangerous` has never been taught, so Assist runs the project's build
 command with no approval), and `83e084f8` (the empty tool allowlist above).
+
+---
+
+# Harness-watch — 2026-08-23
+
+Swept openai/codex, cline/cline, block/goose, sst/opencode and truffle-ai/dexto
+for 2026-08-16..23. anthropics/claude-code carried only CHANGELOG/feed commits;
+Aider-AI/aider and RooCodeInc/Roo-Code had no commits in the window.
+
+Every inber claim below was read in the Go source this sweep. **Three findings
+were filed as todos** (`b8a9c658`, `5a565d77`, `2e61fdf1`); **four more were
+verified and held back** under the three-per-run cap and are recorded in §6 so
+the next run starts at the code and not at the search.
+
+## 1. A correction, and the rule it implies
+
+The 2026-08-22 entry's §5 table cites `tools/mcp/client.go:96` and `:469` as an
+inber site for the process-group-kill gap. **`tools/mcp` has zero importers** —
+`rg 'tools/mcp' --type go .` returns nothing outside the package. This same doc
+states that correctly at line ~5093 ("Not filed, because it is not live"), so
+the table row is inconsistent with the caveat rather than wrong, but a reader who
+stops at the table gets a live-looking site that cannot execute. Confirmed twice
+independently this sweep, and again by the codex reviewer.
+
+**Standing rule: nothing is filed against `tools/mcp` while it has no importers.**
+Delete-or-wire is open as `e29c5c62`. That also disqualifies four otherwise
+relevant upstream MCP changes this window ([codex #40068](https://github.com/openai/codex/pull/40068),
+[#39952](https://github.com/openai/codex/pull/39952), [#39941](https://github.com/openai/codex/pull/39941),
+[#39962](https://github.com/openai/codex/pull/39962)) — they have no landing site.
+
+The same test retired [cline #13476](https://github.com/cline/cline/pull/13476)'s
+inber counterpart before it was written. #13476 is the sequel to #13465: the
+guard added in #13465 **never executed** in the real extension flow, because the
+live path went through a different layer. Measured here:
+`sqlite3 ~/.config/agent-store/agents.db "select count(*) from agent_tools"`
+returns **0**, so `e.AgentConfig.Tools` is empty for every agent on this host and
+`engine/build_tools.go:20` always takes the `buildDefaultTools()` branch. **A
+guard added at `engine/build_tools.go:16` — which is what open todo `83e084f8`
+proposes — would execute for nobody.** Whoever takes `83e084f8` should confirm
+which branch is live first; that is #13476's whole lesson.
+
+## 2. Filed: the pid guard kills processes inber does not own
+
+[cline #13468](https://github.com/cline/cline/pull/13468) adds hub drain/upgrade
+with an OS-backed exclusive singleton lock taken *before any resource exists*,
+and drain-first, verify-before-kill retirement: ask the incumbent to drain,
+request authenticated shutdown, wait for it to retire, and fall back to SIGTERM
+only if it is still alive *and* the recorded pid is verified alive right now —
+"guards against PID reuse killing an unrelated process". Its invariant is the
+inverse of inber's: a process that cannot acquire the lock "can never win by
+killing the incumbent."
+
+inber's `isInberServe` (`server/pidfile.go:83-89`) is
+`strings.Contains(cmdline, "inber") && strings.Contains(cmdline, "serve")`, and
+it is the only check between the pid in `~/.inber/server/inber.pid` and SIGTERM
+(`:43`) then SIGKILL (`:58`). **Measured live during this sweep: two processes
+matched — the real `inber-server`, and an ordinary `/bin/bash -c` shell** whose
+argv merely mentioned the repo path and the word `serve`. An earlier measurement
+in the same run caught three. `Release()` is a `defer`
+(`cmd/inber-server/main.go:102`), so any unclean exit leaves a stale pid, and
+Linux recycles pids.
+
+- **What inber should consider:** filed as `b8a9c658`. The fix must decide what
+  identity *is* — a held `flock`, a pid qualified by `/proc/N/stat` start-time,
+  or an authenticated shutdown RPC — and they differ on whether a **hung**
+  incumbent can still be displaced, which is the case the current code was
+  written for. The drain half is already open as `2a7831d5`; this is the other
+  half, the wrong victim rather than the lost work.
+
+## 3. Filed: the spend cap is fed only by turns that succeeded
+
+[codex #39981](https://github.com/openai/codex/pull/39981)'s sharp half is not
+its headline but this: *"Count thread lookup failures as failed scoring attempts
+so stale scores cannot continue approving later tool calls."* An error path that
+simply returns leaves the last good value in force; the fix makes failure
+advance the counter in the conservative direction.
+[#40038](https://github.com/openai/codex/pull/40038) supplies the other half —
+"stopped" and "finished" are different facts, and the stopped one must still flush.
+
+`engine/engine.go:280` gates `postProcessResult` on `result.Text != ""`.
+`postProcessResult` is the only caller of `recordTurnUsage`
+(`engine/turn_postprocess.go:79`), the only caller of `Guard.RecordCost`.
+`result.Text` is filled only in the terminal branch at `agent/agent.go:415-419`,
+while `processResponse` accumulates tokens on **every** round trip
+(`agent/agent.go:409`). A turn that dies mid-flight therefore carries real billed
+tokens and empty text, and is not charged. `server/server.go:371-376` writes that
+same cost into the SQLite `requests` row anyway. **The DB bills it and the guard
+does not**, and `guard/state.go:113-117` restores from the record, so the
+divergence is permanent.
+
+The comment at `engine/turn_postprocess.go:75-78` asserts the exact property the
+gate violates — *"a turn that fails part-way through still reaches this function
+... Charging only the turns that finished would let a session that keeps erroring
+run past its cap without limit."*
+
+- **What inber should consider:** filed as `5a565d77`. The decision is whether
+  `result.Text != ""` stands for *"did anything happen"* (then the predicate is
+  `result.InputTokens > 0` and usage accounting splits out of `postProcessResult`
+  to run unconditionally) or *"should we persist"* (then the money half and the
+  transcript half must stop sharing one `if`). Splitting them changes what runs
+  on every error path in the engine.
+
+## 4. Filed: invisible characters, and the site the last entry named is dead
+
+[goose #11453](https://github.com/block/goose/pull/11453) strips the Unicode tag
+block at the shared provider-message conversion boundary — one chokepoint, not
+per producer, the same argument `redact/redact.go:10-16` already makes for egress
+redaction.
+
+inber has none: `rg 'E0000|E007F|0xE00|TagBlock|StripTags'` over 355 Go files
+returns nothing. The live ingress sites are `agent/agent_run.go:421`,
+`engine/turn_openai.go:158` and `session/resume.go:122`. The sharpest evidence
+that this is an omission rather than a decision: **inber already sanitizes the
+tool _id_ on this exact path** — `internal/toolid/toolid.go:24`, called at
+`session/resume.go:105` and `:122` — and `:122` is the same line that passes
+`tr.Content` through untouched.
+
+- **What inber should consider:** filed as `2e61fdf1`, closing a loop the
+  2026-08-22 entry explicitly left for this run. **That entry aimed the fix at
+  the MCP boundary; per §1 that site is dead.** The decision is *where* — egress
+  (`agent/redaction.go:58,64` already sees every outbound byte, but protects the
+  provider and not inber's own summarizer, compaction, or the human reading
+  `session.jsonl`) versus ingress at the three sites — and *what* "handle" means,
+  since silent stripping corrupts a file that legitimately contains tag
+  characters and refusal turns a hostile file into a denial of service.
+
+## 5. Ideas worth taking, no defect attached
+
+| Upstream | What landed | Where it would go in inber |
+|---|---|---|
+| [codex #40174](https://github.com/openai/codex/pull/40174) / [#40177](https://github.com/openai/codex/pull/40177) / [#40180](https://github.com/openai/codex/pull/40180) | Classification travels *with* the rendered fragment to the API boundary — `ContentItemKind` as an open-ended string, unknown values preserved, malformed treated as absent; every contextual fragment must supply a stable `<feature>.<name>` kind | inber's producers already mint stable ids and the consumer discards them one hop later: `server/session_context.go:92-94` returns `NamedBlock{ID: "agent-fleet"}`, `:134-136` `{ID: "server-sessions"}`, then `engine/turn_prompt.go:140-148` keeps only `.Text` and `:153` flattens everything into one `"[Context]\n"` blob, inserted unlabelled into the last user message at `agent/agent_run.go:99-117`. Make `NamedBlock` (`session/prompts.go:8`) the rendered fragment and carry `ID` through. Distinct channel from the filed injection-principal defect `ceedbf75`, and cheaper because the ids already exist |
+| [codex #40161](https://github.com/openai/codex/pull/40161) / [#40150](https://github.com/openai/codex/pull/40150) | `--thread-source` set at creation, never overridden on resume; the classifier then reads it and *deletes* the two ad-hoc booleans it replaces | `server/store.go:246-255` already writes a `kind` at creation with `ON CONFLICT DO UPDATE SET last_active` only — upstream's set-once semantics for free. Three values are written (`"main"`, `"spawn"`, `"fork"`) and the only reader is a list scan at `server/store.go:450`. No gate, prompt or limit consults it. It is the natural key for the permission floor open todo `9e31d359` needs. The type comment at `server/store.go:222` still says `"main" \| "spawn"` and is already stale |
+| [codex #40021](https://github.com/openai/codex/pull/40021) | The tool call's cancellation token propagates *into* the approval review, so interrupting a tool aborts its pending review | `agent/agent.go:110` declares `ToolRefusal func(tool, input string) string` — no `context.Context` — and `agent/chain.go:388-394` calls it inside a loop that has `ctx` in scope. Latent today (nothing sets `ApprovalFunc`, per `engine/build_hooks.go:85-88`), but `guard/guard.go:115-118` anticipates an approver that "blocks on a person". Adding `ctx` is two lines now and a breaking change once an approver exists |
+| [goose #11425](https://github.com/block/goose/pull/11425) | The visibility predicate must be applied to *every* catalog derived from the tool list, before hashing/registration — not just the inference one | inber's one derived catalog is prose, not schema: `loadToolsIntoMemory` (`engine/engine_new.go:409-435`, called once at `:629`) writes every tool name and description into memory-store as an `AlwaysLoad`, truncation-exempt memory. See §6 — this one *is* a live defect, held back only by the cap |
+| [opencode #43657](https://github.com/sst/opencode/pull/43657) | A child failure travels up carrying **both** the provider message and the resumable `task_id`, so the parent can tell failure from empty completion and resume rather than repeat | `server/spawn_delivery.go:46-81` already does this correctly for the parent. The sibling path does not — see §6 |
+| [goose #11366](https://github.com/block/goose/pull/11366) | Stop hooks must inspect the same complete user-visible response the user saw — walk back over the run of assistant messages, not `conversation.last()` | A harness has two representations of "the answer" and they drift because only the streamed one is looked at. inber has exactly this split — see §6 |
+
+## 6. Held back — verified, not filed, because this run hit its three-todo cap
+
+**Four defects were confirmed in the Go source and deliberately not filed.** Each
+has a file:line and a decision; none should be re-derived from scratch.
+
+**(a) A disabled tool keeps being described to the model every turn.**
+`loadToolsIntoMemory` (`engine/engine_new.go:409-435`) is called once at
+construction (`:629`) with `e.agentTools`, and memory-store renders it into prose
+saved as `Memory{ID: "tool-registry", Importance: 0.9, AlwaysLoad: true}`.
+`memory/auto_context.go:101` sets `IncludeAlwaysLoad: true`, and AlwaysLoad
+memories are placed first and exempted from truncation. `SetDisabledTools`
+(`engine/engine.go:363-369` → `applyDisabledTools` `:427-445`) rewrites
+`agentTools` and never touches that memory — and it is reachable live over HTTP
+at `server/api_bridge.go:721-723`, long after `:629` ran. So an operator who
+disables `shell_commands` on a live session leaves a system-authored,
+always-loaded, un-truncatable block telling the model it has that tool, while
+`EnabledToolNames()` (`engine/engine.go:395-401`) reports the disable complete.
+The model calls it and gets an unknown-tool error from `agent/chain.go:400`,
+which drives `Turn.ConsecutiveErrors`. **Not a security bypass — execution is
+genuinely blocked** — but a correctness and cost defect that reports success.
+Secondary: the id is the fixed string `"tool-registry"` and the store is
+per-agent, so two concurrent sessions of one agent with different disabled sets
+overwrite each other, last writer wins. `e.workspace.WriteToolsList`
+(`engine/engine_new.go:633-640`) is stale the same way.
+**Decides:** refresh the memory on every `applyDisabledTools` (correct, but it
+rewrites an AlwaysLoad block and therefore the cached system prefix on every
+config call — `agent/agent.go:555` anchors `cache_control` in that region), or
+drop the registry memory entirely and let the wire tools array be the single
+source of truth (cheaper, implied by the `allTools`/`agentTools` split, but needs
+an answer for the "Important guidelines" prose bundled into the same memory).
+
+**(b) The read cache records a file as complete *before* inber's own truncation
+cuts it out of the transcript, then blocks the read that would recover it.**
+In one dispatch iteration in `agent/agent_run.go`: `:383-388` records
+`RecordFullRead(path, lines)` from `outcome.primaryOutput`, parsing tool-store's
+`[complete file — N lines]` footer off the **untruncated** output; `:415-419`
+then runs `hooks.ModifyToolResult` → `Session.TruncateToolResult` →
+`session/truncate.go:58` at a threshold of **1000 estimated tokens** (`:44-49`,
+`len/4`, so ~4KB), keeping 500 head + 200 tail; `:421` puts the **truncated**
+text in the transcript. The cache entry now asserts something the transcript does
+not contain, and a later read is answered with
+`[already in context — N lines, read earlier this turn]`
+(`agent/read_cache.go:104-112`) — including the partial re-read
+(`agent/agent_run.go:332-338`) that the truncation banner just told the model to
+make. tool-store returns "complete" up to 100KB/~550 lines; inber truncates at
+~4KB, so most real source files land in the gap, and `session/truncate.go:21-27`
+documents that the recoverable-ref option was deliberately removed from this
+path. `agent/read_cache_contract_test.go:14-25` names this exact hazard, but its
+three tests only exercise **tool-store's** truncation — here the footer is
+truthful and inber's own downstream rewrite is what invalidates the record.
+Exposed by [codex #40013](https://github.com/openai/codex/pull/40013)
+("invalidate retained evidence after conversation history rewrites").
+**Decides:** whether "in context" means *the tool returned it* or *the transcript
+still holds it*. Moving `RecordFullRead` below `ModifyToolResult` makes the cache
+honest and drops most of its hit rate; teaching the stub to carry the truncation
+keeps the savings but couples `agent/` to what `session/` did to its output.
+
+**(c) The prose the user watched arrive in a tool-using turn is recorded
+nowhere.** `agent/agent.go:415-420` writes `result.Text` only in the terminal
+branch; the `tool_use` branch at `:425-437` writes nothing, and `processResponse`
+(`agent/agent_run.go:263-299`) accumulates usage and `Thinking` (`:291-298`) but
+never text. So for a message containing `[text, tool_use]`, the text reaches
+`hooks.OnTextDelta` and nothing else — and `OnTextDelta` is display-only:
+`Session.Hooks()` (`session/session.go:289-306`) wires `OnRequest`, `OnThinking`,
+`OnToolCall`, `OnToolResult` and **not** `OnTextDelta`, while
+`engine/build_hooks.go:133-137` routes it solely to display. Everything
+downstream of `result.Text` therefore records only the last API call's text:
+`session.jsonl` assistant entries, `CompleteRequest` (`server/server.go:401`),
+and `summary = result.Text` → the whole spawn handoff (`server/spawn.go:323`).
+Thinking, by contrast, is logged in full. The conversation itself keeps the prose
+(`resp.ToParam()` at `agent/agent.go:412`), so this is a record/replay asymmetry
+rather than loss from the model's view — but an operator reading the transcript,
+and a parent model reading a spawn summary, see the least of what was said.
+Exposed by [goose #11366](https://github.com/block/goose/pull/11366).
+**Decides:** whether `result.Text` becomes the turn's full user-visible prose
+(changing what `truncate(..., 1000)` bounds and what an injected spawn summary
+costs in context — already open at `goose.md:1438-1448`), or whether `Text` keeps
+its "final answer" meaning and a separate channel logs intermediate prose (which
+makes the JSONL line-per-delta unless buffered, and has to decide where it
+flushes).
+
+**(d) `updateMainSession` says "Completed" and drops the reason it failed.**
+`server/spawn_delivery.go:204-223` renders
+`"[Context update] Completed spawned task.\nTask: %s\nStatus: %s\nSummary: %s\nFull details available via memory_search."`
+and is called from `server/spawn.go:350` with four strings — no room for
+`errMsg`, which was computed at `:316`/`:319` and carried correctly into
+`SpawnResult.Error` at `:393`. When the child died before producing a result
+(`result == nil` at `:322`), `summary` is `""`, so the agent's main session gets
+"Completed ... Status: error Summary:" with no reason anywhere. Same omission in
+`saveSpawnToMemory` (`:167-201`, content string at `:172`) — which matters
+because that is the memory the closing sentence points at, making *"full details
+available via memory_search"* false in exactly the case where details matter.
+`deliverResult` (`:46-81`) gets this right, so the parent conversation and the
+agent's own main session disagree about the same spawn. Exposed by
+[opencode #43657](https://github.com/sst/opencode/pull/43657).
+**Decides:** whether `updateMainSession` widens to take the whole `SpawnResult`
+(it is called before `spawnResult` is constructed at `server/spawn.go:382`, so
+the call site moves), or whether the note is deliberately a pointer only — in
+which case the honest form drops "Completed" and names the child key so
+`steer_agent`/resume can reach it, which is #43657's actual contribution. Also
+open: whether `saveSpawnToMemory` should store the error at all, given
+`spawn:<key>` is upserted and a retry would overwrite it.
+
+## 7. Screened and rejected, with the reason
+
+- [codex #39957](https://github.com/openai/codex/pull/39957)/[#39958](https://github.com/openai/codex/pull/39958) (shell snapshots), [#39980](https://github.com/openai/codex/pull/39980) (network policy) — need a sandbox/exec layer inber does not own; `shell_commands` lives in tool-store.
+- [codex #40179](https://github.com/openai/codex/pull/40179) (shut down resumed descendants on archive) — increment is nil: `stop()`, `close()` and the reaper read `Session.Children` **not at all**, so there is no walk for idempotency to fix. Already established at line ~5796.
+- [goose #11342](https://github.com/block/goose/pull/11342), [#11193](https://github.com/block/goose/pull/11193), [#11398](https://github.com/block/goose/pull/11398), [#11304](https://github.com/block/goose/pull/11304) — no live surface: `tools.ScopeToRoot` (`tools/root.go:68-72`) *documents* non-confinement as a deliberate choice, and `codeindex/codeindex.go` is 88 lines with no graph traversal.
+- [goose #11381](https://github.com/block/goose/pull/11381) (suppress sensitive OTLP traces) — `trace/trace.go:106-119` is a stub whose `RecordTurn` only appends in memory and whose `WriteSummary` is a `TODO` returning nil. The redaction-scope point is already §3 of the 2026-08-22 entry.
+- [goose #11415](https://github.com/block/goose/pull/11415) (bind ACP permissions to request generations) — there is no approver to over-scope; `opencode.md:614`.
+- [cline #13418](https://github.com/cline/cline/pull/13418) — already at `cline.md:761-764`: `server/session.go:178` `s.Status = Error` is a dead store overwritten by the defer at `:168`. Re-read, still true, not re-filed.
+- [cline #13419](https://github.com/cline/cline/pull/13419) — `Turn.Counter` and `staged.FrozenIdx` **are** restored via `RestoreSession` (`engine/engine_new.go:670-691`), so `cline.md:249-282` is stale in inber's favour. Separately, `session.LoadMessages` (`session/resume.go:30-136`) has **zero non-test callers**, as does `LoadMessagesFromDir` (`:179`) — dead path, no finding. Worth a name sweep: `session.LoadMessages` and `(*Workspace).LoadMessages` are two different functions in one package with one name, and the comment at `session/workspace.go:29` credits the wrong one.
+- [dexto #907](https://github.com/truffle-ai/dexto/pull/907) — already at `dexto.md:354-358`.
+
+One increment to a documented item, too small for its own entry: §3 of the
+2026-08-22 entry names only tool *call arguments* as leaving by NATS/logstack/SSE.
+Tool **results** take the same door — `session/session_logging.go:98-106` puts raw
+output in `Entry.Content`, `session/session.go:265-272` fans every entry to
+`logstack.Log`, and `session/logstack.go:120-134` copies `Content` through for
+role `tool_result`. Relevant to [codex #39993](https://github.com/openai/codex/pull/39993).

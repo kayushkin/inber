@@ -3429,3 +3429,334 @@ shape.** `2608.16190` says do not build a monitor ensemble; `2608.19760` says do
 not build LLM-judge step attribution; `2608.19626` says do not trust a self-graded
 refinement loop. Each names a feature that is the obvious next thing to build in
 `guard/` or `agent-bench`, and shows it does not work.
+
+## Harness-watch — 2026-08-23
+
+Window 2026-07-24 → 2026-08-23. **505 arXiv ids** already logged across
+`docs/papers/*.md` and `docs/comparisons/*.md` were extracted and machine-checked
+against ~200 candidates from eight arXiv API sweeps (cs.SE/cs.AI/cs.CL/cs.CR
+plus keyword slices on tool use, harness, compaction, KV cache,
+permission/sandbox, memory, orchestration, spawn/handoff). Everything below is
+new to both directories.
+
+**The existing corpus is thorough** — 44 strong-looking hits were checked and
+found already logged, including `2608.19662` ReCache, `2608.19652` Evolving
+State, `2608.11242` Lost in Compaction, `2608.14838` Recall Trap, `2608.18351`
+Task-Conditioned Least-Privilege, `2608.16246` CompoSkill and `2608.17597`
+HarnessRisk. Non-arXiv sources were dry: **Anthropic's engineering blog has no
+July or August 2026 posts** (latest is April), and DeepMind/Meta/OpenAI research
+blogs surfaced no harness posts in the window.
+
+### 1. [arXiv:2608.15939](https://arxiv.org/abs/2608.15939) — clearing a rejected branch from the transcript does not un-do it, because the cache still attends to it
+
+The sharpest result of the window. Stateful agents assume that removing a
+rejected branch restores prior state; this fails whenever the serving session
+retains KV state across the logical abort — the model keeps attending to content
+the application believes it discarded. The authors formalize **rollback
+consistency** ("a complete abort must restore the state the model *attends*, not
+just the transcript") and isolate it with a same-token/different-cache audit that
+holds decision-step tokens identical and varies only whether the cached prefix is
+stale or rebuilt. Across seven open-weight families (3.8B–36B), retained KV alone
+**flips a typed protected effect in 25 of 63 audited cells**, with attacker tokens
+absent from the served request in all 63. Rebuilding the cache closes every cell.
+Reproduces under LangGraph time-travel and the default HF Transformers
+cache-reuse path.
+
+- **What inber should consider:** this sits exactly on the `guard/` × engine-cache
+  × `session/checkpoint` seam. When `guard.CheckTool` denies a call, when an
+  approval is refused, or when `session/checkpoint.go` rewinds or a session
+  forks, the cache prefix is part of the state being rolled back — not just the
+  `conversation` slice. `engine/prompt_blueprint.go` already computes per-block
+  hashes and predicted cache behaviour; extend it to assert a post-rollback
+  blueprint's cached prefix is not the aborted one, and add their
+  same-token/different-cache audit as a test. **Caveat, and it matters:** their
+  channel is a local KV store on self-hosted serving. inber's exposure is via
+  Anthropic `cache_control` breakpoints, which is a different mechanism —
+  verify the analogue holds before building on it.
+
+### 2. [arXiv:2608.14943](https://arxiv.org/abs/2608.14943) — four skill-loading strategies, measured cache-correctly, and no universal winner
+
+Compares Full, Skill Block, Reference and Hybrid loading across SearchQA,
+SpreadsheetBench, ALFWorld, ScienceWorld and SynthProc, measuring **cache-correct
+effective input** for multi-turn tasks rather than raw tokens. That is the
+methodological contribution: naive token counting rewards strategies that break
+the cache prefix. Hybrid cuts input 27.4% (SearchQA) and 39.8%
+(SpreadsheetBench); on large multi-turn skills Skill Block and Hybrid reach
+62.5%/52.8% (ScienceWorld) and 73.0%/66.6% (SynthProc). **ALFWorld gains little**
+because its procedures are short and needed every turn. Paired outcome tests
+found no quality difference, and the authors are explicit this does not establish
+equivalence.
+
+- **What inber should consider:** the decision rule — conditional loading pays
+  only when a large fraction of a skill goes unused per turn — is computable from
+  what `engine/prompt_blueprint.go` already knows (each block's size and cache
+  state). Measure inber's tool-schema and skill blocks against their metric
+  *before* adding progressive-disclosure machinery. The ALFWorld null is the case
+  that says don't bother, and inber's always-loaded tool registry is exactly that
+  shape.
+
+### 3. [arXiv:2607.28430](https://arxiv.org/abs/2607.28430) — subagents that only report at completion are leaving most of the gain on the table
+
+Argues the missing primitive is *mid-execution* communication: existing systems
+exchange only at phase boundaries via staged handoffs, so a discovery made
+mid-task cannot be shared until the next boundary. AgentRadio adds threads,
+messages, and **waiting for mentions** as a background task that surfaces peers'
+messages without interrupting foreground work. On SWE-Atlas QnA a single Claude
+Code agent (Opus 4.6) resolves 32.3%; four AgentRadio-organized agents resolve
+**62.1%** — and that beats Claude Code on the newer Opus 4.8 (57.2%). Rubric
+analysis shows the gain grows with task difficulty, consistent with mid-course
+correction as the mechanism.
+
+- **What inber should consider:** the largest measured delta in this batch, and
+  it names a capability `server/` spawn does not have — inber's
+  `MaxSpawnDepth`-bounded subagents return results only at completion, which this
+  says is what caps the score. A `bus/`-backed thread + mention channel with a
+  non-blocking "check mentions" step folded into `engine/turn_prepare.go` is the
+  concrete port. **Caveat:** measured on code *comprehension* QA, not patch
+  generation.
+
+### 4. [arXiv:2608.04719](https://arxiv.org/abs/2608.04719) — canary tools turn "picked the wrong tool" into a per-model profile, and capability tier does not predict safety
+
+Plants diagnostic probe tools in an MCP tool set, each engineered to trip one
+tool-selection weakness, under a six-type taxonomy (semantic decoys, parameter
+traps, **capability mirages**, prerequisite blindness, temporal decoys,
+granularity traps). 8 models × 120 tasks × 3 canary densities × 3 seeds = 8,640
+runs, plus a 2,880-run subtlety ablation, judged by a provider-independent judge
+corroborated by a second (κ = 0.75). Susceptibility spans ~36× across models, and
+**capability tier alone does not predict it** — the most susceptible hosted model
+is mid-tier, and within a provider the cheaper model can be safer. Capability
+mirages are the one type that reliably traps frontier models. Softening give-away
+phrasing leaves frontier susceptibility unchanged, evidence the probes measure
+reasoning rather than phrase-spotting. Susceptibility predicts task failure
+(ρ = −0.34).
+
+- **What inber should consider:** a ready-made eval for `tools/`. Add canary
+  tools to an `agent-bench` fixture registry to get a per-model tool-selection
+  profile before promoting a model in `engine/failover.go`. Test capability
+  mirages first — a tool whose *description overclaims* is the failure frontier
+  models actually fall for, and inber's descriptions are hand-written prose.
+
+### 5. [arXiv:2608.15108](https://arxiv.org/abs/2608.15108) — an allowed tool used to burn your budget is a threat model `guard/` does not have
+
+Identifies a class existing agent-security work misses: attackers induce the
+agent to **invoke, consume, transfer or control** high-value resources — compute,
+credentials, usage budgets, identities, private knowledge, comms channels — for
+the attacker's goals *without ever obtaining the resource or its credentials*.
+ResourceHijackBench covers 6 resource categories, 300 scenarios and 900 attack
+prompts, each run in an isolated environment that records **actual resource use**,
+so success is graded from behaviour and not from text. Undefended, OpenClaw
+reaches **84.06% average ASR** (69.98–89.58% across backends); the strongest
+evaluated defense still leaves **55.11%**.
+
+- **What inber should consider:** `guard/` gates on tool *identity* and mode
+  (Observe/Assist/Autonomous). This threat model is orthogonal — a permitted tool
+  used to consume a resource the task never declared. The concrete ask is a
+  resource-consumption dimension in `guard/state.go` beside the existing
+  MaxCost/MaxTokens limits: per-category caps and an approval route when a call
+  would spend credentials, money or outbound comms. Their measurement discipline
+  — grade the environment, not the response text — is also the right shape for an
+  inber guard test.
+
+### 6. [arXiv:2608.19013](https://arxiv.org/abs/2608.19013) — a harness update can break working behaviour with the model frozen
+
+Names the failure mode any harness with a writable memory or skill store has:
+because prompts, memories, tools, skills and routing rules jointly shape later
+execution, a harness update can regress previously reliable behaviour without
+touching weights — **harness-level forgetting**. Proposes *guarded harness
+evolution*, separating update generation from state commitment: a Continual
+Optimizer proposes candidates from post-execution feedback, and a Continual
+Evaluator commits only after checking current improvement, historical retention
+and validity. Relative gains >10% across textual reasoning, multimodal perception
+and open-world interaction; controlled sweeps show measurable forgetting and an
+adjustable stability–plasticity knob.
+
+- **What inber should consider:** `memory/` writes and `agent/registry` config
+  changes are commit-on-write today. The transferable piece is the propose/commit
+  split with a **historical-retention check** — replay a small held-out set of
+  previously-working behaviours before a memory write or config change lands.
+  Cheap version: keep a regression set in `agent-bench` and gate `memory/tools.go`
+  writes on it. See the cross-paper note below — this arrived three times this
+  window.
+
+### 7. Tier two — verified, narrower, one line each
+
+- [arXiv:2608.19861](https://arxiv.org/abs/2608.19861) **PolicyGuide** — action-local
+  checks cannot guide a multi-step procedure, so compliance fails by *omission*
+  (skipped confirmation) as much as by forbidden action. A proactive verifier at
+  **user-turn boundaries** reconciling open requests from persisted graph state
+  lifts mean Pass⁴ 0.42 → 0.62 on τ²-bench, largest on the most workflow-structured
+  domain (0.19 → 0.61). `guard/guard.go`'s `CheckTool` is exactly an action-local
+  check, and inber already has both the state surface (`session/guard_state.go`)
+  and the boundary (`engine/turn_postprocess.go`). Gains concentrate where the
+  domain is procedural; a coding harness may see less.
+- [arXiv:2608.17911](https://arxiv.org/abs/2608.17911) **CABLE** — memory-graph links
+  driven by semantic overlap **duplicate what the retriever already finds**. CABLE
+  generates antecedent-oriented queries, retrieves priors, **subtracts the direct
+  semantic neighbourhood**, verifies the remainder and keeps only survivors.
+  `memory/` is a vector store with exactly this blind spot; the subtract step is a
+  cheap add to the write path in `memory/memory.go`.
+- [arXiv:2608.15755](https://arxiv.org/abs/2608.15755) **IDSS** — training-free
+  situation state that parses *tool returns* into provenance-aware entities and
+  tracks constraint satisfaction, so the agent stops re-inferring from raw traces.
+  Fits `conversation/manage_tool_pruning.go`: keep a distilled situation block and
+  prune the raw tool results behind it, rather than summarizing prose in
+  `conversation/summarize.go`.
+- [arXiv:2608.16002](https://arxiv.org/abs/2608.16002) **RUPA** — local uncertainty
+  signals miss failures whose cause originates several steps earlier; propagating
+  uncertainty over a trajectory graph enables earlier failure detection. A
+  candidate escalation signal for `guard/` and `engine/failover.go`. **Caveat:**
+  needs logprob-adjacent signals — check what survives the Anthropic Messages API
+  first, the same reason `2608.17829` LeakGauge was rejected earlier.
+- [arXiv:2608.09732](https://arxiv.org/abs/2608.09732) **ColluSkill/ChainGuard** —
+  scanners inspect skills individually, so intent split across separately-packaged,
+  locally-plausible skills passes every check: **96.0% ASR across six scanners**.
+  ChainGuard scans a candidate *jointly with what is already installed*, dropping
+  ASR to 22.5% at 99.5% benign pass. Admission in `tools/` and skill-store must be
+  environment-conditioned.
+- [arXiv:2608.14668](https://arxiv.org/abs/2608.14668) **BRA-Audit** — frames the
+  guard-cost dilemma as audit-point placement under a fixed budget, minimizing
+  cumulative unchecked exposure. Near clean-setting performance at **17.2–40.6%
+  lower end-to-end tokens**. `guard/` checks every call uniformly; "cumulative
+  unchecked exposure" is a usable metric for when to spend an expensive
+  verification, and trusted audit points map onto `session/checkpoint.go`.
+- [arXiv:2608.15565](https://arxiv.org/abs/2608.15565) **AdmitOR** — the negative
+  result is the value: admitting every executable candidate **poisons roughly one
+  admission in four**. Calibrated cross-family behavioural agreement raises
+  admission precision to 0.927 vs 0.871 (majority vote) and 0.726 (execution
+  success). Unusually honest: their preregistered false-discovery criterion held on
+  calibration data but **not** on the wild stream. Directly about `memory/`'s write
+  path — "it ran without error" is the weakest possible gate.
+- [arXiv:2608.06153](https://arxiv.org/abs/2608.06153) **GSE** — skill evolution as
+  local edits overfits; a Skill Relation Graph plus **replay-driven verification to
+  prevent behavioral regressions** gives precision +6.1–34.1% and recall
+  +31.8–180.0% on test generation. Third independent arrival of the guarded-commit
+  shape.
+- [arXiv:2608.17587](https://arxiv.org/abs/2608.17587) — buried in an RL paper's
+  intro: **agent-authored skills perform 8–11 points worse than using no skill at
+  all**, while expert-written ones help. Following procedural guidance and
+  improving it from execution evidence are distinct capabilities. The method needs
+  training and is out of scope; the baseline number is a direct warning against
+  letting an inber agent write its own skills unsupervised. Consistent with the
+  corpus's existing "self-refinement doesn't buy quality" cluster.
+- [arXiv:2608.17034](https://arxiv.org/abs/2608.17034) **SLAaaT** — switching LoRA
+  adapters mid-trace instead of spawning subagents solves 4 of the hardest tasks
+  versus none, at **46.1× fewer tokens** in some scenarios. The mechanism is
+  unavailable over the Anthropic API; the actionable content is the *comparison
+  baseline* — subagent spawn is being measured as a very costly way to compose
+  capabilities. **Two synthetic tasks; treat 46.1× as an existence proof.**
+- [arXiv:2608.15834](https://arxiv.org/abs/2608.15834) **GRA** — seven generic tools
+  over a hybrid graph beat a full-context agent by 5.1 pp while reading under a
+  third of the input tokens, and a graph-free control shows the gain comes chiefly
+  from **selective agentic access rather than graph topology**. Supports keeping
+  `tools/` generic and few, and exposing `codeindex/` as navigation primitives
+  rather than a retrieval blob.
+- [arXiv:2608.16177](https://arxiv.org/abs/2608.16177) — Milgram ported as a scripted
+  probe: 42 models, 4,848 sessions, 102,511 decision turns, full-obedience rates
+  spanning **0%–100%**. Two harness-design results: declaring the scenario
+  **fictional raises obedience**, while **routing the decision through a native
+  tool call, or granting a modest thinking budget, lowers it sharply**. The first
+  is a prompt-hygiene warning for any inber test or sandbox mode that tells the
+  model the situation isn't real; the second is an argument for expressing
+  consequential actions as real tool schemas.
+
+### 8. Also new, worth a line
+
+`2608.18704` MemFuse (source provenance preserved through a causal fusion graph —
+relevant if `memory/` ever ingests from more than one channel) ·
+`2608.01913` (search effort and answer quality only weakly aligned; accuracy
+tracks cumulative retrieval recall, not search count — argues for **stopping
+criteria based on evidence sufficiency** in `engine/turn_execute.go`) ·
+`2608.16707` Semantic Bandits (tool *names and descriptions* are an inductive bias
+on selection, badly so when misaligned — not neutral metadata) ·
+`2608.16447` HaReCAP (compile frequent leaf decisions into **auditable,
+abstainable** one-step rules; 14.67–20.08% token reduction) ·
+`2608.00202` (a **Telephone Loop** cross-agent delegation attack, ~80% success,
+**inert against single-agent systems**; prompt-hardening does not generalize —
+`server/` spawn depth limits are necessary but not sufficient) ·
+`2608.01719` MNC (multi-agent systems leak protected state through internal
+messages, tool arguments, logs and persistent memory even when public output looks
+clean — relevant to what a parent passes into a spawned subagent and to `redact/`) ·
+`2608.08677` Branch2Skill (forking substituting for repeated rollouts; touches
+`session/` forking) ·
+`2608.09025` SAGE-Fin and `2608.17220` PACE (same idea from two domains: bind
+approval to **the exact execution artifact**, not the text the agent proposed —
+inber approves a call by name and input, which is closer to approving text) ·
+`2608.15391` TwinGridShield (simulate-before-approve; the honest part is the
+degradation curve — 0/500 unsafe under self-conformance, but **5.63% and 30.09%**
+unsafe acceptance under model mismatch) ·
+`2608.19974` ReguSim (stated reasoning, attempted action, execution enforcement
+and monitor evidence are four different artifacts; rationales can mislead a
+monitor unless enforcement evidence is shown — framing for what a guard log must
+record) ·
+`2608.12996` ATOBench (make verification observable when **tool output lies**;
+increased activity can mask a broken verification chain) ·
+`2608.18884` EvoResearcher (generate→critique→revise **does not** beat the 95%
+Wilson interval on clean BBH; the value is a CONFIRMED sentinel early-stopping
+82–88% of items at equal accuracy) ·
+`2608.18744` EvalCEGAR (asking a model for evaluator operators directly gave 183
+candidates realizing only **96 distinct behaviours**) ·
+`2608.15579` Kozuchi (open-weight, no fine-tuning, TTS@8 → **374/500 SWE-bench
+Verified**; remaining gap attributed to semantic correctness and *selection*, not
+edit formatting) ·
+`2608.15763` TaoLive (fixed-harness SFT **reduced IFEval by 7.7 points** — a
+moving harness silently degrades a model fine-tuned against an older one) ·
+`2608.18423` FM-Bench (token spend predicts nothing; **self-managed memory fails
+in two opposite modes — an archive that only grows, or a plan rewritten every
+cycle** — a direct description of the two ways an inber workspace can fail).
+
+### 9. Out of window but worth logging — the CLI-shaped-tool result
+
+Hugging Face's *Designing the hf CLI as an agent-optimized way to work with the
+Hub* is dated **2026-06-04**, outside this window, and is logged here anyway
+because it carries hard numbers on a question `tools/` faces directly. Across 18
+non-trivial tasks and ~1,000 runs, a **CLI-shaped tool** beat curl and
+Python-SDK calls by 1.3–1.8× tokens on simple tasks and **2–6× on multi-step
+tasks**, raised Claude Code (Sonnet 4.6) success from 84% to 94%, and an
+auto-generated command reference cut tool calls ~30% (mean ~10 → ~7). Direct
+evidence for exposing capability as **few CLI-like tools plus a good reference
+block** rather than many fine-grained MCP tools — and it agrees with
+`2608.15834` (§7) from a completely different direction.
+
+### 10. Screened, new, and honestly thin — recorded so they are not re-found
+
+`2608.15832` Authority Resolution Framework (**no evaluation at all**) ·
+`2608.17053` Memory Is Communication (position paper; main hypothesis stated as
+untested) · `2608.14707` HASSUM (evaluated on StrategyQA/JailbreakBench/TruthfulQA
+— **not agentic trajectories**; `2608.16002` does the same job with real agent
+benchmarks) · `2608.03588` GenOS (heavy formalism whose entire empirical
+instantiation is an insertion-sort audit) · `2608.11965` (no significant ROUGE
+difference on README summarization; no design lesson) · `2608.13522` Vero
+(well-built benchmark, no harness-design implication) · `2608.16045` Walk Before
+You Run (spreadsheet-narrow) · `2608.02110` IACM-RL (nice BeliefState idea
+delivered as an RL training recipe — §7's IDSS gets a similar effect
+training-free) · `2608.17499` FACA, `2608.16211` BaT, `2608.19880` EnvHarness,
+`2608.20318` AI4AI-Bench, `2608.19072` (all training-side, standing filter).
+
+One worth a sentence despite the rejection: `2608.15678` *Where Accountability
+Lives* maps platform controls against provider terms across four agentic coding
+tools and 18 policy documents and finds the layers contradict each other — one
+provider bars the assigning developer from approving the resulting PR, another
+ships an agent that approves PRs below a risk threshold and can dismiss reviews.
+It is a policy-document study claiming no harm, so it is not evidence about
+inber; but its observation that the approval *artifact* is weaker than the terms
+assume is the same point `2608.09025`/`2608.17220` make empirically, and it is
+relevant to what a `guard/` approval record should contain.
+
+### 11. Two cross-paper observations
+
+**Guarded commit arrived three times independently this window.**
+`2608.19013` (§6) proposes a Continual Evaluator that commits a harness update
+only after a historical-retention check; `2608.06153` (§7) uses replay-driven
+verification to prevent regressions in a skill bank; `2608.15565` (§7) measures
+what happens without one — **one poisoned admission in four** when the gate is
+"it executed". Three groups, three domains, one conclusion: a writable agent
+store needs a regression gate between propose and commit. inber's `memory/` write
+path has none. This is the single best-supported feature request of the sweep.
+
+**Single-item scanning of skills and tools is measurably dead.**
+`2608.09732` (96.0% ASR across six scanners) and the already-logged `2608.16246`
+CompoSkill reach the same finding from opposite framings within a week, while the
+already-logged `2608.17275` datapoint — deployed MCP tools that modify external
+state rising **27% → 65%** — says the population being scanned is getting more
+dangerous at the same time. Admission decisions must be conditioned on what is
+already installed, not made per item.
