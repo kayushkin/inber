@@ -6147,3 +6147,230 @@ Tool **results** take the same door — `session/session_logging.go:98-106` puts
 output in `Entry.Content`, `session/session.go:265-272` fans every entry to
 `logstack.Log`, and `session/logstack.go:120-134` copies `Content` through for
 role `tool_result`. Relevant to [codex #39993](https://github.com/openai/codex/pull/39993).
+
+## Harness-watch — 2026-08-24: a context fragment's *kind* is a required field, not a label — codex spent a week making every model-visible fragment declare who produced it and every transform carry it through; inber's OpenAI path loses the fields it just set, because `ToParam()` reads a buffer a hand-built union never has
+
+### 1. The upstream week: sixteen PRs, one idea
+
+Every content item in a codex conversation now carries a `ContentItemKind` — a namespaced
+string naming *what produced it* — and the kind survives every transform the history goes
+through. The taxonomy is producer-owned and open, not a closed enum:
+`"memories.instructions"`, `"skills.catalog"`, `"permissions.instructions"`,
+`"generic.developer_instructions"`, and `"{source}.internal_context"` generated from the
+fragment's own source ([#40177](https://github.com/openai/codex/pull/40177),
+[#40294](https://github.com/openai/codex/pull/40294),
+[#40295](https://github.com/openai/codex/pull/40295)).
+
+Two properties make it more than telemetry.
+
+**It is required at construction.** `#40177` changes `PromptFragment::new`,
+`developer_policy` and `developer_capability` to *take* `content_kind` as a parameter —
+there is no way to build an unlabelled fragment. The same PR then deletes two `PromptSlot`
+variants (`ContextualUser`, `SeparateDeveloper`): once every fragment declares its kind,
+the slot no longer has to encode it structurally.
+
+**Every transform must preserve it, and each one was a separate bug.** Truncating a message
+([#40264](https://github.com/openai/codex/pull/40264)), merging messages
+([#40184](https://github.com/openai/codex/pull/40184)), normalizing compacted user messages
+([#40273](https://github.com/openai/codex/pull/40273)), filtering a forked agent's history
+([#40266](https://github.com/openai/codex/pull/40266)), rolling back a model switch
+([#40271](https://github.com/openai/codex/pull/40271)), omitting media the target model
+cannot read ([#40277](https://github.com/openai/codex/pull/40277)), preparing images
+([#40281](https://github.com/openai/codex/pull/40281)) — each shipped as its own fix. The
+sharpest is [#40297](https://github.com/openai/codex/pull/40297): a **subagent fork** built
+developer instructions through a generic helper that stamped them `"unknown"`, so a child
+agent received its parent's operating instructions with their provenance erased. The fix
+gives them a dedicated `DeveloperInstructions` fragment emitting
+`"generic.developer_instructions"` and **deletes the generic builder** that could produce
+`"unknown"` at all.
+
+The kind is not inert: `#40295`'s diff touches `token_budget.rs`. The classification is an
+input to what gets *kept* under budget pressure.
+
+**What inber should consider.** This is the rendering-side twin of the 08-22 entry, which
+found that inber's one injection channel carries four principals and stamps them all
+`"user"`. That entry asks who *sent* a message; this one asks who *produced a fragment*,
+and inber has no answer to either. Take codex's **ordering**, not its taxonomy: make the
+field non-optional at the constructor before trying to enumerate the kinds, because a
+`kind` any call site may omit will be omitted, and then every transform that drops it looks
+correct. The second lesson is the bigger one — codex found seven separate transforms that
+silently erased the field, so the work is not "add a field", it is "list every function
+that rebuilds history and prove each one carries it". inber's list is `conversation/`,
+`engine/` compaction and head-drop, `FilterMessagesForAnthropic`, session fork, and
+checkpoint restore. Section 2 is what that list produced this run, and it is worse than a
+missing label: two of those transforms lose fields inber has already set.
+
+### 2. The same audit, run on inber — the OpenAI path never had the metadata to lose
+
+`ConvertOpenAIResponseToAnthropic` (`agent/openai_conversion.go:208-226`) builds the
+assistant reply by assigning the **exported fields** of the response-side union
+(`Type`, `ID`, `Name`, `Input`, `Text`). `engine/turn_openai.go:105` then appends
+`anthropicResp.ToParam()` to the session history. In the pinned SDK, `ToParam()` →
+`AsAny()` → `AsToolUse()`/`AsText()`, each of which is
+`apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)`
+(`anthropic-sdk-go@v1.35.0/message.go:1555-1568`). **`JSON.raw` is unexported and is only
+populated when the SDK itself decoded an HTTP body.** A hand-built union has none, so every
+variant unmarshals from nothing and returns the zero value.
+
+Measured against the pinned SDK:
+
+```
+ToParam() => {"content":[{"text":"","type":"text"},
+                         {"id":"","input":null,"name":"","type":"tool_use"}],"role":"assistant"}
+direct struct read: text= I will read the file.  id= call_1  name= read_files
+```
+
+The `tool_result` keeps its true id, because `engine/turn_openai.go:157` reads
+`anthropicResp.Content` directly. So the second call of any tool-using turn on the
+`openai`/`google`/`openrouter` providers sends an assistant `tool_calls[0].id = ""` and a
+`role:"tool"` message answering `tool_call_id: "call_1"` — a 400 naming nothing in the
+request. And `e.Messages`, which is what `messages.json` persists and resume replays, holds
+`{"text":""}` where the answer was, so `RepairEmptyContent` (`session/resume.go:131`) drops
+the assistant message on resume. **Filed as a todo.**
+
+Note what this says about the three open `ToParam` findings already in the queue: all of
+them sit on `agent/agent.go:412`, the Anthropic path, where `resp` *was* SDK-decoded and
+`ToParam()` is correct. Same call, opposite failure, depending on where the value came
+from. A method whose correctness depends on an unexported buffer nobody outside the SDK can
+set is a hazard the type system does not express — which is the general form of codex's
+`#40177` fix, and the argument for making construction the place the invariant is enforced.
+
+### 3. Filed this run (3 — the cap)
+
+- **A sub-agent's own turn error is misread as an enqueue failure.** The spawn closure's
+  last statement is `return err` where `err` is the child's turn error
+  (`server/spawn.go:422`); `Queue.Enqueue` returns the closure's value verbatim
+  (`server/queue.go:56`), so it lands in the `if err != nil` at `:424` whose body — and
+  whose own comment at `:433` — assume enqueue failed. That branch force-deletes the
+  workspace branch the parent was handed one step earlier (`forge/workspace.go:424-440`),
+  overwrites the honest accounting row with zeros through an unguarded `UPDATE`
+  (`server/store.go:496-506`), and delivers a second contradictory completion. Default spawn
+  timeout is 5 minutes, so it is the ordinary path. **This corrects `:5577` of this file**,
+  which says "once the work does start it is genuinely safe".
+- **`ForkAndSpawn` never returns an error** (`server/spawn.go:453-471` — no `return …, err`
+  anywhere), so `server/api_spawn.go:61` is dead and `POST /api/fork-spawn` answers `200`
+  with a JSON `null` body when every task in the batch was rejected.
+- **The `ToParam()` blanking above.**
+
+### 4. Held back — verified, not filed, because this run hit its three-todo cap (4)
+
+- **`agent/openai_conversion.go:173-182` reorders a `tool_result` behind interleaved user
+  text.** The converter appends the joined user text first and `result = append(result,
+  toolResults...)` after, regardless of the order the blocks were in. OpenAI requires `tool`
+  messages to immediately follow the assistant message that made the calls. inber creates
+  the mixed message itself at `engine/turn_openai.go:167-175`, which appends the
+  post-write-hook text into the *same* user message as the tool results. `conversation/repair.go:208-221`
+  documents this exact rule as measured against the live API and prepends synthesized
+  results to honour it; the OpenAI converter breaks it four files away.
+- **The assistant branch of `FilterMessagesForAnthropic` has no empty-message guard.**
+  `agent/openai_conversion.go:320-327` appends a `MessageParam` even when every block was
+  filtered out; the user branch at `:339-345` has the `len(newBlocks) > 0` guard it lacks.
+  Masked today by §2 (blank ids match nothing), and it becomes the live failure the moment
+  the ids are fixed — so it belongs in the same change.
+- **`engine/build.go:125` drops the session id** — `PruneConversation(ctx, messages,
+  e.MemStore, "", cfg)`, where the sibling call site `engine/lifecycle.go:190-201` computes
+  the real one. The auto-save then keys the row `auto-saved::<hash>` and tags it `["auto-saved","decision",""]`,
+  so two sessions producing the same fact text upsert onto one row carrying an empty-string
+  tag where its owner belongs. Attribution, not content — but it is a join going empty
+  rather than being left out.
+- **`engine/turn_openai.go:177`'s fail-loud guard is dead code.**
+  `return result, fmt.Errorf("unexpected stop reason: %s", …)` can never fire, because
+  `mapOpenAIFinishReason` (`agent/openai_conversion.go:244-255`) normalizes every
+  unrecognized value to `EndTurn` first. The Anthropic loop's equivalent
+  (`agent/agent.go:441`) is live, so the two loops disagree despite
+  `engine/turn_openai.go:36` asserting they "have to agree". Adjunct to open todo
+  `d30c5145` rather than its own item: whoever fixes the mapper must also revive this
+  guard, or the fix looks complete and still cannot fail loudly.
+
+Also noted, and *not* inber's repo so not filed here: `agent-store/cmd/seed/main.go:224`
+guards `if len(ia.Tools) > 0 { SetAgentTools(…) }`, so a seed carrying an empty tools list
+silently leaves stale rows instead of clearing them — the write-side twin of todo
+`83e084f8`.
+
+### 5. One correction to an existing todo, made rather than written up
+
+Todo `83e084f8` (*"an empty tool allowlist means ALL tools"*, `engine/build_tools.go:17`)
+rested on a measurement that has gone stale: it records `agent_harness_tools` as holding
+**zero rows** and concludes the defect is "latent today". Re-measured against
+`~/.config/agent-store/agents.db` this run: **137 rows across 11 agents.** `bran` carries a
+9-tool list that deliberately omits `shell_commands` — the only allowlist on this host that
+excludes the shell — so the field is now used as a boundary, and eight *enabled* agents
+(`argraphments`, `bile`, `claude-code`, `etain`, `healthcheck`, `inber-party`, `keyboard`,
+`lugh`) have no rows and therefore get the full default set including shell, write and edit.
+The todo body has been updated in place. This also re-prices its option (c): the decision is
+now scoped to those eight, not to all 22.
+
+### 6. Related upstream, same window, smaller
+
+- [codex #40280](https://github.com/openai/codex/pull/40280) — the retained-message budget
+  in remote compaction counted **text only**, so an image-heavy conversation blew a 64k
+  budget while the arithmetic said it had not. The fix charges images by size estimate,
+  keeps an image and its label **atomic** across a truncation boundary, and **stops
+  backfilling** rather than splitting an image that will not fit. Two rules worth keeping:
+  a budget that does not count a content type cannot bound a conversation containing it,
+  and at the boundary you stop rather than fragment. Latent for inber — there are zero hits
+  for `OfImage`/`OfDocument`/`ImageBlockParam` in the tree, so no non-text block can enter a
+  conversation today. Worth writing down because `estimateMessageTokens` marshals whole
+  blocks and would price a base64 image at `len/4` against the API's ~1600.
+- [codex #40038](https://github.com/openai/codex/pull/40038) — `suspend_turn_and_shutdown`,
+  a **third, deliberately non-terminal** turn state. A worker can stop an in-flight root
+  turn without recording it complete *or* aborted, flush history, and let another runtime
+  resume it under its original id; codex is explicit that queued input and outstanding
+  approval/elicitation waiters are best-effort and may be dropped. This is the missing state
+  behind inber's open todo *"a deploy stops the server with no check for a live turn, and
+  the killed turn is recorded as Completed"* — the fix there is not "check for a live turn",
+  it is "have somewhere truthful to put one", and codex has now priced what that state costs.
+- [codex #40179](https://github.com/openai/codex/pull/40179) — archiving a thread tree only
+  prepared rollouts *newly* marked archived, so a descendant resumed without unarchiving was
+  left running when its parent was archived again. The fix walks `subtree_thread_ids` and
+  prepares **every loaded thread in the spawn subtree**. Same shape as inber's open reaper
+  todo, and it names the mechanism that todo lacks: persisted **spawn edges** you can query
+  for a subtree, rather than a `Children` field each teardown path is free to ignore.
+- [goose #11425](https://github.com/block/goose/pull/11425) — MCP tools marked app-only
+  reached the model through **Code Mode's** callback catalog, because Code Mode registered
+  tools without applying the model-visibility predicate ordinary inference applies. A
+  visibility rule enforced on one registration path and not the other. inber's analogue is
+  live and unguarded: `engine/build_tools.go:16-21` applies the agent allowlist, and
+  `mergeExtraTools(e.buildTools(), cfg.ExtraTools)` (`engine/engine_new.go:624`) then
+  appends whatever `Server.toolsForAgent` returns (`server/agent_tools.go:7-33`) with **no
+  reference to that allowlist at all** — `spawn_agent` and `steer_agent` unconditionally,
+  plus four workspace tools for the orchestrator. Nine enabled agents carry allowlists that
+  do not name `spawn_agent` and are handed it anyway. Not filed: `ExtraTools`' only producer
+  is in-process server code, so this is inber overriding its own operator config rather than
+  an untrusted-input path, and open todo `9eeba694` already covers the guard-classification
+  half. It wants a test that a tool the allowlist excludes cannot re-enter through
+  `ExtraTools`.
+- [goose #11391](https://github.com/block/goose/pull/11391) +
+  [#11342](https://github.com/block/goose/pull/11342) — a **safety** bound (1 MiB,
+  symlink-refusing, root-confined reads of trusted source files) had been derived from
+  `GOOSE_MAX_TOOL_RESPONSE_SIZE`, a **user-tunable performance** knob, so turning the knob
+  down broke recipe loading and turning it up widened a security limit nobody meant to
+  widen. Now two independent limits. The rule generalizes: *never derive a containment bound
+  from a setting the user is invited to tune.* Checked against inber and clean —
+  `internal/textutil` takes `maxBytes` per call site and no read cap is computed from a
+  response-size config.
+
+### 7. Screened and rejected, with the reason
+
+- [goose #11120](https://github.com/block/goose/pull/11120) adds a stable `tool_call_id` to
+  `PreToolUse`/`PreToolUseResult`/`PostToolUse`/`PostToolUseFailure` so pre- and post-events
+  correlate when the same tool and input repeat. inber already has it: `buildHooks` forwards
+  a tool id to both `OnToolCall` and `OnToolResult`, and
+  `engine/build_hooks_tool_id_test.go` pins **both** places the display branch is wired,
+  precisely because they are separate literals. No gap.
+- [cline #13498](https://github.com/cline/cline/pull/13498) makes the global "Use MCP
+  servers" toggle auto-approve **all** MCP tool calls, retiring the per-tool `autoApprove`
+  flags from the SDK decision. Recorded as a caution rather than a pattern: it is a
+  permission *widening* shipped as a usability fix, and the PR itself acknowledges an
+  unfixed adjacent hole — MCP tools whose names are transformed bypass approval entirely on
+  a policy-key mismatch. Not actionable here; `tools/mcp/` still has zero non-test
+  importers, re-verified this run.
+- The map-iteration nondeterminism in `tools/mcp/adapter.go:75-86` and
+  `tools/mcp/client.go:433-439` — which would move the `cache_control` breakpoint every
+  turn — was re-checked and remains what `goose.md:1025` already calls it: a trap for
+  whoever wires MCP, not a cost today.
+- cline [#13297](https://github.com/cline/cline/pull/13297)/[#13298](https://github.com/cline/cline/pull/13298)
+  (collect `PostToolUse` hook output, deliver `contextModification` to the model) and goose
+  [#11366](https://github.com/block/goose/pull/11366) (pass the complete response to stop
+  hooks) are the same idea the 2026-08-21 cline and goose entries already dispositioned onto
+  inber's post-tool hook. No new ground.

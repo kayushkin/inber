@@ -3760,3 +3760,156 @@ already-logged `2608.17275` datapoint — deployed MCP tools that modify externa
 state rising **27% → 65%** — says the population being scanned is getting more
 dangerous at the same time. Admission decisions must be conditioned on what is
 already installed, not made per item.
+
+## Harness-watch — 2026-08-24
+
+Window 2026-07-25 → 2026-08-24, re-swept one day after the 08-23 sweep, so the
+overlap was expected and it was large: **35 of 40** verified candidates were
+already logged in this directory, including every item the 08-23 entry names.
+Five are new, and one of them is the strongest memory result this file has
+recorded. Non-arXiv was nearly dry again; the two lab items below are the whole
+yield.
+
+### 1. [arXiv:2608.07429](https://arxiv.org/abs/2608.07429) — append-only agent memory scored *worse than having no memory at all*
+
+TEPA (Zhou, Ouyang, Zheng, Xiang; 2026-08-07, v2 08-10). The paper names the
+failure "memory pollution": a memory that newer conflicting evidence has
+superseded stays retrievable and keeps entering the prompt. TEPA stores
+observations as **keyed precedents** and *revokes* an active precedent when fresh
+evidence contradicts it under the same key, keeping the revoked row for audit
+rather than deleting it — validity becomes an explicit state of a memory row
+rather than a consequence of recency ranking.
+
+The number that matters is the baseline, not the method. Under controlled full
+reversal over 50 seeds: **append-only 0.210, last-write-wins 0.210, no memory
+0.309, TEPA 0.950** — and the ordering reproduced under real file-backed drift
+(append-only 0.203, no memory 0.298, TEPA 0.950). On clean MemoryAgentBench SH-6k
+TEPA merely matches last-write-wins, which localizes the entire gain to the
+reversal case.
+
+**What inber should consider:** inber's `memory/` write path is append-only with
+importance decay and recency ranking, and `memory_save` has no field that can say
+*this replaces that*. Under drift — a changed config value, a moved file, a
+retracted decision — that is the 0.210 row, and this paper says it is worse than
+switching memory off. Two consequences, in order: **(a)** a memory row needs a
+`key` and a validity state (`active` / `revoked`), and the revoked row must stay
+readable, because "what superseded X" is a question inber cannot currently ask —
+the same conclusion `2608.13662` (MOOSEDev, already logged) reached from the
+knowledge-graph side, where vector top-k surfaced 6–27% of a supersession answer
+set against 0.98–1.00 for symbolic supersession links. **(b)** Do not model this
+as a delete. The audit trail is the half that makes revocation safe to automate,
+and it is also what lets a wrongly-revoked fact be re-promoted.
+
+### 2. [arXiv:2608.21230](https://arxiv.org/abs/2608.21230) — write-time screening does not catch memory poisoning, and provenance weighting at a shipped setting is indistinguishable from no defense
+
+Poisoning **1.2%** of a LongMemEval corpus with plainly-worded false assertions —
+no triggers, no optimization, nothing an injection classifier is shaped to see —
+dropped accuracy **0.850 → 0.300**. A write-time screening pipeline scoring 0.832
+recall on indirect prompt injection rejected **0 of 360** poisoned memories.
+Provenance-weighted retrieval at the shipped weight was statistically
+indistinguishable from no defense (p = 0.80); turning the weight up recovered
+utility only by excluding untrusted content outright, at which point accuracy
+collapsed to 0.0417 whenever the answer-bearing evidence was itself untrusted.
+
+**What inber should consider:** this is a limit result and it bounds two things
+inber has already filed. Todo `90296699` (memory-store: the model chooses its own
+provenance) and `68e64219` (`memory_save` fabricates provenance) are both worth
+fixing — but this paper says provenance *weighting* is not the payoff. A false
+statement written in good faith by an honest path is still false, and no
+screener distinguishes false from true without external grounding. Pair it with
+§1: revocation on contradiction is a grounding mechanism that screening is not,
+because it fires on *later evidence* rather than on the text of the write.
+
+### 3. [arXiv:2608.20664](https://arxiv.org/abs/2608.20664) — verbatim event memory gets most of the measured benefit; the elaborate-structure premium was not demonstrated
+
+DreamBench-SWE, a preregistered multi-session benchmark where a later software
+task depends on non-inferable evidence from an earlier session, scored by
+executable hidden oracles. No external memory **21/180 (0.117)**; deterministic
+verbatim event memory **82/180 (0.456)**; typed-plus-raw reference probe **83/180
+(0.461)**; a pinned hosted literal-storage config **97/180 (0.539)**. Every
+memory-bearing condition beats no-memory after Holm correction, and the audit
+explicitly declines to establish superiority *among* them.
+
+**What inber should consider:** a baseline to hold inber's memory work to before
+building more structure — most of the distance from 0.117 to 0.539 is bought by
+keeping the events at all. Read against `2608.12888` (ReFind, already logged:
+agent-controlled lexical search over raw chat logs beating HippoRAG 2), the two
+say the same thing from different directions, and both point at log-store search
+tooling ahead of memory-store schema.
+
+### 4. [arXiv:2608.20732](https://arxiv.org/abs/2608.20732) — prefix-cache reuse is a working cross-tenant side channel for inferring who is upstream of whom
+
+CacheTracer: 1.1M API requests across 636 endpoint pairs and 39 reseller
+endpoints over the LLM API reseller ecosystem. **37.1% of endpoint pairs share
+cache reach**, containment order spans seven layers, and one cache reach is
+contained in at least 31 others. Timing on a cached prefix is enough to infer
+that two nominally independent endpoints sit behind one provider.
+
+**What inber should consider:** narrower than it looks, and worth writing down
+before it is not. A cached prefix contains inber's system prompt and whatever
+repo content sits above the `cache_control` breakpoint. Today model-store routes
+to first-party endpoints, so there is no exposure — the item is a **model-store
+policy field**, not code: mark which providers may receive a cacheable prefix, so
+adding a gateway or reseller later is a decision someone makes rather than a
+default someone inherits. Same family as `2608.17485` (KeyPooling, already
+logged: a shared provider credential is a shared prompt cache).
+
+### 5. [arXiv:2608.08468](https://arxiv.org/abs/2608.08468) — static analysis of a skill catches exfiltration and is blind to `rm -rf`
+
+SkillsMetric, five-stage static analysis over 2,266 adversarial skills across 16
+attack types on the SkillMD-138K corpus: **AUC 0.93**, F1 73.4% ± 0.5%, strong on
+data exfiltration (93%) and steganographic payloads (93%). But **host-destruction
+attacks written with ordinary shell commands evade all five stages — 0%
+detection** — and natural-language prompt injection reaches only 42%.
+
+**What inber should consider:** this is the shape of the answer for skill-store
+ingestion, and the shape is "screening is not a gate." The stages that work catch
+payloads that must *look* unusual to function; a destructive skill is
+indistinguishable from a legitimate cleanup skill by inspection, because the
+bytes are the same and only the intent differs. So skill-store may use static
+analysis to *rank* and to refuse the obvious, and must not use it as the
+admission decision. Consistent with the 08-23 entry's conclusion that
+single-item scanning is dead (`2608.09732`, `2608.16246`).
+
+### Lab and industry, both new to this directory
+
+- **[Anthropic — The new rules of context engineering for Claude 5 generation
+  models](https://claude.com/blog/the-new-rules-of-context-engineering-for-claude-5-generation-models)**,
+  dated **2026-07-24** on the page itself, so it sits one day outside this
+  window's nominal start and is logged here because nothing in this directory has
+  it. Anthropic removed **over 80% of Claude Code's system prompt** for Opus 5 /
+  Fable 5 "with no measurable loss on our coding evaluations." The recommendations:
+  replace rules with contextual judgment; stop writing tool-usage *examples* and
+  improve the tool *interface* instead; disclose tool definitions progressively
+  rather than front-loading the catalog; deduplicate guidance that appears in both
+  the system prompt and a tool description; prefer automatic memory over a
+  hand-maintained `CLAUDE.md`. **What inber should consider:** inber's per-agent
+  system prompts are hand-grown and have only ever accreted. The cheap experiment
+  is subtractive and inber can run it today — cut an agent's prompt hard, keep the
+  tool set fixed, and compare on the same task set; the 08-23 entry's ArkBench
+  note (`2608.10934`) is the small bench that makes this affordable. The
+  deduplication point lands on a specific inber habit: guidance that lives in both
+  the prompt and a tool description is paid for on every cached prefix *and* every
+  tool block.
+- **[IBM Research — How Much Memory Does Your Agent Actually
+  Need?](https://huggingface.co/blog/ibm-research/altk-evolve-hmm)** (2026-08-18).
+  The optimal memory dose varies by model tier and not by parameter count. Strong
+  models gain from the **full** guideline set (DeepSeek-V3.2 +9.5 pp, Claude Opus
+  4.6 +4.1 / +7.1 pp, GPT-5.5 +2.9 / +7.2 pp); a mid-tier model gained most from
+  **curated retrieval** (gpt-oss-120b +16.1 pp) at **+5% token overhead against
+  +78%** for full injection; GLM-5 showed **0.0**. **What inber should consider:**
+  memory-injection policy belongs on the **model-store model record**, not in a
+  single engine-wide setting — full injection for the premium agents, retrieval
+  only for the cheap ones. Same shape as the goose 2026-08-20 entry's conclusion
+  about thinking-mode: a default-off capability flag on the model record, gated on
+  the flag and never on a provider name.
+
+**Screened and rejected:** 35 items verified and already present, so no row was
+written for them. Named here so the next sweep does not re-fetch them:
+`2608.11386`, `2608.08654`, `2608.13867`, `2608.18389`, `2608.18280`,
+`2608.13547`, `2608.10178`, `2608.10934`, `2608.20195`, `2608.16370`,
+`2608.06503`, `2608.11775`, `2608.11392`, `2608.06057`, `2608.19662`,
+`2608.07855`, `2608.02645`, `2608.19303`, `2608.04719`, `2608.02650`,
+`2608.19741`, `2608.17007`, `2608.16055`, `2608.16801`, `2608.15888`,
+`2607.25090`, `2608.17393`, `2608.19564`, `2608.15008`, `2608.12888`,
+`2608.13662`, `2608.18066`, `2608.14876`, `2608.18351`, `2608.00997`.
