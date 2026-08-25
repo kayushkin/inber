@@ -6374,3 +6374,326 @@ now scoped to those eight, not to all 22.
   [#11366](https://github.com/block/goose/pull/11366) (pass the complete response to stop
   hooks) are the same idea the 2026-08-21 cline and goose entries already dispositioned onto
   inber's post-tool hook. No new ground.
+
+## Harness-watch — 2026-08-25: a bound that was never written and a boundary that was never checked — codex, goose and opencode all spent the week making an *implicit* limit explicit, and inber's compactor turns out to have a size of conversation it silently refuses to compact while reporting that it did
+
+### 1. The upstream week: three repos, one move
+
+codex, goose and opencode converged on the same edit shape without coordinating,
+and it is not "add a feature" — it is **take something the code was already
+deciding by accident and make it a declared value**.
+
+- codex bounded what a *tool response* may inject:
+  [#40413](https://github.com/openai/codex/pull/40413) pages `skills.list`
+  against the current response-byte budget, skipping entries that do not fit and
+  reporting the overflow once;
+  [#40491](https://github.com/openai/codex/pull/40491) sizes each `skills.read`
+  page to the call's budget, accounting for JSON escaping and UTF-8 boundaries,
+  and snapshots per thread so cursors stay consistent.
+- codex bounded who may *address* a session:
+  [#40464](https://github.com/openai/codex/pull/40464) centralizes one
+  direct-input ownership check and applies it to turn injection, MCP calls,
+  review/compaction/rollback, shell and Guardian actions, so a parent-owned
+  subagent can only be driven by its owner; restricted subagents keep
+  `canAcceptDirectInput: false` while goal reads and interruption stay open.
+  [#40449](https://github.com/openai/codex/pull/40449) and
+  [#40437](https://github.com/openai/codex/pull/40437) add the other half:
+  record the *initiating* agent path, so a turn that inter-agent communication
+  caused reports back to whoever asked rather than always to the spawn-time
+  parent.
+- goose bounded what a *malformed restriction* may mean:
+  [#11474](https://github.com/block/goose/pull/11474) draws the line precisely —
+  absent visibility metadata keeps the permissive default, metadata that is
+  present and unusable now fails closed; and
+  [#11477](https://github.com/block/goose/pull/11477) makes a persisted hard-deny
+  win over an overlapping allow, so the restrictive input is never the one that
+  silently loses.
+- goose bounded what a *failed* compaction may claim:
+  [#10500](https://github.com/block/goose/pull/10500) — a conversation with no
+  tool responses used to loop all five removal percentages, re-send the same
+  oversized prompt five times, and fail with "even after removing all tool
+  responses" when none had ever existed. It now detects the condition up front,
+  fails immediately, and returns guidance instead of a message describing work
+  that never happened.
+- opencode bounded what a *child's request* carries:
+  [#44752](https://github.com/sst/opencode/pull/44752) sends
+  `x-parent-session-id` on a child session's outbound requests, so lineage is a
+  wire field rather than an internal one.
+
+The common claim is worth stating on its own, because inber failed it three ways
+this run: **an unstated limit is still a limit — it is just one you cannot read,
+cannot test, and cannot report.** Sections 2 through 4 are what checking inber
+against that claim produced.
+
+### 2. Filed: a conversation short in *turns* and long in *messages* can never be compacted, and the endpoint says it was
+
+Todo `24bdb603-ed00-4d57-9cb5-bf0df1e0d5b3`. Exposed by goose
+[#10500](https://github.com/block/goose/pull/10500).
+
+`findTurnBoundary` (`conversation/message_utils.go:47`) initialises `splitAt := 0`
+at `:53` and assigns it in exactly one place — inside `if turns >= keepTurns` at
+`:60`. So a transcript with **fewer than `keepTurns` user turns returns 0 however
+many messages it holds**. `StartsUserTurn` (`conversation/message_utils.go:29-41`)
+returns false for a user-role message whose blocks are all `tool_result`, which is
+correct and was made so deliberately — the old over-counting bug is closed. Its
+untracked consequence is that **a long agentic run is one turn**, no matter how
+many tool round-trips it contains.
+
+`SummarizeConversation` then bails without a word:
+
+```go
+// conversation/summarize.go:40
+keepFrom := findTurnBoundary(messages, cfg.KeepRecentTurns)
+if keepFrom <= 0 {
+    // Nothing to summarize
+    return messages, result, nil
+}
+```
+
+`result.Summarized` stays false, the error is nil, nothing is logged. With the
+default config (`conversation/summarize_config.go:44-53`, `TriggerMessages: 60`,
+`KeepRecentTurns: 12`) a 200-message session built from three user turns is well
+past the trigger, enters the path, and can never leave it with a summary.
+
+The harm is not unbounded growth — `ShouldPrune` (`conversation/manage.go:196-200`)
+head-drops past `KeepRecentTurns*2`. It is that those turns are **dropped instead
+of summarized-and-archived**: no summary block, no `conversation-summary:` memory
+row, and `engine/lifecycle.go:110`'s `if result.Summarized` gates both the log
+line and `Session.LogSummarize` — so the one signal that would reveal it is gated
+on the flag that is false. Then `server/api_bridge.go:806` writes
+`"status": "compacted"` with `messages_removed` computed from the prune alone.
+
+This is the shape inber's own unattended autoworkers hit hardest: one operator
+prompt, then hundreds of tool round-trips. **What a fix must decide** is in the
+todo and is genuinely open — fast-fail with guidance (goose's answer), fall back
+to a message-index split when the transcript holds fewer than `KeepRecentTurns`
+user turns (which changes what "keep the last N turns" means and interacts with
+the tool-integrity loop at `message_utils.go:70-88`), or fix only the reporting.
+The reporting half is safe to ship on its own either way.
+
+### 3. Filed: nothing bounds the context injectors, and what they render grows with the box
+
+Todo `3aa890b9-18aa-45d9-abc0-667b2460df43`. Exposed by codex
+[#40413](https://github.com/openai/codex/pull/40413) /
+[#40491](https://github.com/openai/codex/pull/40491).
+
+`sessionStatusInjector` (`server/session_context.go:99`) ranges every live session
+and writes a line each, including `→ children: %s` from `strings.Join`. Its input
+is `ListSessions` (`server/session_management.go:35`), a bare `g.sessions.Range`
+with no limit, filter or cap. `agentFleetInjector` (`server/session_context.go:51`)
+does the same over `g.config.Agents`. The only bound in the file is
+`truncate(si.Task, 80)` at `:76`. The collection site has none either —
+`engine/turn_prompt.go:140` appends each injector's text into `volParts` and joins
+it, and `engine/volatile_context.go` is sixty lines of queue/apply/take with no
+byte or token count anywhere in it.
+
+The comment at `server/session_context.go:25-30` explains that this text sits
+*after* the cache breakpoints so it cannot bust the BP2 prefix. That is the right
+call, and it is exactly why the size matters: **every byte is re-sent uncached on
+every orchestrator turn, at full input price.** The session map is a lifetime
+accumulation rather than a working set, and each `→ children:` list is itself
+unpruned, so the per-turn uncached cost of an orchestrator rises with the history
+of the machine and nothing notices.
+
+The decision the todo refuses to make: what gets dropped when the budget binds —
+a recency window, a status filter, or fixed per-injector shares. Note the one
+thing codex's answer cannot be copied wholesale: codex skips an entry and keeps a
+**cursor**, because its listing is a tool call. This is a push into the prompt,
+so an overflow must be **summarized in place** ("+37 idle sessions not shown")
+rather than paged — otherwise the model reads a partial list it believes is
+complete, which is worse than the cost it was meant to save.
+
+### 4. Filed: `SpawnStarted` takes `parentKey` and never reads it
+
+Todo `4d62e33e-d5ef-4b59-be08-e578216177fd`. Exposed by opencode
+[#44752](https://github.com/sst/opencode/pull/44752).
+
+`server/spawn.go:300` passes `req.ParentKey`. `server/events.go:45-48` accepts it
+and drops it: `grep -n parentKey server/events.go` returns exactly one line, the
+signature. An unused *parameter* is legal Go, so this compiles clean and no linter
+objects. `SpawnCompleted` (`server/events.go:52`) is worse-shaped — it publishes
+under `result.ChildKey`, and `SpawnResult` (`server/spawn.go:109-127`) has no
+parent field at all, so completion carries no lineage even in principle. The wire
+type has nowhere to put one: `ChatDelta` (bus, `messages/chat.go:33-51`) has
+`Agent`, `Orchestrator`, `SessionID`, `CompletionID`, `MessageID` and no lineage
+field. `server/events_test.go:43` passes `"parent:main"` and asserts nothing.
+
+Lineage is durable everywhere else — `server/spawn.go:86-93` puts `"parent_key"`
+and `"depth"` on the in-process `agent_update` stream, and
+`server/api_sessions.go:139-140` returns `SpawnDepth`/`ParentKey` over REST. A
+NATS subscriber is the single consumer that watches a spawn happen and cannot say
+whose spawn it was. Same class as the `MessageID`-never-written finding at
+`goose.md:686-700`, which cites the same delta constructor; different field.
+
+### 5. Verified, NOT filed — an open todo already names these lines
+
+**`steer_agent` has no ownership check at all, and this is a different axis from
+the one that is filed.** codex [#40464](https://github.com/openai/codex/pull/40464)
+is the sharpest single PR of the window and it lands squarely on inber. The whole
+authorization for `steer_agent` is the unmarshal: `server/spawn_tools.go:48` calls
+`g.Inject(in.SessionKey, in.Message)`, and `Server.Inject`
+(`server/session_management.go:110-116`) is `g.sessions.Load(sessionKey)` then
+`s.deliver(message)` — no parent/child comparison, and **no parameter that could
+carry a caller identity even if one wanted to check**. Every agent gets the tool
+unconditionally, and note the asymmetry at `server/agent_tools.go:11-12`:
+`g.SpawnAgentTool(sessionKey)` is bound to the caller's session and
+`g.SteerAgentTool()` is not. Reachability is not hypothetical — a child key
+literally contains its parent's key as a prefix (`server/session_forking.go:97-100`),
+and `sessionStatusInjector` hands the orchestrator every other live session's key,
+parent and children (section 3).
+
+This is **not** filed, and the reason is the dedupe rule rather than the merits:
+open todo `ceedbf75-fe23-43a2-aa2f-5fb90a5f67cd` already names
+`server/session_management.go:110` and `server/spawn_tools.go:48`. It covers
+*provenance* — the injected text being stamped "user" — and observes in passing
+that "both the target key and the message are model-authored" while filing only
+the label. The archived `edfdd798` ("Fix Server.Inject/Session.deliver principal
+isolation") was closed pointing at `ceedbf75` as the filed defect, so a curator
+has already folded the isolation question into it once.
+
+Recorded here so the axis is not lost: **`ceedbf75` asks what a message is
+labelled; #40464 asks whether the caller was allowed to send it, and a correct
+label on an unauthorized injection is still an unauthorized injection.** Whoever
+takes `ceedbf75` should decide explicitly whether ownership is in scope, and the
+choice to name is what "own" means — descendants-only, self-and-descendants, or a
+capability model where the child key returned by `Spawn` is the only steerable
+handle and a *guessed* key fails even when it resolves. `server/api_sessions.go:81`
+must stay unrestricted whichever wins, so the check belongs at the tool or
+`Inject` needs an explicit operator principal.
+
+Its natural companion, from codex
+[#40449](https://github.com/openai/codex/pull/40449): inber has no initiator
+concept — `grep -rn "Initiator\|Originator\|RequestedBy" --include=*.go .` returns
+nothing, and completion is hard-routed to the spawn-time parent at
+`server/spawn.go:417` (`g.deliverResult(req.ParentKey, spawnResult)`), which
+`server/spawn_delivery.go:46-52` resolves or logs "parent %s gone, dropping
+result". So agent A steering agent B produces work delivered to *B's* parent while
+A gets a bare "Message injected into %s mid-turn" and never hears again. That is
+latent today and becomes a defect the moment the ownership question is answered
+in favour of allowing cross-subtree steers. One field — the originating session
+key on the injected message — serves both this and `ceedbf75`'s principal label;
+it should not become a second parallel mechanism.
+
+### 6. Held back — verified, not filed, because this run hit its three-todo cap
+
+- **A `disabled_tools` name the session does not hold is accepted and reported as
+  applied.** goose [#11474](https://github.com/block/goose/pull/11474) is the
+  mirror. `server/api_bridge.go:719-722` is
+  `if req.DisabledTools != nil { s.Engine.SetDisabledTools(req.DisabledTools) }`,
+  and `SetDisabledTools` (`engine/engine.go:363-370`) is a bare `disabled[n] = true`
+  loop with no membership check. The handler answers
+  `{"status":"updated","model":...}` at `:729-732` and never names the resulting
+  set, though the exported reader exists — `EnabledToolNames()` at
+  `engine/engine.go:395-401`. So `{"disabled_tools":["shell_command"]}` — the
+  singular typo, and `guard/guard.go:314-316` records that tool-store really did
+  rename `write_file` → `write_files` once — leaves `shell_commands` on the wire
+  and returns 200. Held back deliberately as well as by the cap: the behaviour is
+  *documented* at `engine/engine.go:360-362` ("An unknown name is not an error.
+  The set is a filter over the tools this session holds, not a registry"), and
+  that rationale is real, so filing it as a defect would decide a stated design
+  choice by accident. The uncontroversial half is the reporting — echo
+  `EnabledToolNames()` and any unmatched names — and the same handler's `effort`
+  arm has the same shape (`api_bridge.go:701-716`: the `default:` branch only
+  assigns on a successful parse, so `"hihg"` is indistinguishable from `"low"`,
+  i.e. thinking off, and returns 200). Those lines are already named by open todo
+  `e68b05e0-5317-4545-a61e-9c00b2b1840b`. Note the repo holds the right pattern
+  one package over: `guard.ParseMode` (`guard/mode.go:16-27`) errors on an unknown
+  mode *and* returns `Observe` on the error path, so a caller who ignores the
+  error still lands strict.
+- **A non-empty configured tool list is authoritative, and every unrecognised name
+  in it is dropped without a word.** cline
+  [#13476](https://github.com/cline/cline/pull/13476) /
+  [#13465](https://github.com/cline/cline/pull/13465) landed the same polarity
+  question. `engine/build_tools.go:16-21` gets the direction right — empty means
+  all — but `buildConfiguredTools` (`:23-45`) loops the names and a name matching
+  neither `buildSpecialTool` nor `findStandardTool` falls off the bottom of the
+  loop with no error, no log and no counter. An agent config listing one stale
+  name therefore ships an agent holding only the memory tools appended at `:39-42`.
+  The repo contains the opposite answer for the same input at
+  `agent/registry/registry.go:219-225`, which returns
+  `fmt.Errorf("get tool %q: %w", ...)`. Two ingestion paths for one config field,
+  one strict and one silent — that disagreement is the defect, independent of
+  which answer wins. **Measured this run: `select count(*) from agent_tools` in
+  `~/.config/agent-store/agents.db` returns 0**, so every live session takes the
+  `buildDefaultTools` branch and the hole is unreachable today. It opens on the
+  first row anyone writes. Adjacent open todo `83e084f8` covers the *empty*-list
+  case, not this one.
+- **`tools/mcp/client.go:154` is the one line-oriented reader in the repo with no
+  buffer bound.** cline [#13525](https://github.com/cline/cline/pull/13525) fixed
+  the general form: ripgrep embeds the whole matched line in each JSON event, so a
+  directory holding a 700MB single-line dump accumulated gigabytes until string
+  concatenation threw. inber's own code states the rule twice and then omits it
+  once — `session/resume.go:38-39` and `session/timeline_jsonl.go:29-30` both
+  carry the byte-identical `scanner.Buffer(make([]byte, 1024*1024), 1024*1024) //
+  1MB lines`, while `readResponses` has a bare `bufio.NewScanner(c.stdout)` and so
+  runs on the 64KB default. One MCP tool result over 64KB — an ordinary read of a
+  medium source file — makes `Scan()` return false with `token too long` and kills
+  the reader goroutine for the rest of the session rather than losing one message.
+  Verified dormant: `grep -rn "inber/tools/mcp" --include=*.go .` returns zero
+  hits outside the package. Worth the one line before the package acquires its
+  first caller; the choice to name is whether an oversized frame should kill the
+  client or be dropped with the reader continuing, since a JSON-RPC stream can
+  resynchronise at the next newline where a session log cannot.
+
+That is three held back, plus section 5's, which is a dedupe skip rather than a
+cap skip.
+
+### 7. Screened and rejected, with the reason
+
+- **codex [#40511](https://github.com/openai/codex/pull/40511)** adds an
+  `Interrupt` hook event firing before the abort event, handing handlers the
+  flushed turn transcript. The *persistence* half is already filed twice and both
+  claims re-verified this pass: `InterruptSession`
+  (`server/session_management.go:76-77`) calls `s.interrupt()` then
+  `g.persistSessionState(s)`, which `persistSessionStateLocked`'s own comment
+  (`:132-136`) concedes cannot reach `Engine.Messages`; the post-unwind snapshot
+  is gated on `if result.Text != ""` at `server/server.go:377`; the dead
+  `s.Status = Error` at `server/session.go:178` is already recorded. The only part
+  with no inber analogue is the extension point — `engine/build_hooks.go:105-240`
+  wires six content hooks and has no turn-lifecycle event of any kind — and that
+  is a feature inber has not asked for, not a defect.
+- **opencode [#43895](https://github.com/sst/opencode/pull/43895)** is test-only,
+  and `opencode.md:625-676` already covers the unknown-finish-reason handling
+  under todos `6b4a9ab5` and `d30c5145`. One non-duplicate data point for the
+  decision that entry parks: upstream settled on *continue the loop and recover*,
+  not hard-error. It does not resolve the retryability half — a content filter and
+  a dead upstream still want opposite handling.
+- **dexto [#907](https://github.com/truffle-ai/dexto/pull/907)** (canonical tool
+  presentation metadata) is already covered at `dexto.md:354-389`, dated
+  2026-08-19, including inber's seven hardcoded tool-name tables. Nothing to add.
+- **goose [#11496](https://github.com/block/goose/pull/11496)** (do not send images
+  to non-vision models) — not applicable. A case-insensitive grep for
+  image/vision/base64/media_type across `agent/ engine/ conversation/ session/`
+  returns one hit, `engine/turn_prompt.go:32`'s `case "vcs.revision"`. inber has
+  no image path to gate, which is the same finding the 08-24 entry reached from
+  codex #40280's side.
+- **goose [#11477](https://github.com/block/goose/pull/11477)** (deny precedence) —
+  no overlapping allow/deny structure exists to get the precedence wrong.
+  `isReadOnly` (`guard/guard.go:319-326`) and `isDangerous` (`:328-334`) are
+  disjoint literal switches consulted from different `CheckTool` arms
+  (`guard/guard.go:171-187`), never both for one call. Assist's fail-open on an
+  unclassified tool is already filed as `9eeba694`.
+- **opencode [#44828](https://github.com/sst/opencode/pull/44828) /
+  [#44281](https://github.com/sst/opencode/pull/44281)** — Cloudflare AI Gateway
+  routing and per-gateway slug rewriting. inber has no gateway provider:
+  `agent/clients.go:91-101` resolves a base URL per provider name with an
+  OpenAI-compatible catch-all and no slug-rewrite layer.
+  **[#44115](https://github.com/sst/opencode/pull/44115)** is pure UI despite the
+  name — sticky provider group labels in the model selector, no header sent
+  anywhere.
+- **claude-code**, nine CHANGELOG commits in the window spanning roughly
+  2.1.237–2.1.241. Verbatim, **2.1.241 and 2.1.240 are each "Bug fixes and
+  reliability improvements" and nothing else**; 2.1.237–2.1.239 are already
+  written up at `claude-code.md:364` and `:444`. The one in-window capability line
+  those entries do not mention is 2.1.238's `headersHelper` cluster — a
+  marketplace/MCP config field that runs a command to mint HTTP headers, gated
+  behind the folder-trust dialog and run without inherited credential env vars.
+  Not applicable: inber has no plugin or marketplace surface and no config-driven
+  header minting, and the credential-env-inheritance half is already documented at
+  `agentic-design-patterns.md:3922-3949` with an open todo.
+- **codex #40488, #40486, #40496, #40465** are analytics and metrics only —
+  #40496's "control tools" turns out to be a telemetry classification with no
+  behavioural split, which is worth saying because the title reads like a
+  permission model. **#40460, #40447, #40443, #40499, #40398, #40508/#40509,
+  #40501, #40450** are runtime/Windows/CI plumbing or further ContentItemKind
+  work already covered by the 08-24 entry at line 6151.

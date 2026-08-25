@@ -3913,3 +3913,162 @@ written for them. Named here so the next sweep does not re-fetch them:
 `2608.19741`, `2608.17007`, `2608.16055`, `2608.16801`, `2608.15888`,
 `2607.25090`, `2608.17393`, `2608.19564`, `2608.15008`, `2608.12888`,
 `2608.13662`, `2608.18066`, `2608.14876`, `2608.18351`, `2608.00997`.
+
+## Harness-watch — 2026-08-25
+
+Window 2026-07-26 → 2026-08-25. Fifty verified candidates, **44 already logged
+here**, so the sweep is now mostly re-reading itself — the screened list at the
+end of this section is longer than the section. Six are new. Two of them
+(`2608.22752`, `2608.22708`) land on machinery inber runs today, and one
+(`2608.23067`) is the first measured argument *against* a rule in this box's own
+directives.
+
+### 1. [arXiv:2608.22752](https://arxiv.org/abs/2608.22752) — a safety rule and a chat log are compacted at the same rate, and only one of them survives being paraphrased
+
+Zerhoudi, Mitrovic, Granitzer (2026-08-24). Measured across 20 production agent
+configurations: Claude Code's `/compact` prompt on Sonnet 4.6 retained **53% of
+safety rules after one compaction and 10% after five** — they call it the
+Compaction Cliff. The diagnosis is the useful part: an episodic log survives being
+summarized because its value is its gist, and a rule does not, because its value
+is its exact wording. Uniform summarization therefore destroys one class and
+preserves the other while reporting a single ratio. Their Knowledge Triage
+classifies each knowledge-base line by type and gives each type its own retention
+policy — TypeCompact keeps **2–4× more safety rules** than the strongest
+single-shot LLM compactor at every ratio (**96% recall over five rounds**),
+TypeDecompose **0% locality violations against 93%** under uniform partitioning,
+TypeRetrieve **100% recall@50 against 73%**. They release AgentArtifactCorpus:
+396,934 agent configurations mined from 54,628 GitHub repos.
+
+**What inber should consider:** inber's compaction is uniform over the transcript
+(`conversation/summarize.go`, `conversation/manage.go`), so a standing operator
+constraint decays at the same rate as a `ls` output. The cheap half of Knowledge
+Triage is not the classifier — it is admitting that some lines must be *copied*
+rather than summarized. inber already has a preserve-set concept in the pruner;
+the question a fix has to decide is **where the rule-type marking comes from**:
+the agent record in agent-store (durable, operator-authored, but blind to rules
+that arrive mid-session), or a per-message flag set at injection time (catches
+both, but every injection site must set it, which is exactly the failure mode the
+08-24 entry documented for `ContentItemKind`). Do not pick one here.
+
+### 2. [arXiv:2608.22708](https://arxiv.org/abs/2608.22708) — progressive tool disclosure and prompt caching are in direct conflict, and the resolution is to move the varying part off the cached prefix
+
+Zha et al. (2026-08-24). Stated plainly for the first time in this directory:
+showing the model only the currently-relevant tools keeps the prompt small, and
+every change to that visible list invalidates the cached prefix, so the two
+techniques cancel. CacheRouter separates the jobs — the main model always sees a
+**small fixed core tool set**, so its request head is byte-stable across turns,
+and the long tail is reached through an independent router sub-model that searches
+the full catalog, picks one tool, executes it and returns only the result. On 55
+functional queries and a 30-turn dialogue, token-level cache hit rates of
+**90.99% and 95.2%**, cutting input cost to **12.0% and 8.0%** of a no-cache
+baseline under DeepSeek pricing.
+
+**What inber should consider:** this is the direct counterweight to "disclose tool
+definitions progressively", which this directory logged approvingly from
+Anthropic's context-engineering post on 2026-08-24 — that advice is priced in
+cache misses and the post does not say so. It lands on live inber machinery: the
+tool block is assembled per turn in `engine/build_tools.go` and then appended to
+by `mergeExtraTools` (`engine/engine_new.go`), so anything that makes an agent's
+tool set turn-dependent moves the cache breakpoint. The structural point is that
+inber already owns the expensive half of CacheRouter — `spawn_agent` *is* a router
+sub-model — so the long tail can be delegated rather than disclosed. What a fix
+must decide: whether a delegated tool call is allowed to write, because a router
+sub-agent that only reads is a cache optimization and one that can write is a new
+principal with no allowlist of its own.
+
+### 3. [arXiv:2608.23067](https://arxiv.org/abs/2608.23067) — injected Agent Skills *lowered* Pass@2 by 1.3–4.2% while raising token cost 72–394%
+
+Yang and Ding (2026-08-24). WebDev-Skills-Bench: 31 public WebDev Skills across 50
+Web-Bench projects, 1,000 ordered tasks. Injecting the *target* Skill — the one
+written for that job — **reduced mean Pass@2 by 1.3% to 4.2%** and **raised token
+cost by 72% to 394%**. Skills helped in only **17–36% of Skill-project pairs**.
+Length-matched controls isolate content from length: Skill *content* lowered Pass@2
+by 1.1–1.4% in some models, so this is not a context-length artifact. The losses
+concentrate on easy early tasks, where the Skill displaces a straightforward
+solution the model already had.
+
+**What inber should consider:** this is the first measured evidence against an
+unconditional skill lookup, and this host's own directives mandate one before any
+non-trivial task. The paper's framing — a Skill is a hypothesis about a specific
+Skill × project × model triple, not a portable asset — is the actionable part: if
+inber records which agent and which repo a skill was pulled for and whether the
+run succeeded, the injection becomes an audited decision with a growing evidence
+base instead of a reflex. Note the limits before over-reading it: WebDev only, and
+Pass@2 on a benchmark of ordered tasks is not the same shape as inber's work.
+
+### 4. [arXiv:2608.22339](https://arxiv.org/abs/2608.22339) — a skill mined from a success raises the model's confidence in the *wrong* tool by 47%
+
+Lin et al. (2026-08-23). The assumption under every "learn from successful
+trajectories" memory design is that more retrieved skills cannot hurt. On tasks
+that *resemble* past successes but need different tools, retrieving more skills
+**increases confidence in wrong tool calls — procedure skills raise the wrong-tool
+margin by 47%** over a memory-free baseline. They call it the Skill Imitation
+Trap. Boundary-Aware Skill Memory attaches applicability conditions, risk cues,
+avoidance rules and recovery notes to each skill: **+23.8% task success on
+AppWorld**, **+5.0% on BFCL**, **−4.6% attack success rate on AgentDojo**,
+**−6.6% average AppWorld steps**.
+
+**What inber should consider:** the sharpest form of this result is that a memory
+recording only what worked is *actively misleading* near its own boundary, which
+is worse than absent — the same shape as the 08-24 entry's finding that
+append-only memory scored below no memory at all, arrived at from a different
+direction. inber's memory rows carry no negative field. A fix has to decide
+whether the boundary is **required on write** (which blocks the cheap
+`memory_save` call that makes memory get used at all) or **retrievable-only when
+present** (which lets the unbounded rows keep competing in ranking). That is a
+real trade, not an oversight.
+
+### 5. [arXiv:2608.21690](https://arxiv.org/abs/2608.21690) — treat the session as an executable environment with an eviction index, not a prompt to be summarized
+
+Lin et al. (2026-08-21). The argument against both summarization and
+extract-to-memory is that each commits to what matters *before* the future need is
+known. Scroll makes each session an executable Session Environment over an
+append-only Event Log plus a sandboxed persistent Python kernel: tool outputs bind
+to variables in a typed namespace instead of being serialized into the prompt each
+call, only explicitly printed projections enter the working view, and evicted spans
+stay recoverable through an eviction index of compact landmarks pointing at exact
+Event Log addresses. With Qwen3.8-Max: **94.8% LongMemEval_S**, **73.1%
+BEAM_10M (+5.1 pts over the best published memory system)**, **86.7% LOCA_256K
+(+37.4 pts over the best published long-horizon agent)**.
+
+**What inber should consider:** take the eviction index and leave the kernel.
+inber's SQLite session store is already the append-only log this design assumes,
+so the missing piece is one landmark row per compacted span carrying the message
+row id — which makes a compacted-away span *addressable* rather than gone, and is
+the recoverability property on its own. The kernel half is a much larger change
+and is not required for it.
+
+### 6. [arXiv:2608.22510](https://arxiv.org/abs/2608.22510) — one-shot success and three-trial success rank agents differently enough that a leaderboard on either is not evidence about the other
+
+Xiao (2026-08-23). The claim is that the evaluable unit is a declared
+model-plus-runtime configuration, because failures land in evidence acquisition,
+runtime routing, safety boundaries and repeated execution — none of which a final
+answer shows. ClawProBench runs on OpenClaw with native surfaces for browsing,
+memory, messaging, scheduling, skills and subagents, scoring from execution traces
+under a safety-gated correctness/process/efficiency formula. Across 68
+configurations: top trace score **0.7671**; native-runtime tasks underperform
+workspace-live tasks **0.5238 vs 0.6415**; **pass@k-any 0.6638 against strict
+three-trial pass 0.2890**; and full-profile against holdout rankings agree at only
+**Spearman 0.1300**.
+
+**What inber should consider:** the 0.29-against-0.66 gap says a single successful
+run is mostly luck at this reliability level, so any inber-versus-harness
+comparison that reports one trial is reporting noise — run three and report the
+strict number. The second half is cheaper than it sounds: inber already writes
+session events to SQLite, so scoring from those rows rather than from the last
+assistant message is a query, and it is the only way failures in spawn, steer and
+delegation become visible at all, since every one of them can occur under a
+correct final answer.
+
+**Screened and rejected — verified and already present in this directory**, named
+so the next sweep does not re-fetch them: `2608.20195`, `2608.19799`,
+`2608.18645`, `2608.18167`, `2608.18050`, `2608.17528`, `2608.17485`,
+`2608.17393`, `2608.17034`, `2608.16402`, `2608.16295`, `2608.16055`,
+`2608.15888`, `2608.15678`, `2608.15584`, `2608.15241`, `2608.15117`,
+`2608.14876`, `2608.14863`, `2608.14093`, `2608.13867`, `2608.13662`,
+`2608.13560`, `2608.13522`, `2608.11772`, `2608.11727`, `2608.11386`,
+`2608.11152`, `2608.10504`, `2608.10450`, `2608.10402`, `2608.10319`,
+`2608.10178`, `2608.09290`, `2608.08793`, `2608.07855`, `2608.07556`,
+`2608.05263`, `2608.01558`, `2608.01507`, `2608.00902`, `2608.00202`,
+`2608.00101`, `2607.25816`, `2607.25090`, `2607.25032`, `2607.15516`,
+`2607.13080`, `2607.12161`, `2607.10582`.
