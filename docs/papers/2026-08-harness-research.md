@@ -4072,3 +4072,433 @@ so the next sweep does not re-fetch them: `2608.20195`, `2608.19799`,
 `2608.05263`, `2608.01558`, `2608.01507`, `2608.00902`, `2608.00202`,
 `2608.00101`, `2607.25816`, `2607.25090`, `2607.25032`, `2607.15516`,
 `2607.13080`, `2607.12161`, `2607.10582`.
+
+## Harness-watch — 2026-08-26
+
+Window 2026-08-20 → 2026-08-26 for arXiv, 2026-07-26 → 2026-08-26 for lab and
+industry sources. Roughly seventy arXiv hits were already logged here, so the
+screened list at the end is again the longer half. **Thirteen are new**, and two
+of them (`2608.24358`, `2608.23651`) land on machinery inber runs today —
+`2608.24358` is the direct counterpart to the defect this run filed as
+`7c6a0ee4-9907-477e-96ee-f21f060e1584`. Announcement lag means nothing submitted
+2026-08-26 is visible yet; the newest ids are `2608.248xx` from 08-25.
+
+### 1. [arXiv:2608.24358](https://arxiv.org/abs/2608.24358) — the right amount of trajectory to carry across a model switch *reverses* with the direction of the switch
+
+Ganz, Shpigel Nacson, Kalyanpur, Litman (2026-08-25, cs.AI). "The Handoff Tax."
+Paired low-capability and high-capability models **from both the Claude and GPT
+families**, switching mid-run, varying direction, timing, and the interface —
+full-trajectory transfer, compaction, or trajectory removal with repo state
+preserved. Two findings. **Full-trajectory escalation recovers less than half of
+the LC→HC quality gap while incurring a substantial cost premium** — that gap is
+the handoff tax, and downshifting once the hard reasoning is done is a favourable
+cost-quality point. The second is the one that matters here: **the preferred
+interface reverses with direction.** Reducing the inherited trajectory *improves*
+escalation quality; removing the HC model's trajectory *degrades* downshift
+quality. Headline results are stated directionally in the abstract rather than as
+point percentages, which is worth saying before quoting them.
+
+**What inber should consider:** inber crosses providers mid-run by design —
+`selectModel` (`engine/failover.go:22`) walks model-store's `FailoverChain()`, and
+the live priority table on this host interleaves anthropic and openai. Today it
+applies a **fixed** trajectory reduction in exactly **one** direction and never
+the other: `engine/turn_execute.go:35` deletes every OpenAI-sourced tool pair when
+entering an Anthropic turn, while `engine/turn_openai.go:57` projects losslessly
+in the reverse direction. That is the opposite of what this paper measures on the
+axis that matters — the reduction is applied on entry to Anthropic regardless of
+whether that model is an escalation or a downshift, because inber has no notion
+of tier at all. The defect half is filed as
+`7c6a0ee4-9907-477e-96ee-f21f060e1584`; the *policy* half is a separate and
+larger question, and this paper says a single uniform compaction rule is the
+wrong shape for it. Note the limit before over-reading: their handoffs preserve
+repo state and switch a whole session, which is not the same as inber's per-turn
+failover under a health signal.
+
+### 2. [arXiv:2608.23651](https://arxiv.org/abs/2608.23651) — the *verbatim text* of a failed tool call is what makes a model repeat it, and deleting the attempt is the worst available remedy
+
+Gumaan (2026-08-24, cs.SE). Defines the **corrective gain** of a failure record as
+the change in log-probability of re-emitting the action that just failed, and
+measures it **negative for all six instruction-tuned checkpoints tested**
+(135M–1.7B, four families) across simulated tool calling and MBPP repair:
+**≈ −1.03 nats per action token, a 2.8× odds shift per token, holding on 90–100%
+of individual items.** Over a fixed candidate set, the probability of repeating
+the failed call rises **0.06 → 0.54**, and greedy decoding reproduces it
+token-for-token on **19% of items after the failure against 0% before**.
+Counterfactuals separate form from semantics: **the failed call's verbatim text
+accounts for 83% of the damage**, while marking it "failed" contributes little.
+Two remedies and one anti-remedy: replacing the verbatim call with a
+runtime-generated failure description **removes 76% of the inversion at zero token
+cost**; an explicit "do not repeat" instruction does nothing; and **deleting the
+failed attempt and retrying from a clean context was the worst harness measured**,
+because it restores the context that caused the failure.
+
+**What inber should consider:** the anti-remedy is the actionable half, because
+inber has that shape in two places. `conversation/repair.go:12`'s
+`interruptedToolResultText` replaces an unanswered call's *result* while leaving
+the call's arguments verbatim, and `truncateToolCall`
+(`conversation/manage_tool_pruning.go:104-117`) rewrites a `tool_use` input to
+`{"_summary": "name: args"}` — which is a *shortened* verbatim, not a
+description. The paper's cheap fix maps onto the existing
+`replaceToolUseInput` seam exactly. **Read the scope before acting on it:** every
+checkpoint measured is 135M–1.7B, and inber runs frontier models where the effect
+may be far smaller or absent. This is a hypothesis to test on this host's own
+rollouts, not a finding to port — and the file already holds the right instrument,
+since `tool_use` blocks in the transcript are the ground truth for how often a
+failed call is re-emitted.
+
+### 3. [arXiv:2608.24188](https://arxiv.org/abs/2608.24188) — an extractive 4B compressor holds 86.5% of solve quality at 25.7% of the context, and copies 96% of identifiers verbatim
+
+Shi, Chen (2026-08-25, cs.AI). Paritok-4B is a LoRA compressor that **selects
+spans rather than rewriting**, conditioned on agent intent so retention follows
+task relevance instead of uniform shrinkage; trained on **67,074 real OpenHands
+trajectories**. **96% of identifiers, paths and numbers in its output are copied
+verbatim from the input.** Compression to **25.7% of original size at 86.5% solve
+quality on SWE-bench Lite**; with line-numbered input, **27.8% and 89.3%**, no
+statistically significant degradation at that sample size. The model is **264 MB,
+self-hosts on one GPU, and has no per-token fee.**
+
+**What inber should consider:** the extractive-versus-abstractive distinction is
+the transferable part and it does not require the model. inber's compaction is an
+LLM summary (`conversation/summarize.go`) whose output is prose, so a file path or
+a symbol name that survives compaction survives as something the summariser
+*rewrote* — and the failure mode is a plausible-looking path that does not exist.
+The 96%-verbatim figure names the property a coding harness actually needs from a
+compactor. The economic argument is secondary but real: using a frontier model as
+the compactor is the expensive way to buy a property a 264 MB extractive model
+gets structurally.
+
+### 4. [arXiv:2608.24876](https://arxiv.org/abs/2608.24876) — split agent memory into mutable working state and validated skills, and the benefit *grows* with horizon length
+
+Yu, Wu, Yin et al., incl. Wang and Yan (2026-08-25, cs.AI). Recuris separates a
+**Working Memory** tracking task progress, which gates skill selection, from an
+**Experiential Memory** of skills, so a skill is chosen against current state
+rather than the full history; a fixed Meta-Agent turns execution evidence into
+localized, **validation-gated** updates to skill memory. Across **four
+long-horizon benchmarks and ten models it improves success in 35 of 37 completed
+model-benchmark pairs**: **+17.8 points to GPT-5.6 Sol and +15.6 to Claude Opus 5
+on tau-bench** (Opus 5 → 87.9%), **+16.6 / +13.5 on Qwen3.6-27B/35B on
+SkillFlow**. The advantage **widens with horizon, to +32.2 points on the longest
+tasks**, and common long-horizon failure modes drop by **up to 80%**.
+
+**What inber should consider:** this is the third independent arrival in three
+days at the same conclusion — after `2608.22339`'s Skill Imitation Trap (a skill
+mined from a success raises confidence in the wrong tool by 47% near its
+boundary, 08-25) and `2608.07429`'s finding that append-only memory scored below
+no memory at all (08-24) — that **an unvalidated, ungated skill store is worse
+than absent**. The validation gate is the common element in all three. inber has
+the working-memory half already and does not call it that: noteboard's
+`workspace` type is a timestamped document a recurring job reads first and
+rewrites last, which is exactly this design's Working Memory, and it sits outside
+the todo queue for the same reason the paper gives. The missing half is that
+`memory_save` writes an unvalidated row. What a fix must decide is unchanged from
+the 08-25 entry and should not be settled here: whether the gate is required on
+write, which blocks the cheap call that makes memory get used at all.
+
+### 5. [arXiv:2608.23992](https://arxiv.org/abs/2608.23992) — 140.2k tool tokens to 1.3k in production, and an explicit argument that prompt caching is not a substitute
+
+Saha, Wang, Manoharan (2026-08-25, cs.IR). SCOUT reframes tool exposure as
+context *selection*: instead of injecting all schemas, expose two MCP meta-tools,
+`tool_search` and `execute_tool`, where the search fuses **BM25 sparse matching
+with dense vector search via Reciprocal Rank Fusion** over a catalog supporting
+zero-downtime updates. Scale: **2,000+ tools across 200+ MCP servers.** In
+production at PayPal, **MCP tool-token consumption drops from 140.2k tokens
+(70.1% of context) to 1.3k (0.8%) — a 99% reduction.**
+
+**What inber should consider:** the sentence to keep is the one they wrote as a
+rebuttal — *prompt caching reduces reprocessing cost but neither frees context
+capacity nor improves accuracy.* That is the counterweight to `2608.22708`
+(CacheRouter, logged 08-25), which argued the other way, and the two are not
+actually in conflict: caching buys back the *price* of a large tool block and
+selection buys back the *window*. inber pays both costs today —
+`engine/build_tools.go:48-65` `buildDefaultTools()` puts the entire registry on
+the wire, and `agent/agent_run.go:36` caches it — and has never measured either.
+The measurement is the prerequisite and the 2026-08-14 shadow-selector plan in
+`agentic-design-patterns.md:1510` already describes how to take it.
+
+### 6. [arXiv:2608.22331](https://arxiv.org/abs/2608.22331) — prompt phrasing, not sampling, sets the noise floor: 11×–58× larger
+
+Chen, Qian, Wang et al. (2026-08-23, cs.CL). Audits measurement variability for
+**three native tool-calling endpoints across two providers** on BFCL
+multiple/parallel with matched AST grading. At temperature 0 reruns are nearly
+deterministic — **ever-flip fractions of 0.7%, 2.0%, 2.7%; mean run correlations
+0.997, 0.966, 0.961**. But **semantics-preserving prompt perturbations produce
+median paired standard deviations 11× to 58× larger than rerun paired SDs.**
+Failure *character* also shifts: **malformed-output failures are 30%, 7% and <1%
+of task failures** across the three endpoints, so one accuracy number hides both
+stability and failure mode.
+
+**What inber should consider:** this sets the bar for any inber-versus-harness
+comparison, and it sharpens `2608.22510` from 08-25 rather than repeating it —
+that paper said one trial is noise against three (0.2890 strict versus 0.6638
+pass@k-any), and this one says even three trials at temperature 0 understate the
+real variance by an order of magnitude unless the *prompt* is perturbed too. Both
+are cheap for inber: session events already land in SQLite, so the scoring is a
+query; the perturbation is the new work.
+
+### 7. [arXiv:2608.23550](https://arxiv.org/abs/2608.23550) — only 4.4% of security rules written into CLAUDE.md have a matching enforceable control
+
+Yan (2026-08-24, cs.HC). Measures the gap between natural-language security rules
+in instruction files and enforceable Claude Code controls across **481 public
+CLAUDE.md files**. Under the strictest matching standard **4.4% (95% CI
+2.6–6.7%)** of retrieved security rules had a matching built-in control; **~4–16%
+depending on strictness**, with close agreement between two blinded
+security-practitioner annotators. A manual review found the extraction pipeline
+captured **66.3%** of eligible rules, so the rates describe the captured subset.
+The framing is the finding: an instruction file is a **write-only channel** — the
+author gets no feedback on whether anything will enforce what they wrote, and the
+same plain text silently mixes enforceable rules with model-interpreted ones.
+
+**What inber should consider:** this box runs exactly the two-layer arrangement the
+paper measures — `~/AGENTS.md` and `~/CLAUDE.md` as prose, `guard/` and
+permission-store as enforcement — and nothing anywhere reports which prose rules
+are backed. The cheap version is a lint that reads the directives and answers, per
+rule, *enforced by X* or *model-interpreted only*; the honest version admits that
+most will be the latter and that saying so is the point. Related and already
+logged: `2608.20195` (the documentation agents actually read is the instruction
+file, 08-22).
+
+### 8. [arXiv:2608.21964](https://arxiv.org/abs/2608.21964) — every release transition invalidated part of the skill set, and skill decay raises no signal
+
+Duan, Shi, Mao et al. (2026-08-22, cs.AI). Repo2Skill-Evo casts each release as a
+skill-maintenance task: given a V1 skill set and the official V1→V2 patch, update
+what is obsolete and preserve what is still valid. Across **57 real repositories
+and 105 selected release transitions, every evaluated transition invalidated part
+of the V1 skill set.** Six frontier agents reach only **29.9%–69.7% avg@3 macro
+F1** under a patch-grounded metric balancing stale-content recall against
+over-editing precision, and two opposing errors dominate — incomplete file
+coverage leaves stale content, overbroad editing raises recall and drops
+precision. The core claim: **externalizing knowledge into a skill makes its rot
+invisible.**
+
+**What inber should consider:** this is about skill-store (`:8301`) rather than
+inber, and it is the strongest argument yet for a staleness signal there — the
+registry ingests by cloning an upstream repo, so it knows the commit each
+`SKILL.md` was read at and can say how far behind the upstream has moved without
+judging the content at all. Pairs with `2608.23067` from 08-25, which measured
+injected skills *lowering* Pass@2 by 1.3–4.2%: a stale skill is the mechanism, and
+this paper says staleness is guaranteed rather than occasional.
+
+### 9. [arXiv:2608.23041](https://arxiv.org/abs/2608.23041) and [arXiv:2608.24804](https://arxiv.org/abs/2608.24804) — two independent papers evolving the *harness* with the model frozen, both reporting double-digit gains
+
+Park, Kim, Tan et al. (2026-08-24, cs.AI) — **AutoSaddler**: offline learning from
+failure traces, diagnosis → structured patch treating the harness as code →
+validation-based update selection, iterated over mini-batches. **+9.0 pp on
+GAIA2, +9.6 pp on SWE-Bench Pro, +10.0 pp on Terminal-Bench 2.0.** Ablations
+attribute the gain to **deep debugging rather than shallow reflection, targeted
+modifications rather than unconstrained editing, and generalization-aware
+selection rather than trajectory-specific repair** — i.e. the naive
+reflect-and-rewrite-the-prompt loop underperforms.
+
+Esakkiraja, Akhiyarov, Yadav et al. (2026-08-25, cs.AI) — **StarHarness**:
+stratified search over prompt framing, tool interfaces, skills, MCP providers,
+**subagent structure**, and agent-loop configuration, with proposer-visible search
+tasks separated from proposer-hidden selection tasks. **+20–35 percentage points
+across ITBench SRE, EnterpriseOps-Gym ITSM and AutomationBench Finance after only
+4–12 accepted changes per environment**, persisting on held-out tasks and
+transferring across GPT and Qwen families without re-evolution.
+
+**What inber should consider:** together these are a measured argument that the
+harness, not the model, is the binding constraint — the same claim OpenAI made
+non-academically this window (§11). The inber-specific note is that both methods
+need failure traces as data, and inber has them: `session.jsonl` plus the SQLite
+session store. What neither paper solves, and what inber would have to decide
+first, is the **acceptance gate** — StarHarness's whole discipline is that the
+proposer never sees the tasks used to select, and an unattended loop that patched
+`agent/`, `engine/` or the prompt blueprint against traces it also proposed
+against would be overfitting with a commit bit. Do not build the loop before the
+holdout.
+
+### 10. [arXiv:2608.22215](https://arxiv.org/abs/2608.22215) — route memory writes with a small model: 68% of redundant writes pruned, 98% of downstream quality kept
+
+Li, Nie, Lan et al. (2026-08-23, cs.CL). Moves memory management to the **write**
+phase: each incoming item is classified non-write / write-new / write-update by a
+**small-to-large model cascade**, with a periodic slow consolidation of
+high-value external memories into parameters. A **1.7B/8B cascade prunes up to 68%
+of redundant external memory while escalating fewer than 50% of inputs to the
+large model, and retains over 98% of the downstream QA Exact Match** of an
+exhaustive-retention baseline.
+
+**What inber should consider:** the cheap half — a write-time router deciding
+new / update / skip — is the one inber can build, and it is the missing piece
+under `2608.19652`'s superseded-fact finding (08-22) and `2608.07429`'s
+append-only result (08-24): all three say the same thing, that the defect is at
+the write, not the read. `memory_save` has no supersession field and no
+classification step, so a revised fact and the fact it revises both survive into
+ranking. The parameter-consolidation half is out of scope and should be said so
+explicitly, or it will be read as a prerequisite.
+
+### 11. Lab and industry — the two items with the most weight
+
+- **MCP specification revision `2026-07-28` removes the handshake, sessions and
+  SSE resumability.**
+  [Changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog).
+  Nine breaking changes. `initialize`/`notifications/initialized` is **gone** —
+  every request carries `io.modelcontextprotocol/protocolVersion` and
+  `clientCapabilities` in `_meta`, and servers must implement a mandatory
+  `server/discover` RPC (SEP-2575). Protocol-level sessions and `Mcp-Session-Id`
+  are removed (SEP-2567): cross-call state becomes a server-minted handle passed
+  as an ordinary tool argument. Server-initiated requests (`roots/list`,
+  `sampling/createMessage`, `elicitation/create`) are replaced by **MRTR** — the
+  server returns `resultType: "input_required"` with `inputRequests` and the
+  client **retries the original request** with `inputResponses` — and every result
+  now carries a required `resultType`. SSE resumability is removed entirely: no
+  `Last-Event-ID`, no event ids. Roots, Sampling and Logging are deprecated on a
+  12-month window, with the suggested Sampling migration being *"integrate
+  directly with LLM provider APIs instead."* Two items are directly ours:
+  servers **SHOULD** return `tools/list` in deterministic order, stated explicitly
+  *"to improve LLM prompt cache hit rates"*, and list/read results now require
+  `ttlMs` + `cacheScope` via a new `CacheableResult` interface.
+  **For inber:** `tools/mcp/client.go` does the handshake and would need
+  rewriting, and it has zero importers outside its own package — which makes this
+  the moment to decide the open todo *"the tools/mcp package has zero importers —
+  delete it or wire it"* with the extra fact that wiring it now means wiring the
+  superseded protocol. The deterministic-`tools/list` rule is free input for the
+  cache-breakpoint work in `agentic-design-patterns.md` 2026-08-26 §4.
+- **OpenAI: two harness settings tripled ARC-AGI-3 while using 6× fewer output
+  tokens.** GPT-5.6 Sol scored **13.3%** on the public set with the official
+  harness and **38.3%** with retained reasoning and context compaction enabled.
+  Their framing: *"the harness was not letting it remember what it had learned."*
+  Retained reasoning means carrying reasoning items across tool calls and turns —
+  `previous_response_id` or encrypted reasoning items on the Responses API — so
+  the model does not re-derive its plan before every action.
+  ⚠️ **Not first-party-verified:** openai.com returns 403 to the fetcher used
+  here; the numbers are quoted verbatim on
+  https://developers.openai.com/blog/codex-as-a-platform, which was fetched, and
+  the 2026-07-29 date comes from search results only. Treat the date as
+  unconfirmed.
+  **For inber:** the OpenAI path is Chat Completions only — `OpenAIRequest`
+  (`agent/openai_types.go:39-46`) has `Model`, `Messages`, `Tools`,
+  `Temperature`, `MaxTokens`, `MaxCompletionTokens`, `Stream` and nothing else —
+  so there is no reasoning item to retain and no `previous_response_id` to send.
+  Every reasoning-model turn inber serves through that path re-derives its plan
+  from scratch at every tool call. Whether that is worth a Responses-API path is a
+  design question with a real cost (a second request builder, a second usage
+  mapping, a second finish-reason table), and the existing open todos on that path
+  — `25b91c78` (the reasoning-model switch is a two-prefix `HasPrefix`),
+  `e68b05e0` (effort accepted and discarded) — are the ones it would have to be
+  decided alongside.
+
+### 12. Lab and industry — the rest, one line each
+
+- **Anthropic mid-conversation tool changes** (beta
+  `mid-conversation-tool-changes-2026-07-01`, Opus 5, 2026-07-24) — write-up in
+  `agentic-design-patterns.md` 2026-08-26 §4; the doc states the prefix hash order
+  `tools` → `system` → `messages` explicitly, which is the first first-party
+  confirmation of a rule this directory had been inferring.
+- **Anthropic advisor tool** — a cheap executor consults a higher-tier advisor
+  mid-generation; `max_uses` is per-request and exceeding it returns
+  `max_uses_exceeded` while the executor continues unadvised. Caching is
+  `{"type":"ephemeral","ttl":"5m"|"1h"}` and the docs stress *"this is not a
+  breakpoint marker. It is an on/off switch."* Measured: advisor output is
+  typically 400–700 text tokens, a plaintext nudge to consult made **74% (Sonnet)
+  to 98% (Haiku)** of nudged attempts call at turn 2, and nudging at turn 2 on
+  workloads whose natural first call was turn 7+ correlated with a **3–4
+  percentage-point performance drop**. Relevant to inber as a cache-preserving
+  alternative to spawning an Opus child over the bus — and the nudge finding is a
+  direct warning against hard-coding "ask the advisor first."
+- **Anthropic Managed Agents limits**, worth copying as numbers someone else has
+  already had to pick: **max 20 agents per roster**, delegation **exactly one
+  level deep** (validated at create/update), **max 25 concurrent threads**, the
+  roster **snapshotted at create** so referenced agents stay pinned, a **single
+  shared budget across all threads** that stops new model requests with a
+  `budget_reached` stop reason rather than killing the session, and an interrupt
+  that closes each pending tool call with an error `tool_result` and re-emits idle
+  **without sampling the model**. The last two are things a bus-based spawn/steer
+  implementation gets wrong by default.
+- **IBM Research / Hugging Face, ALTK-Evolve**
+  (https://huggingface.co/blog/ibm-research/altk-evolve-hmm, 2026-08-18) —
+  behavioural guidelines extracted from prior trajectories and re-injected at
+  inference. On AppWorld across eight models 30B–745B the dose-response is the
+  finding: gpt-oss-120b **39.9 → 56.0 TGC (+16.1pp)**, DeepSeek-V3.2 **+9.5pp**,
+  Claude Opus **90.5 → 94.6 (+4.1pp)**, GLM-5 **0pp**. Token overhead
+  **+5% for curated retrieval against +51% for injecting the full set**. Directly
+  applicable: a memory tool that injects everything it holds on every step is
+  paying the 51% for a benefit that shrinks toward zero as the model gets
+  stronger.
+- **Cursor changelog 2026-08-19** — subagents get **dedicated VMs** with
+  independent project copies, and follow-up messages **queue for the next tool
+  call rather than halting execution**. The second is a property inber already
+  has: `InjectCheck` (`agent/agent_run.go` via `agent/agent.go:344-350`) is
+  consulted between round-trips and appends to the last user message rather than
+  restarting the turn. Anthropic's mid-conversation doc independently recommends
+  the same pattern.
+- **Inference hooks** (Anthropic beta, 2026-08-05, Enterprise) — every governed
+  prompt is held for an external security server's allow/deny verdict **before
+  inference**, signed, with configurable failure handling. A synchronous
+  pre-inference gate, architecturally distinct from tool-call gating; relevant to
+  permission-store's design if it ever grows one.
+- **`agent-memory-2026-07-22` beta header** — memory listing becomes stable
+  server-defined order with `order_by`/`order` **ignored**, `depth` restricted to
+  `0`/`1`/omitted, and `path_prefix` matching whole path segments rather than
+  substrings. Page cursors do not survive adoption. A real contract tightening.
+- **Computer use out of beta** as `computer_toolset_20260801`, plus a new
+  `browser_toolset_20260801` that reads the accessibility tree rather than pixels,
+  and **web tool domain restriction** — `allowed_domains` / `blocked_domains` and
+  `max_content_tokens` on `web_fetch`, a per-tool sandbox contract rather than an
+  all-or-nothing switch.
+- **Nothing new this window** from the Anthropic engineering blog (most recent
+  posts 2026-04-23 and 2026-04-08), Google DeepMind, the Gemini API changelog, or
+  Meta AI. Simon Willison notes the Muse Spark 1.2 card mentions *"rejection
+  sampled harness trajectories and recipe optimizations for goals, compaction, and
+  subagents"* with no accompanying write-up.
+- ⚠️ **Verification note:** the Claude Code release-notes page now 307s to the
+  GitHub `CHANGELOG.md`, which carries version numbers and **no dates**. This
+  window's Claude Code entries were dated by fetching the ten CHANGELOG commits
+  directly and are written up in `docs/comparisons/claude-code.md`.
+
+### 13. Screened and rejected, with the reason
+
+- **2608.23953** "The Empire, Long Divided, Must Unite" (cs.SE, 08-25) — a
+  source-level study of three open harnesses finding convergence on five elements
+  (commoditised loop, append-only replayable session record, model quirks as data,
+  progressive disclosure, extension seams) and a total absence of external
+  verifiability. Squarely on topic and **contains zero measured numbers**;
+  excluded from the ranked list on that rule alone, and worth reading anyway for
+  the taxonomy — inber has four of the five.
+- **2608.24271** llmmas-otel — tool paper, *"initial validation on a minimal demo
+  workflow,"* no numbers.
+- **2608.23623** "When May an Agent Stop?" — heavily numeric (0/288 unsafe
+  completions against 252/288) but **48 fully synthetic tasks** and
+  near-degenerate intervals; low external validity.
+- **2608.23740** AgentRoom (CRDT-backed concurrent multi-agent coding) — results
+  are an ordering, not a split.
+- **2608.23395** Right-Sizing LLM-Agent Decomposition — 4,400 runs and
+  pre-registered, but the intermediate-optimum hypothesis is **unsupported** and
+  the domain is cross-border VAT; the honest negative does not transfer.
+- **2608.21884** Loop Engineering — mined 36,710 repos and confirmed autonomous
+  loops in 217 of 256 heuristic matches, with the nice observation that repos
+  commit loop *configuration* and almost never the prescribed state files. Mostly
+  review plus a research agenda.
+- **2608.23628** "Callability Is Not Operability" — abstract fetched, reports no
+  results.
+- **2608.21833** GameXpert-Bench — task counts only, no scores.
+- **2608.22963** SPARE context pruning (37.89–64.58% reasoning tokens removed) and
+  **2608.23252** Laws of Context Allocation (+16.7–20.5pp portfolio recall) — real
+  numbers, wrong domain: multimodal tool use and RAG/generative search.
+- **2608.23564** SWE Refactor Bench (08-24) — kept out of the ranked list only
+  because it is an eval rather than a harness technique, but the number is worth
+  recording: across **520 runs from 8 frontier models, 28 (5.4%) pass all three
+  stages, 13 of 20 tasks receive no accepted solution, best model claude-opus-5 at
+  47.0/100**, and the protocol exists specifically to catch *"Blindness"* — an
+  agent copying the original implementation to make tests pass. The transferable
+  claim is that **test-passing is not a completion signal**, which is the same
+  hazard as the `updateMainSession` / spawn-summary path inber trusts.
+- **2608.21747** Architecture as Capability Equalizer (08-22) — 90 multi-turn
+  trials over five informationally equivalent spec formats × six models. Format
+  barely matters on the strongest models (spread 0.17–0.92) and matters a great
+  deal on weaker ones (0.83–2.42), with **TypeScript contracts tripling API route
+  coverage for the weakest model (33% → 100%)**. Not ranked because it is about
+  spec authoring rather than harness internals, but directly relevant to how
+  inber phrases a sub-agent's task when it routes one to a cheaper model.
+- **Broad topical near-misses, named so the next sweep does not re-fetch them:**
+  `2608.24509`, `2608.23635`, `2608.23670`, `2608.23078`, `2608.22793`,
+  `2608.22767`, `2608.22310`, `2608.23471`, `2608.22868`, `2608.22930`,
+  `2608.23283`, `2608.20485`.
+- **Verified and already present in this directory**, re-encountered this sweep:
+  `2608.22752`, `2608.22708`, `2608.21690`, `2608.20664`, `2608.20195`,
+  `2608.19799`, `2608.19741`, `2608.18389`, `2608.18280`, `2608.17597`,
+  `2608.17528`, `2608.17485`, `2608.17393`, `2608.16801`, `2608.16370`,
+  `2608.16022`, `2608.15584`, `2608.15008`, `2608.13867`, `2608.13662`,
+  `2608.11775`, `2608.11386`, `2608.10934`, `2608.09802`, `2608.09799`,
+  `2608.07855`, `2608.06503`, `2608.02110`, `2608.01347`, `2608.01326`,
+  `2608.00902`, `2608.00808`, `2608.00101`.

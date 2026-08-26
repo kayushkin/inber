@@ -500,3 +500,142 @@ if the cache ever starts holding content.
   `server/session.go:177-179` sets `s.Status = Error` and the deferred function at
   `:166-173` unconditionally overwrites it with `Idle` — already at
   `cline.md:761-764`.
+
+## Harness-watch — 2026-08-26 (CC 2.1.243, 2.1.246): cache TTL is two settings, not one — and a subagent stopped by its own cap must return its output *marked partial*
+
+Ten CHANGELOG commits in the window, spanning **2.1.236 through 2.1.246**. There
+is no 2.1.242 or 2.1.244 — those numbers were never published — and **2.1.243 was
+published (2026-08-24 23:40Z), fully reverted out of the changelog (08-25 03:38Z)
+and restored ~1.5h later** alongside 2.1.245, whose single entry is a startup
+crash on glibc 2.44. 2.1.240 and 2.1.241 are each *"Bug fixes and reliability
+improvements"* and nothing else; 2.1.236–2.1.239 are covered at `:364` and `:444`
+above and in `agentic-design-patterns.md`'s 08-25 entry. The rest of this section
+is what is new.
+
+### 1. `promptCacheTtl` and `subagentPromptCacheTtl` — the main thread and the fan-out have opposite cache economics
+
+2.1.243, verbatim: *"Added `promptCacheTtl` and `subagentPromptCacheTtl` settings
+so API-key and cloud-provider users can keep a 1-hour prompt cache on the main
+conversation while subagents stay at 5 minutes."*
+
+The reasoning is not stated but is not hard to reconstruct: a 1-hour cache write
+costs more than a 5-minute one, and it pays off only when the prefix is reused
+after the 5-minute window. A long-lived orchestrator that thinks between turns
+reuses its prefix on that timescale. A fan-out of short-lived children does not —
+each child writes a prefix nobody reads twice, so paying the 1-hour premium for
+them is pure loss. One knob cannot express both, which is why there are two.
+
+**What inber should consider:** inber sets no TTL anywhere. All four breakpoint
+sites call `anthropic.NewCacheControlEphemeralParam()` with no argument —
+`agent/agent_run.go:36` (last tool definition, BP1),
+`engine/turn_prompt.go:218,224` (system, BP2), and `agent/agent.go:549-556`
+(history, BP3) — so everything inber caches is on the 5-minute default.
+`docs/cache-optimization.md:279` already raises the 1-hour option (*"for
+long-running sessions, pay more per write but fewer misses"*) and never resolves
+it; upstream's answer is that it is not one decision but two, split on whether the
+session is a parent or a child. inber has that distinction available at the point
+it matters — `server/spawn.go` mints the child and `child.SpawnDepth` is already
+carried — so the split is expressible today. What a change would have to decide is
+**what "long-running" means for the parent**, because the premium is wasted on an
+orchestrator that is also short, and inber has never measured the inter-turn gap
+distribution on this host. That measurement is the prerequisite; the guard rail is
+that `reportCallsThatBoughtNoCache` (`engine/turn_postprocess.go:107`) is the only
+live cache reporter and it counts one cause of miss, not this one.
+
+### 2. A subagent stopped by its own limit must say so — and inber gets this right
+
+2.1.246, verbatim: *"Improved subagent results: a subagent that stops at its
+`maxTurns` limit now returns its output marked as partial, with a hint to continue
+it via `SendMessage`, instead of appearing finished."*
+
+This is the same claim as opencode #43892 from 08-22 — *an unrecognized completion
+is not a successful one* — arriving from the delegation side rather than the
+finish-reason side. A parent that reads a capped child's output as a finished
+answer will roll it up as one, and nothing downstream can tell.
+
+**Checked against inber, and the answer is that inber already holds the
+property.** `Agent.Run`'s runaway cap returns an error rather than a value:
+`agent/agent.go:337-342` is `if apiCalls > maxAPICalls { … return result,
+fmt.Errorf("%w (%d)", ErrMaxAPICallsExceeded, maxAPICalls) }`, and it writes
+`[Agent stopped: exceeded 50 API calls in one turn]` into `result.Text` when the
+turn produced no text of its own. The guard's between-turn caps do the same at a
+level up — `RunTurn` returns `fmt.Errorf("guard: %s", reason)` before doing any
+work (`engine/engine.go:255-259`). The spawn wrapper then reads that error:
+`server/spawn.go:315-320` sets `status = "error"` with `errMsg`, and `SpawnResult`
+carries `Status` and `Error` to the parent alongside `Summary`
+(`server/spawn.go:109-127`). So a capped child does not reach its parent looking
+finished.
+
+Two gaps worth naming rather than filing. `status` is a three-value string
+(`"success"`, `"error"`, `"timeout"`) with no `"partial"`, so a parent cannot
+distinguish *the child failed* from *the child ran out of budget and this is what
+it had* — which is precisely the distinction 2.1.246 introduces, and it is the
+difference between discarding the result and continuing it. And there is no
+continuation handle: upstream's *"hint to continue it via `SendMessage`"* has an
+inber analogue in `steer_agent`, but nothing in `SpawnResult` tells the parent the
+child is still resumable. Both are additions to a wire type rather than defects in
+one, so neither is filed.
+
+### 3. The rest, ranked
+
+**Permission model.** 2.1.246 adds a startup warning for Bash allow rules with a
+wildcard *before* the subcommand (`Bash(git * main)`) *"since they also match
+options inserted before the subcommand"* — the same class as the 2026-08-20
+finding that a git subcommand's argv is not its authority, arriving from the
+allowlist side; and it now *"always require[s] approval for malformed commands
+with a dangling `&&` or `||` operator"*, closing a parse-ambiguity bypass. 2.1.246
+also stops MCP tools marked `requiresUserInteraction` from offering "don't ask
+again", because the rule that option wrote *"the tool then ignored"* — a prompt
+that lied about its own effect. 2.1.238 narrowed plugin `headersHelper` to require
+folder trust and to run **without inherited credential env vars**; the
+credential-env half is already documented at
+`agentic-design-patterns.md:3922-3949` with an open todo.
+
+**Credentials.** 2.1.246: *"Fixed telemetry and metrics requests to Anthropic
+carrying the API key configured for a third-party gateway (`ANTHROPIC_BASE_URL`);
+a credential is now only sent to its own host."* inber's equivalent hazard is
+already filed twice — `01afbb2c` (no HTTP client sets `CheckRedirect`, so a 307
+replays the conversation elsewhere) and `d60ec4a3` (the redactor guards one door
+of four) — and `redact/http.go` is the mechanism that would carry the fix.
+
+**The pairing for this run's filed defect.** 2.1.246: *"Fixed resumed sessions
+failing every turn with a 400 when the saved history contains tool blocks the
+Anthropic API does not accept (typically written by a third-party API proxy)."*
+Same input as inber's, opposite treatment: Claude Code repairs at **resume**,
+inber deletes at **send** and writes the deletion to disk. Written up in
+`agentic-design-patterns.md` 2026-08-26 §2, todo
+`7c6a0ee4-9907-477e-96ee-f21f060e1584`.
+
+**Memory bounding, three entries that are one campaign.** 2.1.238 releases
+subagent tool results *"once they leave the recent display window"*; 2.1.246 stops
+each rendered transcript row retaining *"a full copy of the transcript-wide tool
+lookups"*; 2.1.243 loads code on demand (40–70 MB less per session) and
+garbage-collects sooner as the heap grows. inber's analogue is the
+whole-conversation-in-memory engine, which is a different shape, but the
+per-viewer retention question is live for `dash`/bridge-ui rather than inber
+itself.
+
+**A primitive worth having.** 2.1.236 added `notify_when_idle` to cross-session
+`SendMessage` — *"ask another Claude Code session on this machine to send one
+notice when it next goes idle — opt-in, one-shot, no polling."* inber's spawn
+completion is already push (`deliverResult` / `SpawnCompleted`), so the parent
+case is covered; the uncovered case is a **steer**, where
+`server/spawn_tools.go:48` answers *"Message injected into %s mid-turn"* and the
+caller never hears again. That is the same missing edge the 08-25 entry recorded
+under codex #40449's initiator concept, and one field serves both.
+
+**Also new, no inber surface.** An Auto mode tab in `/permissions` for viewing and
+editing classifier rules, and a safety-check deadline that scales with prompt
+size (2.1.246). `modelPicker` and `modelPricing` settings, and a `/usage` Loops
+breakdown (2.1.243). *"Fixed a severe transcript slowdown when a diff contained a
+very long single line (e.g. a base64 string)"* (2.1.246) — the same input as cline
+#13525, hit in a renderer instead of a search tool, which is worth noting because
+it is the third harness this month to meet the giant-single-line file.
+
+**Routine, recorded so it is not re-read.** The bulk of 2.1.238, 2.1.243 and
+2.1.246 is terminal rendering (fullscreen repaint, scroll, resize, focus-click,
+theme colours, mouse reports), keybinding and vim-mode edge cases, `/resume` and
+session-picker behaviour, Remote Control connection resilience (a dozen-plus
+entries), plugin install/update plumbing, BOM handling, `NO_PROXY` casing, and
+VS Code extension polish. Operational note: 2.1.243's native binary is
+zstd-compressed, ~75 MB instead of ~340 MB on Linux x64.

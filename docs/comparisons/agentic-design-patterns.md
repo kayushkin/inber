@@ -6697,3 +6697,432 @@ cap skip.
   permission model. **#40460, #40447, #40443, #40499, #40398, #40508/#40509,
   #40501, #40450** are runtime/Windows/CI plumbing or further ContentItemKind
   work already covered by the 08-24 entry at line 6151.
+
+## Harness-watch — 2026-08-26: a projection is not the record — codex spent the week retaining the *selection* beside the resolved value four separate times, and inber's provider filter writes its projection back over the transcript it was projected from
+
+### 1. The upstream week: one move, four instances, one repo
+
+codex landed four unrelated-looking PRs in five days that are the same edit:
+
+- [#40651](https://github.com/openai/codex/pull/40651) collapses `StepContext`'s
+  seven loose snapshot fields into one `ResolvedStepSettings` that keeps **both**
+  the raw `selected: Arc<StepSettings>` and the derived effective values, with a
+  comment on the field saying why: *"Unset defaults and unsupported requested
+  tiers must not be reconstructed from the effective values below."* Resolution
+  is lossy in two directions — `None` becomes the pinned model's default, and an
+  unsupported `service_tier` is filtered to `null` — so an effective value
+  round-tripped back into a request has silently discarded the user's choice.
+  The integration test `previous_model_compaction_resolves_selected_settings`
+  pins it with a model that supports `priority` and one that does not: the
+  retained selection is filtered out for the second, **restored** for a
+  compaction on the first, and omitted again afterwards.
+- [#40742](https://github.com/openai/codex/pull/40742) clears
+  `model_context_window` and `model_auto_compact_token_limit` when a Guardian
+  reviewer runs on a different model than its parent — a derived value must not
+  outlive the model it was derived from.
+- [#40737](https://github.com/openai/codex/pull/40737): a text-only MCP result
+  had no media, so `convert_mcp_content_to_items` returned `None` and the caller
+  fell back to `serde_json::to_string(&self.content)` — the model received the
+  literal string `[{"type":"text","text":"…"}]`, wrapper and all. The
+  media-vs-text distinction was deciding the *encoding*.
+- [#40719](https://github.com/openai/codex/pull/40719): `JsonSchema` had no
+  fields for `minimum`/`maximum`/`maxLength`, so parse-then-reserialize dropped
+  every declared bound before the model ever saw the tool.
+
+goose reached the same rule from the error-message side.
+[#10500](https://github.com/block/goose/pull/10500) — already written up in
+yesterday's entry — is the *"an error message is a claim about cause"* half; its
+companion discipline is the test
+`summarize_with_tool_responses_preserves_exhausted_removal_error`, which pins the
+old wording *verbatim* for the branch where it is true.
+
+**The claim, stated once:** *a value produced for one destination is a
+projection, not the record. Keep the record.* The failure is always the same
+shape — the derived thing is stored where the source belonged — and it is
+invisible until something asks the question the projection cannot answer.
+
+### 2. Filed: the Anthropic projection is written back over the transcript, and the OpenAI projection in the same file is not
+
+Todo `7c6a0ee4-9907-477e-96ee-f21f060e1584`. Exposed by codex
+[#40651](https://github.com/openai/codex/pull/40651), and independently by Claude
+Code 2.1.246's *"Fixed resumed sessions failing every turn with a 400 when the
+saved history contains tool blocks the Anthropic API does not accept (typically
+written by a third-party API proxy)"* — the same input, fixed by repairing at
+resume rather than by deleting at send.
+
+inber's two provider directions are written 250 lines apart in one file and only
+one of them is a projection.
+
+**Lossless (correct).** `engine/turn_openai.go:57` calls
+`agent.ConvertAnthropicMessagesToOpenAI(e.Messages)`, which builds a fresh
+`[]OpenAIMessage` — a different type — and drops Anthropic-sourced tool pairs
+from *that*. `e.Messages` is not touched, so the pairs are still there when the
+session returns to Anthropic.
+
+**Destructive.** `engine/turn_execute.go:35` is
+
+```go
+e.Messages, stats = agent.FilterMessagesForAnthropic(e.Messages)
+```
+
+— the filtered slice is assigned back onto the engine's live history. At the end
+of the turn `postProcessResult` calls `saveResumableState`
+(`engine/turn_postprocess.go:52`), which marshals `e.Messages` and writes it to
+the workspace `messages.json` **and** the session log dir
+(`engine/lifecycle.go:265,273`). `session.LoadMessagesFromDir` prefers that
+snapshot over reconstructing from the JSONL, so the deletion survives every
+resume and is copied into every fork made afterwards.
+
+Reachability is a routine failover, not an exotic path. `fallbackChain`
+(`engine/failover.go:64-75`) is model-store's `FailoverChain()` in priority
+order, and the live table on this host interleaves providers — measured
+2026-08-26: priorities 10/15/20/25 anthropic, 30–45 openai, 35 anthropic, 50
+google. `selectModel` walks that list on the first unhealthy result, and
+`server/api_bridge.go:698` lets an operator switch a live session's model
+outright. The whole reason `FilterMessagesForAnthropic` exists is that this
+crossing happens.
+
+What is lost is the evidence of work: the model's own tool calls and the file
+contents, command output and search results they returned. Its *text* survives,
+so after one Anthropic-routed turn the transcript reads as an assistant
+asserting findings with nothing behind them — and if the chain fails back to
+OpenAI, the model is handed exactly that.
+
+**What a fix has to decide, and this run does not:** whether the filter becomes a
+per-request projection (build the request slice, leave `e.Messages` whole —
+which means the engine no longer holds one canonical message list and
+`buildAgent`/`Agent.Run` take a slice they do not own), or whether the durable
+record moves to `session.jsonl` and `messages.json` becomes explicitly a
+send-shaped cache. Both are real designs; the second is closer to codex's
+answer, and it interacts with open todos `875aa19e` (the JSONL reconstruction has
+no callers) and `d347a2fe` (the `messages.json` write whose error is discarded).
+Note also that the *assistant*-branch empty-content guard missing at
+`agent/openai_conversion.go:320-326` is already recorded at `opencode.md:666-670`
+and rides along with todo `d30c5145`; it is the same function and a different
+question.
+
+### 3. Filed: the provider response body has no bound, and the whole of it becomes a host-shared health record
+
+Todo `f4b6e463-1f1a-41b6-ac50-d855a34f9786`. Exposed by goose
+[#11109](https://github.com/block/goose/pull/11109), whose invariant is *the
+trust boundary is the socket, not the API contract — including on the error path,
+which is the one everybody forgets to bound.*
+
+`agent/openai.go:68` is a bare `io.ReadAll(httpResp.Body)`. There is no
+`MaxBytesReader`, no decoded-byte cap, and the `http.Client` bound above it
+(`:34`) is a 120-second timeout, which bounds *duration*, not size. goose's fix
+caps decoded bytes at 16 MiB precisely because `Content-Length` is a lie under
+gzip and absent under chunked encoding.
+
+inber has an amplification goose does not. On a non-200, `:74` builds
+`fmt.Errorf("API error %d: %s", status, string(respBytes))` — **the entire body
+becomes the error string** — and `engine/failover.go:121` writes that string
+whole into `e.modelStore.RecordError(model, err.Error())`. The comment eight
+lines above it (`failover.go:98-104`) states what that store is: *"model-store's
+health table is host-shared, persistent and read across processes."* So a gateway
+that answers a 502 with an HTML page persists that page, verbatim and unbounded,
+into a row every session on the machine reads — and `agent/clients.go:91-101`
+resolves a base URL per provider name with an OpenAI-compatible catch-all, so the
+endpoint is operator-configured and not necessarily OpenAI's.
+
+Two bounds are missing and they are separable. The read bound is
+decision-free. The stored-string bound is not: truncating `LastError` changes what
+an operator reading model-store sees, and the same string is the input to
+`errorIsEvidenceAboutTheModel` (`failover.go:166`) and to the overflow-substring
+match named by open todo *"a byte-size request-limit error matches none of the
+four overflow substrings"* — so a truncation point chosen carelessly can turn a
+recognised error into an unrecognised one. **A fix must decide whether the cap
+lands at the read, at the error construction, or at the store, and only the first
+is free.**
+
+### 4. Ideas worth taking, no defect attached
+
+- **Anthropic shipped the answer to last night's CacheRouter entry.** The
+  [mid-conversation tool changes beta](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages)
+  (`mid-conversation-tool-changes-2026-07-01`, Opus 5, 2026-07-24) states the
+  prefix hash order — `tools` → `system` → `messages` — and therefore that
+  editing the `tools` array invalidates the cache for the **entire**
+  conversation. Its resolution is to never edit the array: declare the full set
+  up front, optionally with `defer_loading: true`, and then emit
+  `tool_addition` / `tool_removal` content blocks inside a `role: "system"`
+  message in `messages`, so the change applies forward and the cached prefix
+  stays byte-identical. This is the first-party answer to
+  [arXiv:2608.22708](https://arxiv.org/abs/2608.22708) (logged 08-25), and it
+  lands on machinery inber runs: `SetDisabledTools` (`engine/engine.go:363`) is
+  callable on a live session from `server/api_bridge.go:719`, and the only tools
+  breakpoint sits on the last tool definition (`agent/agent_run.go:36`), so a
+  mid-session tool change re-buys BP1, BP2 and every BP3 at the 1.25× write rate.
+  inber is unusually well placed to adopt it, because
+  `BuildBlueprint` (`engine/prompt_blueprint.go:105-130`) already hashes the
+  tools section first and `computeDiffSummary` (`:313`) already cascades a
+  divergence forward through system and messages — the accounting is right, only
+  the mechanism is missing. Placement is constrained (a system message must
+  follow a user turn, must not be first, must not sit between a `tool_use` and
+  its `tool_result`), and it is **not** on Sonnet 5, so this is a per-model
+  capability, not a flag.
+- **Cache TTL is two settings, not one.** Claude Code 2.1.243 added
+  `promptCacheTtl` and `subagentPromptCacheTtl` — a 1-hour cache on the main
+  conversation while subagents stay at 5 minutes. inber calls
+  `anthropic.NewCacheControlEphemeralParam()` at all four breakpoint sites
+  (`agent/agent_run.go:36`, `agent/agent.go:549-556`,
+  `engine/turn_prompt.go:218,224`) and never sets a TTL, so everything is 5
+  minutes. `docs/cache-optimization.md:279` already raises the 1-hour option and
+  never resolves it; the split is the resolution, and the reasoning is that a
+  long-lived orchestrator and a fan-out of short children have opposite cache
+  economics. Also written up in `claude-code.md`.
+- **goose #11121 answers an open question inber's own source parks.**
+  [#11121](https://github.com/block/goose/pull/11121) strips Unicode tag
+  characters from JSON keys and then refuses:
+  `bail!("JSON contains a duplicate key after Unicode tag sanitization")` —
+  because sanitizing a keyspace can *merge* two distinct identifiers, and the
+  surviving value is whichever the map iteration order handed over last.
+  `internal/toolid/toolid.go:12-17` describes exactly this hazard for inber's own
+  tool-id normaliser (`"call:1"` and `"call.1"` both become `"call_1"`) and
+  records the choice as open on todo
+  `c114a30b-acc0-4c0f-8d0f-00761348dea9`. Upstream chose **refuse over resolve**,
+  with the argument that refusing to execute beats silently picking. That is a
+  precedent for the todo, not a decision made here. They also split
+  `strip_unicode_tags` (filter only) from `sanitize_unicode_tags`
+  (NFC-normalise, then filter) and used *strip* on schemas, because NFC on a key
+  is itself a silent contract change that can manufacture the collision.
+- **goose #11449's tri-state hook verdict.**
+  [#11449](https://github.com/block/goose/pull/11449) replaces
+  `deny_reason() -> Option<String>` with
+  `HookVerdict { Allow, PolicyDeny, HookFailure }`, because a two-state world
+  makes every malfunction an allow. The two details worth keeping are that
+  `policy_evaluated` and `cause` stay orthogonal — *"a hook ran to a conclusion"
+  is a different fact from "the conclusion was usable"* — and that hook **stdout
+  is strict UTF-8** while stderr stays lossy, on the grounds that stdout is the
+  decision channel and lossy-decoding a decision is a security bug.
+  `engine/build_hooks.go:105-240` wires six content hooks, none of which is a
+  gate, so there is no inber surface to fix today; this is the shape to build to
+  if one is ever added.
+- **A path blocklist must run on the resolved target.**
+  [goose #11148](https://github.com/block/goose/pull/11148) defends `AGENTS.md`
+  `@path` imports against `@.git/config` with four layers, and the third is the
+  one nobody thinks of: in a git **worktree or submodule** `.git` is a *file*,
+  and the real metadata lives wherever its `gitdir:` pointer says, outside the
+  boundary entirely. inber runs sessions in forge worktrees by design
+  (`server/api_sessions_history.go:29-35`), and its only exclusion is a literal
+  glob list — `".git/*"` among `[]string{"*.log", "*.tmp", …}` at
+  `engine/build_tools.go:57-60` and `:71-74` — evaluated on the written name.
+  Nothing today reads a file at a model-supplied path *into the system prompt*,
+  so this is not a live hole; it becomes one the moment an import or
+  file-reference expansion is added.
+
+### 5. Held back — verified, not filed
+
+- **Nothing reports the cache cost of a mid-session tool change.**
+  `reportCallsThatBoughtNoCache` (`engine/turn_postprocess.go:107-118`) exists
+  precisely so this class of cost is visible — its own comment says inber "has
+  been unable to say how often this happens or what it costs, despite the
+  counters being right there" — but its loop is gated on `call.ToolsWithheld`,
+  which is the forced-summary cause only. The other cause inber has, a tool set
+  changed by `SetDisabledTools`, produces a full re-prefill that the reporter
+  cannot see. Held back rather than filed because the reporter's docstring scopes
+  itself honestly ("any call in the turn that went out **without the tools
+  block**"), so this is a gap in coverage rather than a false claim, and the
+  queue already carries three open todos on the same setter (`769860a6`,
+  `83e084f8`, and the disabled-tool-survives-a-fork one). It belongs to whoever
+  takes the mid-conversation-tool-changes work in §4.
+
+### 6. Screened and rejected, with the reason
+
+- **cline [#13518](https://github.com/cline/cline/pull/13518)** puts the latest
+  git commit hash and branch name into the system prompt's
+  `# Workspace Configuration` block. Read as a cache warning it is real — every
+  new session after any commit starts on a cold prefix — but **inber already has
+  the property**: `sourceRef()` (`engine/turn_prompt.go:15-50`) is the only
+  VCS-derived string in the prompt, its own comment says *"Goes in the dynamic
+  group so it doesn't bust cache on redeploy"*, and `BuildSystemPrompt`
+  (`:59-72`) documents the two destinations that enforce it. Worth recording as a
+  thing inber gets right. The half worth borrowing is
+  `redactRemoteUrlCredentials` — they recognised that pushing remote URLs into a
+  prompt leaks embedded tokens — which is the same hazard as goose #11148 above.
+- **cline [#13498](https://github.com/cline/cline/pull/13498) /
+  [#13522](https://github.com/cline/cline/pull/13522)** widen MCP auto-approval
+  from per-tool AND global to the global toggle alone, and the surviving
+  classifier `isMcpToolName` is a pure name-shape heuristic — *"contains `__`
+  with non-empty sides"* — that no longer consults the server registry at all.
+  The PR body admits a fail-open hole it does not close (hashed marketplace tool
+  names match no policy key and *"run without an approval prompt even when the
+  MCP toggle is off"*). inber's equivalent fail-open on an unclassified tool is
+  already filed as `9eeba694`, and inber has no per-tool MCP approval surface to
+  widen. Recorded because it is a rare example of an upstream *removing*
+  granularity and saying so in the UI.
+- **cline [#13352](https://github.com/cline/cline/pull/13352)** resolves hook
+  workspace identity from the window rather than shared global state, and
+  replaces `startsWith` with `isPathWithin` so `/repo/app` no longer swallows
+  `/repo/app-web`. Both checked against inber and both absent as defects:
+  `validateWorkspaceRoots` (`engine/workspace_roots.go:68-90`) compares the
+  primary root against `EngineConfig.RepoRoot` and **fails the session** on a
+  mismatch rather than picking one, and `PrimaryWorkspaceRoot` (`:35-42`) exists
+  so "primary" never degrades to "whichever is first". Note the PR's own body
+  claims a fail-closed property its `catch { return [] }` does not have — an
+  unverified claim in an upstream PR description, which is worth naming.
+- **cline [#13530](https://github.com/cline/cline/pull/13530)** disables the
+  agenda/todo tool for UX reasons, and the reusable half is the flag's doc
+  comment: hiding a supervision UI without also stopping the automation pump
+  leaves *"a previously persisted `auto_start`/`unattended` policy … starting
+  eligible tasks with no surface left to inspect, pause, or cancel them."* No
+  inber surface; recorded as a rule for any future feature flag over autonomous
+  work.
+- **cline [#13468](https://github.com/cline/cline/pull/13468)** replaces the hub's
+  pid-file singleton with a SQLite `BEGIN EXCLUSIVE` held for the daemon's
+  lifetime, and a loser exits 3 rather than killing the incumbent — *"must
+  connect to the running Hub or diagnose — never kill it."* This is the upstream
+  answer to inber's open todo `b8a9c658` (`isInberServe` is a substring match
+  that SIGKILLs a recycled pid, measured against two live shells). Not filed
+  again; noted on the todo's behalf, including the caveat that cline's lock is
+  itself fail-open — an unwritable lock dir yields `held === false` and the
+  daemon starts unguarded.
+- **cline [#13525](https://github.com/cline/cline/pull/13525)**, **[#13476](https://github.com/cline/cline/pull/13476) /
+  [#13465](https://github.com/cline/cline/pull/13465)**, **goose
+  [#10500](https://github.com/block/goose/pull/10500)**, **[#11474](https://github.com/block/goose/pull/11474)**,
+  **[#11477](https://github.com/block/goose/pull/11477)**, **[#11496](https://github.com/block/goose/pull/11496)**,
+  **opencode [#44752](https://github.com/sst/opencode/pull/44752)** — all seven
+  are already written up in the 2026-08-25 entry above (line 6378), with three
+  todos filed and three held. One correction earned this pass: the 08-25 entry
+  reports #13525's crash as string-concatenation accumulation, and that is right,
+  but the mechanism is a JS max-string-length `RangeError` thrown **inside the
+  stream `data` handler, outside the tool's try/catch**, so it escalated to
+  `uncaughtException`. The inber analogue named there
+  (`tools/mcp/client.go:154`, unbounded `bufio.NewScanner`) is still dormant —
+  re-verified this pass, zero importers outside the package.
+- **goose [#11490](https://github.com/block/goose/pull/11490)** is the sharpest
+  goose PR of the window and inber's version is already filed twice. Its
+  invariant — *audience is a property of content, and every egress point must
+  project it independently* — is `d60ec4a3` (tool arguments scrubbed toward
+  Anthropic and published verbatim to NATS, logstack and SSE: the redactor on one
+  door of four) and `ceedbf75` (one injection channel, four principals, all
+  stamped "user"). The detail worth adding to whoever takes them: goose's bug was
+  a *convenience helper*, `Emitter::message`, that both emitted and returned, so
+  the caller assumed one representation served both consumers; and the fix had to
+  hoist `with_generated_id_if_missing()` out by hand, because projecting makes a
+  copy and the id must be minted before the fork or the event and the stored
+  message diverge.
+- **goose [#11455](https://github.com/block/goose/pull/11455)** (a `file`-typed
+  recipe parameter must not be prefilled from a deeplink — *a filesystem path is
+  an authority grant, not a value*) has no inber surface: nothing in the repo
+  pre-populates a path-typed parameter from an untrusted source. The rule that
+  the parameter's **type**, not its provenance, decides prefill — so the recipe
+  author's own `default` is killed alongside the untrusted URL's value — is the
+  part to keep.
+- **goose [#11195](https://github.com/block/goose/pull/11195)** dedupes parallel
+  tool-pair summaries by keying on the sorted *message-id pair* (the unit of
+  provider work) instead of the tool id (the unit of iteration). Checked against
+  inber's compaction: `toolNamesByUseID` (`conversation/manage_tool_pruning.go:13`)
+  builds a map and `pruneToolResult` runs per block, so there is no per-tool-id
+  provider call to duplicate — inber's summarisation is one call over a range,
+  not one per pair. The rejected half of that PR is the transferable lesson:
+  review killed the version that drained all eligible calls because each costs a
+  serial provider completion. *Do not unbound a loop whose body is a network
+  call.*
+- **goose [#11537](https://github.com/block/goose/pull/11537)** (`cmd.exe /C`
+  truncates at the first newline and exits 0, so a multi-line command reports
+  success having run a fraction of itself) — no inber surface, Unix only. The
+  invariant is worth the line: *when the platform's failure mode is silent
+  success, convert it to a loud failure before dispatch* — and put the syntax
+  restriction in the tool's own description, since the model reads that every
+  turn.
+- **goose [#11466](https://github.com/block/goose/pull/11466)**,
+  **[#11486](https://github.com/block/goose/pull/11486)**,
+  **[#11487](https://github.com/block/goose/pull/11487)**,
+  **[#11489](https://github.com/block/goose/pull/11489) /
+  [#11482](https://github.com/block/goose/pull/11482)**,
+  **[#11521](https://github.com/block/goose/pull/11521)** — Windows package-runner
+  basename matching, MCP app events scoped by owning extension, ACP project
+  updates folded into one `WHERE … AND session_type IN (…)` statement, symlink
+  and hard-link confinement for checks and recipes, and aggregate-after-paginate.
+  All correct, none with an inber analogue that is not already filed. #11486 is
+  worth one line as an independent arrival at this box's own directive: resolving
+  an app by `name` alone was correct *"right up until the second row appears."*
+  #11521's discipline is the other half — they measured, found the split
+  **slower** for unbounded listings, and kept the old query there.
+- **codex [#40648](https://github.com/openai/codex/pull/40648) /
+  [#40647](https://github.com/openai/codex/pull/40647)** (admission decision and
+  the commit it authorises must be one atomic step; a sparse patch must stay
+  sparse until it reaches its target) and
+  **[#40653](https://github.com/openai/codex/pull/40653)** (an `Arc::ptr_eq`
+  generation token, because *a later task may reuse the same context and turn
+  ID*) land on ground inber has already covered: the config-handler lock is the
+  2026-08-16 entry with todo `769860a6`, and the live-conversation lock is
+  `3f157f67`. #40653's second lesson is the one with no inber counterpart and it
+  is a practice rather than a patch — the file enumerates by name every consumer
+  still reading the frozen settings and **rejects any update that would change a
+  value one of them depends on**, rather than shipping a half-migrated capability
+  that diverges quietly.
+- **codex [#40728](https://github.com/openai/codex/pull/40728)** replaces one
+  thread-wide permission profile with a per-server map, and a missing entry
+  **declines** rather than inheriting. inber's equivalent fail-open is
+  `9eeba694`. **[#40771](https://github.com/openai/codex/pull/40771)** closes five
+  `TODO(anp)` stale-read markers as a set; the transferable half is the practice
+  of a greppable marker for a known-stale read, and the reminder that a
+  cache-invalidation predicate is only correct if it enumerates every field the
+  cached value depends on.
+- **codex recaps arc, [#40696](https://github.com/openai/codex/pull/40696) /
+  [#40697](https://github.com/openai/codex/pull/40697) /
+  [#40705](https://github.com/openai/codex/pull/40705)** — a background summary
+  generated in an isolated thread with all tools and MCP servers disabled, so the
+  recap cannot change what it describes, plus **two independent counters**:
+  `completed_turns` is eligibility (only successes earn a recap) and
+  `turn_revision` is staleness (any terminal turn invalidates an in-flight one).
+  No inber surface — inber has no idle-recap feature — but the two-counter split
+  is the reusable idea, and so is reserving *half* the prompt budget for the
+  latest user message so an oversized assistant response cannot crowd out the
+  request. Note the correction: the temp thread runs `SandboxMode::ReadOnly` at
+  the parent's cwd, not with no filesystem access.
+- **codex pagination arc** — [#40673](https://github.com/openai/codex/pull/40673)
+  is nine deleted `#[experimental]` attribute lines under 7,439 lines of codegen
+  (boring, though reachability changed);
+  [#40677](https://github.com/openai/codex/pull/40677) is four lines with a real
+  contract — *a thread's history mode is a property of the thread, negotiated
+  once at creation from what its store can actually do*, and `.or_else` so an
+  explicit client choice is never overridden;
+  [#40676](https://github.com/openai/codex/pull/40676) computes the deprecation
+  warning from **runtime state** rather than from the method, which docs cannot
+  express. ⚠️ **No PR in the arc states a mechanism for what full-history
+  hydration costs** — no memory figure, no latency measurement, no size limit. Do
+  not repeat a memory claim as if the diffs supported it. inber's own
+  whole-transcript endpoints (`handleSessionTimeline`,
+  `server/api_sessions_history.go:233`) are unbounded in the same way and equally
+  unmeasured; measuring is the prerequisite, not the fix.
+- **codex [#40692](https://github.com/openai/codex/pull/40692)** deletes a
+  hand-rolled dual-WebSocket transport (+153/−2766) in favour of gRPC/HTTP2,
+  which already multiplexes — a negative result worth recording. Its incidental
+  fix is the transferable one: a silent catch-all that *assumed* any non-http
+  scheme was WebSocket, which had also skipped credential validation, so
+  `wss://alice:secret@…` passed. **[#40678](https://github.com/openai/codex/pull/40678)**:
+  an `AtomicBool` shutdown flag can only be polled *between* steps and therefore
+  cannot cancel a blocking one. Checked — inber has no bool-flag shutdown, and
+  its turn loop checks `ctx.Err()` between round-trips while both provider
+  clients build requests with the context. The one place the property is absent
+  is `engine/workflow_build.go:60,75,87,98`, which runs `go build ./...`,
+  `go test`, `npm test` and `cargo test` with a bare `exec.Command` — no context,
+  no deadline, and `CombinedOutput()` buffering the whole stream. **Not filed:**
+  re-verified dead this pass. `WorkflowHooks.OnToolResult`
+  (`engine/workflow_hooks.go:68-70`) returns unless the tool is named
+  `write_file` or `edit_file` and the registered tools are `write_files` /
+  `edit_files`, which is open todo `af237d64` and already documented at
+  `harness-control-matrix.md:108`. Recorded here so that whoever re-arms it knows
+  the re-arming must add a context and an output bound in the same change —
+  `engine/engine.go:237-244` promises that cancelling a turn stops its running
+  tool, and these four would not be stopped.
+- **codex [#40665](https://github.com/openai/codex/pull/40665)** (turn trigger
+  metadata) and **[#40709](https://github.com/openai/codex/pull/40709)** (rename)
+  are observability and cosmetics; #40709 verified as exactly +31/−31 across use
+  lines and type positions.
+- **opencode**, whole window: `#45061` (recover legacy migration history by
+  reconstructing identity from a `strftime` timestamp prefix, and `Effect.die` on
+  an unrecognised one rather than guessing) is the only PR with design content,
+  and inber has no migration journal to recover. Everything else is Zen billing,
+  console streaming, provider slug rewriting and docs.
+- **claude-code**, ten CHANGELOG commits spanning 2.1.236–2.1.246, with no 2.1.242
+  or 2.1.244 and a 2.1.243 that was published, fully reverted and restored ~1.5h
+  later. 2.1.236–2.1.241 are already covered at `claude-code.md:364`, `:444` and
+  in the 08-25 entry above. The new material is written up in `claude-code.md`
+  under 2026-08-26; the one item that belongs here rather than there is 2.1.246's
+  startup warning for `Bash(git * main)`-style allow rules, *"since they also
+  match options inserted before the subcommand"* — the same class as the
+  2026-08-20 finding that a git subcommand's argv is not its authority, arriving
+  from the allowlist side instead of the config side.
