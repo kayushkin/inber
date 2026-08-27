@@ -639,3 +639,82 @@ session-picker behaviour, Remote Control connection resilience (a dozen-plus
 entries), plugin install/update plumbing, BOM handling, `NO_PROXY` casing, and
 VS Code extension polish. Operational note: 2.1.243's native binary is
 zstd-compressed, ~75 MB instead of ~340 MB on Linux x64.
+
+---
+
+## 2.1.247 — 2026-08-26
+
+The only version newer than the 2.1.236–2.1.246 run above. Six entries carry
+something; the rest is plugin-marketplace and markdown-rendering hardening.
+
+**A subagent must not die on a first-call model 404.** *"Fixed sub-agents dying
+on a first-call model 404: they now use the session's fallback model chain, and
+the error returned to the parent includes the error type, status, request id, and
+model."* Two rules in one line, and inber fails both. Its fallback chain
+(`engine/failover.go:63-76`) is consulted once, **before** the request, in
+`selectModel` (`engine/turn_execute.go:18`), gated on a 30-minute health window;
+nothing re-enters it after a call fails, and the only post-failure retries are
+same-model. A spawn is a single turn (`server/spawn.go:307`), so the
+`RecordError` written at `failover.go:118` helps some later session and never
+this child. And the error is flattened to a string at `server/spawn.go:319` with
+no field on `SpawnResult` to hold a type, a status or a request id; the repo
+makes **zero `errors.As` calls**, so `*anthropic.Error`'s `StatusCode` and
+`RequestID` are never read. Written up in `agentic-design-patterns.md` under
+2026-08-27 §5.
+
+**Megabytes of hook output must not wedge the session.** inber caps ordinary
+tool results well — `ModifyToolResult` → `Session.TruncateToolResult` →
+head/tail with an explicit `[... truncated %d tokens (%d lines) ...]` marker
+(`session/truncate.go:119-130`), on by default. Two gaps: `ModifyToolResult` is
+wired only inside `if e.Session != nil` (`engine/build_hooks.go:116`), so a
+session-less engine appends every result uncapped; and the workflow-hook path
+appends `PostToolResult` output raw (`agent/agent_run.go:425-430`) from producers
+that interpolate unbounded `CombinedOutput()`. ⚠️ That second path is **dead**,
+not live — `engine/workflow_hooks.go:69` gates on `write_file`/`edit_file`
+(singular) while the registered tools are `write_files`/`edit_files` (plural), so
+it always returns `""`. That matches open todo `af237d64`; the bound is a
+precondition for re-arming it, not a live bug.
+
+**When output is lost, say where.** inber is already strong here and states the
+policy: every truncation site names what was lost
+(`conversation/manage_tool_pruning.go:38-43,139-147`), and
+`session/session_logging.go:82-95` documents why the untruncated copy is
+deliberately not retained. Two silent drops remain — a summarization failure is
+`Log.Warn`-only with the model never told (`engine/lifecycle.go:105-108`), and
+`SavedTokens` is computed and discarded (`session/session_logging.go:64-74`).
+
+**A summary must be written under the conversation's own system prompt.**
+*"Fixed `/compact` and 'Summarize from here' in sessions started with `--agent`
+summarizing under the default system prompt instead of the conversation's own."*
+inber has this more absolutely: the prompt is not defaulted, it is unplumbed —
+`conversation/summary_generation.go:40-71` hardcodes a literal and neither
+`generateSummary` nor `SummarizeConversation` has a parameter to receive one. The
+session's real prompt is on the Engine at compaction time
+(`engine/turn_prepare.go:111`) and is not read. Held against open todo
+`421a8162`; the adjacent finding that `CompactContext`'s `summary` argument is
+never referenced is in `agentic-design-patterns.md` 2026-08-27 §5.
+
+**Tell the model a server failed, or it concludes the tools do not exist.** No
+live inber surface — `tools/mcp/` has zero importers repo-wide, re-verified this
+pass. The transferable gap is that inber has no way at all to say "a tool you
+expect exists but is unavailable"; `SetDisabledTools` removes tools from the wire
+silently. Two latent defects confirmed in the dormant package: the
+`bufio.NewScanner` at `tools/mcp/client.go:155` sets no `scanner.Buffer`, so a
+line over 64 KiB wedges the client permanently rather than failing one call; and
+`c.stderr` is created, stored and never read, so a server writing over 64 KiB to
+stderr blocks forever.
+
+**Auto-compact at the model's real window.** *"Changed Sonnet 5's default
+auto-compact window to its full 1M context… about 967K tokens instead of about
+934K."* inber already does this honestly: the window comes from model-store, and
+`requestableContextWindow` (`agent/models.go:107-122`) bounds it by what inber's
+client can actually request, reporting once per model when it caps. Note inber's
+pruning budget is a flat `contextWindow / 2` (`engine/build.go:121`), far more
+conservative than 96.7% — a tuning observation, not a defect.
+
+Also new and without an inber analogue: plugin marketplace names containing
+control or invisible characters are rejected and marketplace text is escape-safe,
+and markdown hyperlinks pointing at network or automounter paths, or leading with
+invisible characters, now render as plain text. inber has essentially no
+control-character validation on externally supplied names — the only such check
+repo-wide is `strings.ContainsAny(value, " \t\r\n")` at `redact/redact.go:220`.

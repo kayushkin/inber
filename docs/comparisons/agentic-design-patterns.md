@@ -7126,3 +7126,352 @@ is free.**
   match options inserted before the subcommand"* — the same class as the
   2026-08-20 finding that a git subcommand's argv is not its authority, arriving
   from the allowlist side instead of the config side.
+
+## Harness-watch — 2026-08-27: a classifier whose default is "harmless" is not a classifier — codex spent the week making every capability prove where it came from, goose made every permission decision fail closed, and inber's read cache asks a question about seven tools that no test has ever asked
+
+### 0. Correcting last night's entry within 22 hours of it being written
+
+Yesterday's §1 cites codex [#40719](https://github.com/openai/codex/pull/40719)
+— which added `minimum`, `maximum` and `maxLength` to `JsonSchema` so that
+parse-then-reserialize stopped dropping declared bounds — as an exemplar of
+"keep the record". **It was reverted.** [#40966](https://github.com/openai/codex/pull/40966)
+deletes the same three fields and the `maxLength`→string inference with it;
+measured against the GitHub API, #40719 merged `2026-08-25T22:03:45Z` and #40966
+merged `2026-08-26T20:01:28Z`, twenty-two hours apart. The reasoning is in
+[#40775](https://github.com/openai/codex/pull/40775): *"remove unsupported schema
+constraints… forward valid JSON object arguments to the backend without enforcing
+client-side limits."* `enum` survives; the bounds do not.
+
+So the invariant at that boundary is not the one yesterday recorded. **A tool
+schema published to a heterogeneous consumer is a wire contract, and a keyword
+the consumer does not support is worse than an absent one.** Keeping the record
+is right for a value you will read back yourself; it is wrong for a value you
+hand to somebody else's parser. Yesterday's entry stands on its other three
+instances (#40651, #40742, #40737), which are all read-back-yourself cases.
+
+The measured inber facts cut with the revert rather than against it.
+`agent/chain.go:75-78` and `:94-98` rebuild every tool's schema per request as a
+hand-built `anthropic.ToolInputSchemaParam{Properties, Required}`, which drops
+`ExtraFields` — that is, every **root-level** keyword: `$defs`,
+`additionalProperties`, the root `description`. Per-property bounds ride inside
+`Properties any` and survive. So the one thing inber actually loses is a root
+`$defs` while a `$ref` inside a property survives it — **a dangling ref**, which
+is the failure mode #40966 was avoiding, arriving by a different road.
+`server/oneshot_schema.go:154-164` is the only path that preserves extras, and it
+bypasses `AddChainAndSidebandFields`.
+
+### 1. The upstream week: origin, not content
+
+- **codex, five PRs.** [#41006](https://github.com/openai/codex/pull/41006): a
+  reviewer may treat an invoked skill as authorization evidence only when its
+  **canonical path resolves under user-owned roots** — repo skills and symlink
+  escapes stay untrusted, and it sends the *verified path*, never the contents.
+  [#40982](https://github.com/openai/codex/pull/40982) gives the reviewer a
+  bounded fragment naming the MCP server **and the user-owned config that
+  declared it**. [#40976](https://github.com/openai/codex/pull/40976) classifies
+  every tool call as connector / configured server / plugin server /
+  executor-selected on the lifecycle callback.
+  [#40992](https://github.com/openai/codex/pull/40992) and
+  [#41005](https://github.com/openai/codex/pull/41005) **reject
+  caller-supplied entitlement metadata outright** and replace it with
+  host-fetched, account-bound values, falling back to `unknown` on any
+  verification failure.
+- **codex, the delegation half.**
+  [#40848](https://github.com/openai/codex/pull/40848) gives a Guardian reviewer
+  exactly four parent executors and **explicitly withholds the `notes`
+  namespace**, with an integration test asserting the exclusion. A delegated
+  child's capability set is a whitelist strictly narrower than its parent's.
+- **goose, the same rule from the deny side** — already dispositioned in the
+  08-25/08-26 entries: [#11477](https://github.com/block/goose/pull/11477) gives
+  denies precedence, [#11474](https://github.com/block/goose/pull/11474) fails
+  closed on malformed tool visibility, and
+  [#11426](https://github.com/block/goose/pull/11426) builds one authoritative
+  `model_visible_tools` set so that **execution requires prior advertisement, in
+  this turn, from the set that produced the request**.
+- **The research side says it too.** Metis
+  ([2608.25322](https://arxiv.org/abs/2608.25322), logged in
+  `docs/papers/2026-08-harness-research.md`) ablates exactly this: the
+  gate-plus-registry condition blocked the declared unauthorized effect and
+  **hid all five escape tools**, and removing both reversed it. Hiding, not
+  denying — a denied-but-visible tool is still attempted and still costs a turn.
+
+**The claim, stated once:** *a default of "harmless" is a decision nobody made.
+A classifier, a capability set or an inherited value that answers "safe" for the
+inputs it does not recognise has not classified them — it has approved them.*
+
+### 2. Filed: the read-cache classifier has a completeness test, and it cannot see the seven tools the server injects
+
+Todo `36f6c3e3-e59b-4936-8477-4dff72fa69db`. Exposed by goose #11474 and codex
+#40976, and the code says the quiet part itself.
+
+`agent/read_cache.go:271-280` — `ReadCacheEffect` — is a three-way switch whose
+`default:` is `ReadCacheUnaffected`, "the call writes no file this cache could
+hold". The comment eight lines above it names the risk and names the remedy:
+*"It is exported so the partition can be pinned against the real tool set… the
+completeness test lives over there and reaches back through this, **the same
+shape as `server/tool_classification_test.go`, which exists because guard cannot
+import server**."*
+
+That mirror was built for the guard and never for the read cache.
+`tools/read_cache_classification_test.go:30-62` derives `everyToolName` from
+tool-store's registry plus the argument-taking constructors in `tools/`. The
+tools the server injects into every session reach the model by a different door —
+`server/agent_tools.go:7-33` → `EngineConfig.ExtraTools` → `mergeExtraTools` —
+and are invisible to it, which is precisely the reason
+`server/tool_classification_test.go:46-70` gives for its own existence. There are
+seven, and all seven answer `ReadCacheUnaffected` today because nothing has ever
+asked.
+
+At least four of them are not that:
+
+- `merge_workspace` (`server/workspace_tools.go:18-80`) calls
+  `forgeDB.MergeToMain(ws)`, which rebases onto main and merges, per repo, and
+  then pushes by default.
+- `fix_workspace` and `reject_workspace` send a workspace back for rework or
+  discard it and the work in it — `server/tool_classification_test.go:85-92`
+  already describes them in those words.
+- `spawn_agent` (`server/spawn_tools.go:75`) creates a child session whose own
+  description says *"Returns immediately"* — so the child's `write_files` and
+  `shell_commands` run **concurrently with the parent's turn**, against a tree
+  the parent may share (`useWorkspace` runs only when the agent config names
+  `Projects`; otherwise the child takes the agent's stored repo).
+
+The cost is a silent wrong answer, not a crash. The read cache answers a repeat
+read with a stub — `a.readCache.Check(path)` at `agent/agent_run.go:325-338` —
+so after one of these calls the parent asks for a file, is told it already has
+it, and reasons from the version it read before the merge. The cache is rebuilt
+per turn (`buildAgent` at `engine/build.go:14`, called from
+`engine/turn_execute.go:41`), so the window is one turn wide; a spawn that
+returns immediately and a merge that returns within the turn both sit inside it.
+
+**What a fix has to decide, and this run does not:** whether these belong in
+`writesUnnamedPaths` — which flushes the entire cache and is correct but costs an
+orchestrator a full re-read on every spawn, and an orchestrator spawns constantly
+— or whether the right answer is that a child's writes should not be able to
+reach the parent's tree at all, which is a forge-layout question and not a
+classifier question. The cheap, decision-free half is the missing test: derive
+the server tool set the way `server/tool_classification_test.go` already does and
+assert every name is bucketed, so the eighth server tool cannot join silently.
+
+### 3. Filed: a forked spawn overwrites the forge workspace it just provisioned, and the parent is then offered a merge of an empty branch
+
+Todo `88d4c5f7-b15c-4f35-8f93-60cd81956142`. Exposed by codex
+[#40912](https://github.com/openai/codex/pull/40912), whose whole content is a
+precedence rule between two sources of one fact: effective roots move onto
+`EnvironmentConfig`, thread-owned selection roots are preserved, **and a ready
+environment attachment is allowed to supply its resolved roots**. inber has the
+inverse precedence and loses the provisioned one.
+
+The sequence is three statements in one function and one in another:
+
+1. `server/spawn.go:186-213` — when the child's agent config names `Projects` and
+   forge is available, a workspace `w` is created and `useWorkspace(&ac, w)`
+   (`server/workspace_roots.go:70-77`) writes **both** `ac.WorkspaceRoots` and
+   `ac.Workspace` to it. `ws = w`, and `w` is registered in `g.workspaces`.
+2. `server/spawn.go:220-226` — `if req.Fork` routes to `forkSession(…, ac, …)`.
+3. `server/session_forking.go:42-45` — `if len(parent.WorkspaceRoots) > 0` then
+   **unconditionally** overwrites both fields with the parent's. The comment
+   above it explains why a fork should inherit its parent's worktree, and it is a
+   good reason; it just does not know that this particular `ac` was configured
+   three statements ago.
+4. `server/spawn.go:352-380` — `ws` is still non-nil, so `forgeDB.CommitAll(ws,
+   …)` runs against the **abandoned** worktree, and `workspaceID = ws.ID`,
+   `branch = ws.Branch` go into `SpawnResult`.
+
+So the child does its work in the parent's live checkout and leaves it
+uncommitted there, while `server/spawn_delivery.go:68-76` hands the parent
+`Workspace: <id> (branch: …)` and the actions `merge(workspace_id) |
+reject(workspace_id)` for a branch containing none of it. `merge_workspace` on
+that id fast-forwards nothing and reports `ok`. The workspace is also never
+cleaned up: the three `forgeDB.Cleanup` calls on this path
+(`server/spawn.go:204`, `:232`, `:430`) are all failure branches.
+
+The precondition is ordinary. `parent.WorkspaceRoots` is non-empty for any
+session whose agent config names roots at all
+(`server/session_creation.go:219-223` returns `ac.WorkspaceRoots` directly), not
+only for forge-provisioned ones, so a plain orchestrator satisfies it.
+
+**What a fix has to decide, and this run does not:** which source wins. Either a
+fork of a child that has its own provisioned workspace keeps that workspace — in
+which case `forkSession`'s inheritance needs a "unless one was already set"
+guard, and the transcript it copies is then about a tree the child is not in,
+which is the exact bug that comment was written to fix — or the fork genuinely
+should share the parent's tree, in which case `Spawn` must not provision a
+workspace for a forked child at all, and `ws` must be nil so that nothing is
+committed, reported or offered for merge. Both are coherent; the current code is
+neither, and it is the *reporting* that makes it dangerous rather than merely
+wasteful.
+
+### 4. Filed: a Claude Max subscription is billed at list API rates, and a real cap is enforced against the invented number
+
+Todo `267464ec-70f7-447b-a8c7-b39ec1241ba6`. Exposed by cline
+[#13552](https://github.com/cline/cline/pull/13552), whose invariant is worth
+quoting because inber's version is the same shape with teeth: *briefly hiding a
+real cost is harmless; briefly showing a fake charge is not.* cline's cause was a
+layer collapsing a tri-state into a boolean — the host "collapsed that value into
+'show' before it reached the webview" — and the fix carries
+`"show" | "hide" | "subscription"` end to end, rendering `"unknown"` rather than
+flash an API-rate estimate while the provider loads.
+
+inber knows the fact and drops it one line after computing it. `agent/clients.go:89`
+is `mc.IsOAuth = strings.HasPrefix(apiKey, "sk-ant-oat01-")` — a Claude Max
+subscription token, where the marginal dollar cost of a turn is zero. That
+field reaches exactly one reader, `agent/registry/registry.go:210`, which uses it
+to pick a system-prompt flag. The field it sets on the agent is write-only:
+`a.isOAuth` is assigned at `agent/agent.go:211` and read nowhere (already filed
+as `1420e738`).
+
+Nothing on the money path has any billing-mode input.
+`engine/turn_postprocess.go:83-88` prices every turn with
+`CalcCostWithCache(e.Model, …)` and adds it to `e.Guard.RecordCost(turnCost)`,
+and `guard/guard.go:286-288` is `if g.cfg.MaxCost > 0 && g.cost >= g.cfg.MaxCost
+{ return true, "max cost exceeded" }` — which `engine/engine.go:255-259` turns
+into `fmt.Errorf("guard: %s", reason)` **before the turn does any work**, and
+`server/spawn.go:315-320` turns into a child that reports `status = "error"` to
+its parent. `session/timeline_cost.go:44-48` states the blast radius in its own
+docstring: *"Everything inber says about money runs through here — the engine's
+per-turn charge and therefore the MaxCost cap, the request rows, the spawn path,
+and the TotalUSD reported over the bridge."*
+
+So under a Max token inber invents a dollar figure, accumulates it, and then
+terminates a session with it. This is the "never fabricate a value when a
+canonical source exists" directive with a kill switch attached, and the
+divergence grows monotonically over a long session, so the sessions it stops are
+the long ones.
+
+**What a fix has to decide, and this run does not:** whether the third state is
+`0` or `unknown`. Reporting zero makes `MaxCost` unreachable and silently
+disarms a cap an operator set — which is the same fail-open shape as §2.
+Reporting a distinct "not priceable" state keeps the cap honest but means
+`MaxCost` must either refuse to arm on a subscription credential or be
+re-expressed in tokens, and `TotalUSD` over the bridge has to carry a state
+rather than a float. There is also a prior question this run cannot answer: the
+credential type is discovered by a **prefix match on the key**, and the
+authority for "how is this account billed" is auth-store, not the first thirteen
+characters of a secret.
+
+### 5. Ideas worth taking, no defect filed
+
+- **A subagent must not die on a first-call model 404.** Claude Code 2.1.247
+  (see `claude-code.md`): sub-agents now use the session's fallback chain, and
+  the error handed to the parent carries *"the error type, status, request id,
+  and model"*. inber fails both halves and the second is the cheaper one —
+  `server/spawn.go:319` is `errMsg = err.Error()`, `SpawnResult`
+  (`server/spawn.go:106-124`) has no field for type, status or request id, there
+  are **zero `errors.As` calls in the repo** so the SDK's `*anthropic.Error` is
+  never inspected, and `agent/openai.go:73-75` bakes the status into prose at
+  source. `server/spawn_delivery.go:54-81` then heads the message
+  `[Sub-agent completed]` even when `status == "error"` and never names
+  `result.Model`, so a parent deciding whether to re-spawn is told neither which
+  model failed nor how.
+- **A 429 is not evidence the model is broken.** codex
+  [#40931](https://github.com/openai/codex/pull/40931) makes
+  `rate_limit_exceeded` a distinct retryable class, preserves its parsed retry
+  delay, and keeps the upstream message out of telemetry summaries. inber
+  collapses every non-200 into one untyped string (`agent/openai.go:73-74`), and
+  `errorIsEvidenceAboutTheModel` (`engine/failover.go:164-173`) excludes only
+  cancel, its own deadline and its own API-call cap — so a rate limit falls
+  through to `RecordError` and, because model-store marks a model down whenever
+  its last outcome was an error, fails that model over **for every session on
+  this host**. The file's own comment at `engine/failover.go:96-103` describes
+  this mechanism exactly; it just does not count a 429 among the errors that are
+  inber reporting on inber. Not filed only because `70ae784b` already owns the
+  substring-classification half of `agent/openai.go:73` and a second todo on the
+  same line would split one fix.
+- **`max_budget` does not bind the turn it was sent during.**
+  `server/api_bridge.go:725-727` writes only `Guard.SetMaxInputTokens`, which is
+  read between turns (`engine/engine.go:256`); the in-turn check reads
+  `e.Limits.MaxInputTokens` (`engine/build_hooks.go:42`), which that handler
+  never updates. Two fields, one concept. And `handleBridgeConfig` has no
+  `Status == Running` check at all, while `handleBridgeCompact` 30 lines below it
+  guards exactly that case with a 409 and a long comment saying why. Held against
+  open todo `769860a6`, which owns the locking half of the same handler.
+- **`CompactContext` discards the summary the API advertises.**
+  `engine/engine.go:454-471` takes `summary string` and never references it,
+  while its doc comment promises *"optionally incorporating a user-provided
+  summary"* and `server/api_bridge.go:752-755,784` decodes `{"summary": …}` off
+  the request and passes it in. Separately, the summarizer's system prompt is a
+  hardcoded literal with no parameter to receive the session's own
+  (`conversation/summary_generation.go:40-71`) — which is Claude Code 2.1.247's
+  *"fixed `/compact` … summarizing under the default system prompt instead of the
+  conversation's own"*, and which `engine/turn_prompt.go:79-82` already argues
+  against in inber's own words: *"a turn built without them is not a degraded
+  turn — it is a different agent answering."* Held against open todo `421a8162`,
+  which already names that prompt.
+- **A broadcast event is a state notification, not a transcript.** cline
+  [#13587](https://github.com/cline/cline/pull/13587) took a 25 GB process to
+  ~120 MB by removing the message array from every session snapshot; the
+  companion [#13516](https://github.com/cline/cline/pull/13516) adds a 64 MiB
+  byte budget to the events DB because row-count retention does not bound bytes.
+  **inber gets the first half right** and it is worth recording: `ChatDelta`
+  carries no history, `StreamEvent` (`server/server.go:281-299`) carries one
+  text or one tool, and `SessionInfo.Messages` is a count
+  (`server/session_management.go:49`). The second half is missing — the
+  `requests` table's only `DELETE` is per-session and its only production caller
+  skips any key without `":bridge-"` (`server/session_reaper.go:59`), and
+  `logs/server-errors.jsonl` is `O_APPEND` with no rotation and no cap
+  (`server/server.go:494`), written on every bus publish failure, so a NATS
+  outage is an unbounded disk writer.
+- **Execution requires prior advertisement.** goose #11426's rule has one hole in
+  inber: `agent/agent_run.go:78` omits the tools block when `forceSummary` is
+  set, while `tools.toolMap` stays fully populated and `agent/agent.go:425`
+  still dispatches whatever `tool_use` comes back. The predicate that would close
+  it already exists — `toolsWereWithheld` at `agent/agent_run.go:151` — and is
+  currently used for accounting only (`agent/agent.go:409`). Unreachable against
+  Anthropic today, which is why it is not filed; one line away from being
+  reachable through any OpenAI-compatible gateway.
+- **The response's answer is not positional.** goose
+  [#11092](https://github.com/block/goose/pull/11092) found a handler reading
+  `content.first()` against a reasoning-first provider and now collects every
+  non-empty text block. `agent/openai_conversion.go:211` handles only the
+  `string` form of `msg.Content` while `agent/openai_types.go:7` declares the
+  type as *"string or []contentPart"* — so a gateway returning content parts
+  yields zero text blocks and a content-less assistant message stamped
+  `end_turn`. That is the same poisoned shape, at a third line, as open todo
+  `d30c5145`, whose "error or sentinel" decision covers it; it belongs on that
+  todo rather than a new one.
+- **A silently missing breakpoint.** `markLastContentBlock`
+  (`agent/agent.go:544-560`) marks only `OfText` / `OfToolUse` / `OfToolResult`,
+  and its `false` return is discarded at `:522`. Any other block kind arriving
+  last means no breakpoint and no word about it.
+
+### 6. No inber surface, verified rather than assumed
+
+`#41011` (skill catalog path aliases) and the skill half of `#41006` —
+`grep -rl skill --include=*.go` returns **0 files**; there is no skills layer.
+`#40994` (retained-image budgeting), `#40846`'s image half and goose `#11496` —
+`grep -rn "base64\|media_type\|ImageBlockParam"` over non-test Go returns
+nothing; inber is text-only, and the one path where image bytes could reach a
+transcript (tool-store's `browser` screenshot) returns a data URL as a plain
+string, so it is priced as text and head-tail truncated. `#41001` (URI-native
+filesystem policy) and `#40961` (macOS scratch scoping) — inber performs no
+containment check at all and `tools/root.go:67-71` says so outright, already
+logged as ABSENT in `docs/harness-control-matrix.md:104`. `#40799` / `#40942`
+(persistent reasoning effort, clock tools) — inber has a thinking token budget
+and no effort tier. `#41020` (invocation-lifetime-scoped capabilities) — a Rust
+lifetime construct; no extension host, and no violated site found for the
+transferable half. opencode `#44776` (derive identity from a signed claim, never
+a mutable name) — the join-on-ids directive arriving from federated auth; inber
+has no OIDC surface.
+
+### 7. Routine, recorded so it is not re-read
+
+codex: exec-server test pins to 0.150.x (`#41030`, `#40979`), Guardian analytics
+and tracing plumbing (`#41023`, `#40983`, `#40906`, `#41017`, `#40892`), proxy
+listener handoff (`#40999`), background WebSocket prewarm (`#40985`), Windows
+helper cleanup (`#40808`), paginated history lookup (`#40787`), Vim find/till and
+buffer-jump motions (`#40785`, `#40958`), Guardian default and classifier tuning
+(`#40846`, `#40967`, `#40844`), bundled-plugin allowlist and layered plugin
+config (`#40993`, `#40954`). goose: OAuth token lifecycle (`#11324`), crate-level
+code movement (`#11294`), Bedrock auth precedence (`#11562`), desktop UI
+(`#11406`, `#11495`, `#11583`), and the app-management, local-inference and
+recipe-library surfaces with no inber counterpart (`#11470`, `#11452`, `#11444`,
+`#11482`). cline: the CRLF pair (`#13512`, `#13521`) is covered by the codex
+`#37757`/`#37758` dismissal at `agentic-design-patterns.md:4122` — inber owns no
+file-editing tool to get this wrong — plus render-crash guards (`#13560`),
+credential-refresh bookkeeping (`#13520`), shutdown ordering, and the whole
+desktop sidebar/schedules run. opencode: stats retention, model-catalog docs,
+nix hashes, console rate limiting; `#45061` and `#44752` are already dismissed
+above at `:7115` and in the 08-25 entry, and `#45027`/`#45374` are the same class
+as the 2026-08-18 finding that a redirect is a fresh authorization decision.
+aider, roo-code and dexto: no commits in the window.

@@ -4502,3 +4502,204 @@ explicitly, or it will be read as a prerequisite.
   `2608.11775`, `2608.11386`, `2608.10934`, `2608.09802`, `2608.09799`,
   `2608.07855`, `2608.06503`, `2608.02110`, `2608.01347`, `2608.01326`,
   `2608.00902`, `2608.00808`, `2608.00101`.
+
+---
+
+## Sweep — 2026-08-27
+
+Twelve papers not previously logged here. Every arXiv id below was confirmed by
+fetching its abstract page; four of them (`2608.25322`, `2608.25920`,
+`2608.22237`, `2608.16391`) were re-fetched a second time by the harness-watch
+run itself, and title, date and headline number matched on all four.
+
+### Ranked for inber
+
+1. **Metis: Typed Runtime Mediation for Tool-Using Software Agents** —
+   [2608.25322](https://arxiv.org/abs/2608.25322), v1 2026-08-26, cs.SE.
+   A multi-provider agent runtime that turns provider streams into *typed
+   events* before any admitted call reaches an external effect, so permission
+   decisions, interference classes, terminal results and lifecycle transitions
+   are explicit rather than inferred. Four-class mediation cut median elapsed
+   time from 25.958 ms to 14.146 ms against forced serialization across 30
+   matched real-I/O pairs. The child-boundary ablation is the part that matters:
+   the gate-plus-registry condition blocked the declared unauthorized effect and
+   **hid all five escape tools**; removing both protections reversed it.
+   - **What inber should consider:** this is the closest published thing to
+     inber's own shape — multi-provider, a tool registry, sub-agent spawn. Its
+     child-boundary result argues a spawned child's tool set should be a
+     *derived, narrowed* registry, and that narrowing must **hide** rather than
+     deny: a denied-but-visible tool is still attempted and still costs a turn.
+     inber currently does the opposite — `server/spawn.go:224` hands the child a
+     zero `RunRequest`, so it inherits no mode at all
+     (`server/tool_classification_test.go:127` pins that as today's answer).
+
+2. **Read Less, Solve More: Token-Efficient Sparse Reading for AI Agents** —
+   [2608.22237](https://arxiv.org/abs/2608.22237), v1 2026-08-23, cs.AI.
+   SparseRead is a training-free reading layer that gates content admission
+   *before* evidence enters the trajectory, on the argument that every existing
+   context-reduction method intervenes only after the content is already in. Up
+   to **92.9% token-volume and 89.0% wall-time reduction** across six frontier
+   models and five scenarios, quality preserved or improved, portable across
+   three agent frameworks.
+   - **What inber should consider:** prevention is cache-preserving and
+     compaction is not. inber's compactor rewrites the message array
+     (`conversation/summarize.go:109-126`), which moves every breakpoint after it
+     — `engine/prompt_blueprint.go:192-204` states that cascade in inber's own
+     words. A read gate on tool results keeps the prefix byte-stable instead, and
+     inber already has the truncation machinery to hang one on
+     (`session/truncate.go:119-130`).
+
+3. **Ventor-QTest: Threat-Model-Driven Verification of Vendor-Hosted LLM APIs** —
+   [2608.16391](https://arxiv.org/abs/2608.16391), v1 2026-08-17, cs.CR.
+   A black-box audit of hosted model routing needing no logprobs: average
+   fidelity loss from repeated frozen-context requests, and extreme fidelity loss
+   from the upper tail of a run-level surprisal statistic. Across seven route
+   snapshots, AFL and EFL show little route-level association with GPQA-Diamond
+   accuracy, but **pronounced EFL coincides with declining Terminal-Bench pass
+   rate as task exposure increases** — long-horizon agentic correctness is
+   sensitive to tail fidelity loss that short benchmarks cannot see.
+   - **What inber should consider:** `engine/failover.go:22-60` demotes a model
+     only on a hard error. This says the silently degraded route is the real
+     hazard and that a benchmark score will not find it. A periodic
+     frozen-context probe per provider, scored on the tail rather than the mean,
+     is the missing input to `selectModel`.
+
+4. **Repair or Resample? Rethinking Failure Debugging in LLM Multi-Agent
+   Systems** — [2608.25920](https://arxiv.org/abs/2608.25920), v1 2026-08-26.
+   Asks whether multi-agent debugging methods causally repair failures or merely
+   exploit sampling randomness. Unguided rerun repairs **6.90%** of failures;
+   symptom-driven intervention that reconstructs execution up to the failure
+   point and regenerates only the subsequent steps reaches **20.15%**. Ships
+   SymFail, 536 annotated failure cases.
+   - **What inber should consider:** blind retry is close to worthless as a
+     recovery policy, and inber's only post-failure retries are same-model
+     replays of the whole turn (`engine/turn_execute.go:44-50`,
+     `agent/agent_run.go:206-215`). Replaying to the failure point and
+     regenerating only the tail is both the better repair and the cache-friendly
+     one, because the replayed prefix is byte-identical.
+
+5. **TOPAS: Workflow-Aware Prefix-State Scheduling for Multi-Agent LLM Serving** —
+   [2608.25523](https://arxiv.org/abs/2608.25523), v1 2026-08-26, cs.CL.
+   Formalizes the tension between retaining an agent's long system-prompt KV
+   cache and starving concurrent batching, scoring candidate states by expected
+   completion-time reduction against downstream prefix reuse, with aging against
+   starvation. In SGLang: up to 39.8% mean and 49.4% p99 JCT reduction on
+   synthetic workloads, 9.8/22.0/26.6% on MetaGPT tasks.
+   - **What inber should consider:** the retention decision is per-*agent-prefix*,
+     not per-request. When inber fans out siblings that share a system prompt and
+     tool block, the breakpoint belongs on the shared boundary and the fan-out
+     should be scheduled to land inside one TTL window — which is the scheduling
+     half of the `promptCacheTtl` / `subagentPromptCacheTtl` split logged under
+     2026-08-26.
+
+6. **Weighted Memory Tree: Remembering What Matters for Long-Horizon LLM Agents** —
+   [2608.20631](https://arxiv.org/abs/2608.20631), v1 2026-08-21, cs.AI.
+   Hierarchical memory with a per-component retention score updated by events and
+   decayed by non-selection. On GAIA-Text across three model variants: **+9.97
+   percentage points accuracy while cutting prompt tokens 32.8%**. Under
+   deliberately poisoned memories it bounds how far the bad information
+   propagates.
+   - **What inber should consider:** the containment result is the operative one.
+     inber's memory importance drifts ×1.01 on read and ×0.99 daily
+     (`memory-store/builder.go:124-143`) — a recency-ish rule with no decay on
+     *non-selection*, so nothing evicts a memory that is retrieved and never
+     used. A retention score gives a principled eviction rule and bounds the
+     blast radius of one bad summarization.
+
+7. **What Process Evaluation of Coding Agents Actually Measures** —
+   [2608.22960](https://arxiv.org/abs/2608.22960), v1 2026-08-24, cs.AI.
+   SCAE, a replay-based estimator from a structural causal model of agent
+   execution. On 499 file-localization episodes from 12 repositories: next
+   actions are driven primarily by **execution provenance rather than code-graph
+   transitions**, execution uncertainty is structured at the task level not the
+   step level, and full-trace judges show systematic **collider bias**.
+   - **What inber should consider:** provenance-over-code-graph says the
+     transcript's record of *which tool produced which result* predicts the next
+     action better than the content does — so a compaction that drops provenance
+     costs more than one that drops text. `conversation/message_utils.go:154-183`
+     flattens to text and keeps tool names; that ordering is the right one and is
+     now defensible on evidence rather than taste.
+
+8. **From State to Action: OODA-Tool for Reliable Multi-Turn Tool Use** —
+   [2608.24368](https://arxiv.org/abs/2608.24368), v1 2026-08-25, cs.AI.
+   Names "state-action competition": direct function-calling and ReAct learn
+   state tracking and action generation in one autoregressive trajectory, so
+   pressure to emit the next call overwrites earlier accumulated information.
+   Routing each decision through controller-checked intermediate states gives
+   consistent gains on Qwen3 0.6B–14B, larger on smaller models and on tasks
+   depending on cross-turn accumulation.
+   - **What inber should consider:** the Orient gate — *is execution warranted at
+     all?* — is a cheap-tier trick. inber has a failover chain ordered by
+     model-store priority and no notion of routing part of a turn to a cheaper
+     row; abstention is a far easier judgement than call synthesis.
+
+9. **JIT-Agent: Scaling Harness Intelligence via Just-in-Time Harness Evolution** —
+   [2608.25593](https://arxiv.org/abs/2608.25593), v1 2026-08-26, cs.CL.
+   Argues the harness — memory management, planning strategy, action protocol,
+   tool orchestration — can dominate the model's contribution, and makes it a
+   composable machine-generatable artifact under a fixed four-module protocol.
+   DeepSeek-V4-Flash + JIT-Agent beats GPT-5.6 on DeepSearchQA (+9.1) and
+   OdysseyBench (+4.3); GLM-5.2 gains up to +20.2.
+   - **What inber should consider:** the four-module protocol is a concrete spec
+     for making an agent definition *data*. If inber's ten agents differ only
+     along those axes they are agent-store rows that can be generated and
+     compared per task, not hand-written Go personas.
+
+10. **ToolMinimize: Auditing and Rewriting LLM Agent Tool Calls to Minimize
+    Privacy Exposure** — [2608.24957](https://arxiv.org/abs/2608.24957), v1
+    2026-08-25, cs.CR. Measured across three frontier models: **81–88% of tool
+    calls carry unnecessary privacy-sensitive data** under default prompts, and
+    explicit privacy instructions still leave 36–76% over-sharing. Existing
+    defenses gate or label flows and cannot rewrite argument *values*; PII
+    detectors miss implicit signals. Schema-aware necessity analysis plus
+    removal/generalization/substitution gets 81.2–92.0% reduction at 100%
+    argument-level task validity, 79.0% on unannotated MCP schemas, median
+    latency 1.77 ms.
+    - **What inber should consider:** the design point is a per-field
+      `minimum_necessary` annotation on the tool *schema*, not a runtime
+      component. That is a field on a registry entry, and it would give
+      `redact/` a deterministic rule instead of a pattern list — relevant to the
+      open finding that the redactor guards one door of four (`d60ec4a3`).
+
+11. **From General Agents to RCA Experts: A Self-Evolving Harness** —
+    [2608.25661](https://arxiv.org/abs/2608.25661), v1 2026-08-26, cs.SE.
+    Finds general-purpose agents now frequently beat purpose-built RCA agents,
+    and that the remaining gap lives in **the adaptation layer, not the agent**.
+    59.0% top-1 accuracy, +63.4% over bare agents, with dual-gate verification on
+    every knowledge update.
+    - **What inber should consider:** the dual gate is the transferable piece. If
+      inber ever lets an agent write back into its own tool registry or memory,
+      an accumulated-knowledge update needs a verification gate or the archive
+      degrades silently — which is the same argument the Weighted Memory Tree
+      poisoning result makes from the other side.
+
+12. **CatchBench: When Can an Agent Failure Be Caught?** —
+    [2608.22808](https://arxiv.org/abs/2608.22808), v1 2026-08-24, cs.LG.
+    Puts one auditor's question to three information states — declared
+    configuration before the run, a growing trace prefix, and the finished trace
+    — across 72 entrants, 1187 configurations and 1162 runs. Only 47 of 118
+    pre-declared contrasts separate; the rest are published unresolved. Its
+    sharpest finding cuts against its own authors: a rule that ignores every name
+    and permission and flags each capability declared after the first hits
+    perfect F1 on one configuration source, measuring corpus construction rather
+    than reasoning.
+    - **What inber should consider:** the PRE/LIVE/POST split is the right frame
+      for where a guard goes, and most of what inber cares about is catchable at
+      PRE — the declared agent plus its tool set — which is far cheaper than
+      judging a finished transcript. The shortcut result is a standing warning
+      against any single-number harness-safety score.
+
+### Checked and dropped
+
+- **`2608.14624`** CacheScout (agent-aware KV eviction and prefetching, +10–18pp
+  hit rate) — relevant and not logged here, but the abstract page gives v1
+  **2026-07-16**, outside this sweep's window. Worth a backfill.
+- **`2608.21375`** SchemaRouter — v1 **2026-07-03** despite the 2608 id. Out of
+  window.
+- **Anthropic, "Harness design for long-running application development"** —
+  published **2026-03-24**, out of window and absent from this directory. Its
+  context-reset plus structured-file-handoff pattern, and the "context anxiety"
+  failure mode, bear directly on inber's compactor. Worth a backfill.
+- Already logged here and re-encountered: `2608.24358`, `2608.22752`,
+  `2608.20664`, `2608.23550`, `2608.22708`, `2608.23953`, `2608.24188`,
+  `2608.23651`, `2608.24804`.
