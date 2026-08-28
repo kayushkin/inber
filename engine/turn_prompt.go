@@ -181,8 +181,15 @@ func (e *Engine) BuildSystemPrompt(userMessage string) ([]sessionMod.NamedBlock,
 
 // buildSystemBlocks converts named blocks to anthropic system blocks with cache control.
 //
-// All system blocks are now stable (volatile content moved to user message injection).
-// BP2 is placed on the last system block. The entire system section is cached.
+// Every system block is stable — volatile content moved to user message injection — so
+// BP2 goes on the LAST block and the cached prefix is the whole slice. That is the one
+// invariant this function rests on, and it is why there is no handling here for a block
+// sitting after the breakpoint: no such block can exist. Four conditions used to guard
+// for one, and none of them could ever fire — driven exhaustively over 0-4 blocks in
+// every empty/non-empty combination, the tail-append condition was evaluated 26 times
+// and was false 26 times. system_block_breakpoint_test.go holds the invariant in their
+// place, so a later change that puts a block after the breakpoint reddens a test instead
+// of being dropped here in silence.
 func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.TextBlockParam {
 	var stableTexts []string
 	var systemBlocks []anthropic.TextBlockParam
@@ -194,36 +201,33 @@ func (e *Engine) buildSystemBlocks(blocks []sessionMod.NamedBlock) []anthropic.T
 		systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: b.Text})
 		stableTexts = append(stableTexts, b.Text)
 	}
+	if len(systemBlocks) == 0 {
+		return nil
+	}
 
-	// BP2 on last system block (all are stable now)
+	// BP2 on the last system block. Every block is stable, so this index is also the
+	// end of the cached prefix.
 	cacheIdx := len(systemBlocks) - 1
 
 	// Deterministic prefix check: if stable blocks haven't changed since last turn,
 	// reuse the exact same TextBlockParam slice to guarantee byte-identical prefix.
-	if cacheIdx >= 0 && len(stableTexts) > 0 {
-		hash := hashStrings(stableTexts)
-		if e.Cache.LastStablePrefix != nil && e.Cache.LastStablePrefix.hash == hash {
-			// Stable prefix unchanged — reuse cached blocks for byte-identical prefix
-			reused := make([]anthropic.TextBlockParam, 0, len(systemBlocks))
-			reused = append(reused, e.Cache.LastStablePrefix.blocks...)
-			if cacheIdx+1 < len(systemBlocks) {
-				reused = append(reused, systemBlocks[cacheIdx+1:]...)
-			}
-			return reused
-		}
-		// Store new stable prefix for next comparison
-		stableBlocks := make([]anthropic.TextBlockParam, cacheIdx+1)
-		copy(stableBlocks, systemBlocks[:cacheIdx+1])
-		if cacheIdx < len(stableBlocks) {
-			stableBlocks[cacheIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
-		}
-		e.Cache.LastStablePrefix = &cachedPrefix{hash: hash, blocks: stableBlocks}
+	hash := hashStrings(stableTexts)
+	if e.Cache.LastStablePrefix != nil && e.Cache.LastStablePrefix.hash == hash {
+		// Stable prefix unchanged — hand back a copy of the cached blocks, so a caller
+		// that edits what it is given cannot reach into the cache and change what the
+		// next turn sends.
+		reused := make([]anthropic.TextBlockParam, len(e.Cache.LastStablePrefix.blocks))
+		copy(reused, e.Cache.LastStablePrefix.blocks)
+		return reused
 	}
 
-	if cacheIdx >= 0 && cacheIdx < len(systemBlocks) {
-		systemBlocks[cacheIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
-	}
+	// Store new stable prefix for next comparison
+	stableBlocks := make([]anthropic.TextBlockParam, len(systemBlocks))
+	copy(stableBlocks, systemBlocks)
+	stableBlocks[cacheIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
+	e.Cache.LastStablePrefix = &cachedPrefix{hash: hash, blocks: stableBlocks}
 
+	systemBlocks[cacheIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
 	return systemBlocks
 }
 
