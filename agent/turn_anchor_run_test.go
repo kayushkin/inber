@@ -151,12 +151,23 @@ func TestRunNeverSendsMoreThanFourCacheControlBlocks(t *testing.T) {
 	}
 }
 
-// TestRunSpendsTheWholeCacheControlBudgetAndNoMore is the other half, and it is
-// the one that would catch a marker going missing rather than a fifth arriving.
-// Inber places one on the last tool definition, one on the last system block and
-// two in history (the frozen boundary and this turn's anchor). A request carrying
-// three is not a safe request that came in under the limit — it is a breakpoint
-// that stopped being placed, which costs money silently.
+// TestRunSpendsTheWholeCacheControlBudgetAndNoMore is the other half, and it
+// catches a marker going missing rather than a fifth arriving. Inber places one
+// on the last tool definition, one on the last system block and two in history
+// (the frozen boundary and this turn's anchor). A request carrying three is not a
+// safe request that came in under the limit — it is a breakpoint that stopped
+// being placed, which costs money silently.
+//
+// ⚠️ It holds THREE of those four, not all four. Measured by deleting each
+// placement in turn: dropping the tools marker reddens this test, dropping either
+// history marker reddens it, and dropping the system marker leaves it GREEN. The
+// system block below arrives with its cache_control already set, by this test's
+// own fixture — engine.buildSystemBlocks is what places it in production and this
+// package cannot reach it, because the import runs engine -> agent. So a system
+// breakpoint that stopped being placed is invisible here.
+//
+// The system surface is pinned in its own package instead, by
+// engine/system_block_breakpoint_test.go.
 func TestRunSpendsTheWholeCacheControlBudgetAndNoMore(t *testing.T) {
 	provider := &recordingToolLoopProvider{toolCalls: 3}
 	a := NewWithSystemBlocks(provider, []anthropic.TextBlockParam{
