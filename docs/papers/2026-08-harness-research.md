@@ -4703,3 +4703,223 @@ run itself, and title, date and headline number matched on all four.
 - Already logged here and re-encountered: `2608.24358`, `2608.22752`,
   `2608.20664`, `2608.23550`, `2608.22708`, `2608.23953`, `2608.24188`,
   `2608.23651`, `2608.24804`.
+
+## Sweep — 2026-08-28
+
+Twelve papers not previously logged here. Every arXiv id below was verified by
+fetching the abs page or the arXiv API `id_list` endpoint; title, date and
+abstract matched on all twelve, and each id was grep-checked against this file
+before inclusion. Ten distinct queries were run. **No lab-blog entries: DeepMind,
+OpenAI and Meta AI published nothing on harness design, context, caching, memory
+or agent security in the 2026-07-29 → 2026-08-28 window, and Anthropic's two
+nearest posts are out of window** ("Effective harnesses for long-running agents",
+2025-11-26; "Scaling Managed Agents: Decoupling the brain from the hands",
+2026-04-08 — the second is a plausible backfill alongside the one already flagged
+in the 08-27 sweep).
+
+### Ranked for inber
+
+1. **Same Model, Different Harness: Different Coding-Agent Results** —
+   [2608.26218](https://arxiv.org/abs/2608.26218), 2026-08-26, cs.AI.
+   Model and task held fixed; the only change is a harness that **mechanically
+   shortens older tool results as the context fills**. Mean per-task
+   fail-to-pass went from **28% to 49%** on a 169-task SWE-bench Verified cohort
+   (20,480-token window, 480 s cap), complete solutions from **43 to 72**, and
+   the frozen treatment transferred to three other models with no retuning while
+   serving fewer prompt tokens per turn.
+   - **What inber should consider:** this prices `session/truncate.go` as a
+     *capability* lever, not a cost lever, and it is the strongest argument yet
+     for fixing the tier selection held back in tonight's
+     `agentic-design-patterns.md` §5 — every agent currently takes one flat
+     1000/500/200 tier. Age-ordered progressive shortening is a different policy
+     from a per-result cap, and it is cache-friendlier than compaction because it
+     never rewrites the recent tail.
+
+2. **When Context Gets Root: Privilege Escalation in LLM Harnesses** —
+   [2608.27299](https://arxiv.org/abs/2608.27299), 2026-08-27, cs.CR/cs.SE.
+   The harness's own context construction promotes low-privilege content to a
+   higher instruction level. **All 13 attack objectives succeeded on all 6
+   coding-agent harnesses** with unrestricted execution, and **all 13 on all 3
+   harnesses that offer automatic permission review**, reproduced through
+   harness-provided persistent goals and scheduled tasks.
+   - **What inber should consider:** inber assembles the prompt in
+     `engine/prompt_blueprint.go` and injects memory-store rows and tool results
+     into it; anything the blueprint promotes into the system region inherits
+     system privilege. The second number is the sharp one — an automatic
+     permission review did not help, so a spend or tool gate is not a mitigation.
+     This is the measured version of open todo `ceedbf75` (one injection channel
+     carrying four principals all stamped "user").
+
+3. **When Tool Outputs Become Commands: Separating Action Induction from Runtime
+   Authorization (SARA)** — [2608.27146](https://arxiv.org/abs/2608.27146),
+   2026-08-27, cs.AI/cs.SE. Authorizing calls only against the user objective plus
+   audited evidence, with a **No-History-Promotion** rule so a recurring call
+   cannot launder its origin, holds **ASR ≤ 0.63%** across four settings on
+   AgentDojo and AgentDyn at competitive utility.
+   - **What inber should consider:** No-History-Promotion is the rule to steal,
+     and inber has the exact laundering path it names — `conversation/summarize.go`
+     collapses a transcript into prose, after which an action that first appeared
+     in a tool result is indistinguishable from one the user asked for. The 08-24
+     entry's "a content fragment's *kind* is a required field" is the same
+     invariant arriving from the security side.
+
+4. **The Framing Gap: Indirect Prompt-Injection Exfiltration Defeats
+   Surface-Level Defenses** — [2608.27092](https://arxiv.org/abs/2608.27092),
+   2026-08-27, cs.CR. Ten overt injection classes are refused (**gpt-4o 0%**), but
+   reframing the identical leak as a mandatory integrity signature or config field
+   drives it **0% → 100%**. Paraphrasing a known template is trivial (**96% at 3
+   wordings**); authoring a fresh mechanism is hard (**0/130**). Only payload-blind
+   checks close it: destination allow-list **0%**, planner/reader capability split
+   **0%** — while SecAlign fine-tuning leaves **32.5%**, channel separation
+   **38.8%**, and an output-normalizing guard loses to ROT13 at **100%**.
+   - **What inber should consider:** both working defences are harness-layer and
+     cheap, and inber has neither. The planner/reader split maps directly onto the
+     existing fork/delegate primitive: a sub-agent that reads untrusted content
+     and holds no network or write tools is exactly the isolation measured at 0%.
+     Note this needs the child's tool set to be a *narrowed* set, which
+     `server/spawn.go:224`'s zero `RunRequest` does not currently produce.
+
+5. **PILOT in the Loop: Live Self-Improvement for Long-Horizon Agents** —
+   [2608.26530](https://arxiv.org/abs/2608.26530), 2026-08-27, cs.AI.
+   A supervisor that can **redirect or abort an active worker mid-execution**:
+   first in 5 of 6 configurations, **+9.8 pp on Terminal-Bench 2.0**, **+14.6 /
+   +12.4 points** in the self-improvement setting, mean output tokens **down
+   42.9% / 47.4%**, successful evaluations per million output tokens **up 110.3% /
+   134.0%**.
+   - **What inber should consider:** inber's delegate is fire-and-forget — the
+     parent sees the child only at completion (`server/spawn_delivery.go`). The
+     token reductions here come from killing bad sub-agent runs early, which makes
+     live abort a *budget* mechanism, not just a quality one. It also depends on an
+     abort that actually lands, which tonight's `7de193b1` says inber's does not
+     for a queued child.
+
+6. **Agent Mesh: Reliability Primitives for Non-Idempotent Agent Delegation** —
+   [2608.26225](https://arxiv.org/abs/2608.26225), 2026-08-26, cs.AI.
+   Failure study of a production agentic platform: **147 incidents over 81 runs**.
+   A **54-consecutive-successful-tool-call loop that no error-rate breaker could
+   see**; **21 events accumulated across 6 invocations of one delegation**, making
+   an idempotent component unwinnable; and **12 incidents where the enforcement
+   layer blocked correct work, the worst costing 107 agent turns and zero accepted
+   writes**.
+   - **What inber should consider:** the enforcement unit should be the
+     **delegation, not the turn**. inber's guard and retries are per-turn, so a
+     sub-agent invoked six times accumulates state the parent's accounting cannot
+     see — which is the same gap codex #41183 closed and open todo `9e31d359`
+     parks. The 107-turns-zero-writes case is what an over-tight guard looks like
+     from the inside, and is the counterweight to that todo's shared-pot option.
+
+7. **Can your AI agent be cheaper? Effects of task specifications on token
+   spend** — [2608.25399](https://arxiv.org/abs/2608.25399), 2026-08-26, cs.AI.
+   Across **2,700 runs**: reducing a full specification to a bare user story
+   raises token spend **29.7%**; run-to-run variance is unaffected by any prompt
+   change; prompt-sensitivity is task-dependent from **13% to 115%**; and a simple
+   predictor prices a full distribution of spec × thinking-effort configurations
+   from **one cheap probe, within 36%**.
+   - **What inber should consider:** a pre-flight estimator for `guard/`. inber's
+     cap is reactive — it stops a run that has already burned the budget
+     (`engine/turn_postprocess.go:87`). A one-probe predictor lets the guard refuse
+     or downgrade before the spend, and the 29.7% figure says the cheapest
+     available saving is rejecting underspecified task text, not tuning the model.
+
+8. **Safety Does Not Compose: Non-Decaying Loop State for Autonomous LLM
+   Agents** — [2608.27141](https://arxiv.org/abs/2608.27141), 2026-08-27,
+   cs.CR/cs.AI. A separation result: against an attack whose evidence is
+   fragmented across iterations, **every trajectory-scoped monitor has a
+   true-positive rate equal to its false-positive rate**, regardless of
+   expressiveness, while a monitor retaining cross-iteration state separates
+   perfectly. A geometrically decaying risk score is insufficient because the
+   adversary's cooling-off wait is a constant in the horizon. LoopHarness bounds
+   expected unauthorized irreversible actions at **B+m−1+m/δ_M**, constant in N.
+   - **What inber should consider:** inber's guards are session-scoped and reset at
+     each session boundary — `restoreGuardState` (`server/session_creation.go:316`)
+     restores totals precisely so a rebuild does not hand the budget back, which is
+     the right instinct applied to money and not to safety. This says a safety
+     counter must live outside the conversation and must **not** decay.
+
+9. **MemToC: Benchmarking Memory-Tool Conflict Resolution** —
+   [2608.26295](https://arxiv.org/abs/2608.26295), 2026-08-26, cs.CL.
+   6,504 episodes over 542 questions: instruction-tuned 7–9B models **retain a
+   verified-correct memory against an incorrect tool return in only 6.5–17.1%** of
+   eligible cases, follow a correct tool in **86.0–93.1%**, and **repeat the tool
+   return in 78.4–86.0% of cases where both sources are wrong**. No cross-model
+   ordering survives three instruction wordings, and **19 of 20 method-model
+   combinations reduce abstention** after tool errors.
+   - **What inber should consider:** a wrong tool result overrides a correct memory
+     almost always. inber injects retrieved memory rows as context that competes
+     directly with live tool output and supplies **no arbitration signal at all**,
+     so a stale or poisoned tool result silently overwrites a good memory. Pairs
+     with the 08-24 entry's finding that append-only agent memory scored worse than
+     no memory.
+
+10. **Routed Graph Handoff: Adaptive Format Selection for Multi-Agent LLM
+    Delegation** — [2608.25277](https://arxiv.org/abs/2608.25277), 2026-08-26,
+    cs.CL. Natural-language inter-agent messages consume **40–60% of the token
+    budget**. A **155-token router (0.15% overhead)** choosing per delegation
+    between a typed dependency graph and natural language gives **+12.7 pp on
+    τ-retail at 3.2× compression** and **+8.7 pp on BrowseComp at 2.2×**, with
+    parity on BFCL/AppWorld — while graph-only delegation **regresses 14.6 pp** on
+    AppWorld without the router.
+    - **What inber should consider:** the handoff payload in `server/spawn.go` is
+      prose, and the child's answer returns as prose through
+      `server/spawn_delivery.go:54-67`. A typed structure is cheaper, but the
+      ablation says forcing it universally is a net loss — the per-delegation
+      router is the load-bearing part, and it is small enough to be a cheap-tier
+      call.
+
+11. **The Guard That Cried Wolf: How Scary Words Make Agent Guardrails Refuse
+    Legitimate Actions** — [2608.27009](https://arxiv.org/abs/2608.27009),
+    2026-08-27, cs.CR. Cautious Bench: **756 decidable benign/twin pairs under
+    three object-name types (2,268 measured pairs)** plus 40 undecidable, labels
+    mechanically re-derived from a stated authorization policy. **All six
+    guardrails across five designs over-refuse an authorized action more often
+    under a scary-looking object name than a benign one** — only the object name
+    varies, so the guardrail reads the surface label rather than the authorization
+    context.
+    - **What inber should consider:** pairs with the 28:1 over-refusal result
+      already logged for `2608.12654`. Any model-driven approval gate inber adds
+      will refuse on filenames like `credentials.go` or `secrets_test.go`
+      regardless of what the call does — an argument for the payload-blind,
+      policy-based gating of #4 over an LLM judge, and a caution for
+      `permission-store` (`:8304`) before it grows one.
+
+12. **SKILL.state: Scalable Long-Horizon Agent Skills** —
+    [2608.26263](https://arxiv.org/abs/2608.26263), 2026-08-26, cs.AI.
+    Replaces append-only conversational history with an explicit mutable execution
+    state: each step the model sees only the immutable skill spec, the current
+    structured state and the latest observation, with intermediate reasoning
+    discarded after a validated state update. Reports improved accuracy and
+    substantially lower cumulative tokens across datasets, models and environments
+    — **direction only; the abstract gives no headline percentage**, which is why
+    it ranks last here.
+    - **What inber should consider:** an alternative to compaction rather than a
+      better compactor. inber's summarizer rewrites the message array
+      (`conversation/summarize.go:109-126`) and cascades every cache breakpoint
+      after it, a cost `engine/prompt_blueprint.go:192-204` states in inber's own
+      words; a fixed-shape state block keeps the prefix byte-stable by
+      construction. A design lead, not a result.
+
+### Verified, logged, not ranked
+
+- **[2608.25198](https://arxiv.org/abs/2608.25198)** *Tunable Tool-Call Rates via
+  Representation Steering* (08-25) — a single linear residual-stream direction
+  moves call rate from ~0% to >90% and nearly doubles open-domain QA accuracy
+  (0.29→0.56). Inapplicable to inber's API-only providers; the cost/accuracy
+  Pareto framing is the transferable part.
+- **[2608.24087](https://arxiv.org/abs/2608.24087)** *Knowing When to Ask for
+  Help* (08-25) — intra-generation Bayesian escalation to a stronger model, on a
+  Qwen2.5-Coder 1.5B→7B cascade (MBPP, 257 tasks). Relevant to
+  `engine/failover.go`, which escalates only on a hard error and never on
+  difficulty.
+- **[2608.25241](https://arxiv.org/abs/2608.25241)** *A Few Pages of Markdown*
+  (08-26) — across 441 repos, agent-first repos *without* committed AI
+  configuration show ~2× the cognitive-complexity increase (**+53% vs +27%**) and
+  1.7× the static-analysis warnings; **73.8% of AI-config artifacts are committed
+  once and never modified**. That last number is a fair warning about this corpus.
+- **[2608.23552](https://arxiv.org/abs/2608.23552)** *Prime Agent* (08-24) —
+  self-improving harness with a persistent IPython REPL and recursive subagents;
+  ARC-AGI-3 RHAE Best@1 from 30% to 95.5%.
+- **[2608.25683](https://arxiv.org/abs/2608.25683)** *psRL* (08-26) — training-time
+  prefix sharing, up to 5.2× throughput. Training-side, out of scope.
+- **[2608.26004](https://arxiv.org/abs/2608.26004)** *AsymSpec* (08-26) — drafter
+  reads full context, verifier reads the compressed view; ~90% of full-context
+  accuracy at 1.3–1.7× throughput. Requires local serving.

@@ -7475,3 +7475,411 @@ nix hashes, console rate limiting; `#45061` and `#44752` are already dismissed
 above at `:7115` and in the 08-25 entry, and `#45027`/`#45374` are the same class
 as the 2026-08-18 finding that a redirect is a fresh authorization decision.
 aider, roo-code and dexto: no commits in the window.
+
+## Harness-watch — 2026-08-28: the environment a step runs in is a fact the step owns, not a fact the process has — codex spent the week making every executor report its own OS, home and path semantics into the turn, and inber's abort reaches a queued sub-agent and does nothing when it gets there
+
+### 0. Correcting a filed todo, from the code
+
+Open todo `cbfe6444` states, of `Session.Children`: "**No lifecycle path consults
+it.**" That is false. `server/session_management.go:69` (`InterruptSession`) and
+`:91` (`StopSession`) both copy `s.Children` under the lock and recurse into
+every child before touching the parent. The todo's core claim — that the
+*reaper* (`server/session_reaper.go:53-95`) does not — still stands, and so does
+everything it concludes from it. But a reader acting on that sentence would build
+a cascade inber already has. The correction is filed onto `7de193b1`, whose
+subject is what that existing cascade does when it arrives.
+
+Open todo `cf3b6b4c` says of `apiutil.IsThinkingSignatureError`: "Any error whose
+message is exactly `Error` destroys all thinking in the conversation and
+retries." Measured: no error inber can produce is exactly `"Error"`.
+`agent/agent_run.go:220` is the only escape for an API error and it always wraps
+— `fmt.Errorf("api call failed: %w", apiErr)` — and the remaining returns are
+`ctx.Err()` and sentinels. So `internal/apiutil/apiutil.go:12` returns `false`
+always and `engine/turn_execute.go:45-49` has never run. The predicate is not too
+broad; it is dead. That kills the todo's option (c), which was "drop the
+resume-path strip, call site 1 still catches it" — call site 1 catches nothing.
+Appended to `cf3b6b4c` rather than filed, because that todo already names the
+file and line.
+
+### 1. The upstream week: where, not just what
+
+- **codex, the executor arc.** [#41204](https://github.com/openai/codex/pull/41204)
+  reports the executor's **home directory** in environment metadata and carries it
+  into every filesystem sandbox context, `apply_patch` included.
+  [#41207](https://github.com/openai/codex/pull/41207) adds `platformOs` to
+  exec-server metadata so each turn environment records the OS of the machine that
+  will run the command. [#41232](https://github.com/openai/codex/pull/41232) does
+  the same for the PowerShell version, bounding the probe and caching it.
+  [#41209](https://github.com/openai/codex/pull/41209) closes the loop: deny-read
+  policies are compiled from `PathUri` policy context *including
+  executor-relative working directories*, so "URI-based policy checks and native
+  filesystem enumeration enforce the same rules". Four PRs, one rule: **the
+  directory, OS and home a step runs under belong to the step, and reading them
+  off the host process is how the policy and the executor come to disagree about
+  where "here" is.**
+- **codex, the budget arc, same shape one layer up.**
+  [#41162](https://github.com/openai/codex/pull/41162) resolves token-budget
+  defaults and context-window limits from **each step's active model** — "model
+  settings can change between steps in the same turn" — while preserving the
+  turn's original explicit preferences beside the resolved value, and adds
+  `ModelInfo::usable_context_window()` to separate reserved headroom from the
+  resolved window. [#41195](https://github.com/openai/codex/pull/41195) is the
+  guard on that: planning tools for a *candidate* model "must not change the
+  selected model or its Responses Lite tool inventory… preparing a fallback can
+  overwrite metadata before the current model's request is sent".
+  [#41221](https://github.com/openai/codex/pull/41221) resolves a reviewer's
+  budget from the *parent turn's* configuration rather than the review model's
+  defaults. [#41183](https://github.com/openai/codex/pull/41183) rolls token usage
+  from spawned descendants, **including nested subagents**, into the root goal's
+  budget, and resets the baseline when the active goal changes.
+- **codex, the ownership arc.** [#41260](https://github.com/openai/codex/pull/41260)
+  removes a client-side size check because "history and notes results are already
+  limited by the backend using the requested output budget" — a second truncation
+  over an already-bounded response only corrupts it.
+  [#41062](https://github.com/openai/codex/pull/41062) is its other half: the
+  invoking call's truncation policy travels to the backend in a header, so the
+  component that owns the history is the component that enforces the budget.
+  [#41152](https://github.com/openai/codex/pull/41152) fails closed when a parent
+  compaction cannot be serialized or exceeds the byte budget, rather than
+  classifying on silently dropped context.
+- **cline.** [#13647](https://github.com/cline/cline/pull/13647) reuses the
+  existing `session.abort` path to cancel teammate work owned by the root session,
+  and — the half that matters — "**cancel queued async runs** and settle running
+  async runs as cancelled exactly once", while leaving idle teammates and
+  unrelated runtimes untouched. [#13626](https://github.com/cline/cline/pull/13626)
+  refuses a checkpoint workspace restore when HEAD has moved past the checkpoint,
+  because `git reset --hard` had been silently knocking later commits onto the
+  reflog. [#13565](https://github.com/cline/cline/pull/13565) stops treating a
+  transient refresh failure as a permanent de-authentication: one error string
+  hit ~90 users in three days because any network error, timeout or 5xx past a
+  30-second grace window read as `invalid_grant`.
+- **goose.** [#11213](https://github.com/block/goose/pull/11213) centralizes
+  context-limit precedence behind one infallible provider API, **removes resolved
+  context limits from `ModelConfig` persistence and ignores legacy session
+  values**, and routes compaction, status, CLI, ACP, SDK and Desktop through it —
+  the same "one resolver, and do not persist what you resolved" rule as codex
+  #41162. [#11449](https://github.com/block/goose/pull/11449) adds `on_failure` to
+  `PreToolUse` hooks with a typed `cause` (`policy_denial` vs `hook_failure`), so
+  a hook that could not answer is distinguishable from one that said no.
+  [#11275](https://github.com/block/goose/pull/11275) makes app-initiated ACP tool
+  calls pass the same permission path as model-initiated ones and fail closed.
+- **opencode.** [#45769](https://github.com/sst/opencode/pull/45769) retains only
+  reasoning the pinned SDK can replay — `signature`, `redactedContent`,
+  `redactedData` — during normalization, so unreplayable reasoning is dropped
+  *before* cache points are assigned rather than poisoning the prefix.
+
+### 2. Filed: the session log's constructor discards the model and the registry
+
+`79e0551c-d08c-4b12-b9ed-6c3306d35542`.
+
+`sessionMod.New` has exactly one non-test call site in the tree, and it throws
+away both of the values that make a cost mean anything:
+
+```go
+// engine/engine_new.go:234
+session, err = sessionMod.New(logsDir, "", agentName, "", nil)
+```
+
+against `New(logsDir, model, agentName, parentID string, modelStore *modelstore.Store)`
+(`session/session.go:98`). `setupSession` is reached from `initSession`
+(`engine/engine_new.go:558`) and the benchmark path, so **every session inber
+creates** has `s.model == ""` and `s.modelStore == nil`, and the `session` package
+has no setter for either — the only one is `SetTruncateConfig`
+(`session/session.go:212`).
+
+`GetModelInfo("", nil)` takes the `store == nil` branch at `agent/models.go:76-78`
+and returns the flat unknown-model rate, **$3.00 / $15.00 per million**
+(`agent/models.go:25-27`). That is the number on `cost()` (`session/session.go:285`),
+on the `turns` table's `cost` column (`session/session_logging.go:227`), and —
+because `session/session_logging.go:41` writes `Model: s.model`, i.e. `""`, into
+every assistant entry — on anything repriced later from `session.jsonl`. A Haiku
+session is logged at twelve times its real cost and an Opus one at a fifth of it,
+and the model id is not recoverable from the log to correct it afterwards.
+`session/checkpoint.go:97` and `session/active.go:38` report the empty model too.
+
+It is also silent in the one place it promised not to be: `GetModelInfo`'s doc
+comment says the fallback happens "loudly" (`agent/models.go:72-73`), and the
+`store == nil` branch returns `unknownModelInfo` without calling
+`reportUnresolvedModel`. The branch every session takes is the branch that says
+nothing.
+
+This is the residue of closed todo `9317ef2b`, which fixed the cost *call sites*
+and deliberately deleted the store-less wrappers "so a caller with nothing to pass
+has to write `nil` out loud". `engine/engine_new.go:234` is a caller writing `nil`
+out loud. The deletion made the hole legible and did not close it, and it is why
+the repaired call sites are still handed an empty model.
+
+goose #11213 and codex #41162 are the pair that name the invariant: one resolver,
+consulted per step, and nothing downstream keeping its own copy. inber has the one
+resolver — `agent.GetModelInfo` has exactly two non-test callers, `engine/build.go:113`
+and `session/timeline_cost.go` — and the session log is the consumer that never
+asks it anything. **The fix is not decision-free**, which is why it is filed: the
+constructor runs before `initModelClient` so ordering must move or a setter must
+exist, and `engine/turn_execute.go:23` reassigns `e.Model` on every failover, so
+"the session's model" has to be defined as the configured one, the per-turn one,
+or abolished in favour of pricing per entry. codex #41162 chose per-step. It is
+still a choice.
+
+### 3. Filed: a stopped session runs the whole turn anyway
+
+`7de193b1-9446-46fc-bebc-869375261ed8`.
+
+`stop()` (`server/session.go:328-335`) is documented as marking a session
+"completed (terminal)" and does two things: cancel `s.cancel` **if it is
+non-nil**, and set `Status = Completed`. `Session.turn` (`server/session.go:145-151`)
+is the only function that would have to honour that, and its first act under the
+lock is `s.Status = Running`, unconditionally. `Completed` is read nowhere in any
+run path — grep finds it in `String()` (`server/session.go:31`) and one bridge
+state mapping (`server/api_bridge.go:1001`). For a session that is not already
+mid-turn, `stop()` is a status write that the next turn erases.
+
+The context does not save it. `withoutCallerCancellation` (`server/session.go:134`)
+is `context.WithoutCancel` plus the caller's deadline, and `WithoutCancel` strips
+a cancellation that has **already fired** — so a child whose parent context is
+already cancelled gets a live context with a fresh deadline.
+
+The cascade is not the missing piece. `StopSession` (`server/session_management.go:87-99`)
+copies `s.Children` and recurses; it reaches the child and calls `child.stop()`,
+which for a child that has not reached `turn()` is the no-op above. And the window
+is wide: the child is in `g.sessions` at `server/spawn.go:237` and in
+`parent.Children` at `:241`, but `child.turn` is not called until `:307` — after a
+DB write, a progress delivery, a NATS publish, and blocking on `Queue.Enqueue`'s
+per-session mutex and the `subagent` lane semaphore (`server/queue.go:44-53`,
+concurrency 8 by default). A child queued behind a busy lane sits there for as
+long as its siblings take. The only thing that might refuse it is that queue's
+`select` racing the semaphore against `<-ctx.Done()`, and Go picks uniformly when
+both are ready: measured over 1000 iterations with an already-cancelled context
+and a free lane, **480 ran anyway, 520 were refused.**
+
+So a user who stops an orchestrator with three queued sub-agents gets a 200, an
+`msg.SessionAborted` on the bridge (`server/api_bridge.go:479`), and roughly half
+those children running their full task — committing to a forge worktree
+(`server/spawn.go:357`), writing a memory row (`:347`), and injecting
+"[Sub-agent completed]" into the session that was just aborted. There is no test
+for the cascade at all: grep of `server/*_test.go` for `StopSession` or
+`InterruptSession` returns nothing.
+
+cline #13647 is the exact shape — its bullet list separates "abort actively
+executing teammates" from "**cancel queued async runs**". inber shipped the first
+and not the second. The fix must decide what Stop means, which is why it is filed
+and not fixed: `getOrCreateSession` (`server/session_creation.go:24-27`) hands a
+`Completed` session straight back to the next user message, so making `turn()`
+refuse a terminal session turns the bridge's Stop button into Delete unless
+something explicitly un-stops it.
+
+### 4. Filed: `deploy` reads the server process's working directory
+
+`d95cc093-bc9c-4024-bd6d-2fd2d5e48462`. **Latent, and the todo says so first** —
+`deploy` is reachable only via `buildConfiguredTools` (`engine/build_tools.go:23-35`),
+it is not in `tools.All()` (`tools/tools.go:83-91`) and not in
+`buildDefaultTools`, `agent_tools` in agent-store has zero rows on this host, and
+none of the ten agents in `/home/kayushkincom/inber-workspace/agents.json` lists
+it. One JSON line makes it live, and the rest of the tree already treats it as a
+mutating tool (`guard/guard.go:330`, `agent/read_cache.go:230`).
+
+`runDeploy` decides *which project and which slot to deploy* from
+`os.Getwd()` (`tools/deploy.go:33`) fed into `detectSlot` (`:40`), which expects
+`~/repos/.pools/<project>/slot-N`. `inber-server` is a daemon serving many
+sessions with many workspaces, and the working directory is a property of the
+process. Measured on the live server: `/proc/1765544/cwd ->
+/home/kayushkincom/repos/inber`, which is not inside a slot — so the tool would
+fail for every session, always, naming a directory no agent asked about. Start the
+server from inside a slot instead and it deploys *that* slot for every caller,
+which is a live preview publish of another session's checkout.
+
+The session's workspace is right there and ignored. `buildSpecialTool`
+(`engine/build_tools.go:68-99`) hands `e.repoRoot` to `repo_map` (`:74`),
+`recent_files` (`:79`), `task_plan` (`:88`) and `scratchpad` (`:92`); `deploy` at
+`:81` is the one case that takes no argument, because `tools.Deploy()`
+(`tools/deploy.go:19`) has no parameter to take one. Two of those siblings also
+return `nil` on an empty root; `deploy` is handed out unconditionally.
+
+`tools.ScopeToRoot` does not save it, and the reason is worth recording. Its doc
+comment (`tools/root.go:55-62`) claims it is "the one place a tool acquires a
+working directory, and every tool the engine offers the model passes through it",
+and `engine/engine.go:419` really does pass the whole set through it. But scoping
+works by rewriting **path arguments**, and `deploy`'s schema is empty
+(`tools/deploy.go:24-26`). A tool with no path arguments passes through untouched,
+so `TestEveryFilesystemToolDeclaresItsPathArguments` — the completeness test that
+guards that table — structurally cannot see it. **A completeness test over
+arguments cannot catch a tool that reads its context from the process instead.**
+That is the general lesson, and it is exactly why codex #41204/#41207 moved the OS
+and the home directory into *reported metadata* rather than leaving them as
+ambient facts each tool could read for itself.
+
+One line down, same class: `agentName()` (`tools/deploy.go:102-107`) reads
+`os.Getenv("INBER_AGENT")` for `triggered_by`. Unset on the running server, so
+every deploy would be attributed to the literal `"agent"` while `e.AgentName` —
+which `scratchpad` already receives one case earlier — sits unused.
+
+### 5. Held back by the three-todo cap, verified and not filed
+
+Five findings survived verification and were not filed. Three are dedupes against
+an open todo that already names the line, one is a decision the queue already
+owns, and the last is a real unfiled defect this run had no slot left for.
+
+- **A failover is permanent: the preferred model is destroyed the first time it
+  is used.** `engine/engine.go:64` declares a single `Model string` with no
+  "configured" companion. `engine/turn_execute.go:23` writes
+  `e.Model = modelUsed` — the *resolved* answer — and `engine/failover.go:23`
+  reads `preferred := e.Model` on the next turn. So one 30-minute health blip
+  (`model-store` marks a model down on a single error, with no threshold and no
+  decay — `engine/failover.go:96-103` says so) migrates the session to a fallback
+  permanently: from turn 2 on, the fallback *is* the preference, it is healthy,
+  and `failover.go:39-42` returns it without ever reconsidering the original.
+  Nothing restores `cfg.Model`. This is codex #41195 precisely — "preparing a
+  fallback can overwrite metadata before the current model's request is sent" —
+  and the 08-26 entry's "a projection is not the record" at a fourth site. Not
+  filed: open todo `2dcdb9a6` already quotes `engine/turn_execute.go:23` and calls
+  it "per-turn selection writing back a **persistent** change, including after a
+  failover", as evidence for its own spawn-precedence decision.
+- **Descendant spend is invisible to the root's cap.** `guard.RecordCost` has
+  exactly one non-test caller, `engine/turn_postprocess.go:87`, and it records
+  against the child's own guard. `server/spawn.go:336` computes the child's cost
+  and writes it to a DB row and a prose summary (`server/spawn_delivery.go:54-67`)
+  and to nothing that enforces anything. Combined with the zero `RunRequest` at
+  `server/spawn.go:224` — which leaves `MaxCost`, `MaxTurns`, `MaxInputTokens` and
+  `MaxDuration` all zero, and `guard/guard.go:81` documents `0 = unlimited` — a
+  root capped at `$5` with `MaxChildrenPerAgent` 5 and `MaxSpawnDepth` 2 can father
+  30 uncapped descendants. This is codex #41183's invariant verbatim, down to
+  "including nested subagents". Not filed: open todo `9e31d359` names both
+  `spawn.go` and `session_forking.go` as passing a zero `RunRequest` and parks
+  exactly this as "the shared-pot decision — when a parent capped at $5 spawns
+  three children, is the cap a pot the whole tree draws from, or does each child
+  get its own $5?" That is the user's call and it is already on the queue.
+- **A signed thinking block from model A is sent verbatim to model B.** Thinking
+  blocks carry their `Signature` into the transcript (`agent/agent.go:412` via the
+  SDK's `ToParam`), and because `markLastContentBlock` (`agent/agent.go:544-561`)
+  marks the *last* block while thinking is always first, they sit **inside** the
+  cached prefix and are frozen there once `FrozenIdx` advances. On failover the
+  only pre-send filter is `FilterMessagesForAnthropic`
+  (`agent/openai_conversion.go:304-360`), which inspects tool ids and never
+  `OfThinking`; there is no per-message model provenance anywhere that could tell
+  which model signed a block. The recovery that exists is the dead predicate in §0.
+  Confirmed on disk — `.inber/workspace/claxon/messages.json` holds 13 signed
+  thinking blocks, every assistant message ordered `['thinking','text']` — and
+  three live agents (`task-manager`, `bran`, `orchestrator`) run with
+  `thinking: 2048`. opencode #45769 is the first-party answer: filter unreplayable
+  reasoning *during normalization*, before cache points are assigned. Not filed:
+  open todo `cf3b6b4c` owns this file set, and §0 above appends the measurement
+  that changes its options.
+- **The CLI resume path omits a repair the server path applies.**
+  `server/session_creation.go:147-152` runs `RepairEmptyContent` →
+  `RepairDanglingToolUse` → `RepairAlternation` → `RepairThinkingSignatures` →
+  `SanitizeMessageToolIDs`; `engine/engine_new.go:176-181` runs the same list
+  **without** `RepairThinkingSignatures`. Two resume paths, one contract, and they
+  disagree. Not filed because the disagreement may already be the desired state:
+  `cf3b6b4c` argues the unconditional strip should be *removed* from the server
+  path, in which case the CLI path is the correct one and the server path is the
+  defect. Whichever way that todo is decided, both paths should end up saying the
+  same thing, and that is one edit inside that todo rather than a new one.
+- **`TruncateConfigForRole` is fed an agent name and matches none of them —
+  re-measured, still true, and never filed.** `engine/engine_new.go:600` and
+  `engine/engine_benchmark.go:136` call
+  `sessionMod.TruncateConfigForRole(e.AgentName)`, and that function
+  (`session/truncate.go:141-171`) switches on **exact** lowercase equality against
+  `"main"`, `"agent"`, `"project"`, `"run"`. The ten live agent names are
+  `task-manager, fionn, scathach, oisin, bran, researcher, orchestrator, party,
+  worker, logstack`. None matches, so every agent takes `default:`
+  (`session/truncate.go:167`) = 1000 tokens / 500 head / 200 tail, the most
+  aggressive of the four tiers, and the `run` tier — commented "minimal
+  truncation, expects large output" — is unreachable. Confirmed against real data:
+  the largest persisted `tool_result` across 1364 blocks is 3997 bytes, i.e.
+  exactly the default threshold, for every agent. Passing `e.AgentConfig.Role`
+  instead would not help either, because the live role strings are prose
+  (`"orchestrator — primary task dispatcher"`) and this switch is exact-match,
+  unlike `conversation.ManagementConfigForRole` (`conversation/manage_config.go:154-173`),
+  which substring-matches and does work. The same exact-match bug sits at
+  `engine/lifecycle.go:69` feeding `DefaultSummarizeConfig`
+  (`conversation/summarize_config.go:31-40`), so summarization always takes its
+  default branch too. The 2026-08-21 entry named this and **no todo was filed**;
+  it is held again tonight only because this run is at its cap. It should be the
+  first thing the next run files. What a fix must decide: whether the three
+  unreachable tiers are restored (make the switch substring-match a role, as
+  `ManagementConfigForRole` does) or deleted (so the 1000/500/200 default is
+  honest and nobody re-derives a tier that never ran).
+
+### 6. Ideas worth taking, no defect attached
+
+- **A hook that could not answer is not a hook that said no.** goose #11449 adds a
+  typed `cause` — `policy_denial` for an explicit block, `hook_failure` for an
+  execution or protocol failure — and an `on_failure` policy that can turn the
+  second into a block. inber's tool gate is `buildToolRefusal`
+  (`engine/build_hooks.go:89`), wired unconditionally with a comment explaining
+  that deciding a session needs no gate "would put that answer in two places". It
+  returns a `string` — empty means allow — so a gate that errored and a gate that
+  permitted are the same value. No defect today because the gate is pure local
+  code that cannot fail; it becomes one the moment a gate consults anything over a
+  network, which `permission-store` (`:8304`) exists to do.
+- **A transient auth failure is not a de-authentication.** cline #13565: any
+  network error, timeout or provider 5xx past a 30-second grace window was
+  reported as "requires re-authentication", and telemetry traced ~90 users in
+  three days to that one string. inber's analogue is
+  `errorIsEvidenceAboutTheModel` (`engine/failover.go:164-173`), which excludes
+  only cancel, its own deadline and its own API-call cap — a 429 or a 503 still
+  reaches `RecordError` and demotes the model **for every session on this host**.
+  Already held against open todo `70ae784b`, which owns the
+  substring-classification half of the same line; recorded here because cline's
+  version supplies the number and the shape (a grace window plus a distinction
+  between "the credential is bad" and "the call did not land").
+- **Truncation ownership is one of the things inber gets right, and it is worth
+  recording before someone re-derives it.** codex #41260/#41062 spent the week
+  making the history backend the single enforcer of tool-output budgets, because a
+  client-side check over an already-bounded response only corrupts it. inber has
+  exactly this: `session.TruncateToolResult` (`session/truncate.go:57-131`) is
+  wired once as `hooks.ModifyToolResult` (`engine/build_hooks.go:161-166`), and
+  **both** providers pass through it before the block enters the conversation —
+  `agent/agent_run.go:414-419` and `:371-376` on the Anthropic path,
+  `engine/turn_openai.go:151-156` on the OpenAI one. `agent.SetHooks` has one
+  caller (`engine/build.go:89`), so there is no second wiring to drift. Truncation
+  also happens at ingest rather than at send, so persistence inherits it: a 50 MB
+  tool return lands on disk as roughly 2.8 KB, and the largest `tool_result` across
+  1364 blocks in `~/.inber/server/sessions/*/messages.json` is 3997 bytes. The
+  limit *selection* is still broken (see §5), but the ownership is sound, and that
+  is the half codex spent the week building.
+- **cline #13626 has no inber counterpart, checked rather than assumed.** Every
+  method of `checkpoint/` returns `ErrNotImplemented` (`checkpoint/checkpoint.go:50,
+  108-110`), the package doc says so, and it has zero importers — the previous
+  version, which returned nil while performing no rollback, was itself the defect
+  that was fixed. `session/checkpoint.go` is a *conversation* snapshot and its
+  reader `LoadCheckpoint` (`:115`) has no caller outside its own test. The nearest
+  analogue is `merge_workspace` (`server/workspace_tools.go:56`), and a merge into
+  a moved HEAD is refused by git rather than clobbering it, so it is not #13626's
+  shape.
+
+### 7. Routine, recorded so it is not re-read
+
+codex: Guardian test/timeout/metrics plumbing and module extraction (`#41226`,
+`#41191`, `#41108`, `#41100`, `#41146`, `#41151`, `#41158`, `#41189`), plugin
+cache and catalog bookkeeping (`#41231`, `#41230`, `#41208`, `#41117`, `#41193`),
+Windows sandbox helper compatibility (`#41227`), realtime/registration transport
+(`#41250`, `#41219`), TUI mention parsing, diff-preview and input bounds
+(`#41218`, `#41143`, `#41159`), recency sorting (`#41223`), MCP startup grace
+(`#41199`), test-fixture hardening (`#41194`), lock removal on trusted skill
+collection (`#41150`), and the async-message guidance rewrite (`#41070`).
+`#41243` (sleep-tool gating), `#41210` (clock tools from model metadata) and
+`#41206` (Ultra reasoning fallback) have no inber surface — inber has a thinking
+token budget and no effort tier, and no clock or sleep tool; already dismissed at
+`agentic-design-patterns.md` in the 08-27 entry. `#41087` (usage metadata on
+completion events) and `#41202` (extensions processing MCP tool results) need an
+extension host inber does not have. `#41094`, `#41072` and `#41118` are the
+skill/MCP trust arc, and `grep -rl skill --include=*.go` still returns 0 files.
+goose: security hardening on surfaces inber has no counterpart for (`#11470`,
+`#11471`, `#11476`, `#11482`, `#11444`, `#11420`, `#11452`, `#11419`, `#11466`),
+provider additions and auth precedence (`#11589`, `#11575`, `#11562`, `#11324`),
+desktop and rendering (`#11583`, `#11495`, `#11406`, `#11594`), session titling
+(`#11135`), background extension load (`#10403`), Windows/cmd.exe input rules
+(`#11537`), image capability gating (`#11496` — inber is text-only, dismissed in
+the 08-27 entry), and `#11195` (deduplicating parallel tool-pair summaries), which
+needs a per-tool-group summarization loop inber does not have —
+`conversation/summarize.go` summarizes the whole span in one call. cline: desktop
+schedules, sidebar and installer work (`#13573`, `#13570`, `#13563`, `#13607`,
+`#13613`, `#13634`, `#13612`, `#13611`), subscription cost display (`#13562`,
+`#13552`, `#13515`), ProtoBus tunnelling and SDK discovery scaffolding (`#13218`,
+`#13017`), searchable history (`#13420`), offline-MCP crash guard (`#13639`),
+watcher lifecycle (`#13629`), and the CRLF-preservation pair (`#13512`), covered
+by the standing dismissal that inber owns no file-editing tool of its own.
+opencode: stats retention and console work (`#45374`, `#45027`, `#45007`,
+`#45044`, `#45503`), config-snapshot comparison and v2-in-v1 loading (`#45784`,
+`#45421`), Azure CLI auth (`#45079`), and provider routing (`#44828`, `#44281`).
+aider, roo-code and dexto: no commits in the window.
