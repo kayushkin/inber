@@ -19,7 +19,7 @@ agent/           LLM client abstraction, tool definitions, message conversion
   registry/      Agent config store (agent-store), spawn management
 tools/           Built-in tool implementations (shell, files, deploy, MCP adapter)
 conversation/    Message repair, stashing, extraction, summarization
-memory/          Thin wrapper re-exporting agent-store/memory (SQLite-backed)
+memory/          Thin wrapper re-exporting memory-store (SQLite-backed)
 session/         Session logging, workspace persistence, cost tracking
 deploy/          Agent seed data (agents-seed.db)
 ```
@@ -167,8 +167,8 @@ Context assembly is handled by the engine (`turn_prompt.go` / `turn_context.go`)
 
 ## Memory System
 
-Thin wrapper around `agent-store/memory` (SQLite-backed). Inber's `memory/` package re-exports types
-and constructors; the implementation lives in the external `agent-store` library.
+Thin wrapper around `memory-store` (SQLite-backed). Inber's `memory/` package re-exports types
+and constructors; the implementation lives in the external `memory-store` library.
 
 - **References**: auto-created after tool calls (file reads, shell output)
 - **PrepareSession**: loads identity + recent files into memory at startup

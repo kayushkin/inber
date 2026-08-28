@@ -1,38 +1,40 @@
-// Package memory provides a thin wrapper around github.com/kayushkin/agent-store/memory.
-// This package re-exports types and interfaces from agent-store/memory while maintaining
-// the same API that inber expects.
+// Package memory provides a thin wrapper around github.com/kayushkin/memory-store.
+// This package re-exports its types and interfaces while maintaining the same API that
+// inber expects. The store was split out of agent-store into its own module, and
+// agent-store has had no memory subpackage since; the old path is not an alias for the
+// new one, it does not resolve at all.
 package memory
 
 import (
-	asmemory "github.com/kayushkin/memory-store"
+	memorystore "github.com/kayushkin/memory-store"
 )
 
-// Re-export types from agent-store/memory
-type Memory = asmemory.Memory
-type MemoryStore = asmemory.MemoryStore
-type CompactionResult = asmemory.CompactionResult
-type BuildContextRequest = asmemory.BuildContextRequest
-type PrepareSessionConfig = asmemory.PrepareSessionConfig
-type ToolMetadata = asmemory.ToolMetadata
-type RecentFile = asmemory.RecentFile
-type Embedder = asmemory.Embedder
-type Tagger = asmemory.Tagger
-type PatternTagger = asmemory.PatternTagger
+// Re-export types from memory-store
+type Memory = memorystore.Memory
+type MemoryStore = memorystore.MemoryStore
+type CompactionResult = memorystore.CompactionResult
+type BuildContextRequest = memorystore.BuildContextRequest
+type PrepareSessionConfig = memorystore.PrepareSessionConfig
+type ToolMetadata = memorystore.ToolMetadata
+type RecentFile = memorystore.RecentFile
+type Embedder = memorystore.Embedder
+type Tagger = memorystore.Tagger
+type PatternTagger = memorystore.PatternTagger
 
-// Re-export functions from agent-store/memory
-var NewStore = asmemory.NewStore
-var OpenOrCreate = asmemory.OpenOrCreate
-var NewSQLiteStore = asmemory.NewSQLiteStore
+// Re-export functions from memory-store
+var NewStore = memorystore.NewStore
+var OpenOrCreate = memorystore.OpenOrCreate
+var NewSQLiteStore = memorystore.NewSQLiteStore
 
-var DefaultPrepareSessionConfig = asmemory.DefaultPrepareSessionConfig
-var FindRecentlyModified = asmemory.FindRecentlyModified
-var FormatRecentFiles = asmemory.FormatRecentFiles
-var NewEmbedder = asmemory.NewEmbedder
-var CosineSimilarity = asmemory.CosineSimilarity
-var NewPatternTagger = asmemory.NewPatternTagger
-var AutoTag = asmemory.AutoTag
-var EstimateTokens = asmemory.EstimateTokens
-var EstimateMessageOverhead = asmemory.EstimateMessageOverhead
-var EstimateToolSchemaTokens = asmemory.EstimateToolSchemaTokens
-var SessionsSchema = asmemory.SessionsSchema
-var DefaultMemoryPath = asmemory.DefaultMemoryPath
+var DefaultPrepareSessionConfig = memorystore.DefaultPrepareSessionConfig
+var FindRecentlyModified = memorystore.FindRecentlyModified
+var FormatRecentFiles = memorystore.FormatRecentFiles
+var NewEmbedder = memorystore.NewEmbedder
+var CosineSimilarity = memorystore.CosineSimilarity
+var NewPatternTagger = memorystore.NewPatternTagger
+var AutoTag = memorystore.AutoTag
+var EstimateTokens = memorystore.EstimateTokens
+var EstimateMessageOverhead = memorystore.EstimateMessageOverhead
+var EstimateToolSchemaTokens = memorystore.EstimateToolSchemaTokens
+var SessionsSchema = memorystore.SessionsSchema
+var DefaultMemoryPath = memorystore.DefaultMemoryPath

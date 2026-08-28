@@ -33,7 +33,7 @@ engine/            Per-session engine (context, memory, tools, hooks)
 agent/             Anthropic API loop (streaming, tool execution, failover)
   registry/        Multi-agent config loading and spawn management
 tools/             Built-in tools (shell, files, deploy, MCP adapter)
-memory/            Thin wrapper around agent-store/memory (SQLite-backed)
+memory/            Thin wrapper around memory-store (SQLite-backed)
 session/           Session logging, workspace persistence, cost tracking
 ```
 
