@@ -4923,3 +4923,65 @@ in the 08-27 sweep).
 - **[2608.26004](https://arxiv.org/abs/2608.26004)** *AsymSpec* (08-26) — drafter
   reads full context, verifier reads the compressed view; ~90% of full-context
   accuracy at 1.3–1.7× throughput. Requires local serving.
+
+## 2026-08-29 sweep — 27 candidates screened, 24 already recorded above
+
+The corpus is working: of 27 papers surfaced for 2026-08-15..29, twenty-four were already
+written up earlier this month. Three are new.
+
+13. **Zero-Shot Self-Orchestration with Ledger-Based Control for Improved LLM Coding
+    Performance** — [2608.26480](https://arxiv.org/abs/2608.26480), Gao, Khosrowshahi,
+    Khosrowshahi, Sun, Lee, Lee, 2026-08-27, cs.AI.
+    A manager-worker scaffold over a shared filesystem workspace, no training, no
+    per-benchmark tuning, measured against the same model answering in a single pass —
+    nine models from 9B to ~2.8T, on the 100 latest hard LiveCodeBench problems. The gain is
+    **real but conditional**: Qwen3.8-27B **+23.4**, Kimi-K3 **+30.4**, GPT-5.6-Luna +10.6,
+    GPT-5.6-Terra +8.0 — and **−1 to −9** for Qwen3.6-35B with reasoning off. A manager
+    **roughly triples the token bill**, yet buys accuracy more cheaply than a bigger model
+    does: GPT-5.6-Terra + manager nearly matches Fable 5's single call (85.0 vs 87.4,
+    p = 0.59) at **$11.71 against $61.11** per 100-problem pass. Transcript analysis names
+    **context management** — short worker calls, shared notes, less truncation — as one of
+    two recurring mechanisms.
+    - **What inber should consider:** the best cost-benefit evidence yet for
+      `server/spawn.go`'s HTTP sub-agent spawning, and the clearest warning against making
+      it a default. It is **net-negative for some models**, so "spawn a sub-agent" should be
+      a per-model policy read from the same place the model is chosen, not a capability the
+      orchestrator always has. inber currently decides spawn depth
+      (`MaxSpawnDepth`, `server/server.go:63`) and nothing about which model it is worth
+      spawning *for*. The paper also prices what a manager costs — ~3× tokens — which is a
+      number `MaxCost` could be set from instead of guessed at.
+
+14. **ProgRouter: Online Progress-Guided Orchestration for Multi-Agent LLM Workflows under
+    Quality-Cost Tradeoffs** — [2608.25992](https://arxiv.org/abs/2608.25992), Li,
+    Abdelmoniem, Wang, 2026-08-26, cs.AI/cs.DC.
+    Existing cascade routing makes **one-shot, query-level** decisions; ProgRouter routes
+    **step-wise**, scoring task progress (subtask completion, progress trends, workflow
+    state quality) and estimating the progress gain of each candidate model against time and
+    cost budgets. Evaluated on HumanEval Plus, MBPP, MATH-500 and ASQA. **The abstract gives
+    no headline number** — "reduces the operating cost relative to key baselines while
+    maintaining strong task-solving performance" — so nothing here is quotable as a figure.
+    - **What inber should consider:** shape only, and it is the shape `engine/failover.go`
+      does not have. inber switches model on **evidence about the model** — an API error
+      that `errorIsEvidenceAboutTheModel` (`engine/failover.go:164-173`) admits — and never
+      on evidence about the *task*: a turn making no progress cannot cause an escalation,
+      and a turn cruising cannot cause a downshift. Same gap [2608.24087](https://arxiv.org/abs/2608.24087)
+      named on 08-25 from the other side. Read together with the Handoff Tax
+      ([2608.24358](https://arxiv.org/abs/2608.24358)), which says *what to hand over* when
+      the switch happens; this one says *when to switch*.
+
+15. **SWE-Prime: Fewer Trajectories, Better Performance** —
+    [2608.27449](https://arxiv.org/abs/2608.27449), 2026-08-27, cs.SE.
+    Training-side, and included for one sentence: "**task success does not guarantee
+    high-quality supervision** — successful trajectories may still contain ineffective,
+    redundant, or risky steps." Two-stage filtering at trajectory then segment level; on
+    SWE-Bench Pro and Verified, training on the **10%** subset beats training on the full
+    resolved dataset, by up to **12.2%** and **24.2%** relative.
+    - **What inber should consider:** not the SFT method — inber trains nothing — but the
+      premise, which applies directly to `SaveToMemory: true`
+      (`conversation/summarize_config.go:30-54`, set on every tier). Compaction archives the
+      whole summarized span, so a session that succeeded after four wrong turns writes those
+      four turns into memory as material a later session retrieves. The paper's claim is
+      that outcome is the wrong filter for what to keep; inber uses no filter at all. A
+      cheap version of the idea — score a span's contribution before archiving it — would
+      sit in `conversation/summarize.go`, and `docs/memory-extraction-evaluation.md` is
+      where the current answer is written down.

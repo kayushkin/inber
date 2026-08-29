@@ -7883,3 +7883,359 @@ opencode: stats retention and console work (`#45374`, `#45027`, `#45007`,
 `#45044`, `#45503`), config-snapshot comparison and v2-in-v1 loading (`#45784`,
 `#45421`), Azure CLI auth (`#45079`), and provider routing (`#44828`, `#44281`).
 aider, roo-code and dexto: no commits in the window.
+
+## Harness-watch — 2026-08-29: a budget that bounds the record does not bound the broadcast — codex and cline both spent the week making the notification carry *less* than the transcript, and inber truncates every tool result twice, for the model and for the log, then hands the third door the raw 15.6 MB
+
+### 0. Correcting a filed note, from the code
+
+Onboarding note `3fde9be9-b998-4c3c-81ec-449620b9c34f` carries the measured
+inventory of what the OpenAI turn loop is not governed by, and its first table row
+reads **`hooks | build.go:89 | yes`**. That row checks that the hooks are *wired*,
+not that they are *fired*. `runOpenAITurn` calls `e.buildHooks()`
+(`engine/turn_openai.go:37`) under a comment claiming "the same hooks the
+Anthropic path reports through: **session logging**, the display, tool-input
+caching, truncation…" — and then never calls `hooks.OnRequest`. The only call site
+in the tree is `agent/agent_run.go:136-137`, on the Anthropic path. `OnRequest` is
+the hook that starts a turn record, so the inventory is one row short and §3 below
+is the seventh hole, not a restatement of one of the six. The six tests on
+`test/openai-turn-governance-parity` pin limits, volatile context, injection,
+reasoning parameter, cache accounting and overflow; none pins this.
+
+### 1. The upstream week: where, not just what
+
+- **cline, the one with the number.**
+  [#13587](https://github.com/cline/cline/pull/13587) — a user on CLI 3.0.58 hit a
+  **25 GB** cline process against **7.5 MB of transcript on disk**, because
+  `emitSessionSnapshot` re-read *every* message from disk on **every status flip**
+  and put the whole conversation on the wire per subscriber. Reproduced against
+  main with a slow consumer: websocket `bufferedAmount` **5.3 GB in 40 seconds**,
+  and **the sender is the process that balloons**, not the slow client. The fix is
+  the rule, not the patch: "**a snapshot is a state notification** — status, usage,
+  model, workspace, capabilities, checkpoint", and anything that needs messages
+  fetches them through `session.messages`. They grepped for readers of
+  `snapshot.messages` before deleting the field and found zero.
+- **codex, the same rule from the other end.**
+  [#41416](https://github.com/openai/codex/pull/41416) strips inline image and
+  audio from `item/started`, `item/completed` and `rawResponseItem/completed`
+  notifications — and states the direction explicitly: "**Keep the media in model
+  input; the filter only changes app-server notifications.**"
+  [#41427](https://github.com/openai/codex/pull/41427) does the same for function
+  call output items. [#41421](https://github.com/openai/codex/pull/41421) is the
+  budget half: a per-tool `output_token_limit` under each MCP server's `tools`
+  config, most-restrictive-wins where plugin and user policies overlap, and — the
+  part that matters — "**carry the effective MCP output budget in conversation
+  history** so tool output, post-tool hook responses, and resumed sessions use the
+  same truncation limit". A budget that travels with the record.
+- **codex, the failure-streak arc.**
+  [#41454](https://github.com/openai/codex/pull/41454) tracks failed `exec`
+  attempts per active goal, **marks the goal blocked after three qualifying
+  failure turns**, resets the streak when any tool succeeds, and refuses to carry
+  a streak into a replacement goal.
+  [#41432](https://github.com/openai/codex/pull/41432) runs executor hooks for
+  *interrupted* turns and [#41435](https://github.com/openai/codex/pull/41435)
+  lets bundled browser cleanup hooks run on subagent stop — cleanup belongs to the
+  abnormal path or it does not exist.
+  [#41308](https://github.com/openai/codex/pull/41308) makes a subagent follow the
+  **root's** service tier rather than its own default.
+- **codex, the fork/baseline arc.**
+  [#41424](https://github.com/openai/codex/pull/41424) treats a surviving full
+  world-state snapshot as a context baseline when a fork removes the associated
+  user message, restores previous turn settings and reference context from it, and
+  ignores partial snapshots and ones superseded by compaction — so a nested agent
+  inherits developer instructions and environment context *exactly*.
+  [#41357](https://github.com/openai/codex/pull/41357)/[#41364](https://github.com/openai/codex/pull/41364)
+  add compression for shared rollout lineages.
+- **goose.** [#11628](https://github.com/block/goose/pull/11628) surfaces
+  provider-reported cached input-token counts on the `CompactionSummary` record
+  and keeps them as `Option<i32>` "**so a reported zero stays distinguishable from
+  'not reported'**". [#11472](https://github.com/block/goose/pull/11472) is the
+  reason that matters: OpenRouter nests `cache_write_tokens` one level deeper and
+  goose had been reading it as zero.
+  [#11426](https://github.com/block/goose/pull/11426) rejects executable tool
+  calls that were not advertised to the model **for the current turn**.
+
+### 2. Filed: the record is truncated twice and the broadcast is not truncated at all
+
+`79d10fd7-f6ca-44f7-b1d5-75e2b247de16`.
+
+inber runs `TruncateToolResult` on every tool result **twice, independently**, and
+both copies are bounded:
+
+- the model's copy — `hooks.ModifyToolResult` (`engine/build_hooks.go:161-166`)
+  → `Session.TruncateToolResult` (`session/session_logging.go:63-74`), applied at
+  `agent/agent_run.go:411-416` and `engine/turn_openai.go:151-156`;
+- the log's copy — `Session.LogToolResult` (`session/session_logging.go:95`) calls
+  `TruncateToolResult` again on its own and writes `result.Displayed`.
+
+The third consumer of the same value is the display hook, and it is handed the
+raw string. `engine/build_hooks.go:149-151` fires `logHooks.OnToolResult(toolID,
+name, output, isError)` and `:153-154` the display's, both **before** the caller
+reaches `ModifyToolResult` — `agent/chain.go:416` on the success path,
+`agent/agent_run.go:367-368` on the error path. `server/session.go:106` puts that
+raw string on the wire as `StreamEvent{Kind: "tool_result", Text: output}`, and
+`server/bus_delta.go:39` copies it into `delta.ToolOutput` →
+`server/bus.go:143-146` → `bus/client.go:110-112` → `~/repos/bus/nats.go:53-58`,
+which `json.Marshal`s it onto core NATS subject `chat.stream`.
+
+**Measured, 2026-08-29.** The truncation banner records what it cut
+(`session/truncate.go:120-125`), so the original sizes are recoverable from the
+transcripts: **161 truncations across 95 sessions in
+`~/.inber/server/sessions/*/messages.json`; largest 3,910,152 estimated tokens ≈
+15.6 MB**, cut to ~2.8 KB for the model and the log and handed whole to the
+display door. The live `nats-server` (pid 1100) reports
+`max_payload: 1048576` on `:8222/varz`, and `nats.go@v1.49.0:4318` returns
+`ErrMaxPayload` client-side above it — so **2 of the 161 would not have been
+published at all**, and `inber-server` runs with `--require=nats`, so this door is
+open in production, not hypothetical. Below the ceiling the whole blob goes to
+every subscriber on a bus this host does not firewall.
+
+The asymmetry is already visible in inber's own code and was written down as
+deliberate: `server/spawn_delivery.go:117-124` narrows the spawn-result relay to
+`delta` and `thinking` only, with the comment "*Tool traffic from a spawn-result
+turn has never reached the bus, and narrowing here rather than in `busDeltaFor`
+keeps that difference from the `chat.inbound` path visible.*" One bus door was
+narrowed; the other was not.
+
+**Not a duplicate of `d60ec4a3`**, which owns *redaction* on these doors and names
+`server/bus_delta.go:37/39` — but it is the same line, and that todo's closing
+paragraph already asks the adjacent question ("an argument is usually short enough
+to omit without losing the thread, an output is the thing the user wants to see").
+Whoever takes either should take both; the cross-reference is on both bodies.
+
+**What a fix must decide.** One hook feeds a local terminal display, an SSE
+client and a NATS subject, and they do not want the same thing: a human at a TTY
+plausibly wants the full output, a broadcast subscriber demonstrably cannot take
+15.6 MB. So the choice is (a) truncate at the hook, and the local display loses
+what the tool actually returned; (b) truncate per door, and `busDeltaFor` /
+`streamEventToBridge` each grow a bound the engine does not know about; or (c)
+cline's answer — the event carries the tool's identity and outcome and **not** its
+output, and a client that wants the body fetches it. (c) is cheapest on the wire
+and is the only one that also fixes `d60ec4a3`; it costs the chat surface the line
+a user watches for.
+
+### 3. Filed: an OpenAI-served turn has an end-of-turn record and no beginning
+
+`dcf181e0-93f3-4fe1-a2fe-e8147d4ee9d7`.
+
+`Session.LogRequest` (`session/session_logging.go:119-141`) is the only thing in
+the tree that does three jobs: it increments `s.turn` (`:123`), writes the
+`request` entry, and calls `store.InsertTurn` (`:135`) — the row every later
+`EndTurn` updates. It is reached only through `hooks.OnRequest`
+(`session/session.go:291-295` → `engine/build_hooks.go:119-123`), and
+`hooks.OnRequest` is fired at exactly one site, `agent/agent_run.go:136-137`, on
+the Anthropic path.
+
+`runOpenAITurn` builds its own request loop and calls `hooks.OnResponse`
+(`engine/turn_openai.go:101-103`) but never `hooks.OnRequest`. So on that path:
+
+- `s.turn` never advances (`s.turn++` has one writer, `session_logging.go:123`),
+  so every `thinking`, `tool_call`, `tool_result` and assistant entry is stamped
+  with the turn number of the last Anthropic call, or `0`; so is every
+  `StreamEvent.Turn` (`server/session.go:97-109`);
+- no row is inserted, so `Session.EndTurn` (`session/session_logging.go:217-229`)
+  prices the turn correctly and runs an `UPDATE … WHERE session_id = ? AND turn =
+  ?` (`session/db_turns.go:20-27`) that matches **zero rows**;
+- that zero is discarded twice: `db_turns.go:21` takes `_, err :=` and never reads
+  `RowsAffected`, and `session_logging.go:227` calls `s.store.EndTurn(...)`
+  without binding its return at all;
+- `WritePromptBreakdown` (`engine/build_hooks.go:122`) never runs either.
+
+`~/CLAUDE.md`'s first directive is "fail fast and loud… don't silently produce
+wrong results". This is a write that reports success while touching nothing, on
+both of the layers that could have said so.
+
+**Latency of consequence, re-measured tonight rather than inherited:** all **18**
+enabled `harness_id='inber'` rows in `~/.config/agent-store/agents.db` carry a
+`claude-*` primary and an empty `model_fallbacks`, so `runOpenAITurn` is reachable
+only by naming an OpenAI-compatible model on a `RunRequest`. Latent on this host's
+corpus, exactly as `5902f7b9` said on 2026-08-07 — a priority argument, not a
+correctness one.
+
+**What a fix must decide:** whether this is a tenth port under `5902f7b9`'s
+option (A) or belongs to its option (B), *and* separately whether
+`SQLiteStore.EndTurn` should report a zero-row update as an error. The second is
+not free — `EndTurn` is also called on paths where a missing row is legitimate,
+and making it loud there turns a silent no-op into a noisy one for every caller,
+not just this one.
+
+### 4. Filed: two selectors read one free-text role field with two different matching rules
+
+`5a96361d-8d5f-4603-b5bf-923aeeefdea5`.
+
+`engine/lifecycle.go:66-71` picks the summarization tier by lowercasing the
+agent's role and matching it **exactly**:
+
+```go
+role = conversation.AgentRole(strings.ToLower(e.AgentConfig.Role))
+cfg := conversation.DefaultSummarizeConfig(role)
+```
+
+`DefaultSummarizeConfig` (`conversation/summarize_config.go:30-54`) switches on
+`RoleOrchestrator == "orchestrator"` and `RoleCoder == "coder"`. The live roles
+are prose: `"main orchestrator"`, `"coding"`, `"the worker: reads a card, changes
+code in northwind-api on a branch, opens a pull request"`. Measured against all
+**28** rows in `agents.role`: **28/28 take `default:`** — trigger 60, keep 12. The
+80/15 orchestrator tier and the 40/8 coder tier have never run.
+
+Its sibling, reading the same field, substring-matches and works.
+`conversation/ManagementConfigForRole` (`conversation/manage_config.go:153-176`)
+tests `Contains(lower, "orchestrat")`, `"coordinat"`, `"code"`, `"implement"` and
+so on; the same 28 roles through it give **24 Default / 2 Orchestrator / 2
+Coder**. So claxon (`"main orchestrator"`) gets the orchestrator *prune* config
+and the default *summarize* config, and summarizes 20 messages earlier and keeps 3
+fewer turns than the tier written for it — an extra API call and permanent
+transcript loss, on the agent whose job is tracking other agents.
+
+The third instance is `session/truncate.go:141-171`, fed an agent **name** at
+`engine/engine_new.go:600` and `engine/engine_benchmark.go:136` while matching
+`"main"|"agent"|"project"|"run"`: **28/28 to the 1000/500/200 default**, and
+`SetTruncateConfig` at `engine_new.go:601` is a provable no-op, since
+`session/session.go:137` already installed that exact config. Note
+`b2131163-5695-4de7-81e8-c7644a67c134` pinned that call site with a test but
+framed it as "the engine forgets to ask" and asserted "a **project** agent drops
+from 3000 to 1000" — no such agent can exist. The call site *is* asked; it can
+only answer one way.
+
+This was named in the 2026-08-21 entry and again in the 2026-08-28 entry's held
+list, which said it "should be the first thing the next run files". It is.
+
+**What a fix must decide:** whether `AgentRole` is a closed enum that agent-store
+validates on write — which makes 28 rows wrong today and needs a migration — or a
+substring match like its neighbour, which makes the tier assignment depend on
+prose nobody edits with tiers in mind. Two rules over one field is the defect;
+picking one is the fix. A third answer is legitimate: delete the unreachable tiers
+so the single default is honest and nobody re-derives a tier that never ran.
+
+### 5. Ideas worth taking, no defect attached
+
+- **A reported zero is not an absent field.** goose #11628 keeps cached-token
+  counts as `Option<i32>` for exactly this reason. inber's OpenAI path does the
+  opposite at `agent/openai_conversion.go:236-239` and `:196-199`: it constructs an
+  `anthropic.Usage` with `InputTokens`/`OutputTokens` set and
+  `CacheReadInputTokens`/`CacheCreationInputTokens` left at their zero value, and
+  `engine/build_hooks.go:203-204` reads that manufactured zero as a measurement.
+  Already owned by `0d052752` on the pricing side; goose supplies the *shape* of
+  the answer, and it is wider than pricing — `agent/openai_types.go:64-68` has
+  three fields and no `prompt_tokens_details`, so there is nothing to be optional
+  about yet. Anthropic-side accounting is correct and was re-verified this pass:
+  `agent/agent_run.go:263-283` reads all four counts and
+  `session/timeline_cost.go:49-56` prices cache reads at 0.1× and writes at 1.25×.
+- **After three failures, stop — do not spend more.** codex #41454 blocks a goal
+  after three failure turns and resets on any success. inber counts the same thing
+  and draws the opposite conclusion: `Turn.ConsecutiveErrors`
+  (`engine/build_hooks.go:157`) feeds only `contextBudget`
+  (`engine/turn_context.go:11-19`), which *raises* the memory budget to 20k, 35k
+  and 50k tokens as errors accumulate, and nothing anywhere stops on the count. A
+  session wedged on a failing tool escalates its own spend until `MaxTurns` or
+  `MaxCost` catches it. Not filed as a defect — the ladder is deliberate and
+  documented — but "more context" and "stop" are two answers to one signal and
+  only one of them is implemented.
+- **A budget that travels with the record.** codex #41421 carries the effective
+  per-tool output budget *in conversation history* so live output, post-tool hook
+  responses and a resumed session all truncate the same way. inber's budget is
+  per-session state (`Session.truncateCfg`) that a resume re-derives from
+  `TruncateConfigForRole`, so a transcript restored under a changed config is a
+  transcript truncated two ways with nothing recording which. Latent while §4 makes
+  that function constant; it becomes real the day §4 is fixed.
+- **cline grepped for readers before deleting the field.** #13587's audit —
+  "no consumer reads `snapshot.messages` from any event or any reply" — is the
+  step that turned a risky deletion into a safe one, and it is the same move this
+  repo keeps needing: `registry.ContextConfig.InheritParent`
+  (`agent/registry/config.go:39`, commented `// inherit parent's context`) is
+  declared and read by nothing, one hit in the whole tree.
+
+### 6. Held back — verified, not filed, because this run hit its three-todo cap
+
+- **`handleBridgeFork` forks a live session onto its stored config.**
+  `server/api_bridge.go:612-613` takes `agentName := parent.AgentName` and then
+  `ac, _ := g.GetAgentConfig(agentName)` — the **stored** model and thinking
+  budget — while the parent's live values sit unread on `parent.Engine.Model` and
+  `parent.Engine.ThinkingBudget()`, both settable at runtime through
+  `POST /sessions/{id}/config` (`server/api_bridge.go:668-671`). This is a
+  *same-agent* fork of the same conversation, so a session switched to opus at
+  effort `high` mid-run forks into a child on the agent's stored sonnet. Unlike
+  `Spawn` (`server/spawn.go:170`), it also discards the lookup's `ok`. This is
+  codex #41308's shape — "subagents follow the root service tier" — and branch
+  `fix/a-spawn-that-ignores-the-parents-live-model-says-so` (`3e6bf91`) touches
+  `spawn.go` only, logs the divergence rather than following it, and does not
+  reach this path. Held because it is the fourth, and because its decision
+  (inherit the live value, or record that it deliberately did not) is the same
+  decision `9e31d359` and `65301d09` already park on for guard caps and disabled
+  tools; those three should be answered together or the fork will keep gaining
+  half-inherited fields.
+- **`docs/fork-inheritance-audit.md` has drifted.** Every structural claim
+  re-verified and holds, but the line numbers do not: `session_forking.go:18-28,
+  :41-42, :55-56, :91` is now `:21-32, :42-45, :59-60, :98`, and
+  `agent/agent.go:300-311`, cited for the spawn-result write-back, now points at
+  unrelated code (the claim survives via `server/spawn_delivery.go:46-101`). Its
+  "a fork is normally a fork *to another agent*" is true of the spawn path and
+  false of `handleBridgeFork`. And its key-collision section reads as live for four
+  paragraphs before a later one says "Fixed, option C of `704c5000`" — the
+  out-of-date-order append `~/CLAUDE.md` warns about, in this repo's own docs.
+- **`memory_expand` is cut by the budget that made the content unreachable.**
+  Of the 161 measured truncations, 3 are `memory_expand` — the one tool
+  `conversation/summarize_config.go:15-27` says the summary block may point at
+  *because* it is how the model reaches archived content. Its answer goes through
+  the same 1000-token budget. Held under §4: the per-tool question is that todo's
+  first decision, and filing it separately would split one choice across two rows.
+
+### 7. Papers
+
+Twenty-seven candidates screened against `docs/papers/` — **24 were already
+recorded** by earlier runs this month, which is the corpus working. Three are new
+and are written up in `docs/papers/2026-08-harness-research.md`:
+[2608.26480](https://arxiv.org/abs/2608.26480) (a manager-worker scaffold is
+worth **+23.4 to +30.4** points for some models and **−1 to −9** for others, at
+roughly **3× the token bill** — so sub-agent delegation is a per-model policy, not
+a default), [2608.25992](https://arxiv.org/abs/2608.25992) (step-wise rather than
+query-level model routing, the shape `engine/failover.go` does not have), and
+[2608.27449](https://arxiv.org/abs/2608.27449) (a successful trajectory is not
+therefore good supervision — **10% of trajectories beats 100%**).
+
+### 8. Screened and rejected, with the reason
+
+**goose #11426 has no inber surface, checked rather than assumed.** It rejects
+tool calls not advertised for the current turn. inber withholds tools from exactly
+one request — the force-summary call at `agent/agent_run.go:71-79`, the only site,
+by its own comment — and a request with no `tools` array cannot come back with a
+`tool_use` block, so there is no unadvertised call to execute. The dispatcher's
+`toolMap` lookup is the backstop either way.
+
+**codex #41424 has no inber surface.** There is no package-level mutable
+compaction state to corrupt across a fork: `ManagementConfig` and
+`SummarizeConfig` are returned by value, `Engine.staged` is a fresh
+`*StagedConversation` per engine, and `TurnState`/`CacheState` are value fields on
+`*Engine`. A fork cannot move its parent's threshold.
+**#41429 is handled correctly** — `engine/turn_prepare.go:94` clears
+`Turn.VolatileContext` each turn on purpose and `Cache.LastNamedBlocks` is
+retained as the degradation path (`:97-102`), with the cache-prefix reasoning
+stated at the site.
+
+**Routine, recorded so it is not re-read.** codex: Guardian transcript/context
+primitives and turn identity (`#41422`, `#41392`, `#41385`, `#41322`, `#41309`),
+plugin/runtime and catalog bookkeeping (`#41396`, `#41375`, `#41456`, `#41457`,
+`#41461`, `#41393`), MCP cache and header refresh (`#41344`, `#41336`, `#41400`),
+terminal-input review and NUL rejection (`#41328`, `#41354`, `#41436`) — the
+invisible-character half is already `2e61fdf1`; app-server plumbing and history
+lookups (`#41413`, `#41403`, `#41349`, `#41235`, `#41239`, `#41260`), Windows and
+shell guidance (`#41368`, `#41232`, `#41384`), keymap/action registry (`#41285`),
+collaboration-mode wording (`#41448`, `#41380`, `#41365`), elicitation forms
+(`#41447`), TTY query handling (`#41436`), retry-backoff test decoupling
+(`#41313`), home-usage measurement (`#41360`), and `#41292` (history-note images
+— inber is text-only, standing dismissal). goose: security hardening on surfaces
+inber has no counterpart for (`#11470`, `#11471`, `#11476`, `#11444`, `#11420`,
+`#11452`, `#11419`), providers and auth (`#11589`, `#11575`, `#11562`, `#11324`),
+desktop/rendering/perf (`#11653`, `#11583`, `#11495`, `#11406`, `#11594`,
+`#11521`, `#11645`), local-inference fences and GGUF discovery (`#11117`,
+`#11005`), auto-updater and packaging (`#10614`, `#11634`, `#11560`), and
+`#11213`/`#11195`, covered on 2026-08-28. cline: desktop, installer and
+onboarding (`#13672`, `#13643`, `#13632`, `#13630`, `#13627`, `#13613`, `#13612`,
+`#13611`, `#13610`, `#13607`, `#13582`, `#13572`, `#13566`, `#13585`, `#13225`),
+telemetry and model catalog (`#13680`, `#13651`, `#13670`, `#13663`), CI and test
+hardening (`#13646`, `#13644`, `#13642`, `#13600`, `#13560`), ProtoBus tunnelling
+and SDK discovery (`#13218`, `#13017`), rules discovery (`#13614`), and
+`#13647`/`#13626`/`#13565`, covered on 2026-08-28. opencode: console, stats and
+config work (`#46055`, `#45923`, `#45904`, `#45849`, `#45845`, `#45836`, `#45784`,
+`#45542`, `#45503`, `#45421`, `#45374`, `#45079`, `#45061`, `#45044`, `#45027`,
+`#45007`, `#44928`, `#44905`, `#44828`), and `#45769`, covered on 2026-08-28.
+aider, roo-code and dexto: no commits in the window.
