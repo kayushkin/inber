@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	logstackclient "github.com/kayushkin/logstack/client"
 	logstackmodels "github.com/kayushkin/logstack/models"
@@ -16,7 +17,15 @@ type LogstackAdapter struct {
 }
 
 // NewLogstackAdapter creates a new logstack adapter if URL is provided.
+//
+// The base URL loses its trailing slashes, because logstack's client appends
+// "/api/v1/logs" to whatever it is given and gin does not treat "//api/v1/logs"
+// as that route. LOGSTACK_URL=http://host:8088/ therefore 404s every entry a
+// session ever writes, and Log discards the error into a log line, so the only
+// symptom is that the session is absent from logstack entirely. Measured
+// against a real logstack 2026-08-29: 404 with the slash, 201 without.
 func NewLogstackAdapter(url, agentName, sessionID string) *LogstackAdapter {
+	url = strings.TrimRight(url, "/")
 	if url == "" {
 		return nil
 	}
@@ -73,6 +82,28 @@ func entryType(role string) string {
 	}
 }
 
+// reportsSessionCumulativeTotals says whether this entry's four counts describe
+// the whole session rather than this entry.
+//
+// Only the closing entry does: closeJSONLWithCompletion and closeJSONLWithError
+// both build a system Entry out of closingTotals(), so its counts are the sum of
+// every turn that already reported itself. Those counts are load-bearing in
+// inber's own JSONL — the closing line is where a session's totals are read from
+// — so they stay on the Entry and are dropped on the way to logstack instead.
+//
+// This is the rule turnStats already applies to Cost, carried to the three
+// counts it was never applied to. Typing the entry lifecycle keeps it out of
+// logstack's Usage and MaxUsage, which both select outbound; it does not reach
+// logstack's third reader. FileStore.Stats, behind GET /api/v1/stats, sums
+// TokensIn and TokensOut over every entry with no type filter at all, so a
+// session that reported its tokens per turn and again at the close is counted
+// twice there. Measured against a real logstack 2026-08-29: three turns of
+// 100 in / 10 out came back from /api/v1/stats as 600 in / 60 out while
+// /api/v1/usage read 300/30 correctly.
+func (e Entry) reportsSessionCumulativeTotals() bool {
+	return e.Role == "system"
+}
+
 // turnStats is the structured usage block logstack reads, or nil for an entry
 // that reports no usage.
 //
@@ -95,6 +126,9 @@ func entryType(role string) string {
 // CacheCreationTokens carries the cache writes and CacheWriteTokens stays zero:
 // MaxUsage reads the two as a sum, so filling both would double the figure.
 func (e Entry) turnStats() *logstackmodels.TurnStats {
+	if e.reportsSessionCumulativeTotals() {
+		return nil
+	}
 	if e.InputTokens == 0 && e.OutputTokens == 0 && e.CacheRead == 0 && e.CacheWrite == 0 {
 		return nil
 	}
@@ -122,6 +156,15 @@ func (e Entry) toLogstackEntry(agentName, sessionID string) logstackmodels.LogEn
 		content = string(e.ToolInput)
 	}
 
+	// TokensIn/TokensOut are deprecated on logstack's model, but FileStore.Stats
+	// still sums them, and it is the one reader with no type filter — so this is
+	// the pair that actually double-counts a session. They go the same way as
+	// Stats. The cumulative figures stay in Metadata, where they are labelled.
+	tokensIn, tokensOut := e.InputTokens, e.OutputTokens
+	if e.reportsSessionCumulativeTotals() {
+		tokensIn, tokensOut = 0, 0
+	}
+
 	return logstackmodels.LogEntry{
 		Timestamp:    e.Timestamp,
 		Orchestrator: "inber",
@@ -133,8 +176,8 @@ func (e Entry) toLogstackEntry(agentName, sessionID string) logstackmodels.LogEn
 		Type:         entryType(e.Role),
 		Content:      content,
 		Stats:        e.turnStats(),
-		TokensIn:     e.InputTokens,
-		TokensOut:    e.OutputTokens,
+		TokensIn:     tokensIn,
+		TokensOut:    tokensOut,
 		Metadata: map[string]interface{}{
 			"turn":      e.Turn,
 			"role":      e.Role,
