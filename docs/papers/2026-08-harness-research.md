@@ -4985,3 +4985,124 @@ written up earlier this month. Three are new.
       cheap version of the idea — score a span's contribution before archiving it — would
       sit in `conversation/summarize.go`, and `docs/memory-extraction-evaluation.md` is
       where the current answer is written down.
+
+## 2026-08-30 sweep — 142 candidates screened, 64 already recorded above
+
+Six new. The corpus is dense through 2026-08-27, so the open band is narrow and every id below was
+re-checked against its own arXiv abstract page rather than a search snippet. One operational note
+for the next sweep: **`curl` has no network egress from this box** — the arXiv API is reachable
+only through the harness's own fetch tool.
+
+16. **The Interaction Tax: When Communication Erases Diversity in Multi-Agent Teams** —
+    [2608.23541](https://arxiv.org/abs/2608.23541), Ann, Liu, Tan, 2026-08-24.
+    Eleven verifier-scored optimization tasks under matched budgets. When agents observe each
+    other's **complete outputs**, "their proposals converge within one round, erasing the
+    diversity" that motivated using several agents at all; agents stay anchored to their first
+    solution. Independent proposal generation avoids the collapse; critique helps only when the
+    violated rule is easy to find and easy to fix. The result is a negative one and has no
+    headline percentage — the claim is that full-solution interaction is a **weak default**.
+    - **What inber should consider:** this governs *what* crosses the parent/sub-agent boundary,
+      and inber's boundary is `server/spawn.go`. A `SpawnRequest` carries `Task`, and the injection
+      channel already hands a sub-agent's answer back to the parent as a "user" message
+      (`ceedbf75`). The paper's line is between handing a sub-agent the **task** and handing it the
+      parent's **draft**; inber has never written down which it does, and the answer differs
+      between `spawn_agent` and the fork paths. Read against the Handoff Tax
+      ([2608.24358](https://arxiv.org/abs/2608.24358), 08-25), which asks what to carry across a
+      model switch: same question, different edge of the graph.
+
+17. **Candidate supply and answer selection shape the value of LLM judging in multi-agent
+    systems** — [2608.25937](https://arxiv.org/abs/2608.25937), Ji, Li, Cheng, She, Yu, Yuan,
+    2026-08-26.
+    **81,390 fixed candidate pools over 16,278 questions**, five benchmarks, replayed offline. The
+    correct answer is frequently already in the pool while the system reports a wrong one — they
+    call it memetic drift. Combining answer frequency with a judge signal, **changing only the
+    terminal selection rule** and neither generation nor communication, moved accuracy
+    **63.82% → 70.82–70.95%**, mostly by rescuing correct answers outnumbered by popular errors.
+    Caveat stated by the authors: judge reliability is not a fixed property of a model, it varies
+    with task, generator and how rare the correct answer is.
+    - **What inber should consider:** ~7 points for no extra generation is the cheapest number in
+      this window, and it lands exactly where inber has nothing. A parent that spawns several
+      sub-agents takes what comes back — `server/spawn_delivery.go` delivers each result as it
+      arrives and there is no selection step, so "several sub-agents on one question" is not
+      currently a thing inber can do better than "one". The paper says the selection rule is worth
+      more than the extra agents.
+
+18. **CONTRAMEM: Learning Self-Evolving Procedural Memory from Contrasting Multi-Model
+    Trajectories** — [2608.22533](https://arxiv.org/abs/2608.22533), Deng, Lu, Feng, Huang, Wang,
+    Xu, Zhang, Sun, Mou, Zhang, Hao, Poczos, Li, 2026-08-23.
+    Training-free. The supervision signal is **outcome variation between different models on the
+    same task**, distilled into a curated bank of Function Cards and Skill Cards — curated, not
+    append-only. Held-out GAIA2/ARE: **26.2% → 55.3%** across three source models (Claude Sonnet
+    4.6 28.0 → 52.5, GPT-5.5 27.5 → 61.0, DeepSeek V4 Pro 23.0 → 52.5), and the bank transfers
+    unchanged to an unseen model (Qwen3.7 Plus 18.5 → 35.5). Under a matched trajectory budget,
+    heterogeneous multi-model trajectories beat same-model multi-rollout.
+    - **What inber should consider:** inber runs a fleet across several models and writes memory on
+      compaction with no filter at all (`SaveToMemory: true` on every tier,
+      `conversation/summarize_config.go:30-54`). This says the highest-value thing to keep is the
+      **contrast** between two models' attempts at the same task, and that curation beats
+      accumulation — the same conclusion [2608.27449](https://arxiv.org/abs/2608.27449) reached
+      from the training side on 08-29, now with a training-free mechanism attached. It is the
+      concrete proposal `docs/memory-extraction-evaluation.md` has been missing.
+
+19. **Beyond Executable Models: The Pufibara Agent Harness and the Modelica Agent Workflow
+    Benchmark** — [2608.23653](https://arxiv.org/abs/2608.23653), Wang, 2026-08-24.
+    Domain is Modelica; the mechanism is not. Three harness properties: persist engineering state
+    across revisions, **bind execution evidence to the candidate that produced it**, and make
+    submission an explicit agent action. Against Claude Code on the same 232-task benchmark under
+    matched backends: **202 vs 185 passes** (DeepSeek v4 Flash) and **202 vs 187** (Claude Sonnet
+    5), with **76.4–82.5% lower logical-token totals** and **6.1–58.4% lower** sequential runtime.
+    - **What inber should consider:** the named failure — an agent reasoning from test output
+      produced by a **superseded** version of the code — is a plain harness bug and inber has the
+      surface for it. A tool result carries no provenance beyond its `tool_use_id`
+      (`agent/chain.go:406` → `session/session_logging.go:95`), so after an `edit_files` the
+      previous `go test` output sits in history indistinguishable from a current one, and
+      compaction keeps summarizing it forward. This is the strongest harness-level token number in
+      the window and a sharper version of "Same Model, Different Harness"
+      ([2608.26218](https://arxiv.org/abs/2608.26218), 08-28).
+
+20. **AID-Guard: Stateful Authorization for Delegated Agent Effects** —
+    [2608.21159](https://arxiv.org/abs/2608.21159), 2026-08-21.
+    Binds an approval to **one effect** across retry and crash recovery: revalidate at commit, hold
+    a single reservation under ambiguity, admit one successor only after a terminal result. Blocked
+    **44/44 attacks under full proposer compromise while admitting 44/44 legitimate proposals**;
+    **210/210** Stripe provider-contract trials matched predeclared outcomes. The strict
+    exact-manifest profile costs **35.4–43.8 percentage points of benign utility**, partly
+    recovered by a typed frontier.
+    - **What inber should consider:** the mechanism half of Agent Mesh
+      ([2608.26225](https://arxiv.org/abs/2608.26225), 08-26), which only diagnosed non-idempotent
+      delegation. The gap it names is inber's: a tool call whose response is lost and retried
+      produces **two effects from one grant**, and the guard (`guard/guard.go`) decides per call,
+      not per effect. Relevant to permission-store, which is still step 1 of 7. Weigh the 35–44pp
+      utility cost before anyone proposes strict mode as a default — that number is the reason this
+      is a design input and not a patch.
+
+21. **SkillShield: Prompt-Space Security Skills for LLM Coding Agents** —
+    [2608.25817](https://arxiv.org/abs/2608.25817), 2026-08-26.
+    A system-prompt-only defense synthesized offline from known attacks and injected at session
+    start — no runtime classifier, no router. Six models on RedCode: malware-generation severity
+    **3.37 → 0.58**, execution attack success **43.6%**, "matching Llama Guard 3's 42.7% without
+    its separate 8B classifier"; a per-class skill reaches **14.5%**. Benign cost **0.14%** mean
+    refusal over 731 benign tasks.
+    - **What inber should consider:** the cheapest safety result in this window, and it lands in a
+      part of inber that already exists — `buildSystemBlocks` renders named blocks per session, so
+      a security block is a block. It is a **complement** to call-time gating, not a replacement:
+      the 43.6% residual is what a reference monitor is still for. Read beside
+      [2608.12654](https://arxiv.org/abs/2608.12654) (08-12), which measured a model-driven
+      approval gate over-refusing 28:1 — prompt-space defense has no such failure mode because it
+      refuses nothing at the gate.
+
+**Runners-up, screened and not written up:** [2608.27311](https://arxiv.org/abs/2608.27311)
+HarnessLens (+7.6–13.6% on held-out harness evolution under a verification budget — overlaps items
+9 and 12 above); [2608.27234](https://arxiv.org/abs/2608.27234) SPA (plan-first information-flow
+control, attack success 0%/0.2%, but the plan-first DSL fits batch workflows rather than an
+interactive coding loop); [2608.26623](https://arxiv.org/abs/2608.26623) AgentJudgeBench (six
+judges all converge to a 77–82% ceiling on hard tool-calling without ground truth — a bound on
+item 17's mechanism); [2608.26742](https://arxiv.org/abs/2608.26742) Claude Code Complete User
+Handbook (reference, no result).
+
+**Rejected despite on-topic titles:** [2608.27086](https://arxiv.org/abs/2608.27086)
+"Contract-Centered Architecture for Agentic Runtimes" — its own abstract states it "reports no
+completed implementation, experiment, dataset, or measured result";
+[2608.26696](https://arxiv.org/abs/2608.26696) "Five Primitives for Governing Autonomous AI Agents"
+— the authors concede the taxonomy describes their own codebase and one of the five is not
+integrated.

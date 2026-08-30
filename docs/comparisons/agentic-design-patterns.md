@@ -8239,3 +8239,268 @@ config work (`#46055`, `#45923`, `#45904`, `#45849`, `#45845`, `#45836`, `#45784
 `#45542`, `#45503`, `#45421`, `#45374`, `#45079`, `#45061`, `#45044`, `#45027`,
 `#45007`, `#44928`, `#44905`, `#44828`), and `#45769`, covered on 2026-08-28.
 aider, roo-code and dexto: no commits in the window.
+
+## Harness-watch — 2026-08-30: the blast radius of a failure is a property of the goroutine it happens on, not of the failure — cline stopped one hook's spawn error from killing its core, codex and goose spent the week making an update touch only what it was asked about, and inber runs whole sub-agent turns on two bare goroutines that recover nothing while the HTTP path survives only by borrowing `net/http`'s
+
+Short window: the 2026-08-29 entry dispositioned everything up to it, so this pass walked only
+what landed after — codex #41449–#41586, cline #13422/#13537/#13567/#13675, goose #11322/#11516/
+#11517/#11542–#11650, opencode #45042–#46213. Two findings against inber's own code, both filed;
+one claim died on contact with the code and is written up as §6 rather than dropped.
+
+### 1. The upstream week: where, not just what
+
+- **cline, the one with the blast radius.**
+  [#13422](https://github.com/cline/cline/pull/13422) — a hook child process that fails to spawn
+  emitted an `error` event with no listener, and Node turns an unlistened `error` into an uncaught
+  exception, "**killing the entire cline-core process instead of failing the one hook**". The
+  common trigger was a **stale workspace root passed as the spawn `cwd`**, which Node reports as a
+  misleading `spawn /bin/sh ENOENT`. The fix has three parts and only one is the guard: check the
+  listener count so rejection is the sole propagation path, **validate the working directory exists
+  before spawning** and name it in the error, and carry the pre-spawn message into
+  `HookExecutionError` instead of a bare "exited with code 1".
+  [#13537](https://github.com/cline/cline/pull/13537) is the same week's other half: sign-in bound
+  callback port 1455, and when the port was taken `startLocalOAuthServer` returned a **no-op
+  server** — the browser still opened, the callback could never arrive, and the user saw nothing at
+  all. It now fails *before* opening the browser.
+- **codex, the update-touches-only-what-it-was-asked-about arc.**
+  [#41464](https://github.com/openai/codex/pull/41464): "**keep client name and version updates
+  from resolving filesystem paths or altering the existing permission snapshot**" — a metadata
+  write was re-deriving a sandbox policy it had no business re-deriving.
+  [#41567](https://github.com/openai/codex/pull/41567): a resumed thread with no explicit `cwd`
+  could restore one from **another thread's** settings snapshot, or lose it to compaction, so
+  snapshots now record an owning thread id and only the resumed thread's own are used.
+  [#41562](https://github.com/openai/codex/pull/41562) does the same for turn lineage: carry the
+  trusted root through automatic goal continuations, and **invalidate stored lineage** when
+  external context reaches an active turn or the goal is edited.
+- **goose, the same rule from the config side.**
+  [#11517](https://github.com/block/goose/pull/11517): saving a provider wrote client-side
+  **defaults over existing disk values** — `LITELLM_HOST` reset from the user's proxy to
+  `http://localhost:4000`, breaking model discovery. The submit handler now "sends only values
+  actually provided" and the form no longer seeds defaults when the config read fails.
+  [#11322](https://github.com/block/goose/pull/11322): a new chat in the same window read
+  `GOOSE_WORKING_DIR` **frozen at window creation**, so a stale local path was sent to a remote
+  host and failed its cwd-existence check.
+  [#11516](https://github.com/block/goose/pull/11516) keeps the experimental `roam` feature in-tree
+  behind a default-off cargo feature: "no `goose roam` commands, no iroh/qrcode/fs2 in the
+  dependency graph, zero runtime cost" — in-tree so CI still compiles it, out of the released
+  binary so it cannot ship by accident.
+- **codex, taxonomy and egress.**
+  [#41331](https://github.com/openai/codex/pull/41331) reclassifies the clock tools as **built-in
+  control tools**, which changes three things at once: their calls emit control-tool analytics,
+  those analytics **omit tool arguments and output**, and the calls stay out of the dynamic-tool
+  count. [#41569](https://github.com/openai/codex/pull/41569) sends the diagnostic report event
+  first and each attachment in its own gzip envelope linked to it, bounds encoded *and* decoded
+  sizes with format-aware truncation for JSONL, and retries transient attachment failures
+  "**without replaying the core event**".
+
+### 2. Filed: a panic on a sub-agent's goroutine takes the whole daemon, and the HTTP path is safe only by accident
+
+`4be67b7c-4ac8-42c9-b1a4-ebf637a582ef`.
+
+Measured, not inferred: `grep -rn "recover()" --include=*.go . | grep -v _test.go` returns
+**exactly two** production sites in the whole tree — `server/bus.go:51` and
+`conversation/extract.go:34`. Nothing else recovers anywhere.
+
+Two goroutines run a **complete turn** — model call, tool dispatch, forge commit, memory write —
+and neither is one of them:
+
+- `server/spawn.go:277` `go func()` → `queue.Enqueue` (`server/queue.go:56`, which just calls
+  `work(ctx)`) → `child.turn` (`server/session.go:145`) → `agent/chain.go:406` `tool.Run`.
+  `Session.turn`'s `defer` (`server/session.go:165-172`) restores `Status = Idle` and requeues
+  injections **while unwinding** — it does not `recover()`, so the panic keeps going.
+- `server/spawn_delivery.go:105` `go func()` → `g.run(context.Background(), …)` at `:143` — a full
+  parent turn triggered by a spawn result, on a detached goroutine.
+
+An unrecovered panic on a goroutine with no `recover()` on its stack ends the **process**, so a
+panic in any tool a sub-agent calls kills every other session on the box. The same panic on the
+HTTP path is survivable, and for a reason inber never chose: `net/http`'s `conn.serve` recovers
+handler panics per connection. So the containment inber has is the standard library's, and it
+covers exactly the paths that do not need it most.
+
+`server/bus.go:48-62` is the counter-example that shows the author already made this decision once,
+in the other direction: it recovers, logs `[bus] PANIC handling message`, and publishes an error
+delta plus a done delta so the sender is told. Its comment is "*so a single bad message doesn't
+crash the server*". The spawn path — the one inber's entire multi-agent design rests on, and
+**27 of the 95 session directories** under `~/.inber/server/sessions/` are sub-sessions — got no
+such treatment.
+
+Related and folded in rather than filed twice: `server/api_run.go:59-73` writes
+`WriteHeader(http.StatusOK)` and flushes *before* streaming, so a panic under `g.Stream` tears the
+connection down mid-body and the `event: error` frame at `:67-71` never goes out. The client sees a
+truncated 200 with no terminal event — cline #13537's "silently dead-ends" shape, one session wide.
+
+**Not a duplicate of `f40924db`**, and the overlap is stated on both: that todo already measured
+"the only `recover()` … is `server/bus.go:51`, so on every other entry point that is a process
+exit", but it owns **one panic source** (an unconvertible content block) and fixes it with a
+pre-check in `executeAPICall`, naming neither goroutine. This one is about where containment lives.
+
+**What a fix must decide, and this job is not deciding it.** `~/CLAUDE.md`'s first directive is
+"fail fast and loud… crash or log visibly at the point of failure", and a process that dies on a
+corrupted invariant is that directive being obeyed. The cost is that it dies holding 30 other
+sessions. So the choice is (a) leave it — crashing is the policy, and then say so at the two
+goroutines instead of leaving it to look like an oversight; (b) recover at the goroutine root,
+mirroring `bus.go`, which contains the blast radius to one sub-agent but leaves the parent holding
+a turn that ended in no result; or (c) recover around `agent/chain.go:406` `tool.Run`, which turns
+a panicking tool into an `isError` tool result on **every** path at once and is the only option
+that also protects the HTTP and bus paths — at the price of a corrupt engine continuing to run.
+(b) and (c) are not exclusive and probably want each other.
+
+### 3. Filed: the workspace fallback resolves to a directory that does not exist, and the two builders of the agent map disagree about it
+
+`2fe5a282-48e9-4d1c-8b35-5384eb69739a`.
+
+`g.config.Agents` — the map every run, spawn, fork and history listing reads through
+`GetAgentConfig` (`server/server.go:200-203`) — has **two** constructors that do not agree:
+
+- startup, `buildConfigFromRegistry` (`cmd/inber-server/main.go:132-161`): `Name: name` (the map
+  key, i.e. the **slug**), and for an agent with no configured workspace it tries
+  `filepath.Join(home, "life", "repos", lookupName)` and takes it **only if `os.Stat` succeeds**;
+- runtime, `reloadRegistry` (`server/api_agent_config.go:174-199`), called after every successful
+  `PATCH /api/agents/config` (`:170`): `Name: rc.Name` — which `LoadFromAgentStore` sets to
+  `fc.DisplayName` (`agent/registry/config.go:131`) while keying the map on `fc.Slug` (`:161`) —
+  and `Workspace: rc.Workspace` raw, with no fallback at all.
+
+**Measured on this host.** `~/life/repos` **does not exist** (`~/life` does), so the startup
+fallback's `os.Stat` never succeeds and the branch is dead code. Of the 18 enabled
+`harness_id='inber'` rows in `~/.config/agent-store/agents.db`, **17 carry a
+`agent_harness.workspace_path`** and one — `bran`, which also has no `project` and has never run a
+server session — does not. `display_name` differs from `slug` on **all 18** (`claxon`/`Claxon`,
+`bench`/`Fianna`, `healthcheck`/`Dian Cécht`), so the `Name` flip is real on every row: before any
+PATCH the fleet block at `server/session_context.go:88` renders `- **claxon** (claxon)`, after one
+it renders `- **Claxon** (claxon)`. Cosmetic today, and that is the point — the divergence is not
+currently *damaging*, which is why it will keep being true.
+
+The dead branch is also **documented as live**: `server/api_sessions_history.go:17-28` explains its
+own multi-root search by saying "buildConfigFromRegistry resolves an agent with no explicit
+workspace to `~/life/repos/<project>`, keyed on the agent's project rather than its name". A reader
+takes that as how agents get their root. Nothing on this host has ever got a root that way.
+
+Where it would bite if the fallback were repaired rather than deleted: an agent whose workspace
+came from it loses it at the next PATCH of *any* agent (the whole map is rebuilt), and then
+`workspaceRootsForSession` returns `""` (`server/session_creation.go:230`) → `EngineConfig.RepoRoot
+= ""` → `setupRepoRoot` walks up from the **daemon's** cwd (`engine/engine_new.go:29-37`), which
+systemd pins to `~/repos/inber` (`deploy/systemd/*`, `WorkingDirectory=__HOME__/repos/inber`).
+`server/api_sessions_history.go:60` silently drops that agent's logs root in the same move.
+
+**Not a duplicate of `aace7fc1`**, which owns the *lock* on `:194`/`:196` and says explicitly that
+it is about the tear, not the contents; nor of `0e0a1245`, which owns `setupRepoRoot` returning
+`("", nil)` for the `$HOME` case. This is the third thing in that neighbourhood: two builders, one
+map, different answers.
+
+**What a fix must decide.** Either (a) delete the fallback, and make an empty workspace a refusal
+at session creation — the argument `ErrWorkspaceGone` already makes at
+`server/session_creation.go:238-244`, and it breaks `bran` the day `bran` runs; or (b) keep a
+fallback and put it in the one place both builders go through, which means deciding what the path
+actually is on this host, since `~/life/repos` is not it. Separately and smaller: `Name` should be
+the slug or the display name in **both** builders, and whichever it is, `session_context.go:88`
+prints it beside the slug and wants them different.
+
+### 4. Ideas worth taking, no defect attached
+
+- **A control tool is a different kind of thing from a model-facing tool.** codex #41331 makes the
+  clock tools built-in controls, so their analytics **omit arguments and output** and they are
+  excluded from the dynamic-tool count. inber has the same population — the seven server-injected
+  tools that `36f6c3e3` is about — and no kind field on any of them; `9eeba694` already owns the
+  classification gap on the safety side. The observability half is unclaimed: every tool inber
+  counts, prices and publishes is counted the same way, so a `clock`-shaped internal call and a
+  model-authored `shell_commands` are one number.
+- **In-tree, out of the binary.** goose #11516 keeps an unshipped subsystem compiling in CI behind a
+  default-off feature flag. inber's answer to the same question is currently "leave it and file a
+  todo": `78212b67` (NewEngineBenchmark, zero callers), `83147706` (registry.Registry unreachable
+  in the only binary), `db1817cb` (the repetition detector that has never run). A build tag is a
+  third answer nobody has offered — it keeps the code compiled and provably not shipped.
+- **Retry the attachment, never replay the event.** codex #41569 splits a diagnostic report into a
+  core event plus separately-uploaded, separately-bounded attachments. That is the same split
+  `79d10fd7` is arguing for on the tool-result doors — identity and outcome on the event, body
+  fetched or uploaded apart — arriving from the telemetry side.
+- **Lineage has to be invalidated, not just carried.** codex #41562 carries the trusted root through
+  goal continuations *and* invalidates it when external context arrives or the goal is edited.
+  inber carries a parent key it never reads (`4d62e33e`) and has no notion of the second half at
+  all: `ceedbf75`'s four principals all arrive stamped "user", which is exactly the "external
+  context reached an active turn" event codex uses as its invalidation trigger.
+
+### 5. Held back — verified, not filed
+
+- **The engine's resumable transcript is keyed per *agent*, not per session.**
+  `sessionMod.NewWorkspace(repoRoot, agentName)` (`session/workspace.go:46-49`) puts it at
+  `<repoRoot>/.inber/workspace/<agent>/messages.json`, and `setupSession`
+  (`engine/engine_new.go:157-176`) loads it whenever `NewSession` is false. The server's own
+  per-key copy is applied *after*, and only when non-empty (`server/session_creation.go:140-171`),
+  so a **brand-new session key** for an agent that has a workspace transcript on disk opens holding
+  it. Held rather than filed because the disk contradicts the obvious reading and I could not
+  resolve it inside this pass: `~/repos/inber/.inber/workspace/claxon/messages.json` was last
+  written **2026-05-07** against 391 claxon sessions in `server.db`, and fionn's `tools.md` in the
+  same directory is from **2026-08-22** while its `messages.json` is from **2026-04-05** — so
+  something *is* running there and `saveResumableState` (`engine/lifecycle.go:258-266`) is not
+  reaching the workspace copy. Todo `8dbf2a4e` already names both transcripts and this file; the
+  next pass should find out which of the two writes stopped before anyone files a third.
+- **`Session.turn`'s defer runs on the panic path and restores `Idle`.**
+  `server/compact_turn_in_flight_test.go:171-172` states this in a comment and then wraps the call
+  in its *own* `defer func(){ _ = recover() }()` — the test supplies the recovery production does
+  not have. Worth knowing when reading §2: the status is not left wedged, the process is just gone.
+
+### 6. A claim that died on contact with the code — the column, not the fact
+
+This pass nearly filed "4 of the 5 agents that have run server sessions are rooted at the daemon's
+cwd", with disk evidence: `~/repos/inber/logs/fionn` and
+`~/repos/inber/.inber/workspace/fionn/` exist, and fionn is configured for something else.
+
+It came from `select slug, workspace from agents`, and `agents.workspace` is **not the column
+inber reads**. `registry.LoadFromAgentStore` → `GetAllAgentConfigs` → `GetFullAgentConfig`, and the
+only assignment of that field in the whole store is `Workspace: ao.WorkspacePath`
+(`~/repos/agent-store/store.go:570`) — i.e. **`agent_harness.workspace_path`**. On that column
+fionn's workspace is `/home/kayushkincom/repos/inber`, which explains the directories exactly, and
+17 of 18 rows are populated. `agents.workspace` is empty for every row but claxon and is read by
+nothing on this path.
+
+Two columns one join apart, one of them a decoy, and the wrong one produced a coherent story with
+supporting evidence on disk. `~/CLAUDE.md` says join on ids from the owning store; the same rule
+applies to reading a fact back — ask the code which column it reads before believing what the
+column named `workspace` says.
+
+### 7. Papers
+
+142 arXiv ids screened for the 2026-08-01 → 2026-08-30 window, **64 already recorded** in
+`docs/papers/`. Six are new, load-bearing and written up in
+`docs/papers/2026-08-harness-research.md` (items 16–21); the two with the sharpest inber surface:
+[2608.23541](https://arxiv.org/abs/2608.23541) — agents that read each other's **complete outputs**
+converge within one round, so handing a sub-agent the parent's draft erases the diversity the
+sub-agent was for — and [2608.25937](https://arxiv.org/abs/2608.25937) — changing **only the
+terminal selection rule** over an unchanged candidate pool moved accuracy 63.82% → 70.82%, and
+inber has no explicit rule at the point a parent picks among sub-agent results.
+
+### 8. Screened and rejected, with the reason
+
+**codex #41464/#41567 have no inber surface, checked rather than assumed.** inber's session
+metadata writes are all targeted `UPDATE`s, not whole-record writes: `store.go:426` (last_active +
+message_count), `store.go:188` (lineage backfill, a migration), `session/db_sessions.go:23`/`:33`.
+The one upsert is `INSERT … ON CONFLICT(key) DO UPDATE SET last_active = CURRENT_TIMESTAMP`
+(`server/store.go:252-253`) — workspace roots and lineage cannot be erased by a later partial
+touch, and that is pinned twice (`server/session_lineage_test.go:53`,
+`server/session_workspace_test.go:106`). `PATCH /api/agents/config`
+(`server/api_agent_config.go:108-172`) is read-modify-write over `*string`/`*int` patch fields.
+`POST /sessions/{id}/config` (`server/api_bridge.go:674-731`) gates every field, and
+`DisabledTools` deliberately carries no `omitempty` and is tested `!= nil` so `[]` and absent are
+different — pinned at `server/config_request_test.go:15-64`. The resume path restores caps *and*
+their totals (`server/session_creation.go:316-343`, `guard/state.go:131-158`). Codex's rule is
+already inber's, four times over.
+
+**cline #13422's spawn half has no inber surface.** Every `exec` site checks its error and turns it
+into a string the model reads: `engine/workflow_format.go:26-29`, `engine/workflow_git.go:12-14`,
+`engine/workflow_build.go:60-103`, `engine/workflow_deploy.go:59-60`, `tools/mcp/client.go:116-121`
+(which has no production callers at all). Go returns a spawn failure as an ordinary error; there is
+no unlistened-event equivalent. Only the *blast-radius* half, §2, carries over.
+
+**goose #11322 is a feature gap, not a defect.** `RunRequest` (`server/server.go:210-232`) has no
+`cwd`/`workspace` field, so a caller cannot name a working directory and cannot send a stale one.
+
+**Routine, recorded so it is not re-read.** codex: vim motions and composer UX (`#41586`), grammar
+and wording (`#41570`), release packaging and asset layout (`#41477`, `#41476`), TUI model picker
+refresh (`#41467`), code-mode host durations (`#41452`), Seatbelt policy rename (`#41449` — page
+would not render, re-check next pass if it recurs). cline: telemetry threading (`#13547`), dep
+bumps (`#13675`), shared UI components (`#13567`), Windows signing (`#13021`). goose: ACP method
+removal (`#11650`), canonical models json (`#11641`), AGENTS.md structure (`#11614`), docs
+(`#11597`, `#11592`, `#11565`, `#11564`), release bumps (`#11542`, `#11547`), desktop provider save
+(`#11517`, taken above), issue automation (`#11345`). opencode: docs, console, stats and provider
+catalogue throughout (`#46213`, `#45269`, `#45221`, `#45042`, `#38395`). aider, roo-code and dexto:
+no commits in the window.
