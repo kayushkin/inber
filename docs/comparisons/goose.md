@@ -1606,3 +1606,42 @@ working.
 normalization implemented at one of two ingestion points holds only for the path someone remembered.
 inber has exactly that shape in `agent/agent_run.go`'s streamed accumulation versus `session/resume.go`'s
 replay, and the sweep below found a live instance of the same shape in the tool-hook pair.
+
+## Harness-watch — 2026-08-31: the prompt-cache TTL became a setting, and the half worth copying is the clamp that takes it away again
+
+[goose #11576](https://github.com/block/goose/pull/11576) adds `GOOSE_CACHE_TTL`, accepting
+`5m` or `1h` and rejecting anything else, stamping `{"type":"ephemeral","ttl":"1h"}` at all four
+Anthropic breakpoints — system prompt, last tool spec, last two user messages. The field is
+**omitted entirely when unconfigured**, so the default request stays byte-identical to what it
+was before the feature existed. goose's motivating number: a 58k-token session idle for 7
+minutes cost **$0.36** re-writing its prefix against **~$0.03** to read it back.
+
+The reusable part is not the setting. Even for a user who opts into `1h`, three surfaces are
+clamped back to `5m`: `goose run`, subagents (`TaskConfig::new`), and scheduled recipes, because
+they "finish in one burst and cannot recover the 2× write premium of 1h cache". That completes
+the rule this file wrote on 2026-08-14 — *a cache write is a bet that the prefix recurs*. The
+missing clause: **a longer TTL is a bigger stake on the same bet, so the surfaces least likely
+to win it are exactly the ones that must not be allowed to raise.**
+
+inber takes the 5-minute default everywhere — `agent/agent.go:549`, `agent/agent_run.go:36`,
+`engine/turn_prompt.go:218` and `:224` all stamp a bare
+`anthropic.NewCacheControlEphemeralParam()`.
+
+**Measured on this host before recommending anything** (full table in
+`agentic-design-patterns.md` under 2026-08-31 §4): across the 165 consecutive request pairs in
+`~/.inber/server/server.db`, the cache read:write ratio falls **3.73 → 2.02 → 1.09** across the
+under-5m, 5m-to-1h and over-1h gap bands, and **39 pairs (24%) sit in the middle band** — where
+a 5m entry has expired and a 1h entry would still be live. Caveat that bounds it: 99 of the 100
+sessions hold a single request, so all 165 pairs come from `agent:claxon:main`.
+
+**What inber should consider:** if the TTL becomes settable, copy the clamp as well as the
+setting — but derive inber's clamp list from inber's own data, because it is not goose's. goose
+forces subagents to 5m; inber's sub-agent requests carry **7,987,841 cache reads against
+610,797 writes, a 13.1 ratio, the best in the table**, because one inber `requests` row is a
+whole multi-call turn rather than one exchange. The surfaces here that genuinely cannot win the
+bet are the ones the 2026-08-14 entry already named and re-confirmed stamp nothing —
+`conversation/summary_generation.go:62-71`, `conversation/extract.go:81-87`,
+`server/oneshot_schema.go:34-43`.
+
+Also this window: [#11673](https://github.com/block/goose/pull/11673) adds `--system` to
+`goose session` for parity with `goose run`. No inber surface.

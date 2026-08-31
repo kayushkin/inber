@@ -8504,3 +8504,284 @@ removal (`#11650`), canonical models json (`#11641`), AGENTS.md structure (`#116
 (`#11517`, taken above), issue automation (`#11345`). opencode: docs, console, stats and provider
 catalogue throughout (`#46213`, `#45269`, `#45221`, `#45042`, `#38395`). aider, roo-code and dexto:
 no commits in the window.
+
+## Harness-watch — 2026-08-31: a cache entry is a bet you should be allowed to size, and a record that knows why the turn ended is worth nothing if the replay never asks — goose made the Anthropic prompt-cache TTL configurable and then clamped it away from the surfaces that cannot win the bet, and inber's history endpoint replays 99 of 265 requests as a question with no answer while the same file emits `msg.EventError` on the live path eighty lines above
+
+Very short window: the 2026-08-30 entry dispositioned everything up to it, and only 13 upstream
+commits are new — codex #41613–#41744, goose #11576/#11673, opencode #46221. Each of the 130
+PRs in tonight's report was checked against `docs/` by number before being called new. Two
+findings against inber's own code, both filed; the headline upstream change is measured against
+this host's own request table rather than taken on its numbers.
+
+### 1. The upstream week: two changes, and one of them is a reversal
+
+- **goose, the one worth the whole entry.**
+  [#11576](https://github.com/block/goose/pull/11576) makes the Anthropic prompt-cache TTL a
+  setting — `GOOSE_CACHE_TTL`, accepting `5m` or `1h`, rejecting anything else, and **omitting
+  the field entirely when unconfigured** so the wire format is unchanged by default. It stamps
+  `{"type":"ephemeral","ttl":"1h"}` at all four breakpoints (system, last tool spec, last two
+  user messages). goose's motivating measurement: on a **58k-token session a 7-minute idle gap
+  cost $0.36** re-writing the prefix against **~$0.03** to read it back.
+
+  The half that matters more than the setting is the **clamp**. Even when the user opts into
+  `1h`, three surfaces are forced back to `5m`: `goose run` (one-shot CLI), subagents
+  (`TaskConfig::new`), and scheduled recipes. The stated reason is that these "finish in one
+  burst and cannot recover the 2× write premium of 1h cache". That is this file's own 2026-08-14
+  rule — *a cache write is a bet that the prefix recurs* — with the missing second clause
+  supplied: **the longer TTL is a bigger stake on the same bet, so the surfaces least likely to
+  win it are exactly the ones that must not be allowed to raise.**
+
+- **codex, an authorization that must outlive the evidence it was based on.**
+  [#41660](https://github.com/openai/codex/pull/41660): Guardian caches its security review of a
+  user message, and the cache was keyed on the conversation-history generation — so **compaction
+  and host-injected context invalidated an authorization the user had not changed**. The fix is
+  three-part and the shape is general: "track a host-owned user-message revision **separately
+  from** the conversation history generation", advance it "for genuine user messages and history
+  resets, while preserving it across compaction and internal context injection", and "use
+  message **content-kind metadata** to distinguish host context from user input". That last
+  clause is the consumer this file's 2026-08-24 entry was waiting for: content-kind was filed
+  upstream as a required field on every fragment, and this is the first thing that *decides*
+  something with it.
+
+- **codex, a default that lasted seventeen hours.**
+  [#41630](https://github.com/openai/codex/pull/41630) landed 2026-08-30 07:25Z as "Update tests
+  for default-enabled `update_plan`". [#41744](https://github.com/openai/codex/pull/41744) landed
+  2026-08-31 00:35Z: "Default `tools.update_plan.enabled` to `false`; users can explicitly enable
+  it". The PR gives no reason, which is worth recording as-is rather than guessing at. The
+  mechanical detail is the reusable part: disabling the tool also **removes the bundled planning
+  guidance from the prompts**, while preserving custom instructions that mention planning. The
+  tool and the prose that tells the model to use it are one unit. (Second such reversal inside a
+  week — the 2026-08-27 entry caught codex reverting the bounds-in-tool-schemas PR within 22
+  hours. An upstream default is not a decision until it has survived a day.)
+
+- **codex, a reserved field.** [#41743](https://github.com/openai/codex/pull/41743) stamps
+  `history_ingest_requested: true` into Responses turn metadata when the history-notes
+  token-budget extension is on, and **reserves the key so caller-supplied metadata cannot
+  override it**. Omitted, not `false`, when the extension is off — the same
+  absent-is-not-false discipline as goose's TTL field above.
+
+### 2. Filed: the bridge history replay drops every failed turn, and the live path in the same file gets it right
+
+`3fe14317-32d0-4105-b99b-cdaef7ff65a6`.
+
+`handleBridgeHistory` (`server/api_bridge.go:406-462`) backs `GET /sessions/{id}/history`, the
+endpoint llm-bridge and dash rebuild a transcript from. It reads 100 rows
+(`:412` → `server/store.go:545-570`) and emits two event kinds per row: `user_message`, gated on
+`row.InputText != ""` (`:421`), and `msg.EventResult`, gated on
+**`row.OutputText != nil && *row.OutputText != ""`** (`:436`).
+
+It never reads `row.Status`. It never reads `row.ErrorText`. Both are on the struct
+(`server/store.go:466`, `:477`) and both are selected by the query it just ran
+(`server/store.go:563`).
+
+**Measured against `~/.inber/server/server.db`** — 265 rows, 100 sessions:
+
+| status | rows | empty `output_text` | populated `error_text` |
+|---|---|---|---|
+| completed | 158 | 1 | 0 |
+| success | 9 | 0 | 0 |
+| error | 90 | 90 | **90** |
+| interrupted | 8 | 8 | 0 |
+
+**99 of 265 (37.4%) have a non-empty `input_text` and an empty `output_text`**, so the replay
+emits the question and then nothing at all. **90 of those carry the error that killed the turn**
+— `api call failed: POST "https://api.anthropic.com/v1/messages": 400 Bad Request` and its
+siblings — unread in the row. The turn does not read as failed; it reads as a turn the assistant
+never answered.
+
+`msg.EventError` is not missing from inber and does not need adding. The **live** path emits it
+eighty lines up, at `server/api_bridge.go:322-330`, with
+`Error: &msg.ErrorEvent{Message: err.Error()}`, and `streamEventToBridge` maps the `"error"`
+stream kind onto it at `:976-978`. So a user watching live sees the failure and the same session
+reloaded does not. Two doors onto one event, and the durable one is the wrong one — the
+2026-07-30 claude-code entry ("text the user already saw must survive the error that killed the
+turn") arriving from the replay side, and the 2026-08-22 opencode entry ("an unrecognized
+completion is not a successful one") arriving from persistence.
+
+**What a fix must decide, and this job is not deciding it.** (a) What a failed turn replays as:
+`msg.EventError` matches the live path, but history is also what a resumed session is rebuilt
+from, and an error event in that stream is a new case for every consumer; the quieter
+alternative is the `msg.EventSystem` with an `error` subtype that `streamEventToBridge`'s
+`default` branch already produces at `:981-984`. (b) Whether `interrupted` and `timeout` are
+errors — measured, all 8 `interrupted` rows have an empty `error_text`, because the process went
+away rather than the model failing. (c) `error_text` is written raw from `err.Error()`
+(`server/spawn.go:319`, `server/server.go:401`) with none of the `truncate(…, 1000)` that
+`output_text` gets, so surfacing it puts an unbounded string on a door that currently carries
+only bounded ones — `79d10fd7`'s shape.
+
+### 3. Filed: `requests.status` has two terminal vocabularies, and the fix for §2 is what makes that matter
+
+`a2152cb9-082d-4625-a155-a6c0e28c339c`.
+
+One column, two writers, different answers:
+
+- main path, `server/server.go:401`: `CompleteRequest(reqID, "completed", …)`;
+- spawn path, `server/spawn.go:309-321`: `status := "success"`, overwritten to `"timeout"` on
+  `context.DeadlineExceeded` and `"error"` on a non-nil error, into the same
+  `CompleteRequest` (`server/store.go:496`).
+
+The schema comment declares the vocabulary and `success` is not in it —
+`server/store.go:68`: `-- pending, running, completed, error, timeout, interrupted`. The
+conflation happens because `spawn.go` runs one variable into two contracts: the row **and**
+`SpawnResult.Status`, whose own declared set is `"success", "error", "timeout"`
+(`server/spawn.go:113`). That set is the parent model's wire contract; it is not the row's.
+
+**Nothing reads the terminal value today**, which is why this is written down rather than
+assumed harmless. Every `WHERE status = ?` in the tree filters `'running'` —
+`server/store.go:511` (the startup sweep) and `:527` (`GetActiveRequest`) — and neither is
+touched. The cost is latent and is about to stop being latent, because the §2 fix has to switch
+on `row.Status`, and a switch written against the schema comment silently drops the 9 `success`
+rows — **which carry 7,987,841 of this database's 14,315,120 cache-read tokens, 55.8%**. It is
+"join on ids, never on names" in its enum form: correct until the second row appears, and it
+already has.
+
+### 4. Measured, not filed: what goose's TTL setting would actually be worth on this host
+
+goose #11576 is a setting inber does not have — `agent/agent.go:549`,
+`agent/agent_run.go:36` and `engine/turn_prompt.go:218,224` all stamp a bare
+`anthropic.NewCacheControlEphemeralParam()`, so every one of inber's four breakpoints takes the
+5-minute default. Whether that costs anything is an empirical question and the request table
+answers it.
+
+**Caveat first, because it bounds everything below:** of 100 sessions, **99 hold exactly one
+request** and `agent:claxon:main` holds 166. So all 165 consecutive-request pairs come from one
+long-lived orchestrator session. This is one session's gap distribution, not a hundred.
+
+| gap to previous request | pairs | cache read | cache write | read:write |
+|---|---|---|---|---|
+| under 5m — the 5m TTL hits | 108 | 4,683,046 | 1,255,601 | **3.73** |
+| 5m–1h — 5m has expired, 1h would still hit | **39** | 1,077,802 | 533,255 | **2.02** |
+| over 1h — both miss | 18 | 112,700 | 103,660 | **1.09** |
+
+Median gap 142s, p75 500s, p90 4,419s. The read:write ratio degrades monotonically across
+exactly the two TTL boundaries, which is the shape the hypothesis predicts and not one a
+confounder produces for free. **24% of this session's turns land in the band goose just made
+configurable.** Whole-database cache health is good — 14,315,120 reads against 4,190,657 writes
+and 781,355 uncached input, a 74.2% read share — so this is a tail to recover, not a broken
+cache.
+
+Not filed, because a missing setting is not a defect and the 1h write premium (2× base against
+1.25×) means the trade is only worth taking where the gaps actually are.
+
+**What inber should consider:** if the TTL becomes settable, copy goose's clamp and not just its
+setting — and note that inber's clamp list is *not* goose's. goose forces subagents back to 5m
+because they finish in one burst. **Measured here, inber's do the opposite**: the 9 sub-agent
+rows carry 7,987,841 cache reads against 610,797 writes, a **13.1 read:write ratio, the best in
+the table**, because one inber `requests` row is a whole multi-call turn rather than a single
+exchange. The surfaces that genuinely cannot win the bet here are the ones the 2026-08-14 entry
+already named and confirmed stamp nothing — `conversation/summary_generation.go:62-71`,
+`conversation/extract.go:81-87`, `server/oneshot_schema.go:34-43`. Leave them stamping nothing.
+
+### 5. Ideas worth taking, no defect attached
+
+- **A tool and the prose that tells the model to use it are one unit.** codex #41744 removes the
+  bundled planning guidance from the prompts when `update_plan` is disabled. inber has the
+  machinery for this and applies it in exactly one place: `StashConfig.RecallToolNames`, filled
+  per turn from `EnabledToolNames`, so the stash pointer names only `memory_` tools that are
+  actually on the wire (`docs/write-read-gate-audit.md`, fixed 2026-08-01). Nothing else in the
+  tree does it. The generalization — every piece of injected prose that names a tool is gated on
+  that tool being present — is unclaimed.
+- **Absent is not false.** goose's TTL field is omitted when unconfigured rather than written as
+  `5m`; codex #41743 omits `history_ingest_requested` rather than sending `false`. Both keep the
+  default request byte-identical to what it was before the feature existed, which is the only
+  version of the change that cannot move a cache hit. Worth holding as a rule for any field
+  inber adds to a cached prefix.
+- **A reserved key the caller cannot override.** codex #41743 reserves
+  `history_ingest_requested` against caller-supplied metadata. inber's nearest surface is the
+  spawn event metadata map (`server/spawn.go:295-300`), which is entirely server-built today —
+  so the rule is worth adopting *before* a caller-supplied map is ever merged into it, not
+  after.
+
+### 6. Checked against inber and rejected, with the reason
+
+- **The limit-check message names `spawn_agent` unconditionally, and on this host that is not a
+  bug.** `engine/build_hooks.go:58-68` injects "Either give your answer now or `spawn_agent` for
+  the work" into the last user message (`agent/agent.go:365-385`) whenever
+  `MaxResponseTime` is exceeded — with no check that the session holds the tool, which is
+  exactly codex #41744's shape. Checked rather than assumed: **only two agents on this host set
+  `max_response_time`** (`agent_harness`, harness `inber`) — `claxon` at 300s and `bran` at 20s
+  — and `agent_harness_tools` grants `spawn_agent` to **both**. The message names a tool both
+  holders have. It stays a latent gap, because `SetDisabledTools`
+  (`engine/engine.go:355-369`) can take the tool away mid-session and the message would not
+  notice; not filed, because nothing on this host can reach it.
+- **The system prompt does not carry volatile content, checked rather than assumed.** goose's
+  TTL work made it worth confirming that BP2 can pay out at all. It can:
+  `engine/turn_prompt.go:119-155` splits memory blocks on `isVolatileMemoryID` and routes the
+  volatile ones — plus the fleet status and every `ContextInjector` — into
+  `e.Turn.VolatileContext`, which `Agent.Run` appends to the last *user* message.
+  `server/session_context.go:24-30` says so in its own doc comment and gives the reason. The
+  system section is genuinely stable and `e.Cache.LastStablePrefix`
+  (`engine/turn_prompt.go:202-221`) reuses the identical `TextBlockParam` slice on a hash match
+  to guarantee byte-identity. Nothing to file.
+- **No fifth cache breakpoint.** Anthropic allows four and inber places exactly four: system
+  (`engine/turn_prompt.go:224`), last tool (`agent/agent_run.go:36`), and up to two in the
+  messages (`agent/agent.go:478-503`, `placeHistoryCacheBreakpoints` at `:505-523`, which clears
+  every other `cache_control` first). `engine/build.go:13` claims to add system cache_control
+  too, but it only calls `buildSystemBlocks` — one stamp, not two. At the limit with no
+  headroom, which is worth knowing before anything adds a fifth.
+- **`update_plan`'s opt-in question does not apply.** inber's equivalent, `task_plan`, is
+  already per-agent opt-in: it exists only where `agent_harness_tools` grants it, which on this
+  host is `claxon` alone.
+- **Dead branch, not a defect.** `engine/turn_prompt.go:209-211` guards
+  `if cacheIdx+1 < len(systemBlocks)` where `cacheIdx` is `len(systemBlocks)-1` two lines above,
+  so the condition is unreachable. Vestigial from when some system blocks were volatile;
+  harmless, and noted here so the next pass does not re-derive it.
+- **Routine, recorded so it is not re-read.** codex: Vim search motions and their test move
+  (`#41586`, `#41613`), JediTerm cursor rendering (`#41673`), TUI rate-limit banners (`#41742`),
+  package-style MCP server names (`#41700`), MCP test working directories (`#41683`), first Node
+  REPL approval (`#41666`). goose: `--system` flag parity between `goose session` and `goose
+  run` (`#11673`). opencode: docs only (`#46221`). aider, roo-code and dexto: no commits in the
+  window.
+
+### 7. Papers
+
+206 arXiv ids screened for 2026-08-20 → 2026-08-31, **54 already recorded** in `docs/papers/`.
+Nine are new and load-bearing, written up in `docs/papers/2026-08-harness-research.md` (items
+14–21) with a further eleven recorded at item 22. Four of the headline ids were re-fetched from
+`arxiv.org/abs/` and matched verbatim on title, date and numbers.
+
+The three with the sharpest inber surface:
+
+- [2608.27808](https://arxiv.org/abs/2608.27808) — **64 of 71 failures (90%) end with the agent
+  claiming success**, on a pipeline that scores above the human reference. That is §2 of this
+  entry as a research finding: a terminal state an agent reports about itself is not evidence,
+  and inber's history replay does not even carry the one it stored. The paper's honest baseline
+  is worth as much as its method — retrospectively, **total tokens alone is not significantly
+  worse** than its composite monitor (Δ=+0.026, p=0.101).
+- [2608.28027](https://arxiv.org/abs/2608.28027) — progressive disclosure of the tool surface cuts
+  **wrong-action selection from 28% to 2%** and keeps the resident interface at **53 tokens at
+  any catalog size**, while **disclosing one tier too early costs up to 23 accuracy points**.
+  This inverts the premise of `docs/cache-optimization.md` and `docs/smart-truncation.md`, which
+  both treat context reduction as a saving bought at some accuracy cost.
+- [2608.26197](https://arxiv.org/abs/2608.26197) — adding deterministic FSM control to a harness
+  **degraded reproducibility in two of four model-task cells and improved it in one**; only
+  schema-validating the plan *before the first tool call* fixed it, reaching Reproducibility Rate
+  and Determinism Index **1.000 at N=100 in three of four**. The first measurement in this file
+  saying that harness structure, added in the wrong place, makes things worse.
+
+Also: [2608.28553](https://arxiv.org/abs/2608.28553) is the out-of-process answer to
+`4be67b7c-4ac8-42c9-b1a4-ebf637a582ef` (last night's blast-radius todo) — a plugin as a process,
+with **80 sessions resuming with no repeated effect** after kills at all four tool-call
+boundaries — and it makes that todo's option (c) a genuine choice between two containment
+strategies rather than the only one on the table.
+
+### 8. Screened and rejected, with the reason
+
+- **Compaction leaves `staged.FrozenIdx` stale, and it is already filed.** The codex #41660 lens
+  ("compaction rewrote the conversation and a thing keyed to it was not told") points straight at
+  `engine/lifecycle.go:112`: `summarizeIfNeeded` assigns `e.Messages = summarized` and touches
+  neither of the two repairs the codebase provides for exactly that hazard —
+  `StagedConversation.Flush` (`conversation/staged.go:36`, which `RestoreSession` calls at
+  `engine/lifecycle.go:53` under a fourteen-line comment explaining why not doing it is wrong)
+  and `ShiftAfterHeadDrop` (`conversation/staged.go:58`, whose doc says "anything that shortens
+  the slice from the front moves every message the boundary was placed against"). With the
+  default role's `TriggerMessages: 60` and `KeepRecentTurns: 12`
+  (`conversation/summarize_config.go:49-50`), `FrozenIdx` is left near 57 against a message slice
+  of about 25, so for up to `FlushInterval` turns afterwards
+  (`conversation/manage_config.go:82`, 5) three things go quiet at once: BP3 is silently not
+  placed (`agent/agent.go:487` requires `frozenIdx <= messageCount`), `ManageStaging` becomes a
+  no-op because `StagingSlice` returns nil (`conversation/staged.go:82-85`), and the cross-zone
+  superseded-file note is skipped (`engine/lifecycle.go:161`). **Not filed: `3553efe9-d90e-4350-a33a-023e73817e90`
+  is open and already owns it** — "summarization replaces the frozen prefix and leaves
+  staged.FrozenIdx pointing into content that no longer exists". Recorded here because the three
+  downstream consequences were measured this pass and the todo names the pointer, not them.

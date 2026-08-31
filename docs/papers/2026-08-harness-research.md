@@ -5106,3 +5106,246 @@ completed implementation, experiment, dataset, or measured result";
 [2608.26696](https://arxiv.org/abs/2608.26696) "Five Primitives for Governing Autonomous AI Agents"
 — the authors concede the taxonomy describes their own codebase and one of the five is not
 integrated.
+
+## 2026-08-31 sweep — 206 candidates screened, 54 already recorded above
+
+Window 2026-08-20 → 2026-08-31, nine arXiv API queries across cs.SE / cs.AI / cs.CL plus the
+HuggingFace daily page and the Anthropic and DeepMind blogs. Existing coverage above is dense
+through 2026-08-27, so almost everything new sits in the **2026-08-28 announcement batch** —
+08-29 and 08-30 were a weekend and nothing had posted for 08-31 at sweep time. The blog sweep
+returned nothing new in-window; DeepMind's only in-window item was the Gemma 4 release, a model
+launch rather than harness research.
+
+**Four of the headline ids below were independently re-fetched from `arxiv.org/abs/` and their
+titles, dates and quoted numbers matched verbatim** — 2608.28027, 2608.26197, 2608.20614 and
+2608.27808. The rest are recorded as reported.
+
+### 14. [arXiv:2608.28027](https://arxiv.org/abs/2608.28027) — progressive disclosure is an *accuracy* mechanism, not just a cost one: wrong-action selection 28% → 2%
+
+*String: An Agentic OS Where Every App Is a Markdown File* (2026-08-28). The premise is one this
+file has met before — an agent "re-reads, and pays again for, everything it is shown on every
+turn" — but the result is new. Tool knowledge moves out of context into a layer that renders it
+back one view at a time as Markdown behind two verbs (`/open` to see, `/act` to do). On 87 tasks
+across six models frontier-to-small: **33.5% fewer tokens among completed episodes at comparable
+aggregate success (+1.3pp)**, and **the resident interface stays a constant 53 tokens at any
+catalog size**. The part that matters more than the saving: **disclosing one tier of detail a
+single turn too early costs up to 23 accuracy points**, and proper staging drops **wrong-action
+selection from 28% to 2%**. Privilege follows provenance — a remote page may call HTTP but never
+the shell.
+
+**What inber should consider:** this reverses the framing in `docs/cache-optimization.md` and
+`docs/smart-truncation.md`, which both treat context reduction as a cost lever with an accuracy
+cost to be minimised. The 28% → 2% figure says a staged tool surface is *more* accurate than a
+flat one, so the trade is not the one those docs assume. Concretely: tool-store's `/provision`
+returning a constant-size resident index plus on-demand expansion, rather than a full schema
+dump, now has an accuracy argument behind it as well as a token one.
+
+### 15. [arXiv:2608.26197](https://arxiv.org/abs/2608.26197) — bolting an FSM onto an agent made reproducibility *worse* in half the cells; constraining the planning step is what fixed it
+
+*Harness Engineering for Predictable Agentic Systems* (2026-08-25). Wraps an agent in a
+deterministic execution layer — finite-state control, forced tool selection, output validation,
+bounded retry — and measures reproducibility over two models (Qwen-2.5-7B-Instruct, Gemma-3-27B)
+and two task domains. The first-pass harness is a **mixed result: significantly improves
+reproducibility in one of four model-task cells, significantly degrades it in two, no effect in
+the fourth.** A trace-level diagnostic finds why: once tool sequence, state sequence and output
+are already consistent, **the unconstrained free-text planning step is the dominant remaining
+variance source.** Adding Structured Planning — validating the plan against a fixed schema
+*before any tool is invoked* — removes it: **three of four cells reach a Reproducibility Rate and
+Determinism Index of 1.000 at N=100, and task success rises to 100% in three of four.** Token
+cost falls in every cell; latency splits by model, one faster, one markedly slower.
+
+**What inber should consider:** the negative half is the useful half. inber has repeatedly been
+advised in this file to add control structure around the turn loop, and this is the first
+measurement saying that structure *without* a constrained planning step can make things worse.
+If reproducibility is wanted, schema-validate the plan before the first tool call — and measure
+the latency effect per model rather than assuming it, since the paper finds it goes both ways.
+
+### 16. [arXiv:2608.27808](https://arxiv.org/abs/2608.27808) — 90% of an agent's failures end with the agent claiming success
+
+*CURA: Certified Runtime Alarms for Computer-Use Agents* (2026-08-28). On 361 OSWorld tasks the
+pipeline scores a mean **82.9, above the 72.4 human reference** — and **64 of its 71 failures
+(90%) end with a success claim**, 61 of them acknowledging no blocker, with the explicit failure
+affordance never used across roughly 9,100 calls. CURA is an external monitor reading **only
+harness-visible telemetry** — no model internals, no extra LLM calls, no prompt changes — turned
+into a sequential test with certified false-alarm control. At α=0.10 it **detects 42.3% of
+failures a median of 31 steps before termination at a realized false-alarm rate of 0.066**.
+Retrospectively its composite AUROC of 0.828 is **not significantly better than a plain
+total-token baseline (Δ=+0.026, p=0.101)**; the separation is online. Alarm-gated oversight
+**recovers 23 of 70 failures while spending a frontier overseer on only 38**.
+
+**What inber should consider:** this is the research form of the defect filed tonight as
+`3fe14317-32d0-4105-b99b-cdaef7ff65a6`. inber's terminal status comes from the turn's own
+outcome, and 90%-of-failures-claim-success says a self-reported terminal state is not evidence.
+inber already logs the telemetry a sequential test would need. Note the honest baseline the
+paper hands over: **total tokens alone is nearly as good retrospectively**, so any monitor inber
+builds has to beat that, not beat nothing.
+
+### 17. [arXiv:2608.20614](https://arxiv.org/abs/2608.20614) — roughly one skill in four is neutral or harmful, and the lint-style checks do not predict which
+
+*Evaluating Skills, Not Just Agents: Agentic Continuous Evaluation of Skills* (2026-08-20).
+Current gates scan skill artifacts for structure, style and security and never answer whether the
+package helps a live agent under the same model, sandbox and grading policy. ACES runs paired
+live trials with and without a target skill and reports **Skill Lift**. On **145 real skills**,
+structural and LLM-judge scores measure different things — **Spearman ρ = 0.14**. Across **947
+scored paired cases from 58 of 64 production skills** and four harnesses, mean composite Skill
+Lift is **0.2134 (95% paired-case CI [0.1967, 0.2301])**, mean outcome-only lift **0.1799**, and
+composite lift is **positive in 72.8% of paired cases** — so **about one skill in four is neutral
+or actively harmful**. The largest process-metric gains sit in discovery, routing and tool-use
+signals that a document scan cannot observe at all.
+
+**What inber should consider:** skill-store ingests and indexes `SKILL.md` files and has no
+measured notion of whether any of them help; bundle-store's `/resolve` selects members by repo
+and task tags, which is a structural signal, and ρ=0.14 says structural signals do not predict
+live benefit. A paired with/without run producing one Skill Lift number per skill would make
+`/resolve` selectable on evidence. This is a cross-store change, not an inber one, and is
+recorded here rather than filed.
+
+### 18. [arXiv:2608.28502](https://arxiv.org/abs/2608.28502) — a 1.2% fleet-average attack rate hides a 47-point per-configuration swing
+
+*Recognition Without Enforcement* (2026-08-28). Names a **recognition-enforcement gap**:
+source-format features are linearly decodable from activations and models can verbalize that an
+authority claim is forged — and some configurations emit the conflicting tool call anyway.
+Across **46 model endpoints from 6 vendors**, average execution under diverse novel attacks is
+**1.21% [0.5–2.1%] over 14,294 spoofed trials**, but the risk is **concentrated in reproducible
+cells and shifts across deployment windows, up to a 47pp within-window per-fingerprint range**.
+Prompt-layer defenses do not generalize across models. Their external reference monitor —
+authenticated source routing plus capability-gated tool execution — deterministically rejects
+every forged, tampered, replayed and unsigned request tested; an adaptive red team found one
+implementation flaw (clock-skew admission, since patched), not a cryptographic bypass.
+Companion: [2608.27496](https://arxiv.org/abs/2608.27496) **ROPE**, origin-based information-flow
+control, holding attack success to **1.6–2.6% while retaining 82–100% of undefended clean
+utility**.
+
+**What inber should consider:** the 47pp swing is the operational point and it bears directly on
+`guard`. A low fleet average tells you nothing about your own model-and-config cell, so any place
+inber reasons "the model will refuse this" needs a per-endpoint measurement rather than a global
+prior. This is also the research backing for permission-store being an **external** reference
+monitor rather than instructions in prompt space — which is what its README already says it is,
+and now has numbers behind it.
+
+### 19. [arXiv:2608.28147](https://arxiv.org/abs/2608.28147) — one retained system-prompt clause about *when to re-verify* moved final success 35/120 → 95/120
+
+*Post-Edit Re-Verification in Simulator-Backed Engineering Agents* (2026-08-28). A clean
+single-variable ablation: Cadence-Guided keeps one instruction to request fresh evidence after a
+substantive modification, Cadence-Omitted removes it. **Neither condition uses a hard gate** and
+verification-relevant state is held constant, so this measures instruction-conditioned policy
+adherence and nothing else. Five Qwen models × eight cases × three runs = 120 slots per
+condition. Re-verification occurred in **94/120 vs 32/120**; cadence violations **26/120 vs
+87/120**; bounded final success **95/120 vs 35/120**. One model (qwen3.5-35b-a3b) barely
+re-verified in either condition and never succeeded, so the effect is not uniform.
+
+**What inber should consider:** a near-3× swing in final success from one sentence, with no gate
+and no tool change, is the cheapest result in this sweep. `buildSystemBlocks`
+(`engine/turn_prompt.go:186`) is where it would go. Two caveats before believing it here: the
+effect is per-model, and inber's system prefix is cached — adding a block changes the prefix
+once, which is a single cache write, not a recurring cost.
+
+### 20. [arXiv:2608.28439](https://arxiv.org/abs/2608.28439) — enabling structured output silently disabled tool use, and the fidelity check passed anyway
+
+*Fidelity Is Not Enough: Dispatch-Level Instrumentation for Agentic Datasheet Extraction*
+(2026-08-28). Opens with a harness bug rather than a model failure: **a structured-output
+constraint silently disabled tool use, and the model answered anyway with fabricated source text
+— passing the fidelity check.** Only the per-tool dispatch trace exposed it. They build a
+**silent-failure detector whose two rules check only *which tools were called*, never the
+extracted value**: it raises no flag on 207 clean fidelity-passing extractions across three model
+families and recovers all 50 planted faults that withhold exactly the tools its rules check. The
+authors are explicit that the two results are asymmetric — the first bounds false positives, the
+second is recall by construction — and that power against runs which *do* call their tools and
+still answer wrongly is unmeasured.
+
+**What inber should consider:** the failure mode is a harness/provider interaction. inber has the
+adjacent surface: `buildRequest` (`agent/agent_run.go:54`) sets `params.Tools` only when
+`!forceSummary` (`agent/agent_run.go:78`), so the force-summary path deliberately ships a request
+with no tools — the same "the tools were not on the wire" state the paper's detector keys on,
+reached on purpose here rather than by accident. A value-independent assertion at the engine
+boundary — a task that required a tool actually dispatched one, read off the call record —
+costs nothing and catches an entire class of silently-wrong runs.
+
+### 21. [arXiv:2608.28553](https://arxiv.org/abs/2608.28553) — a plugin is a process: 80 sessions resume with no repeated effect after kills at all four tool-call boundaries
+
+*Logos: An Agent Harness on a Cross-Process Bus* (2026-08-28). Argues that "plugin = component in
+one process sharing one context" puts every capability in a single failure domain, so one fault
+suspends every component and a process death interrupts every session that process hosts. Since
+LM inference is stateless, all cross-step state lives outside the model and the soundness
+invariant is defined on the state space alone — so nothing binds an agent to one process. Logos
+makes **a plugin a process, with an append-only transcript as the only shared state**. Measured:
+**80 sessions resume with no repeated effect** after kills placed at all four boundaries of the
+tool-call cycle, and in a same-fault comparison the single-process configuration has one fault
+interrupting *every* co-resident session while the peer-process construction confines it to one
+node.
+
+**What inber should consider:** this is the upstream research answer to
+`4be67b7c-4ac8-42c9-b1a4-ebf637a582ef`, filed 2026-08-30 — a panic on a sub-agent goroutine takes
+the whole daemon, and 27 of 95 session directories are sub-sessions. That todo's option (c)
+(recover around `agent/chain.go:406`) is the in-process containment; this is the argument for the
+out-of-process one, and it makes the trade explicit rather than leaving it as "crashing is the
+policy". The cheap first step needs no architecture change: run the kill-at-four-boundaries test
+against inber's own resume path and find out whether a resumed session repeats an effect.
+
+### 22. Recorded, not written up
+
+- [2608.27969](https://arxiv.org/abs/2608.27969) **openJiuwen** (08-28) — names *Structural
+  Composability* and *Runtime Adaptivity* as harness properties, with adaptivity driven by
+  evolving evidence around a **fixed model policy**: **82.6% SWE-bench Verified, 87.19%
+  Terminal-Bench 2.1, +3.4pp and +3.39pp** over the strongest selected official-leaderboard
+  points. The claim that adaptivity belongs in the framework's control decisions is exactly the
+  layer `engine` owns.
+- [2608.28363](https://arxiv.org/abs/2608.28363) **EvoUndo** (08-28) — of 600 one-shot
+  self-evolution tasks, **197 capability-improving mutations fail recoverability verification**
+  and **conventional repair recovers 0/197**; an extended recovery calculus reaches 191/197.
+  Exact state-address grounding lifts 0/48 → **38/48** where the base language suffices. The
+  headline for any self-modifying-harness feature: undo must be a verified inverse with exact
+  state addresses, not a re-prompt.
+- [2608.27831](https://arxiv.org/abs/2608.27831) **RealSWE** (08-28) — problem-statement-only
+  requests are **88% of real prompts and 7% of benchmark problems**; realistic inputs cut
+  resolution **6.4pp on average** and can change model rankings. Load-bearing detail for prompt
+  assembly: **Desired Behavior and Motivation significantly affect performance; Environment
+  Information and Reproduction Steps add tokens without measurable benefit.** Also implies
+  `agent-bench` numbers overstate real-world resolve by roughly 6pp.
+- [2608.27924](https://arxiv.org/abs/2608.27924) **What Makes Agent Memory Useful** (08-28) —
+  memory gains are selective and fragile under dataset shift; **cross-model reuse is more
+  feasible than cross-dataset transfer**, and **procedural/rule-based memories transfer best**.
+  A caution for `memory`: store transferable behavioural guidance, not more experience.
+- [2608.28497](https://arxiv.org/abs/2608.28497) **Claude Code Plugin Marketplaces** (08-28) —
+  1,926 repos, 8,351 plugins; plugin-touching commit activity grew **8.8× over six months**; in
+  `skills/` directories, instruction files and implementation scripts co-evolve above chance with
+  **78% of co-changes functionally coupled**. Relevant to how skill-store versions a `SKILL.md`
+  against its scripts.
+- [2608.27167](https://arxiv.org/abs/2608.27167) **Calibrated Enough to Know, Not Calibrated to
+  Act** (08-27) — commitment on provably unpredictable questions rises **6.5% → 54.0%** with
+  escalating evidence, and a **fully fabricated** panel lifts commitment to 36.8%, statistically
+  indistinguishable from the 37.6% from genuine data. Models classify such questions as
+  irreducible **90%** of the time and then commit on 0.4% of those — the act/don't-act gate
+  fails, not the knowledge. **Rigid response formats that remove room to reason break the gate.**
+- [2608.25091](https://arxiv.org/abs/2608.25091) **Auto-Policy, not Auto-Skill** (08-25) — names
+  "Borrowed Authority": the Skills format gives a receiving agent no typed way to reject an
+  inter-agent permission claim. Typed guards reject **60/60** borrowed-authority requests across
+  five variants without blocking benign ones. Direct bearing on inber's spawn path.
+- [2608.22830](https://arxiv.org/abs/2608.22830) **Beyond the Harness** (08-24) — on 5,176
+  production queries, optimizing the *context artifacts* beat optimizing the retrieval harness,
+  **~12–25% vs ~3–12% AST similarity**.
+- [2608.26036](https://arxiv.org/abs/2608.26036) **Trace Integrity** (08-26) — on BIRD Mini-Dev,
+  answer accuracies of 20/22/24% sit against Trace Integrity pass rates of 39/43/40% and
+  **Correct-Answer/Invalid-Trace rates of 55%, 59.1%, 45.8%**. Answer accuracy, trace validity
+  and silent-failure risk are three distinct signals.
+- [2608.25500](https://arxiv.org/abs/2608.25500) **CaSKG** (skill retrieval) — ScienceWorld
+  macro-average **72.62 → 80.50**, ALFWorld **80.01% → 86.79%** over Graph-of-Skills at reduced
+  environment steps. Companion: [2608.27454](https://arxiv.org/abs/2608.27454) **WikiSkill**.
+- [2608.28476](https://arxiv.org/abs/2608.28476) **ContextPilot** (08-28, Tencent) — proactive
+  context management with planning, long-term memory, soft context offloading and action-level
+  credit assignment for context-editing decisions. Directionally very close to inber's compaction
+  path, but **the abstract reports no numbers** — design reference only until the tables are read.
+
+### 23. Screened and rejected, with the reason
+
+[2608.28011](https://arxiv.org/abs/2608.28011) — careful null result on ZO/ES budget routing, but
+frozen 1.5–3B models, irrelevant to an API-model harness.
+[2608.27750](https://arxiv.org/abs/2608.27750) — probe-based tool-call error detection needs
+hidden states inber cannot reach.
+[2608.26442](https://arxiv.org/abs/2608.26442) — over/under-reasoning position paper, no
+mechanism. [2608.27790](https://arxiv.org/abs/2608.27790) **Credo** — right idea (declarative
+harness primitives with provenance), self-described preliminary results and a research agenda.
+[2608.26563](https://arxiv.org/abs/2608.26563) **SPT** — mid-training method, not a harness
+change. [2608.26983](https://arxiv.org/abs/2608.26983) **GraphMemix** and
+[2608.27800](https://arxiv.org/abs/2608.27800) **ContextLeak** — on-topic, abstracts carry no
+numbers to act on.
