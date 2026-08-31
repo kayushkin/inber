@@ -42,9 +42,24 @@ func fetchRegistryAgents() []RegistryAgent {
 	return agents
 }
 
+// registeredAgents returns the registry entries this Registry describes and
+// validates spawns against.
+//
+// It calls the live bus-agent API unless a caller supplied its own lister. That
+// injection point is the only seam the spawn tool has: fetchRegistryAgents is a
+// hardcoded GET, so a test without it reaches the tool's body only because the
+// endpoint happens to answer with something that fails to unmarshal today, and
+// would stop reaching it the day the endpoint answers JSON.
+func (r *Registry) registeredAgents() []RegistryAgent {
+	if r.listRegisteredAgents != nil {
+		return r.listRegisteredAgents()
+	}
+	return fetchRegistryAgents()
+}
+
 // validAgentsDescription returns a description string with the list of valid agents.
-func validAgentsDescription() string {
-	agents := fetchRegistryAgents()
+func (r *Registry) validAgentsDescription() string {
+	agents := r.registeredAgents()
 	if len(agents) == 0 {
 		return "Agent name to spawn. Must match a registered agent."
 	}
@@ -56,8 +71,8 @@ func validAgentsDescription() string {
 }
 
 // validOrchestrators returns the set of unique orchestrators from the registry.
-func validOrchestrators() []string {
-	agents := fetchRegistryAgents()
+func (r *Registry) validOrchestrators() []string {
+	agents := r.registeredAgents()
 	seen := make(map[string]bool)
 	var result []string
 	for _, a := range agents {
@@ -80,8 +95,8 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 	}
 
 	// Fetch valid agents/orchestrators at tool creation time
-	agentDesc := validAgentsDescription()
-	orchs := validOrchestrators()
+	agentDesc := r.validAgentsDescription()
+	orchs := r.validOrchestrators()
 	orchDesc := "Backend/orchestrator to use (e.g., 'inber', 'openclaw'). Optional — resolved from registry if omitted."
 	if len(orchs) > 0 {
 		orchDesc = fmt.Sprintf("Backend/orchestrator to use. Valid options: %s. Optional — resolved from registry if omitted.", strings.Join(orchs, ", "))
@@ -127,7 +142,7 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 			}
 
 			// Validate against registry if available
-			agents := fetchRegistryAgents()
+			agents := r.registeredAgents()
 			if len(agents) > 0 {
 				valid := false
 				for _, a := range agents {
