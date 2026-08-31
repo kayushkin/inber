@@ -124,7 +124,7 @@ func (g *Server) SpawnAgentTool(parentSessionKey string) agent.Tool {
 				timeout = time.Duration(in.TimeoutSeconds) * time.Second
 			}
 
-			resp, err := g.Spawn(ctx, SpawnRequest{
+			resp, err := g.startChildSpawn(ctx, SpawnRequest{
 				ParentKey: parentSessionKey,
 				Agent:     in.Agent,
 				Task:      in.Task,

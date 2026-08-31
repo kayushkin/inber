@@ -127,6 +127,20 @@ type SpawnResult struct {
 
 // Spawn creates a child session and enqueues its work.
 // Returns immediately. Result delivered to parent async.
+// startChildSpawn spawns the child session a caller asked for, through the
+// injected implementation when there is one.
+//
+// The seam exists for the spawn tool's own reply. Spawn creates a real child
+// session, a real request row and a live goroutine, so a test that reaches the
+// tool's returned string through the real Spawn is not testing the tool — it is
+// standing up half a server. Nil means the real thing and nothing changes.
+func (g *Server) startChildSpawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, error) {
+	if g.spawnChildSession != nil {
+		return g.spawnChildSession(ctx, req)
+	}
+	return g.Spawn(ctx, req)
+}
+
 func (g *Server) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResponse, error) {
 	// Validate parent.
 	val, ok := g.sessions.Load(req.ParentKey)
