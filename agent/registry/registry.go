@@ -27,6 +27,14 @@ type Registry struct {
 	openclawURL   string   // OpenClaw gateway URL
 	openclawToken string   // OpenClaw auth token
 	openclawAgents []string // Agents that route to OpenClaw
+
+	// listRegisteredAgents supplies the bus-agent registry entries that the
+	// spawn tool validates a requested agent against and builds its parameter
+	// descriptions from. Nil means the live registry over HTTP. It exists as a
+	// field because the live call is a hardcoded GET against a fixed port, so
+	// without it no test can reach the spawn tool's body for a stated reason —
+	// only for whatever that endpoint happens to be serving on this box.
+	listRegisteredAgents func() []RegistryAgent
 }
 
 // New creates a registry using agent-store as the source of truth.
