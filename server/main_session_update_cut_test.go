@@ -107,8 +107,14 @@ func TestTheSpawnSummaryIsCutBeforeItReachesTheMainSession(t *testing.T) {
 
 	long := strings.Repeat("L", 5000)
 	got := fieldOf(t, queuedMainSessionUpdate(t, "t", long), "Summary")
-	if got == long {
-		t.Errorf("a %d-byte summary reached the parent session uncut, so the cut at "+
+
+	// Contains, not equality. The call site is `Truncate(...) + "..."`, so a
+	// mutation that stops the cut but keeps the marker yields `long + "..."` --
+	// unequal to `long`, and an equality check calls that a pass. Measured: the
+	// scorer's own notrunc arm has exactly that shape, and this assertion was
+	// written as equality first and reported SURVIVED against it.
+	if strings.Contains(got, long) {
+		t.Errorf("the whole %d-byte summary reached the parent session, so the cut at "+
 			"spawn_delivery.go:214 bounds nothing.\nSummary is %d bytes", len(long), len(got))
 	}
 }
@@ -140,8 +146,10 @@ func TestTheSpawnTaskIsCutBeforeItReachesTheMainSession(t *testing.T) {
 
 	long := strings.Repeat("L", 5000)
 	got := fieldOf(t, queuedMainSessionUpdate(t, long, "x"), "Task")
-	if got == long {
-		t.Errorf("a %d-byte task reached the parent session uncut, so the shared "+
+
+	// Contains, not equality -- same reason as the summary case above.
+	if strings.Contains(got, long) {
+		t.Errorf("the whole %d-byte task reached the parent session, so the shared "+
 			"truncate helper bounds nothing at this call site.\nTask is %d bytes",
 			len(long), len(got))
 	}
