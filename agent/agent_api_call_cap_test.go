@@ -56,4 +56,20 @@ func TestRunSignalsItsOwnAPICallCapAsASentinel(t *testing.T) {
 	if got, want := err.Error(), "exceeded max API calls (50)"; got != want {
 		t.Fatalf("operator-visible text changed: got %q, want %q", got, want)
 	}
+
+	// The cap is TWO properties and the check above holds only one of them. The
+	// message pins the VALUE: move maxAPICalls to 60 and the text says "(60)".
+	// It cannot see the BOUNDARY. Rewriting `apiCalls > maxAPICalls` as `>=`
+	// stops the loop one call early and still prints "(50)", because the
+	// constant has not moved. Measured on d472cb2: 50 calls with `>`, 49 with
+	// `>=`, the whole repository suite green either way.
+	//
+	// 50 is spelled out rather than written as maxAPICalls on purpose. A fixture
+	// written in terms of the constant it guards agrees with itself at every
+	// value of it, which is how the boundary came to be unheld in the first place.
+	if provider.calls != 50 {
+		t.Fatalf("the loop made %d API calls before the cap fired, want exactly 50 — "+
+			"a comparison rewritten as >= stops a call early with the error text unchanged",
+			provider.calls)
+	}
 }
