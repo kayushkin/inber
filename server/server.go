@@ -44,6 +44,13 @@ type Server struct {
 	workspaces map[string]*forge.Workspace // active workspaces by ID
 	mu         sync.RWMutex
 
+	// spawnChildSession creates the child session that spawn_agent reports on.
+	// Nil means Server.Spawn. It is a field because Spawn mints a session key,
+	// creates a real child session, writes a database row and starts a live
+	// goroutine, so without it nothing can ask the spawn tool what it replies —
+	// and the reply is the string the model reads.
+	spawnChildSession func(context.Context, SpawnRequest) (*SpawnResponse, error)
+
 	// Health tracking
 	startedAt   time.Time
 	lastError   string
