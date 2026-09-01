@@ -9057,3 +9057,43 @@ The two with the sharpest inber surface:
   or equal management cost**, and calibration gains on one task set do not transfer to held-out
   tasks. That is the direct warning against §5's "move the number onto the model row" if the
   number is then treated as sufficient: `TokenBudget` names stored state, not delivered context.
+
+### 8. Verified this pass, not filed — the three-per-run cap, written down so they are recoverable
+
+All four were read in the code, not taken from doc prose. None is filed, because the run's cap is
+three and §1–§3 outranked them. `file:line` given so the next pass starts from the line rather than
+from the search.
+
+- **A sub-agent's timeout message reports the budget it asked for, not the one it got.**
+  `server/spawn.go:314-317` prints `fmt.Sprintf("timed out after %s", timeout)` using the
+  *requested* `timeout`. But `context.WithTimeout` at `:304` yields the earlier of that and any
+  deadline inherited from the parent, and the bus path sets one: `server/bus.go:155-156` wraps every
+  turn in `context.WithTimeout(ctx, 5*time.Minute)`. A child spawned 4m30s into a bus turn with
+  `timeout_seconds: 300` is killed after 30 seconds and tells the parent model it ran for five
+  minutes — to a model that is deciding whether to retry. Only bites on the bus path today, which is
+  the path the whole chat surface uses.
+- **The JSONL resume path can never reconstruct a thinking block.** `session/resume.go:44-51`
+  admits only `user`, `assistant`, `tool_call` and `tool_result`; `session/session_logging.go:109-116`
+  writes thinking as `Role: "thinking"`, so it is filtered out. And `session.Entry`
+  (`session/session.go:21-37`) has **no signature field** — only `Content string` — so even
+  admitting it would produce an unusable block, since a thinking block without its signature cannot
+  be sent back. `LoadMessagesFromDir` (`session/resume.go:180-189`) prefers `messages.json`, so this
+  is the fallback path; when that snapshot is missing or corrupt the reconstruction silently drops
+  the reasoning. Adjacent to `cf3b6b4c` but a different mechanism — that one strips, this one cannot
+  represent.
+- **A frozen-zone cache breakpoint is silently skipped when the message ends in a thinking block.**
+  `markLastContentBlock` (`agent/agent.go:544-560`) switches on `OfText` / `OfToolUse` /
+  `OfToolResult` and returns `false` in `default`. `ThinkingBlockParam` has no `CacheControl` field,
+  so it takes that branch — and `placeHistoryCacheBreakpoints` (`agent/agent.go:519-523`) **ignores
+  the return value**. An assistant turn cut off by `max_tokens` while still thinking therefore ends
+  in a thinking block, BP3 is not placed, and the whole prefix is re-sent at full price with nothing
+  logged. The doc comment at `agent/agent.go:474-476` already acknowledges the skip. Small, and it
+  is a silent one.
+- **`IsThinkingSignatureError` compares an error to the literal string `"Error"`.**
+  `internal/apiutil/apiutil.go:6-14` is `msg := err.Error(); return msg == "Error"`. Its caller at
+  `engine/turn_execute.go:35` receives an error wrapped by `agent/agent_run.go:225`
+  (`fmt.Errorf("api call failed: %w", apiErr)`), which cannot equal `"Error"` — so the strip-and-
+  retry at `engine/turn_execute.go:44-50` is unreachable on that path. Probable rather than certain:
+  not every provider path was traced for an unwrapped error. Worth confirming before `cf3b6b4c` is
+  fixed, because that todo's argument for removing the unconditional strip rests on this reactive
+  path existing.
