@@ -8785,3 +8785,275 @@ strategies rather than the only one on the table.
   is open and already owns it** — "summarization replaces the frozen prefix and leaves
   staged.FrozenIdx pointing into content that no longer exists". Recorded here because the three
   downstream consequences were measured this pass and the todo names the pointer, not them.
+
+## Harness-watch — 2026-09-01: a control that returns before the work does has to say so twice — cline spent the week making one abort reach every delegated child and stay reached, and inber's stop cascade is correct right up to the moment the child it just killed hands its result back and restarts the parent
+
+Three cline PRs in one window are the same fix at three depths:
+[#13677](https://github.com/cline/cline/pull/13677) `fix(core): propagate parent aborts to
+delegated subagents`, [#13647](https://github.com/cline/cline/pull/13647) `Propagate session
+aborts to teammates`, and [#13678](https://github.com/cline/cline/pull/13678)
+`fix(desktop): keep Stop available for running child agents`. Read together they say something
+narrower than "cancel your children": **an abort is not an event you deliver once, it is a state
+the system has to keep being in.** #13677 makes the signal travel down. #13678 makes the control
+that sends it survive the travel, because a Stop button that disappears while a child is still
+running is a system that has decided, on the user's behalf, that the abort is finished.
+
+Two codex commits are the other half of the week, and they rhyme:
+[#41803](https://github.com/openai/codex/pull/41803) `Allow models to enable token budgeting by
+default` and [#41919](https://github.com/openai/codex/pull/41919) `Source Guardian REPL policy
+from model metadata` — both move a number out of a harness constant and onto the model row that
+the number is actually about. goose [#11213](https://github.com/block/goose/pull/11213)
+(`unify context limit resolution behind provider API`) is the same move for context windows.
+
+inber has all three shapes. One of them it already gets right, and the doc says so below rather
+than leaving it to be re-derived.
+
+### 1. Filed: a stopped parent is restarted by the result of the child the stop just killed
+
+`27dcb8e6-8844-41ef-8960-85feee45ae9d`.
+
+`StopSession` (`server/session_management.go:82-100`) is not the cline-#13647 "nobody tried"
+case. It reads `s.Children`, recurses depth-first, and only then stops itself. The cascade is
+real and it works.
+
+What has no cascade is the *return path*. A stopped child's work closure runs on past its
+cancelled turn, computes `status = "error"`, and calls `g.deliverResult`
+(`server/spawn.go:417`). That lands in `server/spawn_delivery.go:101`:
+
+```go
+if !parent.injectIfRunning(msg) {
+    log.Printf("[server] delivering spawn result to idle parent %s", parentKey)
+    go func() {
+        ...
+        _, err := g.run(context.Background(), req, onEvent)
+```
+
+`injectIfRunning` (`server/session.go:296-300`) returns false for a parent that is not running —
+which the parent, having just been stopped, is not. So the fallback fires and starts **a brand
+new turn** on the session the user stopped, under `context.Background()`, carrying
+`"[Sub-agent completed] … Status: error"`. `getOrCreateSession` (`server/session_creation.go:24-28`)
+hands back any live session without reading `Status`, so nothing between the stop and the new
+turn asks whether the session was supposed to be over. With N children stopped at once, N such
+turns queue on the same parent key.
+
+The comment above that branch (`server/spawn_delivery.go:98-100`) explains why it is
+`injectIfRunning` and not a `Status` read: *"a parent whose turn ends in between, or whose
+injection buffer is full, takes the turn path below instead of losing the result into an unread
+channel."* That reasoning is right about the case it was written for — an **idle** parent — and
+it does not distinguish idle from stopped, because at that point in the code the two are the same
+boolean. This is cline #13678 on the server side: the abort was delivered, and then the system
+quietly decided it was finished.
+
+**What a fix must decide, and this job is not deciding it.** (a) Where a stopped parent's child
+result goes instead — dropping it loses the record of work that was actually done and paid for,
+and `pendingMessages` (`server/session.go:312`) keeps it for a turn that by construction will
+never come. (b) Whether `Completed` becomes a state that gates entry to `Session.turn` at all —
+it is currently read as a gate nowhere in the package, only counted for stats at
+`server/api_bridge.go:1001`, and `Session.turn`'s own defer overwrites it back to `Idle`
+(`server/session.go:167-173`), so a stopped-then-resurrected session never reports `completed` to
+any UI either. That second half is the same pointer `7de193b1` already owns from the entry side;
+this is the exit side of it, and the two want one answer.
+
+### 2. Filed: the assistant branch of the provider filter does not ask the question the user branch twenty lines below it does
+
+`b0f47ede-be6e-4d1d-af81-f5ca1e51943c`.
+
+`FilterMessagesForAnthropic` (`agent/openai_conversion.go:304`) drops OpenAI-sourced tool blocks
+when a session crosses back to Anthropic. Its two halves are not the same code:
+
+```go
+// assistant, agent/openai_conversion.go:320-327
+if len(newBlocks) != len(msg.Content) {
+    filtered = append(filtered, anthropic.MessageParam{Role: msg.Role, Content: newBlocks})
+} else {
+    filtered = append(filtered, msg)
+}
+
+// user, agent/openai_conversion.go:338-348
+if len(newBlocks) != len(msg.Content) {
+    // Only add if there's content left
+    if len(newBlocks) > 0 {
+        filtered = append(filtered, anthropic.MessageParam{Role: msg.Role, Content: newBlocks})
+    }
+}
+```
+
+The user branch asks whether anything survived. The assistant branch does not, so an assistant
+message whose blocks were *all* OpenAI-sourced `tool_use` — the routine shape of a
+tool-calls-only turn from a GLM-served model, built at `agent/openai_conversion.go:190-235` and
+appended at `engine/turn_openai.go:105` — comes out as `{"role":"assistant"}` with zero content
+blocks, which the Anthropic API rejects.
+
+Verified by running the function rather than by reading it: with one `user[text]` and one
+`assistant[tool_use call_*]`, the output is `msg[1] role=assistant blocks=0` and the marshalled
+wire form is literally `{"role":"assistant"}`.
+
+This is cline [#13583](https://github.com/cline/cline/pull/13583) (`stop an empty capability list
+from stripping image input`) with the polarity flipped. There, an empty list was read as a
+deliberate "none". Here, an empty list is *written* as if it were a message. Both are the same
+missing question — is this empty because someone said so, or because everything fell out of it?
+— and inber already answers it correctly in two other places and says why: `server/api_bridge.go:719-721`
+tests `req.DisabledTools != nil` rather than its length, under a comment stating the rule outright.
+
+Distinct from `7c6a0ee4`, which owns the *write-back* on the same line
+(`engine/turn_execute.go:35` assigns the projection over `e.Messages`). That todo makes the loss
+durable; this one is what makes the request fail. Fixing either leaves the other.
+
+### 3. Filed: `effort: "high"` asks for a thinking budget nearly twice the `max_tokens` the request is hardcoded to
+
+`79b8f9e5-8ba8-4578-8fb8-ede0e6f7615c`.
+
+`server/api_bridge.go:701-716` maps effort onto a thinking budget:
+
+```go
+case "high":
+    budget = 32000
+```
+
+`agent/agent_run.go:55-59` builds every Anthropic request with:
+
+```go
+MaxTokens: 16384,
+```
+
+Anthropic requires `max_tokens` to exceed `thinking.budget_tokens`. Nothing clamps between the
+two — `Engine.SetThinkingBudget` (`engine/engine.go:346`) and `Agent.SetThinkingBudget`
+(`agent/agent.go:178`) are bare assignments, and `agent/agent_run.go:82-88` writes the budget
+straight into `ThinkingConfigEnabledParam`. `medium` (10000) is under the ceiling; `high` is not,
+and neither is any raw integer ≥ 16384 through the parse branch at `server/api_bridge.go:711-713`.
+The budget is session-scoped, so the failure is not one bad turn — every subsequent Anthropic turn
+on that session 400s.
+
+This is the codex #41803 / #41919 lens landing on inber: `16384` is a harness constant with no
+model behind it, and model-store has no max-output-tokens column to put it in, so the two numbers
+that must be ordered are owned by two different files that never meet. **What a fix must decide:**
+whether to clamp the budget at the door (cheap, and silently gives an operator less thinking than
+they asked for), raise `MaxTokens` per model (correct, and needs a model-store column that does
+not exist), or refuse the config with a 400 (loudest, and breaks any caller currently sending
+`high` and getting a 400 later instead of sooner). Only the third is consistent with "fail fast
+and loud", and only the second is consistent with "single source of truth".
+
+### 4. Measured, not filed: 15 of 18 inber agents are configured with a model id that resolves to nothing
+
+`agent/registry/config.go:158-160` defaults an unset model to `"claude-sonnet-4-5"`. Measured
+against the two live stores tonight:
+
+```
+agent-store, harness_id='inber':   claude-sonnet-4-5            15 rows (all enabled)
+                                   claude-sonnet-4-5-20250929    1
+                                   claude-sonnet-4-6             1
+                                   claude-opus-4-6               1
+model-store: models where id='claude-sonnet-4-5'            → 0
+             model_aliases where alias='claude-sonnet-4-5'  → 0
+             (the only sonnet aliases are `sonnet` and `claude-sonnet`,
+              both → claude-sonnet-4-5-20250929)
+```
+
+So 15 of 18 enabled rows, plus inber's own hardcoded default, name a string
+`GetModelInfo` cannot resolve (`agent/models.go:81-84`), and every one of them takes
+`unknownModelInfo` — 200,000 tokens, $3.00/$15.00 (`agent/models.go:25-27`).
+
+**Not filed, and the reason is the interesting part.** The fallback is *numerically identical* to
+the right answer today: `claude-sonnet-4-5-20250929` is registered at $3.00/$15.00 with a
+1,000,000-token window, and `requestableContextWindow` (`agent/models.go:113-122`) caps Anthropic
+at 200,000 anyway. Every agent gets the correct window and the correct price by coincidence. It is
+also **loud** — `reportUnresolvedModel` (`agent/models.go:133-139`) logs once per id with the
+fallback numbers in the message, which is more than most fallbacks in this tree do.
+
+It stops being free the moment one of those 15 rows is repointed at a model whose price differs:
+`claude-opus-4-6` is registered at $15.00/$75.00, so an undated Opus string that fails to resolve
+is priced at one fifth of its cost, and `MaxCost` (`267464ec`) terminates on that number. Recorded
+here so the next pass does not re-derive it, and so that whoever fixes `267464ec` knows the
+default id is part of the same question.
+
+### 5. Ideas worth taking, no defect attached
+
+- **A policy number belongs on the row it is about.** codex #41803 and #41919 both moved one out
+  of the harness. inber's context window already made that move and is clean:
+  `GetModelInfo` → `modelstore.ResolveModel` → `engine/build.go:113-114`, re-resolved per turn
+  after failover has picked the model. Three numbers have *not*: `MaxTokens: 16384`
+  (`agent/agent_run.go:58`, `engine/turn_openai.go:71,73`), `SummarizeConfig.TriggerMessages`
+  (`conversation/summarize_config.go:36,42,49` — 80/40/60 by role, message count only, model-blind),
+  and the memory ladder at `engine/turn_context.go:8-38`. All three want a model-store column
+  before they can move, so this is a schema change first and an inber change second.
+- **The control that sends the abort has to outlive the abort.** cline #13678's server-side form
+  is that a terminal state must be readable *by the thing that would restart the session*, not
+  just written by the thing that ended it. §1 is that rule unenforced.
+- **Loaded and never read is a lie with a config file behind it.** `AgentConfig.Context.Budget` is
+  filled from agent-store's `context_budget` at `agent/registry/config.go:142-145` and has **no
+  reader anywhere in the tree** — grep for `.Context.Budget` returns the write site alone. On this
+  host that is ten live rows (`claxon` … `dagda` at 50000, `bran` at 40000) configuring nothing;
+  every one of them actually gets the hardcoded ladder in `engine/turn_context.go:8-38`. Not filed
+  as a defect because the fix is a design choice — wire it, or delete the field and stop offering
+  a knob — but an operator lowering `context_budget` to rein an agent in today gets silence.
+
+### 6. Checked against inber and rejected, with the reason
+
+- **The child's context being detached from the parent's is deliberate, documented and
+  test-pinned.** `withoutCallerCancellation` (`server/session.go:117-139`) drops the caller's
+  cancellation and keeps its deadline, under fourteen lines explaining that a browser tab closing
+  must not abort work the session would otherwise finish; `TestTurnContextDropsCallerCancellation`
+  and `TestTurnContextKeepsCallerDeadline` (`server/session_cancellation_test.go:18-51`) hold it.
+  cline #13677's fix does not transfer as-is, because inber deliberately does not route aborts
+  through the context tree. Answering the other half: the child **does** inherit the parent's
+  deadline, so `context.WithTimeout` at `server/spawn.go:304` yields the earlier of the two and
+  that half of propagation works.
+- **goose #11637 (`preserve tool-call indices in streaming responses`) does not apply.**
+  `agent/agent_run.go:174-192` hands assembly to the SDK's `Accumulate`, which ignores
+  `event.Index` entirely and applies deltas to the last appended block. That is safe because
+  Anthropic's stream emits blocks strictly sequentially — the ordering guarantee is part of the
+  wire contract, unlike OpenAI's `tool_calls[].index`. And inber's OpenAI path does not stream at
+  all: `OpenAIRequest.Stream` (`agent/openai_types.go:45`) is declared and never set, and
+  `agent/openai.go:41-71` reads the whole body. (The swallowed `Accumulate` error on the same
+  lines is a real defect and is already open as `fb3d8e62`.)
+- **goose #11636 (`preserve thinking and redacted-thinking blocks across turns`) is already open,
+  twice over.** The live turn path is correct — `agent/agent.go:412` appends `resp.ToParam()`,
+  which carries `thinking` with its signature. The unconditional strip on every server resume
+  (`server/session_creation.go:151`) is `cf3b6b4c`. Worth adding to that todo when it is picked
+  up: the CLI resume path (`engine/engine_new.go:176-180`) runs the same repair chain **minus**
+  that call, so one session resumed two ways keeps or loses its reasoning depending on which door
+  it came through, and one of the two is wrong.
+- **cline #13583's own subject — image input — has no surface here.** `OfImage`,
+  `ImageBlockParam` and `NewImageBlock` appear nowhere outside vendor, and there is no capability
+  or model-feature list to empty. Only the *shape* of the bug transfers, which is §2.
+- **Already open, recorded so they are not refiled.** A child stopped before its turn starts runs
+  anyway (`7de193b1` — this is §1's twin at the entry point). Every sub-agent accepted over
+  `POST /api/spawn` enqueued under a context `net/http` has already cancelled (`656ff657`). The
+  session log priced at the flat unknown-model rate (`79e0551c`, still true — 328 rows in
+  `.inber/sessions.db`, every one with an empty `model`). An empty tool allowlist meaning *all*
+  tools (`83e084f8` — seven unshelved agents have zero rows in `agent_harness_tools` and run with
+  unrestricted `shell_commands` and `write_files`). The swallowed `Accumulate` error (`fb3d8e62`).
+  The unconditional thinking strip (`cf3b6b4c`). The destructive write-back on the same line as §2
+  (`7c6a0ee4`).
+- **Routine, recorded so it is not re-read.** codex: TUI reconnect and draft preservation
+  (`#41916`, `#41911`, `#41918`, `#41929`), Vim composer undo and insert-mode drafts (`#41941`,
+  `#41921`), transcript layout caches (`#41940`), config-schema generator crate move (`#41915`),
+  archived-rollout scan skip (`#41908`), native voice build recipes (`#41884`, `#41890`, `#41894`).
+  The Guardian-across-compaction cluster (`#41846`, `#41852`, `#41857`, `#41858`, `#41870`,
+  `#41879`) is last night's entry continuing and adds nothing new to it. cline: desktop
+  marketplace redesign (`#13653`), attachment drop zone (`#13672`), Windows signing (`#13607`,
+  `#13021`). goose: Opper provider (`#11589`), Databricks discovery (`#11575`), long-chat render
+  performance (`#11583`). opencode: docs and stats only. aider, roo-code and dexto: no commits in
+  the window.
+
+### 7. Papers
+
+Screened the arXiv `cs.SE`, `cs.MA` and `cs.AI` recent listings for 2026-08-26 → 2026-09-01
+against the 415 ids already recorded across `docs/papers/` and `agentic-design-patterns.md`. Seven
+are new and load-bearing, written up in `docs/papers/2026-09-harness-research.md`. Eight more were
+on-topic and already recorded — including [2608.26225](https://arxiv.org/abs/2608.26225)
+**Agent Mesh**, which is the closest paper to §1 in the whole set and was logged last night.
+
+The two with the sharpest inber surface:
+
+- [2608.29128](https://arxiv.org/abs/2608.29128) **APIFlow-Bench** — across 19 models, **77% of
+  failing runs reached the correct final state and failed only at delivery**, and pass rates on
+  20-subtask chains sit **33 percentage points above** the product of subtask-level rates, so the
+  independent-error account of compounding failure does not fit. Also: best-of-five spans seven
+  points across models while all-five-of-five spans **44** — reliability separates models far more
+  than best-case capability does. §1 and §2 are both delivery failures on top of completed work.
+- [2608.31057](https://arxiv.org/abs/2608.31057) **Measure Before You Manage** — across 55
+  archived coding-agent trajectories, **equal token budgets do not imply equal delivered context
+  or equal management cost**, and calibration gains on one task set do not transfer to held-out
+  tasks. That is the direct warning against §5's "move the number onto the model row" if the
+  number is then treated as sufficient: `TokenBudget` names stored state, not delivered context.

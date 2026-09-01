@@ -872,3 +872,40 @@ inber's channel exists and is narrower than it looks. `agent.Hooks.PostToolResul
 else — and the two provider loops disagree about when the hook runs at all. See the sweep entry below:
 on the Anthropic path a failed tool call never reaches `PostToolResult`, which is also how the
 `toolInputsCache` leak got in.
+
+## 2026-09-01: an abort is a state, not an event — three PRs in one window, at three depths
+
+[#13677](https://github.com/cline/cline/pull/13677) `fix(core): propagate parent aborts to
+delegated subagents`, [#13647](https://github.com/cline/cline/pull/13647) `Propagate session aborts
+to teammates`, [#13678](https://github.com/cline/cline/pull/13678) `fix(desktop): keep Stop
+available for running child agents`.
+
+The first two are the signal travelling down — a parent abort that left delegated children running.
+The third is the one worth stealing, because it is not about the signal at all: a Stop control that
+disappeared while a child was still running is a system deciding, on the user's behalf, that the
+abort is over. Together they say an abort is a state the system has to keep being in, not an event
+delivered once.
+
+inber has the cascade and not the state. `StopSession` (`server/session_management.go:82-100`) reads
+`s.Children`, recurses depth-first, and stops itself last — the #13647 half is done and correct. But
+the child's *return path* has no cascade: `deliverResult` reaches
+`server/spawn_delivery.go:101`, `injectIfRunning` returns false for a parent that is no longer
+running, and the fallback starts a fresh turn on the session the user just stopped, under
+`context.Background()`. Filed as `27dcb8e6-8844-41ef-8960-85feee45ae9d`. Its twin at the entry point
+— a child stopped before its turn begins runs the whole task anyway, because `stop()` writes a
+status `turn()` never reads — is `7de193b1`, and the two want one answer about whether `Completed`
+gates `Session.turn`.
+
+Also this window, and a different lesson:
+[#13583](https://github.com/cline/cline/pull/13583) `fix(core): stop an empty capability list from
+stripping image input` — an empty list read as a deliberate "supports nothing" rather than "not
+configured". inber has no capability list and no image handling, so the subject does not transfer,
+but the *shape* does with its polarity flipped: `FilterMessagesForAnthropic`'s assistant branch
+(`agent/openai_conversion.go:320-327`) *writes* an empty block list as if it were a message, while
+the user branch twenty lines below asks `len(newBlocks) > 0` first. Filed as
+`b0f47ede-be6e-4d1d-af81-f5ca1e51943c`.
+
+Routine in the same window, recorded so it is not re-read: desktop marketplace redesign (`#13653`),
+shared attachment drop zone (`#13672`), Windows Authenticode signing (`#13607`, `#13021`),
+searchable session history (`#13420`), agent-created schedules anchored in `.cline`
+(`#13634`, `#13613`). The hook-crash fix (`#13422`) is the 2026-08-30 entry and adds nothing new.
