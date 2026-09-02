@@ -205,3 +205,190 @@ before injecting it" idea here.
 - [2608.26225](https://arxiv.org/abs/2608.26225) **Agent Mesh** — the closest paper in the listing
   to tonight's §1, and **already recorded** in `2026-08-harness-research.md`. Re-fetched to
   confirm, not re-logged.
+
+# 2026-09-02 sweep
+
+~150 distinct arXiv ids screened across the `cs.SE`, `cs.MA`, `cs.AI` and `cs.CL` recent
+listings plus four keyword searches; 20 dropped as already filed in `2026-04` through
+`2026-09`. Eight new, all eight carrying numbers.
+
+⚠️ **Two method warnings, both worse than last sweep's.** The arXiv Atom API answered
+`429`/`503` for every attempt from this host, as on 2026-09-01 — two sweeps running, so
+treat it as unavailable and use the per-category listing pages. Worse: a `cs.AI/new`
+listing fetch returned **hallucinated id-to-title mappings**, reporting `2609.00035` as
+"Conversation Coach" and `2609.00023` as "Invalidation Contracts for Cross-Episode Agent
+Memory"; neither is the real paper. Every id below was re-read at `arxiv.org/abs/` and the
+listing titles discarded. **Do not report a paper from a listing or search snippet.**
+`2609.00035` was independently re-fetched at `/abs/` by the parent job before acting on it.
+
+## 1. A tool vocabulary stated only in prose is missed by every model, every time
+
+[arXiv:2609.00035](https://arxiv.org/abs/2609.00035) — **SilentProbe: Measuring Silent
+Failure in Production APIs Used as Agent Tools** (2026-08-29). 721,320 parameters across
+2,501 OpenAPI documents: 7.5% declare an enum, 15.2% declare any machine-checkable
+constraint, 40.1% state a constraint in prose the schema does not encode. Against live
+endpoints, machine-checkable constraints gave an honest error **111/111**; prose-only
+constraints failed silently **44/61** (p = 2e-13). A vocabulary the description merely
+*exemplifies* was missed **88/88**; written out in full it was used correctly 88–91%.
+Promoting it into the schema took 88/88 → **0/89**. In the loop, models detected the silent
+failure 12% of the time, repaired it **0%**, and asserted a false negative to the user 41%.
+
+- **What inber should consider:** `grep '"enum"'` across the tree returns **two** hits, one
+  of them a test — production has exactly one, `agent/chain.go:50`. Every other constrained
+  vocabulary is prose in a `description`. Measured this pass, inber is *not* in the
+  88/88 bucket: `server/spawn_tools.go:72` builds `"Agent name to spawn. Available: %v"`
+  from the full sorted list, which is the 88–91% bucket. The residual 9–12% is what an
+  `enum` closes, and it lands unvalidated because the agent-name check is off (todo
+  `a6fceed2`). The fix is one line beside the description — and the sort at
+  `spawn_tools.go:71` is already deterministic, so it will not move the cache anchor.
+- Companion, same class: [arXiv:2609.00072](https://arxiv.org/abs/2609.00072) (*Can MCP
+  Clients Decide What to Do After Failure?*, 08-31) — across 21 induced MCP failures, typed
+  fields expose *that* it failed but never a specific cause, target, repair or replay
+  constraint. Do not build retry logic that assumes `isError:true` carries a reason.
+
+## 2. Source-code anatomy of eleven production harnesses
+
+[arXiv:2609.00006](https://arxiv.org/abs/2609.00006) — **Harness Engineering: Anatomy,
+Architecture, and Evolution of Coding Agents** (announced 2026-09-02). Reads the source of
+Claude Code, Codex CLI, Gemini CLI, Mistral Vibe, OpenHands, Aider, Mini-SWE-Agent, Hermes,
+Pi, OpenCode and OpenClaw. Seven canonical subsystems, **29 recurring design patterns**, 18
+recommendations, a 90-line minimum-viable-harness scaffold. Two absences hold across ~4M
+lines: **no runtime imports a general-purpose agentic framework, and none retrieves code
+with vector embeddings.** `SKILL.md` skills lead MCP 9/11 vs 8/11. A controlled one-quarter
+diff shows behavioural policy migrating from prompt prose into configuration.
+
+- **What inber should consider:** the 29-pattern catalogue is the largest external set
+  `docs/comparisons/agentic-design-patterns.md` has had to check itself against — read it
+  as a coverage audit of that file, not as a bullet. The no-embeddings finding validates
+  `codeindex/`; the prose→config migration is an audit target for `engine/build.go`.
+
+## 3. Fold the trace into typed state; don't re-read it
+
+[arXiv:2609.01466](https://arxiv.org/abs/2609.01466) — **Parsing the Stream: A Live Trace
+Model for Long-Horizon Agents and Their Observers** (2026-09-01). An append-only ledger
+folded incrementally into typed state, compiled into per-consumer views. Monitoring
+questions answered with **14–15x fewer input tokens at 5–7x lower cost, accuracy 0.85–0.87
+versus 0.48** for a budget-capped single read of the raw trace. On 120-link
+sequential-dependency tasks, keeping the running statistic in per-step state succeeds
+**30/30 against 8/30** for full-context prompting. Honest ablation: a prompt-level
+scratchpad matches the accuracy more cheaply, so the fold's residual value is deterministic
+auditability plus serving both consumers from one state.
+
+- **What inber should consider:** build the fold **only** if the same typed state serves
+  compaction *and* the observer — for compaction alone it loses to a scratchpad. That
+  scopes `trace/trace.go` (a single file) against `conversation/staged.go` and
+  `conversation/stash.go`. The 0.85-vs-0.48 gap is the number justifying a compiled view
+  anywhere in `server/` that re-reads a raw trace.
+
+## 4. Keeping the model's own reasoning in context is what carries state
+
+[arXiv:2609.00012](https://arxiv.org/abs/2609.00012) — **Long-Horizon State Tracking in
+LLMs: Executing MD5 through a Deep Sequence of Dependent Tool Calls** (2026-08-02, announced
+in-window). **196 dependent tool calls over 64 rounds**, four 32-bit words carried in
+context, graded against an RFC 1321 trace so every failure is pure bookkeeping.
+`gpt-oss-120b` (~5.5B active) at temperature 0 carries full state across all 196 calls. Two
+ingredients decide it, neither touching weights: **keeping the model's own reasoning in
+context each turn**, and voting over a thinking-enabled worker.
+
+- **What inber should consider:** a direct constraint on compaction. Whatever
+  `conversation/manage_tool_pruning.go` and `staged.go` drop, dropping prior reasoning
+  blocks is the one thing measured here to break dependent-call chains — which is exactly
+  what `server/session_creation.go:151`'s unconditional strip does (todo `cf3b6b4c`). Worth
+  a test pinning thinking-block retention through a prune, beside
+  `prune_preserves_is_error_test.go`.
+- **Tension with §3, and it is real.** Fold-into-typed-state and keep-reasoning-in-context
+  pull opposite ways; both are measured. The reconciliation: the *aggregate* is
+  deterministic state, the *reasoning* is not summarizable. Deciding which of inber's
+  carried values is which is the work.
+
+## 5. Outcome-only judging misses more than half of silent faults
+
+[arXiv:2609.00038](https://arxiv.org/abs/2609.00038) — **trajectory-judge: What Outcome-Only
+LLM Judges Miss on Agent Trajectories** (2026-08-29). Deterministic environment, scripted
+oracle, one injected fault at a known step, stratified by whether the visible outcome
+survived. 400+ trajectories, five judges: the outcome-only judge catches **84% of loud
+faults but 45% of silent ones, while flagging 33% of correct trajectories**. A step-rubric
+judge reaches **77% silent recall with zero false alarms at 3x cost**. **No judge reads the
+final reply** — an invented promise appended to a perfect trajectory evades the rules
+entirely and the step judge 82% of the time. Self-consistency tripled cost and improved
+nothing.
+
+- **What inber should consider:** the judge-side number for the delivery-layer blind spot
+  filed on 2026-09-01 from [2608.29128](https://arxiv.org/abs/2608.29128). `requests.status`
+  in `~/.inber/server/server.db` is an outcome-only signal and on these figures would miss
+  over half the faults that leave the visible answer intact. If harness-watch ever scores
+  its own runs, **stratify recall by outcome survival** or the number means nothing.
+
+## 6. Retrying blind beats localizing the fault
+
+[arXiv:2609.00854](https://arxiv.org/abs/2609.00854) — **Does Fault Localization Beat a
+Fresh Attempt? A Placebo-Controlled Study of Test-Guided Code Repair** (2026-09-01). Three
+arms — blind resampling, spectrum-based localization plus suspect-span infilling, and
+same-length infilling at a *random disjoint* span (the placebo) — over three frozen 26–32B
+models, three benchmarks, 488 failing candidates. **Localization is rarely even available:
+9.0% of failing candidates expose a failing public test with a usable spectrum.** Among the
+177 localizable, localized infilling **loses to blind resampling 3:40** at matched attempts
+(p = 3.0e-9). Re-pricing as tokens does not save it: 16 localized attempts reach 6.8% where
+**one blind attempt reaches 10.1%**. Infilling reproduces the removed span verbatim 48.9% of
+the time, which is why more budget does not help.
+
+- **What inber should consider:** if any retry path narrows the model's edit window to a
+  suspected span after a failure, widen it back to a fresh attempt. Scoped to 24–32B models,
+  so treat as a hypothesis for frontier models — but "narrow the retry" now needs evidence
+  rather than being the default.
+
+## 7. Separate spawning a sub-agent from granting it authority
+
+[arXiv:2609.01035](https://arxiv.org/abs/2609.01035) — **Spawn Freely, Act Sparingly:
+Progressive Risk Vesting for Recursive LLM-Agent Trees** (2026-09-01). Splits **sandbox
+spawning** (external controls prevent harm) from **capability activation** (a branch crosses
+an irreversible-action boundary), holds a trajectory-level risk budget in escrow and debits
+it only on activation. Proves an anytime harm bound over adaptively generated trees, and
+shows delayed vesting preserves every policy available under irrevocable spawn charging.
+Trajectory harm switches regime as the authority reproduction number ℜ_A crosses one.
+Synthetic — it does not estimate safety in deployed agents.
+
+- **What inber should consider:** inber charges at spawn — a child takes its model and tool
+  set from config at creation (`server/spawn.go:170-175`) — and `guard` gates per call with
+  no per-trajectory budget shared down a spawn tree. The result that deferring the charge to
+  activation costs nothing in reachable policy says a recursion-depth-blind guard is leaving
+  a free safety property on the table. Bears directly on the open zero-`RunRequest` todo
+  `9e31d359`, which is the same boundary seen from the caps side.
+
+## 8. Don't let the model write the file — let it write the intent
+
+[arXiv:2609.00227](https://arxiv.org/abs/2609.00227) — **Don't Let the Model Write the YAML:
+Deterministic, Minimal-Diff GitOps Remediation from LLM-Proposed Field Changes**
+(2026-08-31). On real Kubernetes manifests, **no text-generation strategy is safe
+unattended**. Unified diffs under strict patching almost never apply; a tolerant tool (GNU
+patch) applies 96% but **silently misapplies 1 in 7 (14–20%) with no error signal**.
+Full-file rewrite is capability-dependent and non-deterministic even for a frontier model,
+at O(file size) per edit. Their alternative: the model emits a structured field-change
+*intent*; a deterministic pipeline locates the target scalar's character span via the
+parser's node position marks and replaces that span in the raw text, never re-serializing.
+
+- **What inber should consider:** the **14–20% silent-misapply** rate is the number to carry
+  into any tool in `tools/` that applies a model-authored diff. Where inber edits structured
+  config, the intent-plus-deterministic-applier split is strictly better and cheaper.
+
+### Screened and rejected, with the reason
+
+- [2609.01437](https://arxiv.org/abs/2609.01437) **HarnessDev** (09-01) — LLMs build and
+  evolve their own harness. One caution worth logging: evolution gains are unstable, transfer
+  only partially to held-out tasks, and depend strongly on the executing model. Otherwise a
+  benchmark.
+- [2609.01481](https://arxiv.org/abs/2609.01481) **Harness-of-Harness** (09-01) — +52.25%
+  average relative gain over standalone harnesses, but no ablation isolating which of its
+  seven design choices earns it.
+- [2609.00546](https://arxiv.org/abs/2609.00546) **Runtime-Independent Persistent Agents**
+  (09-01) — six continuity invariants and a quiesce/checkpoint/rehydrate protocol. On-topic
+  for `agent-store`, but its evidence is "833 core tests pass" and it says so itself.
+- [2608.29641](https://arxiv.org/abs/2608.29641) **Harness-RL** (08-30) — trains a central
+  policy. inber does no training.
+- [2609.00050](https://arxiv.org/abs/2609.00050), [2609.01271](https://arxiv.org/abs/2609.01271),
+  [2609.01603](https://arxiv.org/abs/2609.01603), [2609.01600](https://arxiv.org/abs/2609.01600),
+  [2609.00823](https://arxiv.org/abs/2609.00823), [2609.01294](https://arxiv.org/abs/2609.01294),
+  [2609.00077](https://arxiv.org/abs/2609.00077) — all read, none clearing the bar:
+  framework-without-comparison, benchmark-profiling, eval-subset-selection, benchmark,
+  activation-probing (needs hidden states inber does not have), a search-strategy gain on
+  deep-research benchmarks, and a mitigation for autonomous ML-research loops inber does not run.

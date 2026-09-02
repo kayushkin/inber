@@ -586,13 +586,41 @@ processes become impossible rather than unlikely.
 
 **inber's deploy never asks.** `deploy.sh:45-46` is an unconditional `systemctl --user stop`, with no
 query of live session state anywhere in the script — although the server exposes exactly that
-(`GET /sessions`, `server/api.go:38`). The graceful path is real but bounded: a turn runs
-synchronously inside the HTTP handler, and `Queue.Enqueue` (`server/queue.go:39-56`) runs `work(ctx)`
-on the caller's goroutine, so `server.Shutdown(context.Background())` (`server/api.go:53`, unbounded)
-genuinely waits for it — until systemd's stop timeout expires. `deploy/systemd/inber-server.service.template`
-sets no `TimeoutStopSec` and no `KillMode`, so it inherits the manager default and a long turn is
-SIGKILLed: `defer g.Close()` (`cmd/inber-server/main.go:95`) never runs, `persistSessionState` never
-runs, and tool calls the turn already made leave side effects with no transcript record.
+(`GET /sessions`, `server/api.go:38`).
+
+⚠️ **Corrected 2026-09-02. The paragraph that stood here said the graceful path "genuinely waits
+… until systemd's stop timeout expires". It does not wait at all, and systemd's timeout is not
+what bounds this.** The first two clauses were true and the conclusion did not follow.
+`http.Server.Shutdown` closes the listeners *first* and drains afterwards, so `ListenAndServe`
+returns `ErrServerClosed` at the moment the listener closes — and `Serve` returns `nil` right
+there (`server/api.go:62-65`). The drain continues inside the anonymous goroutine at
+`server/api.go:51-54` and **nothing joins it**: no `WaitGroup`, no channel, no returned error.
+`Shutdown` blocks the goroutine that calls it, which is not the goroutine that decides to exit.
+
+Measured with a standalone probe copying `api.go:51-54` verbatim, one 3s handler:
+
+```
+>>> ListenAndServe returned ErrServerClosed at 0.60s  <-- inber's Serve() returns nil HERE
+>>> defers (cancel, pidFile.Release, g.Close) would fire at 0.60s
+HANDLER FINISHED at 3.30s
+Shutdown RETURNED at 3.82s
+```
+
+So `run()`'s defers fire LIFO — `cancel()` (`cmd/inber-server/main.go:109`),
+`pidFile.Release()` (`:102`), `g.Close()` (`:95`) — 2.7 seconds before the turn finishes, and the
+process then exits. Three costs follow. The in-flight turn is cancelled roughly when the listener
+closes, so the graceful window is effectively zero and `persistSessionState` never runs for it —
+tool calls the turn already made leave side effects with no transcript record. The turn's
+request and usage rows are written to a closed `*sql.DB`, since `Server.Close()` shuts
+`g.store`, `g.modelStore`, `g.agentStore` and `g.forgeDB` while the handler is still writing to
+them. And `pidFile.Release()` deletes the single-instance lock while the process is still alive
+and serving, so a start racing a stop passes `Acquire()` and two servers contend on the same
+SQLite files.
+
+`deploy/systemd/inber-server.service.template` still sets no `TimeoutStopSec` and no `KillMode`,
+but that is now a second-order concern: the process leaves on its own well before any systemd
+timeout is reached. Open todo `2a7831d5-07e4-4293-b6d2-19b6e8a915b2` carries the same wrong
+claim in its point 2 and should be read against this correction.
 
 Two smaller things fall out of the same read. `Server.Close()` (`server/server.go:166-172`) is the
 **one of four sites** that acts on a session without reading `Status` first — `session_release.go:44`,
@@ -909,3 +937,123 @@ Routine in the same window, recorded so it is not re-read: desktop marketplace r
 shared attachment drop zone (`#13672`), Windows Authenticode signing (`#13607`, `#13021`),
 searchable session history (`#13420`), agent-created schedules anchored in `.cline`
 (`#13634`, `#13613`). The hook-crash fix (`#13422`) is the 2026-08-30 entry and adds nothing new.
+
+## Harness-watch — 2026-09-02: one rule with three implementations, and the strictest one guards a destructive step
+
+### 1. The model-facing rejection string is load-bearing
+
+[cline #12673](https://github.com/cline/cline/pull/12673): a terse `"User denied the tool
+execution"` reads to a model like a system fault, so it retries or routes around. cline
+centralised two constants and appends them in one place, `prepareToolExecution()`, so every
+client sends the identical *"…rejected by the user and not executed. -- NOT a tool or system
+failure. Clarify with user before proceeding."*
+
+inber already has the single-wording half: `agent/chain.go:257-259` `RefuseToolCall` renders
+`refused: %s was not run — %s` and is the only refusal wording, used by the primary call
+(`:389-391`), the `then` chain (`:437-443`) and each sideband field
+(`agent/sideband.go:231`). **What inber should consider:** the missing second sentence — the
+explicit "this is not a failure" — belongs in the reason string at
+`engine/build_hooks.go:96-99`, which is where the wording is authored.
+
+### 2. Three sentence splitters disagree, and the one guarding a destructive truncation is the strictest
+
+[cline #13584](https://github.com/cline/cline/pull/13584) found three code paths each
+translating model capabilities with their own `switch`; builtins emitted `["text"]` where the
+others emitted `undefined`, stripping tool definitions from four models. The fix forces one
+exported translator with a compile-time decision per capability.
+
+inber has the same shape. `conversation/manage.go` runs auto-save-to-memory and then
+truncation over the same assistant text, and each half uses its own splitter:
+
+- `conversation/manage_auto_save.go:122-141` `extractKeySentences` — `strings.FieldsFunc` on
+  `.`/`!`/`?`, threshold `len(sentence) > 20`, **no fallback**.
+- `conversation/manage_text_utils.go:33-50` — same job, threshold `< 10`, and at `:48-50` a
+  fallback: `textutil.TruncateWith(text, 300, "...")`.
+- `session/checkpoint.go:219-240` — a rune scan that **keeps** the terminator and thresholds
+  at `> 10` on the untrimmed fragment.
+
+All three are live (`engine/build.go:125`, `engine/lifecycle.go:195`, `:233`).
+
+**Measured, not inferred.** Running `extractKeySentences` verbatim over four realistic
+assistant openings, two return nil:
+
+```
+1. First item. 2. Second item. 3. Third item.       -> 0 frag  DROPPED
+I made three changes. 1. Rewrote the parser to ...  -> 1 frag  saved
+Deployed v2.1.4 to production. The rollout comp...  -> 0 frag  DROPPED
+The migration finished and every row was verifi...  -> 1 frag  saved
+```
+
+`FieldsFunc` splits on every `.`, so a numbered list — the most common opening for agent
+prose — burns slots on `1` and `2`, and the `i >= maxSentences` break at `:132` counts those
+skipped fragments against the budget. `v2.1.4` breaks the third case the same way. On nil,
+`manage_auto_save.go:90-92` does `continue` **with no log and without incrementing `saved`**,
+and `manage.go:122-132` then truncates that same message to ~300 characters: the detail is
+gone from the live conversation and no memory row exists. The file's own comment at
+`:109-111` states the rule being broken — *"a save that failed is content leaving the process
+for good. Say so rather than counting it and moving on"* — and enforces it only for a
+`memStore.Save` error, not for an empty extraction. Every fragment of length 11–20 also lands
+in the gap between the two thresholds: kept by the truncator, rejected by the extractor. The
+name lies too: it returns up to N of the *first* N fragments clearing a length filter, not
+"the first N sentences".
+
+**What a fix must decide:** (a) whether these are one function or two — they answer different
+questions, "what stays in context" versus "what gets persisted", so collapsing them is a
+semantic claim, not a refactor; if collapsed, whether 10 or 20 wins. (b) Whether
+`extractKeySentences` inherits the 300-byte fallback, which turns auto-save from "save facts"
+into "save something for every truncated message" — a write-volume decision against
+memory-store. (c) Whether an empty extraction should *block* the truncation at
+`manage.go:122` or merely log; blocking makes pruning refuse to free tokens, the opposite of
+what the caller asked for. (d) Whether `session/checkpoint.go:219` joins the rule at all,
+given it keeps terminators on purpose.
+
+### 3. Assist mode cannot tell "the approver said no" from "there is no approver"
+
+`guard/guard.go:177-182` collapses two events into one verdict: `approve == nil` (nobody to
+ask) and `approve(...) == false` (a human refused). `engine/build_hooks.go:98` then renders
+that single verdict with one hardcoded explanation — *"…and this session has no approver to
+ask"*.
+
+**Reported as latent, because it is.** `ApprovalFunc` is set by no production site — only
+three test files — so the string is accidentally true today. It becomes false on the first
+commit that wires an approver, and fails in the exact direction #12673 documents: a model
+told the session has no approver reads a configuration gap, not a decision, and reasonably
+tries another route to the same effect.
+
+**What a fix must decide:** whether `ToolVerdict` grows a fourth value (`DeniedByApprover`,
+distinct from the policy `Denied`), or whether `CheckTool` returns a verdict plus a reason and
+`buildToolRefusal` stops authoring explanations it cannot verify. The first changes an
+exported enum every switch must then handle; the second moves the wording to where the fact
+lives but away from the other refusal strings. Both must also settle whether a human denial is
+*terminal* — cline's answer, "clarify with the user before proceeding", needs a channel inber
+does not have.
+
+### Also checked this window, nothing to import
+
+- **[#13626](https://github.com/cline/cline/pull/13626)** — a checkpoint restore now refuses
+  when HEAD moved past the checkpoint, reporting the commit count, and uses
+  `git update-ref HEAD <new> <old>` as a compare-and-swap. inber's `checkpoint/checkpoint.go`
+  is an honest sketch: every method returns `ErrNotImplemented` and the package doc names the
+  three open design questions. The transferable rule — a destructive step refuses rather than
+  silently skips — is what §2 above violates in a different package.
+- **[#13549](https://github.com/cline/cline/pull/13549)** — sanitize credentials at the write
+  boundary; clipboards inject newlines, zero-width spaces and BOMs. `agent/clients.go:46-63`
+  never trims, and `mc.IsOAuth = strings.HasPrefix(apiKey, "sk-ant-oat01-")` (`:89`, repeated
+  at `:114`) fails on a *leading* invisible — silently downgrading an OAuth token to the
+  `X-Api-Key` path with different beta headers. Worth a trim at the resolve boundary; folded
+  into the credential-lifecycle question in `goose.md`'s 2026-09-02 §3 rather than filed twice.
+- **[#13583](https://github.com/cline/cline/pull/13583)** — already covered (2026-09-01,
+  `b0f47ede`). Re-verified: inber has no capability or modality gate, and the nearest
+  analogue, `agent/agent_run.go:151-153` `toolsWereWithheld`, gets the tri-state right.
+- **[#13639](https://github.com/cline/cline/pull/13639)**,
+  **[#13744](https://github.com/cline/cline/pull/13744)**,
+  **[#13727](https://github.com/cline/cline/pull/13727)**,
+  **[#13420](https://github.com/cline/cline/pull/13420)**,
+  **[#13017](https://github.com/cline/cline/pull/13017)**,
+  **[#13629](https://github.com/cline/cline/pull/13629)**,
+  **[#13634](https://github.com/cline/cline/pull/13634)**,
+  **[#13565](https://github.com/cline/cline/pull/13565)** — no inber surface: `tools/mcp` is
+  stdio-only with zero importers, there is no cross-harness session format, no filesystem
+  watcher, no local schedules home, and no token refresh (delegated to auth-store).
+- **#13677 / #13647** (parent aborts to delegated subagents) — the whole abort-cascade theme
+  was this file's 2026-08-31 entry. Not re-reported.

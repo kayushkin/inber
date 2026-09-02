@@ -1645,3 +1645,138 @@ bet are the ones the 2026-08-14 entry already named and re-confirmed stamp nothi
 
 Also this window: [#11673](https://github.com/block/goose/pull/11673) adds `--system` to
 `goose session` for parity with `goose run`. No inber surface.
+
+## Harness-watch — 2026-09-02: the usage-bearing path nobody instrumented is the error path
+
+Three items this window, and the first corrects the premise this sweep started from.
+
+### 1. #11636 is not the resume fix it looked like
+
+[goose #11636](https://github.com/block/goose/pull/11636) preserves thinking and
+redacted-thinking blocks "across turns", which reads like inber's open resume gap. It is
+not. It is an **outbound-conversion** fix at the Kotlin/Python binding boundary: thinking
+blocks reached callers only as stream chunks, so a caller assembling assistant history from
+a `ProviderCompletion` had nothing to replay. It adds `MessageContent::from_goose_content`
+and a `content: Vec<MessageContent>` field. The transferable part is the invariant —
+**signatures and redacted data are copied verbatim and never decoded**.
+
+Thinking-block preservation in inber, measured this pass rather than assumed:
+
+| Path | File:line | Preserved? |
+|---|---|---|
+| Stream accumulation | `agent/agent_run.go:175` `accumulated.Accumulate(event)` | **Yes** — SDK handles `SignatureDelta` |
+| Into history | `agent/agent.go:412` `append(*messages, resp.ToParam())` | **Yes**, verbatim. inber constructs a `ThinkingBlockParam` **nowhere**, so it can never fabricate a signature |
+| Persist | `engine/lifecycle.go:260` → `messages.json` | **Yes** — round-tripped against SDK v1.35.0, signature intact and byte-identical |
+| CLI resume | `engine/engine_new.go:164,176-180` | **Yes** — that repair chain omits `RepairThinkingSignatures` |
+| Server resume | `server/session_creation.go:151` | **No** — unconditional strip. Todo `cf3b6b4c` |
+| Stream-error salvage | `agent/agent.go:397-402` | **No** — rebuilt from `deliveredText`, text blocks only. Lossy but safe; no orphan signature |
+
+**What inber should consider:** nothing new from #11636 itself. The table is the point — the
+strip is one line on one path, not a representational gap, and the surrounding pipeline is
+already correct.
+
+### 2. A failed API call's tokens are never counted — the 2026-07-30 fix landed on the text half only
+
+`agent/agent.go:391-409`: when `executeAPICall` returns an error, the branch salvages
+`deliveredText(resp)` into history and **returns at `:405`**. `processResponse`
+(`agent/agent_run.go:263-299`) is the only writer of `result.InputTokens`,
+`CacheCreationTokens`, `CacheReadTokens` and `result.APICalls`, and it sits after that
+return, so it is unreachable on any failed call.
+
+The tokens are real and in hand: `executeAPICall` sets `partial = &accumulated`
+(`agent_run.go:195`) and the SDK's `MessageStartEvent` handling means `partial.Usage`
+already holds the input and cache-write counts — the prompt was processed and the 1.25×
+cache write was already paid before the stream died.
+
+**Cost:** every mid-stream failure is free in inber's books — session total, `requests` row,
+and `buildLimitCheck` (`engine/build_hooks.go:41`), which compares `MaxInputTokens` against
+`e.Tokens.Input + result.InputTokens`. A flapping connection can retry indefinitely without
+the input-token cap ever binding.
+
+⚠️ **`docs/comparisons/claude-code.md:259` filed this on 2026-07-30 as one defect with two
+halves.** The history half shipped — `partial`, `deliveredText` and
+`incompleteResponseNotice` all exist now — and the usage half did not. That entry still
+describes `resp` as staying `nil`, which is stale; read it against this.
+
+**Distinct from open todo `5a565d77`**, which is the *engine* gate discarding spend already
+recorded from earlier round trips. This is the layer below: the failing call's own tokens
+were never written into `result` at all, so fixing the gate alone still loses them.
+
+**What a fix must decide:** whether a failed call's usage counts against the session's
+*budget* or only its *bill*. Not the same question — a mid-stream failure that is retried
+and succeeds bills twice for one logical step, so charging both to `MaxInputTokens` makes a
+flaky network eat a budget that produced no work, while charging neither is what ships
+today. Also open: whether `result.APICalls` gains a failed entry, given it feeds
+`ToolsWithheld` cost analysis, which assumes every element is a completed call.
+
+### 3. Credentials from a command, with proactive and 401-reactive refresh
+
+[goose #11657](https://github.com/block/goose/pull/11657) lets a provider's `auth` block name
+a command, a refresh interval and a timeout, re-running it on the interval and immediately on
+HTTP 401, "so short-lived credentials refresh automatically instead of requiring a restart".
+
+inber resolves once and holds forever. `agent/clients.go:46-51` calls
+`auth.ResolveKey(model.Provider)` and hands the string to `newClientFromKey`;
+`engine/model_client.go:34-36` returns early when the selected model is unchanged, so on the
+steady-state path `ResolveKey` never runs again. `createModelClient` has two callers, both at
+engine construction, and `server/session_creation.go:24` serves cached sessions without
+rebuilding an engine. Grepping `agent/` and `engine/` for `401`, `StatusUnauthorized` or
+`refresh` returns **nothing**.
+
+**Cost:** `mc.IsOAuth` (`agent/clients.go:89`) is set for `sk-ant-oat01-` tokens, which are
+short-lived. A long-running server session outlives its access token and from that moment
+every turn 401s with no refresh and no reclassification; the only recovery is tearing the
+session down. `MaxDuration` sessions and the bus chat surface are exactly that case.
+Distinct from `agentic-design-patterns.md:2990-2996`, which is about the *first* resolution
+swallowing its error — this is about there never being a second.
+
+**What a fix must decide:** who owns the refresh. auth-store already does server-side token
+refresh and is the source of truth, which argues inber should re-resolve on a trigger (401,
+or an interval) rather than caching a string; owning it in inber duplicates logic the vault
+already has. Separately: whether a 401 invalidates the client and retries the same turn, or
+fails the turn and lets the next one rebuild.
+
+### 4. The JSONL resume reconstruction has no production caller
+
+`session/resume.go:30 LoadMessages` and `:179 LoadMessagesFromDir` are called from nothing
+but tests — no importer of `inber/session` anywhere under `~/repos`. The real resume is
+`(*Workspace).LoadMessages` (`session/workspace.go:102`), which reads `messages.json`
+directly with **no JSONL fallback**, and its caller `engine/engine_new.go:164-175` hard-errors
+rather than degrading.
+
+⚠️ This corrects a claim filed here on 2026-09-01. `agentic-design-patterns.md:9077-9083`
+says `session.Entry` having no signature field means "when that snapshot is missing or
+corrupt the reconstruction silently drops the reasoning". There is no such reconstruction in
+production. The representational gap in `session.Entry` (`session/session.go:21-37`) is real;
+its stated consequence is not, and the comment at `engine/lifecycle.go:251` cites
+`LoadMessagesFromDir` as though it were live.
+
+**What a fix must decide:** whether `session.jsonl` is a resume source at all. If it is,
+`LoadMessagesFromDir` needs a caller and `Entry` needs a signature field. If it is not —
+which is what the code does today — both functions should go, and `lifecycle.go:251` needs a
+different justification for writing the snapshot.
+
+### Also checked this window, nothing to import
+
+- **[#11685](https://github.com/block/goose/pull/11685)** makes tool approval a
+  suspend/resume in the state machine: the decision is persisted into conversation history
+  *before* the machine resumes, and the machine is recreated over the same session, so
+  approval survives disconnects and reloads. inber's `guard.Config.ApprovalFunc`
+  (`guard/guard.go:90`) is a synchronous `func(tool, input) bool` — a shape that can only
+  block a goroutine. Nothing sets it (`engine/build_hooks.go:85-88`), so this is the shape to
+  copy *if* Assist mode is ever wired, not a defect today.
+- **[#11492](https://github.com/block/goose/pull/11492)** replaces regex extraction of shell
+  commands from model text with AST parsing, closing seven evasions. Good rule — *parse,
+  don't pattern-match, when the parse result is a security decision* — but inber has no
+  toolshim; tool calls arrive as structured `tool_use` blocks.
+- **[#11637](https://github.com/block/goose/pull/11637)**, **[#11750](https://github.com/block/goose/pull/11750)** —
+  already dismissed at `agentic-design-patterns.md:9001-9008`; and inber's OpenAI path does
+  not stream (`OpenAIRequest.Stream` is declared and never set).
+- **[#11628](https://github.com/block/goose/pull/11628)**, **[#11472](https://github.com/block/goose/pull/11472)** —
+  covered at `agentic-design-patterns.md:3364-3395`, owned by todo `0d052752`.
+- **[#11602](https://github.com/block/goose/pull/11602)**, **[#11275](https://github.com/block/goose/pull/11275)**,
+  **[#11440](https://github.com/block/goose/pull/11440)**, **[#11117](https://github.com/block/goose/pull/11117)**,
+  **[#11629](https://github.com/block/goose/pull/11629)**, **[#11630](https://github.com/block/goose/pull/11630)**,
+  **[#11632](https://github.com/block/goose/pull/11632)** — verified no gap, no surface, or
+  already recorded. `prepareTools` (`agent/agent_run.go:18-50`) builds `params` and `toolMap`
+  from one index-aligned pass, so a dispatch mismatch cannot arise.

@@ -694,3 +694,77 @@ existing transcript) are on the todo and should not be picked unattended.
   no inber surface today.
 - **[#43675](https://github.com/sst/opencode/pull/43675)** is already recorded at
   line 598 of this file.
+
+## Harness-watch — 2026-09-02: a thinking block is bound to the prefix that preceded it, and the client can now ask the server to drop it instead of refusing the request
+
+[opencode #46653](https://github.com/sst/opencode/pull/46653) adds one constant —
+`const ANTHROPIC_BLOCK_BINDING = { prefixMismatchBehavior: "drop_block" }` — and a
+patched AI SDK that sends the `thinking-binding-controls` beta whenever it is set.
+The reason given is that newer Anthropic models bind a thinking block's signature to
+the **system prompt, the tool list and the prior messages** that stood in front of it,
+and opencode "re-renders parts of the prefix between turns", so an unchanged block
+sitting behind a changed prefix is no longer valid and the request fails. `drop_block`
+asks the server to strip the invalidated blocks and answer anyway.
+
+This is a **third** invalidation axis, and the two already recorded here are not it: a
+signature is bound to the credential (`goose.md:533`) and to the model
+(`goose.md:1032`). Prefix binding is new, and it is the one a harness trips over by
+doing its own routine work — pruning, compacting, or withholding tools.
+
+inber mutates the bound prefix in three places, all downstream of `agent/agent.go:412`,
+which appends `resp.ToParam()` and so keeps signed thinking in the transcript:
+
+- `engine/build.go:126-141` — the `BeforeRequest` prune drops head messages
+  (`messages = messages[dropTo:]`) while the retained tail keeps its signed thinking.
+- `conversation/summarize.go:123-126` — compaction replaces the head with a summary and
+  appends `recentMessages` verbatim. This is opencode's "compaction" case exactly.
+- `agent/agent_run.go:78` — `if !forceSummary && len(tools.params) > 0` withholds the
+  whole tool list on the force-summary call, against a history full of bound thinking.
+
+Neither `anthropic-beta` header carries the beta: `agent/clients.go:119` (OAuth) sends
+`claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-2024-07-31`
+and `:129` (API key) sends `prompt-caching-2024-07-31` alone.
+
+**Calibration.** The mechanism is confirmed from the PR diff — 95%, read directly. The
+*dated* form of the beta identifier is not: the diff comment names
+`thinking-binding-controls` without a date suffix, so treat any dated spelling as
+unverified. Whether enforcement is live for this host's account today is also
+unmeasured — opencode describes it as gated on newer accounts — so this is a hazard
+that is real in the protocol and **not** demonstrated to be firing here. Confidence
+that an enforcing account would 400 on inber's compaction path: 80%, inferred from the
+PR's stated motive plus the three call sites above.
+
+**What inber should consider:** `drop_block` is strictly gentler than what inber does
+today. `conversation/repair.go:229-262` destroys *all* thinking and substitutes
+`"[thinking redacted]"`; the server-side drop removes only the invalidated blocks and
+does not bill them. A fix would have to decide three things, none of them obvious:
+whether to set the flag globally or per-model (opencode needed special handling for
+think-by-default models); whether the beta joins the API-key branch at
+`clients.go:129` as well as the OAuth branch that already enables interleaved thinking;
+and whether `drop_block` **replaces** `RepairThinkingSignatures` as the general remedy
+or merely sits in front of it. That last one is a real change in blast radius and
+should not be picked unattended.
+
+### Also checked this window, nothing to import
+
+- **[#45769](https://github.com/sst/opencode/pull/45769)** filters unreplayable Bedrock
+  reasoning *before* cache points are assigned, so reasoning-only assistant messages
+  stop producing "There is nothing available to cache". The ordering rule is the
+  lesson, but inber does not have the crash: `agent/agent.go:544-561`'s `default`
+  arm correctly refuses to attach `cache_control` to a thinking block. That it
+  *swallows* the refusal instead of reporting it is already recorded at
+  `agentic-design-patterns.md:7433` and `:9085`.
+- **[#45520](https://github.com/sst/opencode/pull/45520)**,
+  **[#46671](https://github.com/sst/opencode/pull/46671)** — Bedrock SDK bump and a
+  `none` reasoning effort. `agent/clients.go` builds direct Anthropic and
+  OpenAI-compatible clients only; no Bedrock path.
+- **[#32596](https://github.com/sst/opencode/pull/32596)** — a `time.start` reset made a
+  10s command log as 332ms. `engine/turn_execute.go:57` times from a single `apiStart`
+  captured before the call and never reset.
+- **[#45329](https://github.com/sst/opencode/pull/45329)** — no apply-patch tool in inber.
+- **[#45079](https://github.com/sst/opencode/pull/45079)** — Azure CLI auth is
+  auth-store's job, not inber's.
+- **[#45421](https://github.com/sst/opencode/pull/45421)**,
+  **[#45784](https://github.com/sst/opencode/pull/45784)**,
+  **[#46673](https://github.com/sst/opencode/pull/46673)** — config-version and
+  dependency-pinning plumbing. inber has no dual-schema config.

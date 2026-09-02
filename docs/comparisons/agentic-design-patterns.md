@@ -9097,3 +9097,161 @@ from the search.
   not every provider path was traced for an unwrapped error. Worth confirming before `cf3b6b4c` is
   fixed, because that todo's argument for removing the unconditional strip rests on this reactive
   path existing.
+
+## Harness-watch — 2026-09-02: a shutdown that does not know a turn is in flight, and three harnesses bounding speculative work
+
+### 1. codex bounds discovery, prewarming and permission resolution — and the lens found inber's shutdown returning early
+
+Three codex PRs this window share one discipline: **speculative or repeated work must be
+bounded, and it must die with its caller.**
+
+- **[#42132](https://github.com/openai/codex/pull/42132)** replaces per-call git-root probes
+  with a shared `GitRootDiscovery` that coalesces concurrent lookups for the same cwd, caps
+  concurrent probes, runs them on detached threads so blocking I/O never sits on the async
+  runtime, **discards results rather than caching them** (a repo that moves is still seen
+  next turn), and aborts enrichment when the caller's context drops. The last two together
+  are the idea: a lookup cheap enough to repeat should be bounded rather than memoised.
+- **[#42137](https://github.com/openai/codex/pull/42137)** moves login-shell environment
+  capture off the command critical path, gated on the turn's *resolved* configuration rather
+  than its request. A failed speculative capture "remains retryable by actual commands
+  without consuming retry budgets" — the optimist can never spend the pessimist's retries —
+  and outstanding prewarming is cancelled at shutdown.
+- **[#42146](https://github.com/openai/codex/pull/42146)** resolves permission paths against
+  *the executor that will run the command* — its home, workspace roots and temp dirs —
+  rejecting mismatched conventions outright rather than normalising them into something
+  plausible, and retaining the originating environment beside a pending request so a delayed
+  answer normalises the way the question did. The rule: **a path is only a permission if you
+  also know whose filesystem it names.**
+
+**What inber should consider:** the coalescing half has no analog —
+`server/session_creation.go` builds a fresh `WorkflowHooks` per session
+(`engine/engine_new.go:607`), each re-running `repodetect.Detect` against the same repo root
+with no sharing. And `guard.CheckTool` (`guard/guard.go:167`) classifies by tool name only
+and never sees a path, so if `guard.Config.ApprovalFunc` ever grows a *persistent* grant,
+#42146 says the grant must carry the root it was resolved against.
+
+### 2. ⚠️ inber's `Serve` returns before the drain, so teardown runs under a live turn
+
+Reading inber for #42137's "cancel outstanding work at shutdown" found that inber's shutdown
+does not know a turn is in flight at all.
+
+`server/api.go:51-54` starts a goroutine that waits on `ctx.Done()` and calls
+`server.Shutdown(context.Background())`. **Nothing joins that goroutine** — no `WaitGroup`,
+no channel, no returned error. `http.Server.Shutdown` closes the listeners *first* and drains
+afterwards, so `ListenAndServe` returns `ErrServerClosed` at that first step and `Serve`
+returns `nil` right there (`:62-65`).
+
+Measured with a standalone probe copying `api.go:51-54` verbatim, one 3s handler:
+
+```
+>>> ListenAndServe returned ErrServerClosed at 0.60s  <-- inber's Serve() returns nil HERE
+>>> defers (cancel, pidFile.Release, g.Close) would fire at 0.60s
+HANDLER FINISHED at 3.30s
+Shutdown RETURNED at 3.82s
+```
+
+`run()`'s defers then fire LIFO — `cancel()` (`cmd/inber-server/main.go:109`),
+`pidFile.Release()` (`:102`), `g.Close()` (`:95`) — 2.7 seconds before the turn finishes.
+Three costs. The in-flight turn is cancelled when the listener closes, so the graceful window
+is effectively zero and `persistSessionState` never runs for it — tool calls the turn already
+made leave side effects with no transcript record. Its request and usage rows are written to
+a closed `*sql.DB`, since `Server.Close()` (`server/server.go:166-184`) shuts `g.store`,
+`g.modelStore`, `g.agentStore` and `g.forgeDB` while the handler is still writing. And
+`pidFile.Release()` deletes the single-instance lock while the process is alive and serving,
+so a start racing a stop passes `Acquire()` and two servers contend on the same SQLite files.
+Separately, `Server.Close()` is the one close site that never reads `s.Status` first —
+`session_release.go:47`, `session_reaper.go:69` and `api_bridge.go:779` all do.
+
+**This corrects a written claim in two places.** `cline.md`'s 2026-08-19 entry and open todo
+`2a7831d5`'s point 2 both say `Shutdown(context.Background())` "genuinely waits… until
+systemd's stop timeout expires". The first two clauses were true and the conclusion did not
+follow: `Shutdown` blocks the goroutine that calls it, which is not the goroutine that decides
+to exit. systemd's timeout is not what bounds this; the process leaves on its own well before
+it. `cline.md` is corrected in place; the todo is cross-referenced from the new one.
+
+**What a fix must decide.** (a) *Wait, or cancel-and-record?* Joining the drain makes the wait
+genuinely unbounded, and `deploy/systemd/inber-server.service.template` sets no
+`TimeoutStopSec` — so an unbounded wait converts a slow turn into a SIGKILL of the whole
+process group, strictly worse than today's bounded cancel. A bounded `Shutdown(ctx)` needs a
+number, and that number is a judgement about how long a turn may hold up a deploy. (b)
+*Ordering inside `Server.Close()`*, which currently cancels turns and closes the stores those
+turns write to, with no persist. Persisting first records a conversation a live turn is still
+appending to — the unlocked-`Engine.Messages` race owned by todo `3f157f67`. Cancelling first
+loses everything since the last persist. The defer order is picking this today; whoever fixes
+shutdown must pick it deliberately.
+
+### 3. Cross-cutting: an approval is a piece of state, not an event — and this week four harnesses said so at once
+
+Prior entries here answer *what may be done* (06-06 org-managed allowlists, 06-18 approval
+precedence, 07-12 sandbox inheritance) and *who said so* (07-24). This window adds **how long
+the answer lives and where it is anchored**:
+
+- codex **[#42146](https://github.com/openai/codex/pull/42146)** anchors a permission to the
+  executor's filesystem, and **[#42121](https://github.com/openai/codex/pull/42121)** lets the
+  approval *reviewer* change on an active turn.
+- goose **[#11685](https://github.com/block/goose/pull/11685)** persists the approval decision
+  into conversation history *before* resuming the state machine, and rehydrates pending
+  confirmations on session load — "re-entrant and recoverable across delays, disconnects, and
+  session reloads".
+- cline **[#12673](https://github.com/cline/cline/pull/12673)** fixes what the *model* is told
+  when the answer is no, so a denial is not read as a fault to route around.
+- claude-code 2.1.258 fixes "remote and scheduled sessions failing with 'user messages must
+  have non-empty content' after a **re-sent permission approval could not be applied**", and
+  2.1.257 fixes a teammate permission request "being answered twice when the leader's mailbox
+  write was briefly locked".
+
+The shared claim: **an approval that lives only in a callback frame dies with the connection,
+and a harness that cannot re-ask, re-anchor or replay it will either hang or fail open.**
+
+**What inber should consider:** `guard.Config.ApprovalFunc` (`guard/guard.go:90`) is a
+synchronous `func(tool, input) bool` — a shape that can *only* block a goroutine. Nothing sets
+it, and `engine/build_hooks.go:85-88` documents the consequence honestly ("Approval needs
+somewhere to ask, and there is nowhere yet"). So this costs nothing today, and it fixes the
+design before it is wired: the four PRs above agree that the approval decision belongs in the
+persisted conversation, not in a closure, and that the verdict must distinguish *refused* from
+*unaskable* — which `guard.ToolVerdict` currently cannot (see `cline.md`, 2026-09-02 §3).
+Note the standing tension with the 07-12 entry: a delegated agent must inherit the parent's
+permission *ceiling* while not inheriting its *context*. inber inherits neither — open todo
+`9e31d359` — and arXiv:2609.01035 (this month's papers note, §7) argues the charge should be
+deferred to the irreversible-action boundary rather than taken at spawn.
+
+### Also checked this window, nothing to import
+
+- **[#42178](https://github.com/openai/codex/pull/42178)** replaces `send_user_message_async`
+  with `request_user_input_async`: the agent poses structured questions with optional
+  suggested answers **while the turn continues**, preserved through app-server events and
+  thread history with a readable fallback. inber has no ask-the-user surface at all — the
+  inbound half exists (`server/session.go:302-313`), the structured outbound question does
+  not. A feature gap, not a defect.
+- **[#42147](https://github.com/openai/codex/pull/42147)** (skip Guardian in Full Access) —
+  `guard.CheckTool` already short-circuits on mode before classifying.
+- **[#42065](https://github.com/openai/codex/pull/42065)**,
+  **[#42085](https://github.com/openai/codex/pull/42085)**,
+  **[#42076](https://github.com/openai/codex/pull/42076)** (Guardian history and context
+  composition) — inber's analog is guard state and it is already careful:
+  `guard/state.go:26-158` carries caps *and* totals *and* mode together, an unparseable
+  recorded mode falls to `Observe` rather than the built mode, and it is restored on every
+  rebuild.
+- **[#42121](https://github.com/openai/codex/pull/42121)** — inber's mid-turn mutation surface
+  has the identical hazard and worse (an unsynchronized data race), already written up at
+  `:4805-4860` and filed as `769860a6`.
+- **[#42135](https://github.com/openai/codex/pull/42135)** (forks from symlinked session
+  roots) — checked rather than assumed: `agent/path_identity.go:62-72` already canonicalises
+  via `EvalSymlinks`, and the one theoretical duplicate needs `~/life`, which is empty here.
+- **[#42128](https://github.com/openai/codex/pull/42128)**,
+  **[#42133](https://github.com/openai/codex/pull/42133)** — `tools/mcp` has no importers and
+  no OAuth path.
+- **[#42173](https://github.com/openai/codex/pull/42173)** (header injection in network
+  requirements) — checked inber's exposure: `server.Config` carries `bus_token` and
+  `openclaw_token`, but no handler marshals `g.config` into a response. Nothing leaking.
+- **[#42142](https://github.com/openai/codex/pull/42142)** (early rate-limit warnings) — inber
+  has hard stops and no warnings; a feature gap, and plan-tiered thresholds have no analog
+  since inber tracks dollars, not a rolling window.
+- **[#42196](https://github.com/openai/codex/pull/42196)** (managed worktrees) — inber has
+  this via `forge`, including the harder half: `ErrWorkspaceGone`
+  (`server/api_bridge.go:559-563`) refuses to resume a session whose worktree is gone.
+- **[#42113](https://github.com/openai/codex/pull/42113)** — the executor-owns-its-own-OS rule
+  was the 2026-08-28 entry at `:7479`.
+- claude-code 2.1.257–258 changelog: the stale-daemon-lock-on-a-reused-pid fix matches open
+  todo `b8a9c658` exactly, and the mid-stream subagent continuation and >5MB subagent
+  transcript fixes both land on already-filed inber findings. Nothing new.
