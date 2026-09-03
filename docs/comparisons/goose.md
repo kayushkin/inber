@@ -1780,3 +1780,115 @@ different justification for writing the snapshot.
   **[#11632](https://github.com/block/goose/pull/11632)** — verified no gap, no surface, or
   already recorded. `prepareTools` (`agent/agent_run.go:18-50`) builds `params` and `toolMap`
   from one index-aligned pass, so a dispatch mismatch cannot arise.
+
+## Harness-watch — 2026-09-03 (#11429, #11469): a cache breakpoint that does not move is a breakpoint the growing end of the turn never reaches
+
+Ten commits screened from the 2026-08-27 → 2026-09-03 window. Eight are already
+covered here or in `agentic-design-patterns.md` — the tool-approval state machine
+(#11685, `goose.md:1761`), thinking-block preservation (#11636, `:1653-1677`),
+permission revocations across managers (#11383, the disabled-tool-on-fork twin at
+`:915-949`), the execute-shell and command-scanner hardening (#11492 `:1768`,
+#11440 `:1778`), and the two streaming tool-call fixes (#11750, #11637) dismissed
+at `agentic-design-patterns.md:9001-9008`. Re-verified rather than assumed on the
+last two: `OpenAIRequest.Stream` (`agent/openai_types.go:46`) is declared and
+assigned nowhere in the tree, so inber has no OpenAI streaming accumulator to get
+the tool-name delta wrong; and the SDK's `Accumulate`
+(`anthropic-sdk-go@v1.35.0/messageutil.go:32-64`) ignores `event.Index` and
+always writes `acc.Content[len-1]`, which is safe under Anthropic's sequential-
+block guarantee and is not inber's code to key wrongly.
+
+Two carry something.
+
+### 1. #11429 — anchor the second breakpoint on the tail, measured in blocks
+
+[`5f642327`](https://github.com/block/goose/commit/5f642327) — *fix(cache):
+anchor chat-payload breakpoints on the agentic tail*.
+
+goose anchored its two chat-payload breakpoints on the last two `user` messages.
+On an OpenAI-shaped envelope a tool result is `role:"tool"` and a tool call rides
+on `role:"assistant"`, so both breakpoints collapsed onto the last human turn and
+the whole agentic tail was re-billed on every iteration of the tool loop. The fix
+anchors the primary on the last cacheable message whatever its role, and places
+the secondary a fixed `LOOKBACK_BLOCKS = 20` **content blocks** behind it — sized
+to Anthropic's roughly 20-block cache lookback, so the next request's tail
+breakpoint still lands inside the window even when one iteration appends many
+blocks at once (parallel tool calls). It also adds a `has_cacheable_content`
+guard: never stamp `cache_control` on an empty text block, on a thinking or
+`reasoning` block, or on an assistant message whose payload is in `tool_calls`
+with `content: null`.
+
+inber is native Anthropic, so the role half does not transfer. The placement half
+does, and inber has the same shape of bug for a different reason.
+
+**Verified in inber.** `a.turnAnchorIdx` is set once, at turn start
+(`agent/agent.go:318`), and `a.FrozenIdx` once per turn from the staged
+conversation (`engine/build.go:44`). `buildRequest` then calls
+`placeHistoryCacheBreakpoints(params.Messages, a.FrozenIdx, a.turnAnchorIdx)` on
+**every** API call of the turn (`agent/agent_run.go:134`, and again at `:215`
+after a prune-retry) with those two indices unchanged, and
+`HistoryCacheBreakpointIndices` (`agent/agent.go:478-500`) returns exactly
+`[frozenIdx-1, turnAnchorIdx]`. Nothing advances either index inside `Run`'s
+loop, which is capped at 50 API calls (`agent/agent.go:336`); the one other write
+to `turnAnchorIdx` (`agent/agent.go:535`, `-= dropped`) moves it *backwards* to
+survive a prune. So on API call *k* of a turn, every message appended since call
+1 sits past the last breakpoint and is sent at full price, and the turn's
+uncached total grows with k².
+
+Probed in the `agent` package with `frozenIdx=3`, `turnAnchorIdx=3` and one
+assistant + tool-result pair per iteration:
+
+```
+iter= 0 messages=  4 breakpoints=[2 3] msgs_after_last_bp=0
+iter=10 messages= 24 breakpoints=[2 3] msgs_after_last_bp=20
+iter=20 messages= 44 breakpoints=[2 3] msgs_after_last_bp=40
+```
+
+Live instance in `~/.inber/server/server.db`, request `124`: `turns=26`,
+`input_tokens=227,437`, `cache_read_tokens=335,453`, `cache_write_tokens=11,155`
+— 40% of that turn's input billed at full price, 8,748 uncached tokens per call
+against a 4,012 baseline for single-call requests. Across the `turns>=9` bucket,
+2,777 uncached tokens per call over 118 calls.
+
+- **What inber should consider:** the transferable idea is *offset-based*
+  placement — measure the second anchor a fixed distance behind the tail, not a
+  fixed distance behind the head. Filed this run. Three things a fix has to
+  decide, none of them decided here: **(1)** which of the two message breakpoints
+  gives way, since tools and system already hold two of Anthropic's four
+  (`agent/agent_run.go:36`, `engine/turn_prompt.go:218,224`) — retiring the
+  frozen-zone anchor gives up the thing that makes the frozen/staging split pay,
+  retiring the turn anchor gives up the cheap first call; **(2)** how often the
+  tail anchor moves, since every call maximizes the read but pays a 1.25× write
+  each time, and goose's 20-block stride requires counting content **blocks**
+  where `HistoryCacheBreakpointIndices` counts **messages**; **(3)** whether
+  `markLastContentBlock` (`agent/agent.go:544-566`) needs goose's
+  `has_cacheable_content` guard at all — it stamps `cache_control` on an empty
+  text block and on an empty tool result, which `agent/agent_run.go:421` produces
+  whenever a tool returns `""`, but no production path was found that puts such a
+  message at a breakpoint index (`conversation.RepairEmptyContent`,
+  `conversation/repair.go:131`, runs only on the three resume paths, not on the
+  live turn), and it was not established that Anthropic rejects it. Held at 30%
+  and deliberately not filed.
+
+### 2. #11469 — upstream retired the pattern this doc offered inber as option (b)
+
+[`bbf0ddf7`](https://github.com/block/goose/commit/bbf0ddf7) — *refactor: remove
+fast model routing*. `GOOSE_FAST_MODEL` is gone from `model_config.rs` and from
+every provider's `base.rs`, about 100 lines deleted. A pure refactor with no
+defect behind it, and it would not be worth a line except that it closes an
+option this file left open.
+
+The 2026-08-20 entry (`goose.md:1327`) gave inber three answers for which model
+compaction should run on, and **(b)** was *"give it a declared Anthropic model —
+`SummarizeConfig.Model`, the field that already exists and has never been set."*
+Re-verified this pass: `SummarizeConfig.Model` (`conversation/summarize_config.go:10`)
+is still assigned by nobody, all three branches of `DefaultSummarizeConfig`
+(`:34,:41,:48`) omit it, and `conversation/summarize.go:58-61` falls through to
+the caller's model every time.
+
+- **What inber should consider:** nothing yet — this is evidence, not a decision.
+  Record against that entry that the upstream harness which had a separate
+  cheap-model route for auxiliary work has now deleted it, so option (b) can no
+  longer be argued from goose's precedent. Whether inber still wants it is a
+  separate question about inber's own compaction costs, which
+  `conversation/summary_generation.go` currently does not measure at all (see the
+  2026-09-03 entry in `claude-code.md`).

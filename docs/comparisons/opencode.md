@@ -768,3 +768,167 @@ should not be picked unattended.
   **[#45784](https://github.com/sst/opencode/pull/45784)**,
   **[#46673](https://github.com/sst/opencode/pull/46673)** — config-version and
   dependency-pinning plumbing. inber has no dual-schema config.
+
+## Harness-watch — 2026-09-03 (#46890, #46903, #44944): a stream needs a bound on silence and a teardown that runs — inber has neither, and the second one leaks
+
+Five opencode commits screened. Three are already dismissed here and were
+re-verified rather than trusted: tool-call `time.start` (#32596, `:761` — inber
+records no per-tool duration anywhere, `trace.ToolCall.Duration` living in the
+dead `trace` package), the apply-patch move path (#45329, `:764` — `grep
+apply_patch --include=*.go` is still zero hits), and Bedrock `none` reasoning
+effort (#46671, `:759` — no Bedrock path in `agent/clients.go`).
+
+The other two are one story from both ends.
+[#46890](https://github.com/sst/opencode/pull/46890) and
+[#46903](https://github.com/sst/opencode/pull/46903) default a chunk timeout and
+a header timeout to 300s: opencode's chunk timeout was opt-in and its header
+timeout had no default, so a provider that opened a stream and went quiet hung a
+turn outright. [#44944](https://github.com/sst/opencode/pull/44944) is the
+teardown half — `void reader.cancel(err)` dropped the promise, so a failure to
+release the reader surfaced as an unhandled rejection instead of a clean abort.
+
+Together they say a streamed response needs **(i)** a bound on *silence* that is
+not a bound on *length*, and **(ii)** a teardown path that actually runs and
+whose failure is visible.
+
+The missing bound is already filed via goose #10620
+(`agentic-design-patterns.md:3070-3085`, the connect/read/total three-timer
+split, stating that inber's Anthropic stream carries no deadline of any kind);
+re-verified live this pass rather than trusted. What is **not** filed is that
+`agent.StreamingResponse` (`agent/provider.go:23-33`) declares `Next` / `Current`
+/ `Err` and **omits `Close`**, so there is no teardown path to run at all. That
+couples the two questions: an idle timeout that cannot close the body converts a
+hang into a leak instead of fixing it.
+
+Both findings below are **verified and held at 0.9, and neither is filed** — the
+three-per-run cap was spent on `a5b91a47`, `7be5a692` and `905a5e68`. They are
+recorded here in full so the next sweep can file them without re-deriving them.
+
+### Held finding 1 — a stream that ends before `message_stop` is reported as a *successful* call, so the salvage path built for exactly this never runs
+
+`agent/agent_run.go:193-197`. `ssestream.Stream.Next()` sets `s.err =
+s.decoder.Err()`, and `bufio.Scanner` reports `io.EOF` as `nil`. So a stream that
+terminates cleanly mid-message — an HTTP/2 `END_STREAM`, or any proxy that hits
+its own read timeout and finalizes the response, which is exactly what nginx
+`proxy_read_timeout` does — yields `streamResp.Err() == nil`. The `else` at
+`:197` fires and `resp = &accumulated`: the truncated message becomes the success
+value.
+
+Probed in-package against an `httptest` server:
+
+```
+A: message_start + 2 text deltas, then close. No message_stop.
+   err = <nil>   partial != nil = false
+   resp.StopReason = ""   content[0] text="I will now delete the stale rows"
+B: cut inside a tool_use's input JSON
+   err = <nil>   content[0] = tool_use id="toolu_1" name="shell_commands"
+                 input = {"commands":["rm -rf /tm      (invalid JSON)
+D: json.Marshal(resp.ToParam()) -> {"id":"toolu_1","input":{},"name":"shell_commands","type":"tool_use"}
+E: agent/agent.go:441 error text = "unexpected stop reason: "
+```
+
+`agent/agent.go:412` appends `resp.ToParam()` to `*messages` **before** the
+stop-reason branch, so the truncated turn is persisted. `:415` and `:425` both
+miss because `StopReason` is `""`, and `:441` returns `unexpected stop reason: `
+— an error naming nothing. The salvage block at `agent/agent.go:392-403`, whose
+own comment says *"A streaming call can fail after the model has already written
+text… so the caller can keep what the user saw"*, is gated on `executeAPICall`
+returning an error and therefore does not run: `result.Text` stays empty and
+`result.Incomplete` stays `false` even though `OnTextDelta` already streamed that
+text to the user. In case B the arguments the model was mid-way through writing
+become `"input":{}` — **the conversation records `shell_commands` called with no
+arguments, a call the model never made.** `agent/agent_run.go:243-248`
+(`deliveredText`) refuses to carry a half-built `tool_use` into the conversation
+for precisely this reason, but only on the error path.
+
+Live corroboration: `logs/server-errors.jsonl:2` —
+`{"agent":"brigid","error":"unexpected stop reason: ","input":"read go.mod and
+summarize it","ts":"2026-07-31T15:47:25+00:00"}`. Empty stop reason, the
+signature this mechanism produces. The file holds 3 lines total, so that is an
+existence proof and not a rate.
+
+**0.9.** The remaining 0.1 is whether that log line came from this path rather
+than another route to an empty `StopReason`; no other was found. Moves with any
+occurrence carrying a *non-empty* unexpected stop reason (a second cause), or a
+raw stream capture at recurrence.
+
+- **A fix has to decide,** and none of it is decided here: **(i)** whether a
+  stream ending without `message_stop` is an **error** — which routes it through
+  `deliveredText`/`Incomplete` and makes it model-health evidence at
+  `engine/failover.go`, where §2 of `agentic-design-patterns.md` 2026-09-03 shows
+  health already drives model selection — or a **partial success** the caller may
+  keep; **(ii)** if an error, whether the truncated message is still appended at
+  `agent.go:412` (needed to keep what the user already saw) or dropped (needed to
+  keep an argument-less `tool_use` out of history) — these pull opposite ways;
+  **(iii)** whether `agent.go:441` should distinguish `""` from a genuinely
+  unknown stop reason, since they are different bugs and print identically today.
+
+### Held finding 2 — the SSE body is never closed, so an error-terminated stream pins its connection for the life of the process
+
+`agent/provider.go:23-33` declares `StreamingResponse` with `Next`/`Current`/`Err`
+and no `Close`. `anthropicStreamingResponse` (`:59-77`) wraps `*ssestream.Stream`,
+which **does** have `Close() error` (`ssestream.go:192-197` →
+`eventStreamDecoder.Close()` → `s.rc.Close()`), and neither the wrapper nor
+`agent/agent_run.go:167-199` ever calls it. The SDK closes nothing itself:
+`Stream.Next()` (`ssestream.go:178-181`) just sets `s.err` and returns false.
+
+On a clean drain this is harmless — `net/http` reclaims a body read to EOF. It is
+not harmless when `Next()` returns false *before* EOF, which is what an SSE
+`event: error` frame does (`ssestream.go:172-174`) — the frame Anthropic sends
+for `overloaded_error` mid-stream under load.
+
+Probed with `MaxConnsPerHost: 1` to make the leak observable:
+
+```
+G: first stream ended with err=received error while streaming:
+   {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+G: SECOND TURN BLOCKED 20s — the first stream's body was never closed,
+   so the single connection was never released
+   (httptest.Server also blocked in Close: TCPConn ... in state active)
+```
+
+In production `http.DefaultTransport` has `MaxConnsPerHost: 0`, so it does not
+deadlock — it **accumulates**. Every mid-stream `overloaded_error`, or any event
+whose JSON fails to unmarshal at `ssestream.go:167`, permanently pins one TCP
+connection, one `persistConn` readLoop goroutine and its read buffer in a
+long-lived `inber-server`. The connection stays `active`, never `idle`, so
+`MaxIdleConnsPerHost` and `IdleConnTimeout` never reap it and there is no
+finalizer. Growth is proportional to overload events over process uptime.
+
+**0.9.** The missing `Close` and the non-release are both directly demonstrated;
+the 0.1 is on *magnitude* — how often Anthropic delivers a mid-stream `error`
+frame to this host was not measured. Moves with `ss -tn state established '(
+dport = :443 )' | wc -l` sampled against `inber-server` uptime, or a pprof
+goroutine count showing `readLoop` accumulation.
+
+- **A fix has to decide:** whether `Close` joins the `StreamingResponse`
+  interface — every implementation and every test double then grows it, and
+  `CompleteStreaming`'s contract changes from *"returns an iterator"* to
+  *"returns a resource the caller owns"* — or whether
+  `AnthropicProvider.CompleteStreaming` keeps the resource internally and closes
+  it when `Next` first returns false, which is cheaper but leaks for any caller
+  that abandons the loop early. No caller does that today, and nothing enforces
+  that property. Coupled to held finding 1 and to the missing idle timeout.
+
+### cline, same window: nothing new
+
+All seven screened cline commits are already covered or have no inber surface,
+and each was re-checked rather than taken from the doc: the tool-rejection
+wording (#12673) is verbatim at `cline.md:944-957`; session import (#13744) and
+hub drain-and-replace (#13727) are dismissed at `cline.md:1046` for want of a
+cross-harness session format; the API-key sanitize half of #13549 is at
+`cline.md:1039-1045` and its error-classification half lands on
+`agent/clients.go:47-51`, already at `agentic-design-patterns.md:2991-2998`; and
+the hook telemetry threading (#13547) is dismissed at
+`agentic-design-patterns.md:8500`, a dismissal that still holds — inber's
+structural twin is `engine/engine.go:208`, where `trace.NewRecorder("", "", …)`
+returns nil so every `Trace.RecordTurn` at `:297` is a silent no-op, with
+`engine/engine_types.go:74` already carrying a comment that `EnableTrace` has no
+reader. Hub-managed Agent Plugins (#13652, #13017) are new to these docs but have
+no inber surface at all: `grep -rl plugin --include=*.go` returns zero files, and
+skill-store and tool-store own that ground externally.
+
+One nuance worth keeping from #12673 that the cline.md entry omits: cline
+deliberately **removed** the tool name from the rejection string, on the grounds
+that tool results are already paired with their tool-call blocks. That cuts
+against inber's `RefuseToolCall` interpolating it — cosmetic, not filed.

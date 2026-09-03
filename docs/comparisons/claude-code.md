@@ -718,3 +718,121 @@ and markdown hyperlinks pointing at network or automounter paths, or leading wit
 invisible characters, now render as plain text. inber has essentially no
 control-character validation on externally supplied names — the only such check
 repo-wide is `strings.ContainsAny(value, " \t\r\n")` at `redact/redact.go:220`.
+
+## Harness-watch — 2026-09-03 (CC 2.1.248–2.1.259): the tool block is the cache prefix, and four separate things re-rendered it this week
+
+Twelve releases since the 2.1.247 entry above. ⚠️ **2.1.257 and 2.1.258 were
+already screened** on 2026-09-01 — `agentic-design-patterns.md:9255-9257` records
+three of their entries and dismisses them — so the genuinely unscreened range is
+**2.1.248–2.1.256 and 2.1.259**, and the two 2.1.257 items cited below are ones
+that pass named but did not reach. Most of the window is Windows, terminal and
+gateway plumbing. Four entries share one root and are the reason this section
+exists.
+
+**Four cache misses, one cause: a tool definition changed for a reason that was
+not the conversation.** 2.1.248 fixed *"a prompt-cache miss (and lost
+extended-thinking context) roughly once an hour in long sessions, caused by tool
+definitions being re-rendered after an OAuth token refresh"* and *"the
+`ScheduleWakeup` tool definition changing between a session and its `--resume`
+when the account had entered usage overage"*; 2.1.257 fixed *"Remote Control
+connecting mid-session re-sending the Bash tool definition, causing a
+prompt-cache miss"*; 2.1.259 fixed *"the prompt cache being invalidated when the
+OAuth token refreshed in sessions with telemetry disabled"*. A token refresh, an
+account's billing state, and a client attaching are none of them things the model
+said, and all four moved bytes inside the cached prefix.
+
+inber has already learned the general lesson and says so where it matters:
+`server/agent_names.go:5-20` states that the spawn tool description sits in the
+block carrying the `cache_control` breakpoint (`agent/agent_run.go:34-36`), so
+the agent list is sorted rather than map-ranged, and `server/spawn_tools.go:63-72`
+repeats the reasoning at the call site. That guard covers the server's own spawn
+tool.
+
+⚠️ It does **not** cover the CLI's. `agent/registry/spawn_tool.go:46-56` builds
+the same kind of description — `"Agent name to spawn. Valid options: %s"` — from
+`fetchRegistryAgents()`, an HTTP GET with a 2-second timeout
+(`spawn_tool.go:26-31`), and it does two things the server path deliberately does
+not: it preserves whatever order the response arrived in rather than sorting, and
+on any error it returns a **different string** (`"Must match a registered
+agent."`). So the bytes under the breakpoint depend on whether an HTTP call
+succeeded, and on a remote service's row order. That is the `ScheduleWakeup` bug
+exactly. It is **latent, not live**: the URL is `http://localhost:8101/api/agents`
+— dash, not inber's own server — which serves the SPA's HTML, so
+`json.Unmarshal` fails and the fallback string is returned every time,
+deterministically by accident. Already filed as `a6fceed2`; the prefix hazard is
+a second reason to fix it, not a new todo.
+
+- **What inber should consider:** when `a6fceed2` is fixed, the fix has to sort
+  the names and keep the two branches byte-identical in shape, or repairing the
+  registry lookup will *introduce* the cache miss it currently cannot cause.
+
+**A prompt-cache line in `/cost` is the check inber cannot run.** 2.1.251 added
+*"a per-session prompt-cache line to `/cost` (hit ratio, misses, tokens
+re-cached, warm/cold) and a matching `prompt_cache` object for status line
+scripts"*. inber records cache reads and writes on the main turn path
+(`engine/turn_postprocess.go:87`, `engine/engine.go:295`) — but two API calls
+never reach it at all. `conversation/summary_generation.go:74` and
+`conversation/extract.go:81` call `client.Messages.New` directly, bypassing
+`agent/agent_run.go`'s hook dispatch, and both discard `response.Usage`:
+`generateSummary` returns `(summary, cutOffAtTokenLimit, err)` and nothing else.
+The only two recording sites in the repo are the two above, both on the turn
+path, and the only SDK middleware installed is redaction
+(`agent/redaction.go:55-58`), so there is no client-level accounting either.
+Measured on this host's session logs: **13 summarize events, every one of them
+`cost_usd: 0`**, against ordinary message entries carrying real per-turn costs up
+to $0.018. Filed this run.
+
+**Deny-by-default became a named mode.** 2.1.248 added `--restricted` (drops the
+tools that run commands or code, keeps file tools inside the working directory,
+refuses `bypassPermissions`, ignores user/project/local settings files) and
+2.1.259 added `--permission-prompts none` for unattended headless hosts —
+*"anything that would prompt is denied automatically while the active permission
+mode keeps deciding"*. 2.1.257 added `permissions.blockReadsOutsideWorking-
+Directories` and a Containment Escape rule so cloud metadata-credential fetches
+and cross-tenant reach stop being auto-approved.
+
+inber's `guard` is a real gate, not a spend meter only: `guard.CheckTool` returns
+`Allowed` / `Denied` / `NeedsApproval` (`guard/guard.go:165`) and is wired into
+the live path at `engine/build_hooks.go:94`. What it lacks is the approver —
+`ApprovalFunc` has **zero non-test assignments**, so `Assist` refuses every
+dangerous tool and tells the model why (`build_hooks.go:98`). That is not a
+defect and the code says so at `build_hooks.go:84-87`: refusing is a true answer
+and running would be a false one. What CC added is the *name* for it. inber's
+`Assist` currently behaves as `--permission-prompts none` by omission rather than
+by choice, and the two are indistinguishable from outside.
+See `agentic-design-patterns.md` 2026-09-03 §1.
+
+**Also new, no inber analogue, worth knowing:**
+
+- 2.1.259 *"Fixed `--resume` failing (and `--continue` opening an empty
+  conversation) when a saved session contains an attachment entry with no
+  payload"* and 2.1.248 *"Fixed `claude agents` crashing on launch when the
+  PR-status cache held a malformed entry"* — one bad record killing a whole
+  replay, twice in twelve releases. Cross-cut with codex in
+  `agentic-design-patterns.md` 2026-09-03 §2.
+- 2.1.251 *"Fixed file tools (Read, Write, Edit) following a symlink swapped
+  inside the working directory after the permission check"* — a TOCTOU between
+  the check and the open. inber's file tools come from tool-store, so the gap, if
+  any, is not in this repo.
+- 2.1.251 *"Fixed conversations getting stuck on `text content blocks must be
+  non-empty` errors after a turn where the model produced only thinking"* — the
+  same wire error inber's assistant-branch filter can produce, already open as
+  `b0f47ede`. Independent confirmation that the failure is terminal for the
+  session, not a one-turn blip.
+- 2.1.251 *"Fixed Opus 5 requests failing with `effort … is not supported when
+  thinking is disabled` when effort was xhigh/max"* — CC now downgrades effort to
+  `high` in that case. inber's mismatch is the other one, budget against
+  `max_tokens`, already open as `79b8f9e5`.
+- 2.1.257's mid-stream subagent continuation was already dismissed on 2026-09-01
+  (`agentic-design-patterns.md:9255-9257`) as landing on filed findings. Adding
+  only what that pass did not say: inber's spawn sets `status := "success"` as
+  the *initial* value and changes it only on `context.DeadlineExceeded` or a
+  non-nil error (`server/spawn.go:307-320`), so a stream cut short returns
+  whatever text arrived and the child reports success. That is the same defect
+  arXiv:2608.23623 is built to catch — see `docs/papers/2026-09-harness-research.md`
+  2026-09-03 §5.
+- 2.1.248 improved *"the Workflow tool's prompt footprint: its description is now
+  about 1k tokens instead of 5.7k, with the script-writing reference moved into a
+  bundled skill"* — a 4.7k-token reference moved out of the always-resident
+  prefix and behind a load. The same trade inber's `docs/reference-based-prompt-
+  architecture.md` describes.

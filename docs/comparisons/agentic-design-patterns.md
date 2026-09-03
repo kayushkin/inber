@@ -9255,3 +9255,172 @@ deferred to the irreversible-action boundary rather than taken at spawn.
 - claude-code 2.1.257–258 changelog: the stale-daemon-lock-on-a-reused-pid fix matches open
   todo `b8a9c658` exactly, and the mid-stream subagent continuation and >5MB subagent
   transcript fixes both land on already-filed inber findings. Nothing new.
+
+## Harness-watch — 2026-09-03 §1: the missing piece was never the approver — it is that "no approver" is a value nobody chose
+
+⚠️ **Most of this ground is already held.** `:2670-2685` records that
+`guard.Config.ApprovalFunc` has zero producers repo-wide, that Assist can only
+reach `NeedsApproval` → refuse (`engine/build_hooks.go:97-99`), that codex
+`--approve-for-me`/`auto_review` is the shape that would unblock it, and — the
+sharper live fact — that spawned sub-agents are handed a **zero** `RunRequest`, so
+`guard.ParseMode("")` yields `Unset`, documented at `guard/guard.go:38-44` as
+**full access**, already filed as `9e31d359`. None of that is re-litigated here.
+
+What is new this window is that three harnesses independently named the *third*
+part of an approval decision, which none of the prior entries separate out. An
+approval has a **policy** (what class of thing needs asking), a **channel** (who
+is asked and what they are shown), and a **default when there is no channel**.
+Prior entries covered inber's missing channel. This window is about the default.
+
+**Claude Code made the default an argument.** 2.1.259 added
+`--permission-prompts none` for unattended headless hosts: *"anything that would
+prompt is denied automatically **while the active permission mode keeps
+deciding**"* — deny answers the prompt, it does not replace the policy. 2.1.248
+added `--restricted` (`CLAUDE_CODE_RESTRICTED=1`), whose interesting clause is not
+the dropped tools but that it **ignores user, project and local settings files**:
+a restricted mode a project file can widen is not one.
+
+**goose made a revocation durable.**
+[#11383](https://github.com/block/goose/pull/11383) makes a permission
+*revocation* survive being carried across config managers, and
+[#11743](https://github.com/block/goose/pull/11743) makes the confirmation show
+the **authoritative** tool details rather than a re-render, so what the human
+approved is what runs. Both target the failure where a gate exists and quietly
+reopens — which is what `9e31d359` is, arrived at through a zero-valued struct
+rather than a config merge.
+
+- **What inber should consider — and it is not "write an `ApprovalFunc`".** The
+  gap is that inber's two effective policies are both *consequences*, not
+  choices: `Assist` denies everything because no approver exists, and a sub-agent
+  gets full access because a zero struct parses to `Unset`. Neither is written
+  down anywhere as the intended value, so the day someone wires an approver for
+  one caller, every other caller's effective policy moves with no diff naming it.
+  The cheap move is to make the no-channel default an explicit per-session value
+  before the channel is built, so adding one is an opt-in rather than a silent
+  global loosening. **A fix has to decide** whether `NeedsApproval` with no
+  approver means deny (today, safe, wrong for an interactive caller) or means
+  escalate to a queue — and if a queue, what a session parked for a human does
+  with its prompt cache, which
+  [arXiv:2608.30830](https://arxiv.org/abs/2608.30830) measures as costly in both
+  directions: retaining suspended KV costs 41% of serving goodput, evicting it
+  costs ~10× resume latency, and Anthropic's 5m/1h TTLs put a human-scale wait on
+  the wrong side of both (`docs/papers/2026-09-harness-research.md` 2026-09-03
+  §8). Not decided here.
+
+## Harness-watch — 2026-09-03 §2: codex asks before swapping a model under you; inber swaps on every turn and the trigger is idleness
+
+[**#42380**](https://github.com/openai/codex/pull/42380) — *Require confirmation
+for safety-buffered retries*. codex's position is narrow and useful: retrying an
+attempt on a **server-selected** model is a decision the caller makes, not an
+optimization the harness applies, so it asks first.
+
+inber does the same swap, silently, and the trigger is not even a failure.
+`selectModel` (`engine/failover.go:30-58`) uses the configured model only if
+`health.IsHealthy(healthWindow) || health.IsUnknown()`, with
+`healthWindow = 30 * time.Minute` (`:12`). `ModelHealth.IsHealthy` returns false
+when `time.Since(LastSuccessAt) > window` — **staleness is scored as unhealth** —
+so a model that has merely not run for half an hour is treated exactly like one
+that is failing. It then walks `fallbackChain()` and takes the first entry that
+is healthy **or `IsUnknown()`** (`:52`), so a model that has *never been proven to
+work* outranks the one the operator configured.
+
+Measured live against `~/.config/model-store/store.db`, not argued:
+
+| priority | model | health |
+|---|---|---|
+| 5 | `claude-fable-5-1` | **no row at all → `IsUnknown()` = true** |
+| 10 | `claude-opus-4-6` | stale since 2026-04-05 |
+| 15 | `claude-sonnet-4-6` | stale since 2026-05-07, 44 consecutive errors |
+| 20 | `claude-sonnet-4-5-20250929` | stale since 2026-04-05 |
+| 25 | `claude-opus-4-5-20251101` | stale since 2026-03-14 |
+
+`model_health` holds 32 rows and **zero** have a success inside the 30-minute
+window. So the configured model is stale (not healthy, and not unknown — its
+`LastSuccessAt` is non-zero), the loop runs, and the first chain entry wins
+unconditionally because nobody has ever tried it. **Every run on this host that
+does not pass an explicit `model` in its `RunRequest`
+(`server/session_creation.go:65` is the only place `modelExplicitlySet` is set)
+executes on `claude-fable-5-1`.** The only trace is
+`Log.Info("failover: %s → %s")`; `server/store.go`'s `requests` table has no
+`model` column, so it cannot be confirmed historically either.
+
+This is not the failover material already here. `:2803` covers *"prompt too
+long"* → `RecordError` → failover, and `goose.md:1052` covers the moment health
+flips to unhealthy. Neither covers idleness as the trigger or `IsUnknown`
+outranking a configured model. Filed as `905a5e68`.
+
+- **What inber should consider:** separate *"this model is broken"* from *"this
+  model has not run lately"* — they are the same value today and want opposite
+  responses. Two independent decisions, either of which alone closes the hole:
+  whether a 30-minute silence means unhealthy or merely unknown, and whether a
+  never-tried model may outrank a configured one. A third question the fix will
+  surface: whether a silent cross-provider swap is acceptable at all without
+  telling the caller which model actually ran.
+
+## Harness-watch — 2026-09-03 §3: one bad record must not take the whole replay with it — and this corrects what `:5077-5094` said about 1 MiB scanners
+
+Four fixes, two harnesses, one window. Claude Code 2.1.259 fixed *"`--resume`
+failing (and `--continue` opening an empty conversation) when a saved session
+contains an attachment entry with no payload"* and 2.1.248 fixed *"`claude
+agents` crashing on launch when the PR-status cache held a malformed entry"*;
+codex [**#42369**](https://github.com/openai/codex/pull/42369) keeps the SQLite
+history projection **moving past** invalid records and
+[**#42378**](https://github.com/openai/codex/pull/42378) routes rollout reads
+through one canonical JSON decoder. The shared rule: a reader over a log of
+records owes the caller every record it *can* parse, and a reader that aborts
+turns one bad row into total data loss.
+
+⚠️ **Two obvious readings of this for inber are wrong, and were checked rather
+than filed.**
+
+*Wrong reading one — the resume path.* `session.LoadMessages` and
+`session.LoadMessagesFromDir` (`session/resume.go:30`, `:179`) have **no
+production caller**, matching `goose.md:1741` and `opencode.md:466`. The live
+resume is `engine/engine_new.go:164` → `Workspace.LoadMessages`
+(`session/workspace.go:102`), which reads `messages.json` only and **hard-fails
+loudly**, naming the file (`engine/engine_new.go:171-174`). That path is correct
+and is not the bug. The real observation is adjacent: inber's resume has exactly
+one source and no recovery path, because the function that would fall back to
+`session.jsonl` is dead. **Wire `LoadMessagesFromDir` in as the recovery path or
+delete it — do not leave it looking live.**
+
+*Wrong reading two — the JSON decoder.* codex's canonical-decoder fix does not
+transfer: `[]anthropic.MessageParam` round-trips text, `tool_use` and
+`tool_result` losslessly, because SDK v1.35.0 defines real `UnmarshalJSON` on
+both `MessageParam` and `ContentBlockParamUnion`. Verified by probe, not assumed.
+
+**Where the live analogue actually is: the timeline endpoint.**
+`ReconstructTimelineFromJSONL` caps `bufio.Scanner` at 1 MiB
+(`session/timeline_jsonl.go:31`) and — unlike the JSON-decode error ten lines up,
+which `continue`s (`:41-43`) — **returns** on `scanner.Err()` (`:151`). One
+over-long line therefore discards every event in the file. Reached from
+`server/api_sessions_history.go:244`, `GET /api/sessions/{key}/timeline`.
+
+Reachability is the whole argument. `Session.Hooks().OnRequest`
+(`session/session.go:291-294`) marshals the **entire `MessageNewParams`** —
+system prompt, every tool schema, every message — into one `request` line on
+every API round trip (`session/session_logging.go:120-133`). Across all 477
+session logs on this host, `request` is by far the largest role at **168,208
+bytes**, against 4,611 for `tool_result` (capped by `TruncateToolResult`) and 800
+for `user`; it starts at 50–120 KB of tool schemas on turn 1 and grows
+1,041–2,532 bytes per turn, monotonically, because the line embeds the whole
+conversation. The sharpest part: the reader takes nothing from that record but
+`Request.Messages[].Content[].Text` truncated to **120 characters**
+(`timeline_jsonl.go:80`). The one record class that can blow the buffer
+contributes a 120-character preview.
+
+⚠️ **This corrects `:5077-5094`**, which surveyed these scanners and treated the
+1 MiB ones as the safe case, filing only `tools/mcp/client.go:155` (left at the
+64 KiB default). 1 MiB is not safe when one record class is the serialized
+conversation.
+
+- **What inber should consider:** held at **0.6 and deliberately not filed** —
+  the code path and the abort are certain, but no session on this host has
+  crossed 1 MiB yet (largest `messages.json` is 165 KB, ~28% of budget), so the
+  failure is proven in code and unproven in the field. Moves to 0.9 with one long
+  session's log crossing it, or a production 500 from `/timeline`. **A fix has to
+  decide** whether the `request` record should carry the full payload at all —
+  it is written by `OnRequest` and read here for a 120-char preview, though
+  `session/prompts_read.go` may want more — or whether the reader should skip
+  over-long records instead of aborting. Different files, different owners, and
+  the answer to the first makes the second moot.

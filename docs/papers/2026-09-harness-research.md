@@ -392,3 +392,201 @@ parser's node position marks and replaces that span in the raw text, never re-se
   framework-without-comparison, benchmark-profiling, eval-subset-selection, benchmark,
   activation-probing (needs hidden states inber does not have), a search-strategy gain on
   deep-research benchmarks, and a mitigation for autonomous ML-research loops inber does not run.
+
+# 2026-09-03 sweep
+
+Screened 108 distinct arXiv ids against the 448 already in this repo's docs
+(37 were already covered), drawn from roughly 330 titles across six
+date-range-filtered `arxiv.org/search/advanced` queries plus the `cs.MA` 2026-08
+listing. Eight are recorded below. As on 2026-09-01 the Atom API answered `429`
+through this host's fetch path; the advanced-search HTML endpoint with
+`date-filter_by=date_range` worked and is the better tool for the next run.
+
+⚠️ **The id prefix is not a date filter, and this sweep caught it doing damage.**
+Probing the abs-page format, `2608.00001` reports `[v1] Tue, 14 Apr 2026` — an
+in-window-looking id four months out of window. Every `[v1]` line below was read
+off `arxiv.org/abs/` individually. Two entries (§1, §2) plus §1's load-bearing
+context-window number were then re-fetched independently by the sweep's caller
+and matched exactly.
+
+## 1. Agents rot by the step, and truncating context makes it worse
+
+[arXiv:2609.01660](https://arxiv.org/abs/2609.01660) — **How Fast Do Agents Rot?
+An Empirical Study of Long-Horizon Degradation in LLM Agents for Production
+Decision-Making** (2026-08-31). 9 models from 1.2B to 671B plus three
+proprietary, four task families including a real tool-use loop, five horizons,
+three context regimes, 10,664 analyzed trajectories.
+
+Task success follows a geometric law in a **single per-step reliability
+parameter** that rises with model scale and saturates well below 1 even for the
+strongest models. On the agentic task **every model tested falls from
+near-perfect success to near zero within sixteen steps**. Projected reliability
+runs 0.42 at GAIA-length horizons down to **0.24 at hundred-step production
+horizons**.
+
+The result that matters most here is the context-regime one: **bounding the
+context window steepens the decay rather than easing it** — logit slope −0.69
+bounded against −0.44 unbounded, p=3×10⁻⁶ — which the authors say contradicts a
+lost-in-the-middle explanation and warn is "a common production shortcut".
+
+⚠️ Checked before repeating the obvious framing: **inber's docs do not actually
+argue for compaction on "shorter context degrades less" grounds**, so this
+corrects nothing already written here. It is a caution against a rationale the
+repo has not adopted, not a correction to one it has.
+
+**What inber should consider:** inber bounds a turn at 50 API calls
+(`agent/agent.go:336`) and a spawn at a wall-clock timeout
+(`server/spawn.go`, default 300s). Neither is a reliability budget — both are
+runaway guards denominated in the wrong unit. The paper's per-step parameter is
+measurable from inber's own `requests` table (`turns` against `status`), and a
+step-count abort with a stated reliability basis would be a different thing from
+a 50-call ceiling picked to stop a loop.
+
+## 2. Replay cannot score a model switch
+
+[arXiv:2608.08239](https://arxiv.org/abs/2608.08239) — **The Replay Gap: Static
+Evaluation of Model Switching in LLM Agents Scores the Wrong World** (2026-08-08).
+Forks live SWE-bench trajectories, rebuilds the environment, and continues each
+fork under a different model against same-model control forks; ~900 rollouts over
+six paired runs.
+
+Swaps exceed control floors by **+0.25 to +0.66 normalized edit distance**,
+rewriting **61–94% of post-fork actions**. **74–77% of early swaps diverge at the
+very first post-fork action** against 6–35% for controls, leaving **only 3% of
+replayed states valid**. A log-stitching replay evaluator **mispredicted every
+success-relevant outcome** and produced patches with 0.00–0.11 similarity to
+what actually happened. Separately: temperature-0 determinism is
+serving-config dependent — FP8 controls diverged on >90% of forks where AWQ was
+near-identical.
+
+**What inber should consider:** inber switches models — `engine/failover.go`
+picks from a chain, and `selectModel` (`engine/turn_execute.go:18`) is gated on a
+30-minute health window. Any evaluation of that chain built by replaying stored
+sessions under a different model is measuring a world that does not exist. The
+second half is the sharper one for this repo: inber stores sessions and treats
+them as replayable, and "deterministic replay" is only a claim about a stated
+serving backend.
+
+## 3. Token savings and cache hits pull against each other
+
+[arXiv:2609.00749](https://arxiv.org/abs/2609.00749) — **ContextPipe:
+Database-Inspired Context Assembly for Long-Horizon Agents** (2026-09-01).
+Context assembly as query execution: a five-phase Plan/Bind/Optimize/Execute/
+Feedback pipeline over a data-source catalog, with a cache-aware deterministic
+optimizer and an `EXPLAIN ANALYZE`-style trace.
+
+Against append-only construction on the SWE-bench Pro Qutebrowser subset:
+**−31% total tokens, −23% LLM calls, −9% response time — and a *lower* KV
+cache-hit ratio.**
+
+**What inber should consider:** that last clause is the finding, not a footnote.
+It is the measured form of the trade the cache-breakpoint todo filed this run
+(`a5b91a47`) has to decide, and it says a compaction or pruning policy tuned on
+token count alone can lose more to cache misses than it saves. inber has the
+worse version of this problem: it cannot currently see either side of the trade
+on its auxiliary calls (`7be5a692`). The `EXPLAIN`-style per-turn trace is the
+cheap half to copy — inber already stages and prunes, and does not record why.
+
+## 4. Cached knowledge needs an invalidation granularity, and is not model-portable
+
+[arXiv:2609.00243](https://arxiv.org/abs/2609.00243) — **Invalidation Contracts
+for Cross-Episode Agent Memory** (2026-08-31). Version stamps plus cacheability
+hints on cached error-recovery suggestions, so a client evicts a stale entry
+instead of discovering staleness by trying it. 7 models, 3 serving paths, 2
+domains, ~9,400 episodes.
+
+**Row-level invalidation raises compliance by 0–66.7pp; table-level invalidation
+drops post-drift first-try rates to 0% on 5 of 7 models** — coarse invalidation
+is measurably worse than none. Recovers 29–33% of baseline token cost on 4 of 7.
+The contract costs 15% of response payload; eviction precision is 1.00 at row
+granularity. And the portability result: identical wire bytes gave **100%
+first-try compliance on Claude Haiku 4.5 and ≤11% on Claude Sonnet 5**.
+
+**What inber should consider:** inber's memory extraction
+(`conversation/extract.go`) writes facts with no version stamp and no stated
+invalidation granularity, and `memory/auto_context.go` reads them back into
+later sessions. Two bullets: stamp each extracted fact with the provenance
+version it was true of, and pick the granularity deliberately, because the
+paper's measurement is that whole-memory invalidation is the actively harmful
+choice rather than the conservative one. The portability number also bears on
+inber directly — memories extracted under one model are replayed into sessions
+running another.
+
+## 5. A "done" that a replay can re-derive
+
+[arXiv:2608.23623](https://arxiv.org/abs/2608.23623) — **When May an Agent Stop?
+Evidence-Carrying Termination for Tool-Using LLMs** (2026-08-22). An agent may
+return COMPLETE only when a typed certificate binds each claim in the answer to
+in-scope trace evidence *and* a deterministic replay reconstructs the claimed
+value.
+
+Static study over 48 synthetic tasks, 6 tool-use families, 8 fault types:
+**0/288 unsafe completions against 252/288 for a termination-critic baseline
+(−87.50pp)**. On a frozen 576-trajectory study: **0/66 premature unsupported
+terminations against 40/66 (−60.61pp)**, with supported completion 97/132 against
+92/132 (+3.79pp, inside a −10pt noninferiority margin). It recovered in 18/66
+trajectories, 17 of which then completed with support.
+
+**What inber should consider:** inber's spawn decides status by exception —
+`status := "success"` is the initial value at `server/spawn.go:307-320`, changed
+only on `context.DeadlineExceeded` or a non-nil error. A stream cut short mid-
+response returns whatever text arrived and the child is reported `success` to its
+parent, which is the failure this paper is built to catch and which CC 2.1.257
+fixed from the other end (see `claude-code.md` 2026-09-03). inber persists whole
+sessions already, so the trace half of the certificate is sitting on disk unused.
+
+## 6. Four compaction baselines under one trigger, scored in non-cache tokens
+
+[arXiv:2608.29897](https://arxiv.org/abs/2608.29897) — **When History Is
+Multimodal: Rethinking Context Management for Long-Horizon Agents** (2026-08-30).
+Context management as budget-constrained history transformation, benchmarking
+**No Compression, Discard-All, Sliding Window and Summarization** under a shared
+harness, policy and trigger across 4 text-centric and 3 multimodal benchmarks.
+Their training-free manager cuts **cumulative non-cache tokens by 31.5–63.1%**
+against No Compression.
+
+**What inber should consider:** the controlled four-baseline comparison is the
+value, not the proposed method — inber has only ever run summarization
+(`conversation/summarize.go`) and has never measured it against a sliding window
+or a plain discard on its own traffic. Note the metric: **non-cache tokens**, not
+tokens, which is the right denominator for a harness that caches deliberately and
+the same denominator §3 above and todo `a5b91a47` turn on.
+
+## 7. A revision mid-turn should invalidate a region, not the run
+
+[arXiv:2609.00643](https://arxiv.org/abs/2609.00643) — **REVISE:
+Validity-Guided Recovery for Online Revisions in Agent Workflows** (2026-09-01).
+When a user revision lands mid-execution, intersect the delta with recorded
+data and control dependencies, stop only the invalidated work, recompute only
+the affected region of the DAG.
+
+Measured on real coding-agent traces: **118 sessions retain observable work
+before a queued later message is delivered, and enqueue-to-completion overlap
+reaches 56.55s at p95** across 167 overlapping responses. Over 300 revision
+executions it matches a latest-version oracle with zero stale outputs and cuts
+model calls **40.6–56.0% against full restart** and **31.3–43.6% against suffix
+recomputation**.
+
+**What inber should consider:** this is inber's injection path exactly —
+`Server.Inject` and the `steer_agent` tool (`server/spawn_tools.go:15-58`)
+deliver a message either mid-turn between tool calls or queued for the next
+turn, and the mid-turn case has no notion of which completed work the new
+message invalidates. The p95 overlap number says the window where this matters is
+tens of seconds wide in practice, not hypothetical.
+
+## 8. A session paused for a human is a different cache workload
+
+[arXiv:2608.30830](https://arxiv.org/abs/2608.30830) — **Adaptive KV Retention
+for LLM Agents at Human-Approval Timescales** (2026-08-31). Aimed at requests
+suspended for **minutes to hours** awaiting human approval, not seconds-scale
+tool pauses. Retaining suspended KV costs **41% of active-serving goodput**;
+evicting it costs **roughly 10× higher resume latency**. Their tiered controller
+gains **23–51% over vLLM baselines, 22–29% over MORI, 41–52% over Continuum**.
+
+**What inber should consider:** this is serving-side and inber is a client, so
+none of the mechanism transfers. The bearing is on the approval gap named in
+`claude-code.md` 2026-09-03: if inber ever gives `guard.NeedsApproval`
+(`guard/guard.go:165`) somewhere to ask, the resumed session's cache is a
+decision, not a given — and Anthropic's 5m/1h TTLs put a human-scale wait firmly
+on the wrong side of both. Worth knowing *before* the approver is built rather
+than after.
