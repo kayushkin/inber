@@ -20,12 +20,10 @@ import (
 // A logs root belongs to a workspace, not to an agent. session.New writes
 // <workspace>/logs/<agent>/<session>/session.jsonl and owns the <agent>
 // segment itself, so the root is shared by every agent that runs there — and
-// two agents do land in one workspace, because a workspace is a repo root and
-// buildConfigFromRegistry resolves an agent with no explicit workspace to
-// ~/life/repos/<project>, keyed on the agent's project rather than its name.
-// Walking once per agent would therefore report every session in a shared root
-// once per agent sharing it, each copy labelled with whichever agent the loop
-// happened to be on.
+// two agents do land in one workspace, because nothing stops two agents being
+// configured with the same one. Walking once per agent would therefore report
+// every session in a shared root once per agent sharing it, each copy labelled
+// with whichever agent the loop happened to be on.
 //
 // There are two sources for that set and both are needed. The agents' configured
 // workspaces are where an ordinary session works. A session spawned into a forge
