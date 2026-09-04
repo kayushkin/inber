@@ -1892,3 +1892,148 @@ the caller's model every time.
   separate question about inber's own compaction costs, which
   `conversation/summary_generation.go` currently does not measure at all (see the
   2026-09-03 entry in `claude-code.md`).
+
+## Harness-watch — 2026-09-04 (#11787, #11743, #11604, #11782, #11627): five repairs, one shape — the guard ran, and it was pointed at the wrong object
+
+Five `fix(security)`/`fix(tracing)` commits from one author landed within hours on
+2026-09-03, and they are worth reading together rather than separately, because
+none of them adds a missing check. In every case the check existed and was applied
+to the wrong noun. The cross-cutting write-up is at
+`agentic-design-patterns.md` under 2026-09-04; this entry keeps the mechanisms and
+the inber checks.
+
+### 1. #11787 — content decided control flow
+
+[`feecb14f`](https://github.com/block/goose/commit/feecb14f). Every CLI-wrapping
+provider opened `stream()` with
+`if super::cli_common::is_session_description_request(system)`, and that predicate
+was literally `system.contains("four words or less") || system.contains("4 words or less")`.
+So **any** request whose system prompt happened to contain that substring never
+reached the CLI at all — goose fabricated a reply locally from the first user
+message and returned it as if the model had answered. The repair binds dispatch to
+the call path instead: a new `uses_local_session_naming()` on the `Provider` trait,
+`generate_session_name` calling the local generator directly, and
+`is_session_description_request` **deleted** along with the sniffing block in
+`claude_code.rs`, `codex.rs`, `cursor_agent.rs` and `gemini_cli.rs`. A second fix
+rides along: the local generator now filters `m.is_user_visible()` and
+`filter_for_audience(Role::User)`, so agent-only content stops leaking into a
+persisted session name.
+
+**Checked in inber, and it carries nothing.** The only content-substring branches
+on a live path are `conversation/stash.go:113-159` (`DetectContentType`) and
+`conversation/manage_auto_save.go:78,96`. `stash.go` **is** live — `engine/engine.go:148`
+builds the config, `engine/turn_prepare.go:23` and `engine/turn_stashing.go:38`
+consume it — but the content type it derives is carried into the result struct and
+the tags and **decides nothing**: importance is `cfg.DefaultImportance` at
+`stash.go:195` on every branch. A label, not a gate. Nothing to file.
+
+### 2. #11743 — the human approved a string the provider wrote
+
+[`f90aa8ed`](https://github.com/block/goose/commit/f90aa8ed). `find_tool_confirmation`
+destructured `ActionRequiredData::ToolConfirmation { id, prompt, .. }` — throwing
+away `tool_name` and `arguments` through the `..` — and the prompt printed only
+`prompt`. So a provider could render *"read package manifest"* over an
+`arguments` of `{"command": "cat ~/.ssh/id_rsa"}`. The repair returns the whole
+`ToolConfirmationRequest`, prints the provider's text under an explicit
+`"Provider-provided approval notice"` header and the authoritative
+`{"tool_name": …, "arguments": …}` beneath it, moves the output to **stderr**, and
+escapes bidi controls (`U+061C, 200E, 200F, 202A–202E, 2066–2069`) on top of the
+existing ANSI/OSC/DCS stripping. The tests assert the *effect*: one re-spawns the
+test binary, feeds it an 80-line forged provider prompt, and asserts the
+authoritative token is on stderr and not stdout.
+
+**No inber surface today.** `guard.Config.ApprovalFunc` is assigned by nobody,
+`engine/build_hooks.go:85-88` says so in a comment, and `NeedsApproval` is refused
+rather than queued. Recorded as the constraint for whenever an approver exists: the
+prompt must render the payload that will execute, from the trusted struct,
+untruncated and control-escaped, with any model- or provider-supplied narrative
+*alongside* it under an untrusted label — never instead of it.
+
+### 3. #11604 — hiding a tool from a list is not an authorization control
+
+[`35524fac`](https://github.com/block/goose/commit/35524fac). `manage_extensions_impl`
+took no `session_id` at all and `list_tools` took `_session_id: &str`
+(underscore-discarded), so a delegated subagent could enable arbitrary extensions;
+`handle_start_agent` had no caller identity, and `handle_send_message`'s only guard
+was a self-send check. The repair resolves the caller's `Session` and gates on
+`session_type` in **both** layers — the tool is hidden *and* the handler refuses —
+and fails closed when the session cannot be resolved
+(`.is_ok_and(|session| session.session_type != SessionType::SubAgent)`). Messaging
+becomes sibling-only: same `parent_session_id`, both `SubAgent`.
+
+**inber's twin is exact and already open** as
+`9e31d359-462e-4492-a1ca-317c08733564`. Re-measured this run rather than taken
+from the todo: `server/spawn.go:224` and `server/session_forking.go:47` both pass
+`RunRequest{}`, `applyRequestOverrides` copies only non-zero fields, and a probe
+through `guard.ParseMode` + `LimitConfig.GuardConfig` prints
+
+```
+parent cfg: mode="assist" maxCost=5 maxTurns=10 maxInputTokens=100000 maxDuration=600
+child  cfg: mode=""       maxCost=0 maxTurns=0  maxInputTokens=0      maxDuration=0
+shell_commands   parent(assist)=NeedsApproval  child()=Allowed
+write_files      parent(assist)=NeedsApproval  child()=Allowed
+edit_files       parent(assist)=NeedsApproval  child()=Allowed
+deploy           parent(assist)=NeedsApproval  child()=Allowed
+spawn_agent      parent(assist)=Allowed        child()=Allowed
+```
+
+so an assist-mode parent — which cannot itself run `shell_commands` without an
+approver that does not exist — spawns a child that can. That is the escape the
+todo's 2026-07-31 note predicted, now measured end to end. The todo is parked on
+the shared-pot-versus-per-child decision and stays parked; the only thing to carry
+onto it is goose's sentence, **tool-list filtering is discoverability, not access
+control**, which says the fix has to reach the handler and not just the advertised
+set.
+
+### 4. #11782 — the opt-out gated the standard attributes and not the legacy ones
+
+[`0338189c`](https://github.com/block/goose/commit/0338189c).
+`capture_message_content()` (default **false**) gated the standardized `gen_ai.*`
+span attributes while goose's own legacy fields recorded content unconditionally —
+`dispatch_tool_call` recorded full tool `arguments` with no gate at all, and
+`user_message`/`trace_input`/`trace_output` sat *above* the `if`. Opting out still
+exported the same secrets under different keys. Every content-bearing field moved
+inside the gate; non-content attributes stayed out.
+
+**inber's structural twin is open** as `d60ec4a3-4004-4f8e-b2ef-d4d0a70bb51e` — the
+redactor on one door of four, with NATS, logstack and SSE getting the raw
+arguments. Nothing new to file. The importable part is not the fix but the test:
+`tool_arguments_are_not_traced_without_content_capture` plants an
+`"api_key": "tool-input-super-secret-token"` and asserts it appears **nowhere in
+the whole exported field map**, rather than asserting the guard was called. That
+effect-level assertion is what catches the *next* bypass, and it is the style to
+copy onto the redactor todo.
+
+### 5. #11627 — upstream just shipped one of the two options inber is parked on
+
+[`0f7d763b`](https://github.com/block/goose/commit/0f7d763b) is mostly a feature —
+`ToolOperation<S>` for the new state-machine agent — but two duplicate-name guards
+ride along, and one of them is a real fix to the **legacy** agent:
+`reply_parts.rs` gained `ensure_unique_tool_names(&tools)` after `list_tools`,
+erroring `"multiple tools registered '{name}'"`, where before two extensions
+exporting one name produced a silently ambiguous tool list. `machine.rs` threads a
+`HashSet<String>` across all operations for the same reason.
+
+inber's twin is open as `e2d0b07b-5034-4f7d-b97f-2a534141dfc1` and is documented
+in the code itself — `engine/extra_tools.go:8-15` says the fix *"needs a policy
+decision (reject a duplicate at registration, or keep the first and warn), so this
+function preserves the existing behaviour rather than guessing at it."* **goose
+just shipped the first option**, and that is the whole contribution of this entry:
+new evidence for a decision that was parked for want of any. Mechanism re-read
+this run: `agent/agent_run.go:29-45` builds `toolParams` as a **list** over every
+entry while `toolMap[t.Name] = a.tools[i]` is a **map**, so on a collision both
+definitions go on the wire and dispatch resolves to whichever was registered last —
+the model reads one schema and a different implementation runs.
+
+Worth noting goose did not fully escape it either: its own dispatch is still a
+name-based join (`.find(|tool| tool.definition.name == call.name)`), safe only
+because uniqueness is now enforced at registration, and its README requires that
+provider tool names and handlers *"remain stable between those boundaries"* — a
+contract that is documented, not enforced.
+
+- **What inber should consider:** nothing new is filed from this window. Two open
+  todos gain evidence rather than scope — `e2d0b07b` gains an upstream precedent
+  for rejecting duplicates at registration, and `9e31d359` gains a measurement of
+  the escape and the sentence that says a fix must reach the handler. The one
+  genuinely new item is a testing style: assert that a canary token is absent from
+  the whole exported surface, not that the guard was invoked.

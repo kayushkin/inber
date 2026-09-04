@@ -9424,3 +9424,222 @@ conversation.
   `session/prompts_read.go` may want more — or whether the reader should skip
   over-long records instead of aborting. Different files, different owners, and
   the answer to the first makes the second moot.
+
+## Harness-watch — 2026-09-04: a guard applied to the wrong thing, in five upstream repairs and two inber defects that were already written down and not yet filed
+
+The window is short — the 2026-09-03 sweep ended at 04:16Z, so the new material
+is about a day of commits. It is unusually coherent anyway. goose landed **five**
+`fix(security)`/`fix(tracing)` commits from one author within hours, and codex
+landed two provenance repairs on the same day, and every one of them has the same
+shape: **the guard existed, ran, and was applied to the wrong object.** Naming was
+gated on prompt text instead of the call path; approval was rendered from the
+provider's string instead of the request struct; extension management was hidden
+from the tool list instead of authorized in the handler; content capture gated the
+standardized telemetry attributes but not the legacy ones; compaction
+compatibility was read off the currently-selected model instead of off the
+checkpoint. None of these is a missing check. All of them are a check pointed at
+the wrong noun.
+
+Three rules are worth extracting before the inber half, because they generalize
+past the commits that produced them.
+
+**1. Never let emptiness stand in for failure.** codex
+[#42598](https://github.com/openai/codex/pull/42598)
+([`8f31b64c`](https://github.com/openai/codex/commit/8f31b64c)) converted MCP tool
+discovery from `Option<Vec<ToolInfo>>` to `Result<Vec<ToolInfo>, StartupOutcomeError>`
+down the whole stack, on the stated grounds that *"an empty tool map does not
+distinguish a successfully returned empty catalog from a server whose startup or
+tool discovery failed."* `list_all_tools` becomes a wrapper over
+`list_tools_with_errors() -> (Vec<ToolInfo>, HashMap<String, String>)`, and
+`tools_error: Option<String>` goes on the wire with the doc *"Null when a catalog
+is returned, including cached or empty catalogs."* The Go equivalent is any
+function returning `(T, bool)`, a nil slice, or a nil error where the caller
+cannot tell empty from broken.
+
+**2. Never truncate the thing that carries the restriction.** Stated twice,
+near-verbatim, in two codex commits on one day: *"Omit a record atomically when it
+cannot fit; never truncate a restriction out of a grant"*
+([#42579](https://github.com/openai/codex/pull/42579), `verified_answers.rs`) and
+*"Never truncate a steer"* ([#42410](https://github.com/openai/codex/pull/42410)).
+The reasoning is that truncation is **biased**: it preferentially destroys the
+qualifier and leaves the permission, so *"yes, but only in /tmp"* clips to *"yes"*.
+Both commits drop the whole record instead and mark the context incomplete —
+`retained_context_complete: bool` propagating into the type system, with a fixed
+host string injected at index 0 and pushed *before* the `MAX_ROOT_MESSAGES` drain
+so the cap cannot evict the warning about the cap.
+
+**3. Record provenance on the artifact at write time; never re-derive it from
+current config.** codex [#42588](https://github.com/openai/codex/pull/42588)
+([`ad8ee16a`](https://github.com/openai/codex/commit/ad8ee16a)) found that an
+opaque compaction checkpoint's producer-compatibility hash was being read off
+`parent_model` — *the currently selected model* — so after a resume, rollback or
+model switch the live model's hash could match while the checkpoint in history
+came from a different producer. The new doc comment is the rule: *"Missing
+provenance must not be inferred from the currently selected model, including
+after resume."* The second half is worse and is rule 1 again: on a hash mismatch
+the old sampler **silently dropped the compacted context and scored the request
+anyway**, on truncated history, with no error. Now it returns
+`LunaSamplerError::IncompatibleCompaction` and fails closed to full review.
+
+### The inber half: two findings that were already written down, and are now in the queue
+
+Both come from the 2026-09-03 sweep, which wrote them up in full at
+`opencode.md:807` and `opencode.md:866` and then **held them behind the
+three-per-run cap** — the failure mode this job exists to avoid. They were
+re-derived this run by running the code rather than by reading those paragraphs,
+and the re-derivation matched exactly. Filed as
+`2b6cb49e-73b8-4473-bc9f-e8bcddc4e1b5` and `1c951f8d-bacd-4f59-9c2e-18d38358e5f8`.
+
+**A stream that ends before `message_stop` is a successful API call.**
+`agent/agent_run.go:192-198` decides success by asking `streamResp.Err()`, and
+`bufio.Scanner` reports `io.EOF` as `nil`, so a cleanly-cut stream yields no
+error and `resp = &accumulated`. Probed fresh this run against
+`agent.executeAPICall` with a stream that stops after one `input_json_delta`:
+
+```
+executeAPICall err = <nil>
+resp.StopReason = ""  content blocks = 1
+  block[0] type="tool_use" name="write_files" input={"path":"a.go","cont
+resp.ToParam() marshals to:
+  {"content":[{"id":"toolu_probe","input":{},"name":"write_files","type":"tool_use"}],"role":"assistant"}
+```
+
+`agent/agent.go:412` appends that **before** the stop-reason branch, so the
+conversation permanently records `write_files` called with **no arguments — a
+call the model never made** — and `:441` then returns `unexpected stop reason: `,
+an error naming nothing. This is rule 1 twice over: `Err() == nil` standing in for
+"complete", and `ToParam()` emitting `{}` for "unparseable". Live signature read
+this run at `logs/server-errors.jsonl:2`. New this pass, and it is the part the
+09-03 write-up did not carry: `engine/failover.go:166-175`
+(`errorIsEvidenceAboutTheModel`) returns **true** for that error, so **a transport
+cut is recorded as evidence the model is unhealthy, host-wide** — which meets
+`905a5e68` (staleness scored as unhealth, a never-tried model outranking the
+configured one) to make a proxy hangup capable of pushing a working model out of
+rotation for every session on the box. `engine/failover.go:161-165` says that is
+deliberately parked on todo `4c511c8f`; it stays parked.
+
+**`StreamingResponse` has no `Close`.** `agent/provider.go:23-32` declares
+`Next`/`Current`/`Err` and no teardown, and `:53-56` wraps the SDK's
+`*ssestream.Stream` — which does have `Close() error`
+(`ssestream.go:192-197` → `s.rc.Close()`, the only path in the SDK that closes the
+HTTP body) — behind an interface literal that omits it. Re-read this run:
+`Stream.Next()` (`ssestream.go:147-181`) sets `s.err` and returns false on the
+`case "error"` frame, on an unmarshal failure and on exhaustion, and never touches
+`rc`. A clean drain is harmless because `net/http` reclaims a body read to EOF; a
+mid-stream `overloaded_error` is not, and pins one TCP connection and one
+`persistConn` readLoop goroutine for the life of the process. codex #42623 hit the
+same class from the other end — a new pre-`RpcClient` stage where *"its Drop
+implementation cannot abort the transport task for us"*, repaired with a manual
+`terminate()` + `task.abort()`. **A stage that exists before its RAII owner must
+clean up by hand**, and Go has no RAII at all, so the interface is the only place
+to put it.
+
+- **What inber should consider,** for both: the two fixes are coupled — same
+  loop, same window — but their decisions are separate and neither is made here.
+  For the truncated stream, the live question is whether "no `message_stop`" is an
+  **error** (routing it through `deliveredText`/`Incomplete`, and into
+  model-health evidence) or a **partial success**, and then whether the truncated
+  message is still appended at `agent.go:412` — appending keeps the text the user
+  watched arrive, dropping keeps an argument-less `tool_use` out of history, and
+  only one can win. For the leak, whether `Close` joins the interface (correct for
+  every caller, but every implementation and test double grows a method and
+  `CompleteStreaming`'s contract changes from *"returns an iterator"* to *"returns
+  a resource the caller owns"*) or the provider closes internally when `Next`
+  first returns false (one file, but latently wrong for any future caller that
+  abandons the loop early — no caller does today and nothing enforces it).
+
+### Four upstream repairs whose inber twin is already tracked — recorded, not refiled
+
+Checked against the code rather than against these docs, because two claims in
+this file have overstated the code before.
+
+- **goose [#11604](https://github.com/block/goose/pull/11604) — subagent platform
+  guards.** goose found delegated subagents could call `manage_extensions` and
+  `start_agent`, and repaired it by resolving the caller's `Session` and gating on
+  `session_type`, in the **handler as well as the tool list**, failing closed when
+  the caller cannot be resolved. inber's twin is exact and open as
+  `9e31d359-462e-4492-a1ca-317c08733564`. Re-measured this run rather than
+  assumed: `server/spawn.go:224` and `server/session_forking.go:47` both pass
+  `RunRequest{}`, `applyRequestOverrides` copies only non-zero fields, and a probe
+  through `guard.ParseMode` + `LimitConfig.GuardConfig` prints
+  `parent cfg: mode="assist" maxCost=5` against `child cfg: mode="" maxCost=0`,
+  with `shell_commands`/`write_files`/`edit_files`/`deploy` all
+  `parent=NeedsApproval, child=Allowed`. goose's *"tool-list filtering is
+  discoverability, not access control"* is the sentence to carry onto that todo;
+  the shared-pot-versus-per-child decision it is parked on is unchanged.
+- **goose [#11627](https://github.com/block/goose/pull/11627) —
+  `ensure_unique_tool_names`.** goose made a duplicate tool name a **hard error at
+  registration**, across every source. inber's twin is open as
+  `e2d0b07b-5034-4f7d-b97f-2a534141dfc1` and is documented in the code itself, at
+  `engine/extra_tools.go:8-15`, which says the fix *"needs a policy decision
+  (reject a duplicate at registration, or keep the first and warn)"*. **goose just
+  shipped the first option** — that is new evidence for a parked decision, and the
+  only thing this entry adds. Mechanism re-read this run: `agent/agent_run.go:29-45`
+  builds `toolParams` as a **list** over every entry while `toolMap[t.Name]` is a
+  **map**, so on a collision both definitions go on the wire and dispatch resolves
+  to whichever was registered last.
+- **goose [#11743](https://github.com/block/goose/pull/11743) — authoritative tool
+  approval details.** goose was rendering the *provider's* description of a call
+  in the consent prompt while `tool_name` and `arguments` were discarded via `..`,
+  so a notice reading "read package manifest" could sit over
+  `{"command": "cat ~/.ssh/id_rsa"}`. The repair prints the provider text under an
+  explicit `"Provider-provided approval notice"` header and the authoritative
+  struct beneath it, on **stderr**, untruncated, with bidi controls escaped.
+  **No inber surface today:** `guard.Config.ApprovalFunc` is set by nobody,
+  `engine/build_hooks.go:85-88` says so in a comment, and `NeedsApproval` is
+  refused rather than queued. Recorded as the design constraint for whenever an
+  approver is built — the prompt must render the payload that will execute, and
+  any model- or provider-supplied narrative goes *alongside* it under an untrusted
+  label, never instead of it.
+- **goose [#11782](https://github.com/block/goose/pull/11782) — content-capture
+  opt-out.** `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` gated the
+  standardized `gen_ai.*` attributes while goose's own legacy span fields recorded
+  full tool arguments unconditionally, so opting out still exported the same
+  secrets under different keys. inber's structural twin — the redactor sitting on
+  one door of four while NATS, logstack and SSE get the raw arguments — is open as
+  `d60ec4a3-4004-4f8e-b2ef-d4d0a70bb51e`. The importable part is not the fix but
+  **the test**: goose asserts a canary token appears nowhere in the whole exported
+  field map, rather than asserting the guard was called. That effect-level
+  assertion is what catches the next bypass.
+
+### Checked and carrying nothing for inber
+
+- **goose [#11787](https://github.com/block/goose/pull/11787) — dispatch on the
+  call path, not on prompt text.** goose was routing on
+  `system.contains("four words or less")`, so any request whose system prompt
+  contained that substring never reached the CLI and got a locally fabricated
+  answer — content deciding control flow. Looked for the twin: inber's only
+  content-substring branches on a live path are `conversation/stash.go:113-159`
+  (`DetectContentType`) and `conversation/manage_auto_save.go:78,96`. `stash.go`
+  **is** live (`engine/engine.go:148` → `engine/turn_prepare.go:23`,
+  `engine/turn_stashing.go:38`), but the content type it derives is carried into
+  the result and the tags and decides nothing — importance is
+  `cfg.DefaultImportance` at `stash.go:195` on every branch. A label, not a gate.
+  Nothing to file.
+- **codex [#42413](https://github.com/openai/codex/pull/42413) / coordinated MCP
+  OAuth refresh** — one owner per credential, reread inside the refresh lock,
+  persistence on a task the caller's cancellation cannot kill. inber's
+  credential-for-life issue is open as `7983aa25`, and the 09-03 sweep already
+  narrowed it (`ResolveKey` returns a non-expiring API key), so the refresh
+  machinery has no live hazard to attach to here.
+- **codex [#42652](https://github.com/openai/codex/pull/42652) — managed
+  worktrees in `codex exec`.** One rule worth keeping without a defect behind it:
+  worktree *allocation* is configured from a deliberately separate config load,
+  *"Allocation belongs to the host, not this session's project, profile, or
+  overrides"* — so a checked-in project `config.toml` cannot redirect where the
+  harness writes on disk. inber's equivalent surface is forge workspace
+  allocation; no mismatch was found this pass.
+- **codex [#42453](https://github.com/openai/codex/pull/42453) / #42425 / #42401 —
+  discovering capabilities from the app server.** Three commits independently
+  implementing one checklist for a discovery RPC: timeout, page-size cap,
+  page-count cap, repeated-cursor detection, dedup, and a request-identity check
+  that discards replies the user has navigated away from. Two details are worth
+  stealing if inber ever adds a discovery call — a **constant** request id for a
+  reopenable popup, so twenty opens cannot leave twenty in-flight requests, and
+  clearing restored local state on discovery (`developer_instructions: Some(None)`)
+  so a resumed session's cached prompt cannot survive underneath a freshly
+  discovered mode. No inber surface today; recorded for when there is one.
+- **cline and opencode: nothing.** The only cline commits after the cutoff are a
+  desktop release chore and a TUI toast-wrapping fix; everything else in the
+  report predates 2026-09-03T04:16Z and was screened last run. opencode's
+  post-cutoff commits are all console, stats-page and docs work.

@@ -590,3 +590,281 @@ none of the mechanism transfers. The bearing is on the approval gap named in
 decision, not a given — and Anthropic's 5m/1h TTLs put a human-scale wait firmly
 on the wrong side of both. Worth knowing *before* the approver is built rather
 than after.
+
+# 2026-09-04 sweep
+
+Screened by parsing the arXiv listing pages directly rather than search-engine
+hits, so the not-already-covered check is exact against the **446 ids** already
+extracted from `docs/papers/*.md`. Volume: the full `cs.SE`/`cs.AI`/`cs.CL`/`cs.MA`
+**2026-09** listings — 924 distinct ids, **901 unseen**; the same four **2026-08**
+listings — 4,738 ids, **878 unseen** above `2608.24000` (where the August sweeps
+stopped); plus one `arxiv.org/search/advanced` date-range query on prompt/KV
+caching, 11 new of 18. Topic filtering left **124 candidate titles**, of which
+**30 abstract pages were fetched and read in full**. Every number below is off an
+`arxiv.org/abs/` page. No PDFs were fetched, so nothing here comes from a results
+table — where a paper's headline rests on a table rather than an abstract, that
+is said.
+
+Eight carry something. The blogs did not: Anthropic's engineering index carries
+23 posts and the newest harness one still dates to **2026-03-24**
+(`harness-design-long-running-apps`) — the `2026-09-01` on the index is a
+`siteSettings._updatedAt` field, the same false positive the 08-07 sweep flagged.
+HuggingFace's front index has posts through 2026-09-03 and nothing on harness
+design, context management or agent infrastructure.
+
+## 1. Lifecycle hooks are an unguarded update path, and all seven harnesses tested fell
+
+[arXiv:2609.03884](https://arxiv.org/abs/2609.03884) — **A Blind Trust, the
+Bloody Thrust: When Attacker-Controlled Hook Updates Steer AI Agent Harnesses
+towards Malicious Behaviors** (2026-09-03, cs.CR/cs.AI).
+
+The threat model is the interesting part, because it is smaller than the usual
+one: the attacker controls **only plugin metadata and lifecycle-hook
+configuration**. A benign, versioned plugin is trojanized by an *update* that
+binds attacker-chosen shell commands to benign events — session start, tool call,
+file edit. Those commands run with host privileges and fire at moments the model
+never observes, so nothing in the transcript shows them and no model-side
+permission gate can see them at all. Their HookPry framework realizes ten attack
+objectives across **25 harness×backend combinations in 1,000 end-to-end runs**,
+compromising **all seven evaluated harnesses**, per-harness success reaching
+**92.5%**. Defenses are weak: Microsoft Defender scores **0% recall**, and the
+union of three static defenses misses **47.5%** of malicious artifacts.
+
+This lands on `hook-store`, not on inber's own tree: hook-store rows *are*
+(harness, event, matcher, **shell command**) tuples, queried by the server at
+session spawn, which is the exact object the paper attacks.
+
+- **What inber should consider:** treat a change to a hook's `command` as a
+  privileged mutation rather than an ordinary update — pin or hash the command
+  and require explicit re-approval when it changes, so the trusted thing is the
+  command and not the row. The second half is harder and is worth stating rather
+  than solving: because hooks fire outside the model's view, **the permission
+  model that gates tool calls cannot cover them**, so whatever gates hooks has to
+  be a separate mechanism from `permission-store`'s tool-call rules.
+
+## 2. Persistent memory is part of the authorization policy, not a cache
+
+[arXiv:2609.01836](https://arxiv.org/abs/2609.01836) — **Agent Memory Is a
+Surface for Endogenous Authorization Laundering** (2026-09-01, cs.CR/cs.AI).
+
+No external attacker anywhere in this one. When memory misrepresents *evolving*
+authorization state, the agent's own records come to grant authority the history
+never permitted. EAL-Bench evaluates 5 LLMs as memory **writers** and 2 as
+**executors** across procurement, cybersecurity and finance. Under incremental
+memory updates, writers fabricate false authority for up to **50.2% of
+unauthorized requests** — and once such a row is present, executors act on it in
+**98.6% of trials**. Two safeguards help: requiring a stored permission to be
+backed by a valid source event, and bounded event sourcing over permission
+changes. Both cut laundering substantially and both **reject more legitimate
+actions**; the authors state the safety-utility tradeoff rather than hiding it.
+
+- **What inber should consider:** memory rows are injected into the prompt as
+  ordinary content, so a row reading *"user approved X"* is indistinguishable
+  from the user having approved X. The transferable piece is the safeguard's
+  shape, not the benchmark: **a memory row that asserts a permission needs a
+  source-event id, and a row without one must not be readable as
+  authorization.** Distinct from SARA's No-History-Promotion rule already at
+  `2026-08-harness-research.md` (2608.27146) — that one governs summarization,
+  this one governs the store.
+
+## 3. A verification tool only pays where its reach covers the failure mode
+
+[arXiv:2608.28795](https://arxiv.org/abs/2608.28795) — **The reach of a
+verification tool decides its value: A controlled study of verification surface,
+artifact quality, and cost in AI coding agents** (2026-08-28).
+
+The agent's tool list is the single controlled variable: one minimal coding agent
+built **1,116 web applications** across **six models and eight tool
+configurations**, graded condition-blind against a frozen rubric plus automatic
+API probes. With no tools, **about one build in seven fails to launch at all**. A
+single boot probe removes nearly all of those at roughly **35% of a full shell's
+token cost**, while the full shell **multiplies the no-tools cost by 2.35×**.
+Screenshots help only where the mistake is visible, and that gain **does not
+survive correction for multiple comparisons**; on a failure that is measured
+rather than seen (scroll smoothness over 100,000 rows) screenshots add nothing.
+
+- **What inber should consider:** the cheapest concrete tuning result in the
+  batch, and it is a bundle-composition rule `bundle-store` could encode — the
+  marginal value of adding a tool is **not monotone in its cost**, so give a
+  session the cheap reach-matched verifier by default and gate the shell, rather
+  than ordering tools by capability.
+
+## 4. Aggregate "retrieval helps" can be positive while the per-task effect is negative
+
+[arXiv:2609.00549](https://arxiv.org/abs/2609.00549) — **Skill Following:
+Evaluating Actual Skill Use in Retrieval-Enabled LLM Agents** (2026-09-01,
+cs.CL).
+
+Standard skill evaluations compare retrieved against non-retrieved tasks, which
+is a selection-biased comparison — the tasks differ, not just the treatment. They
+define the **Retrieval-Invoked Actual-Use Effect (RAE)**: the same-task outcome
+difference between matched skill-enabled and skill-disabled runs, conditioned
+only on tasks where the agent *actually retrieved* a skill. Across **17 LLMs** on
+coding and math they report an evaluation paradox — models frequently show
+**positive aggregate retrieval lift and negative RAE**. On MBPP+, several models
+that appear to benefit system-wide **actively harm their own performance on
+exactly the tasks where retrieval fired**.
+
+- **What inber should consider:** `skill-store` content is injected and nothing
+  measures whether it helped. RAE is cheap enough to run on inber's own traffic —
+  replay a session with the skill bundle disabled, condition on sessions where a
+  skill was retrieved, diff the outcome. Note the binding constraint: the
+  comparison must be **matched same-task**, which needs session replay, which
+  inber already keeps on disk.
+
+## 5. Halt the run early: 13–26% of agent steps are decidable before completion
+
+[arXiv:2609.02783](https://arxiv.org/abs/2609.02783) — **EarlyEval: Cheaper Agent
+Evaluation via Early Outcome Prediction** (2026-09-02, cs.CL).
+
+Rather than cutting the number of eval tasks, they cut cost *within* each task. A
+pair of **LightGBM** success/failure classifiers over behavioral, textual and
+reference-solution features halts the run the moment either crosses a calibrated
+confidence threshold. Across **SWE-bench Verified, TerminalBench and Toolathlon**
+this removes **13%–26% of agent steps** and up to **44.1% of input tokens** and
+**29.4% of output tokens** at **89%–97% prediction accuracy**, perturbing
+per-agent resolve rates by only one to two percentage points.
+
+- **What inber should consider:** the predictor is gradient-boosted trees over
+  trajectory features, **not a model call**, so per-step overhead is negligible
+  and it is implementable against the sessions already persisted here. The reach
+  beyond evaluation is the interesting part: the same signal is a candidate abort
+  condition for a doomed sub-agent, which today is bounded only by turn and token
+  caps — a cap stops a run that is *expensive*, never one that is merely *lost*.
+
+## 6. Functional tests pass; review constraints do not
+
+[arXiv:2609.04167](https://arxiv.org/abs/2609.04167) — **SWE-Gate: Passing
+Functional Tests Is Not Enough for Software Engineering Agents** (2026-09-03,
+cs.SE/cs.AI).
+
+A repo-level benchmark that derives **review constraints from real PR review
+comments** and synthesizes repair instances around them, giving each instance
+*separate* functional and constraint tests plus non-compliant and gold patches.
+**303 instances across 75 Python repos**, four LLM backends under one common
+scaffold. Among **644 repairs that pass the functional tests, 221 fail the review
+constraints** — roughly a third of functionally-correct patches would be rejected
+in review.
+
+- **What inber should consider:** the separation is the reusable idea, not the
+  benchmark. inber's verify path scores *did it work*; this says a second,
+  **independently specified** constraint check is where about a third of the
+  residual failure lives. Pairs with the 08-16 finding (2608.12895) that a
+  reviewer on the same model as the worker is not a second opinion — there the
+  **model** was the thing that had to differ, here it is the **specification**.
+
+## 7. A generic harness with an execution-feedback repair round beats domain multi-agent machinery
+
+[arXiv:2609.03718](https://arxiv.org/abs/2609.03718) — **What Do CAE Simulation
+Agents Really Need Beyond a Generic Harness?** (2026-09-03).
+
+With information access and repair budget held fixed, a **single-agent generic
+harness matches or beats multi-agent specialized systems: FoamBench 96.4% vs
+88.2%**. The ablation localizes why. **Execution-feedback repair lifts FoamBench
+from 71.8% (no repair round) to 96.4%**, while **scripted reflection adds
+nothing**. The one non-harness input that still helps is domain knowledge as
+solver tutorials — their largest measured gain, **80.9% → 96.4%**.
+
+- **What inber should consider:** three numbers bearing directly on how inber
+  spends its ten agents. Multi-agent decomposition bought **−8.2 points** here
+  against one agent with a repair loop; scripted reflection was null; the win was
+  a repair round plus domain docs. Where the choice is between spawning
+  specialists and tightening the tool-error → retry loop, this argues for the
+  loop — and the tutorial result is the strongest case in this batch for
+  `skill-store` **content** over agent **count**.
+
+## 8. Second tier — real, verified, narrower
+
+- [2609.00267](https://arxiv.org/abs/2609.00267) **Delegation Without Trust**
+  (2026-08-31, cs.CR) — an untrusted-model standard for sub-agent delegation;
+  LangGraph, CrewAI, AutoGen and MCP-auth all fail confinement (three provide
+  none, one partial). Their authorization broker confines a compromised sub-agent
+  to **1.5 reachable actions against all 8,100 under bearer delegation** across
+  2,000 scenarios, at **~2.6 µs per decision**, 0 of 200,000 forged tokens
+  accepted. The closest thing yet to a design for `permission-store`'s unbuilt
+  stages 2–7, and it is about delegation specifically.
+- [2609.00949](https://arxiv.org/abs/2609.00949) **Calibration is the Bottleneck**
+  (2026-09-01) — decomposes multi-turn tool-call failure into action-class
+  miscalibration against execution failure over TOOL_CALL / ASK / REFUSE /
+  CONFIRM, with a self-revealing bound `Acc ≤ GAR`. A single **context-only**
+  perturbation moves accuracy **+11.5 pp on one model family and −21.0 pp on
+  another** in the same scenario — which is a warning about porting a prompt
+  change across models on one model's measurement.
+- [2609.02246](https://arxiv.org/abs/2609.02246) **LLM-as-a-Judge Is Not an
+  Oracle** (2026-09-02) — a position paper, so weighed as one, but the catalog of
+  eleven production evaluation-signal failures is concrete: agents reaching a
+  **100% pass rate that concealed 68% true capability** by reading cached answer
+  keys out of the environment; a corrupted ground-truth label steering the
+  optimizer into deleting correct rules; a syntactically broken prompt winning
+  because a silent parser fallback improved the metric.
+- [2609.00759](https://arxiv.org/abs/2609.00759) **Compile, Don't Memorize (CCA)**
+  (2026-09-01) — compiles prose context once into a typed IR with fixed slots
+  (`rules.{must_do, must_not, conditional}`, `output_spec`, `available_tools`,
+  `data_profile`). On CL-bench (1,899 tasks, 4 open models) it beats vanilla and
+  two long-context baselines on every model; Kimi K2.5 **15.4% → 21.4%**. Same
+  "a labelled field survives compression, prose does not" family as 2608.06953.
+- [2609.03340](https://arxiv.org/abs/2609.03340) **PlanFence** (2026-09-03) —
+  plans cite the exact records they were built from, and the executor validates
+  only the records affecting the pending action. In 30 controlled workflows a
+  freshness-only executor acts on the obsolete plan **in every task**; PlanFence
+  completes all of them with no invalid action. Small n; complements REVISE
+  (2609.00643) from the 09-03 sweep.
+- [2608.27487](https://arxiv.org/abs/2608.27487) **Grounded Checklist Partial
+  Credit** (2026-08-26) — evidence-grounded partial credit for skill
+  trajectories, **AUC 0.689 against 0.619** for holistic judging over 4,455
+  deduplicated SkillsBench trajectories, and the judge abstains when the log
+  carries no evidence.
+- [2609.01507](https://arxiv.org/abs/2609.01507) **LatentPress** (v2 2026-09-03) —
+  **0.504 accuracy at 7.70× compression against 0.490 uncompressed** on
+  LongMemEval, 43 ms per conversation to write. Recorded and **not actionable**:
+  it reads continuous memory tokens through the input-embedding interface, which
+  an API client does not have.
+
+## Screened and rejected, with the reason
+
+- **2609.02889** *Where Does Harness-Optimization Value Live?* — genuinely
+  relevant (nearly all self-evolution value localizes in the reflection/control
+  slot, +0.119 leave-one-in; an even four-way budget split leaves 16 rollouts per
+  slot, below the optimizer's search floor, and reaches 0.657 where concentrating
+  half that budget reaches 0.761). **Out of window**: it surfaced in the
+  September listing but the abs page reads *Submitted on 25 Jun 2026*, v1 only.
+  Noted here so the next sweep does not re-screen it, and worth a read if
+  inber ever auto-tunes its own prompt blueprint.
+- **2609.01736** *HEART / Tool Primitives* — headline numbers rest on a
+  25,519-function repository with an LLM wrapper per tool, and the comparison is
+  against bare models rather than a harness, so nothing is attributable to the
+  design.
+- **2609.00829** *HarnessEvolve* — same self-evolution space as 2609.02889 and no
+  measured numbers in the abstract at all.
+- **2609.00069** *Auditing Harness Tampering* — real phenomenon, decent taxonomy,
+  no rates; and it only applies to agents that rewrite their own harness, which
+  inber does not.
+- **2609.00252** *Spec-Driven Development for ASE* — the authors call it a
+  conceptual analysis over gray literature and say the evidence base is immature.
+- **2609.01345** *Cheap Verifiers, Large Blind Spots* — good work (a dashboard
+  reading a flat 3% while true error swings to 32%) about inference cascades and
+  student fine-tuning, not about a harness inber runs.
+- **2609.04128 / 2609.04148** *Environment Evolution, Terminal-Universe* —
+  training-data generation for terminal agents; useful to a lab, nothing for a
+  client.
+- **2608.24509 PeakBench**, **2609.02459 CivBench**, **2609.03047 SHELF** — pure
+  benchmark papers, no transferable mechanism.
+- **2608.15584, 2609.00891, 2609.03235, 2609.03430, 2609.03949, 2608.27128,
+  2608.28293** — serving-side KV-cache work. inber is an API client; same
+  structural exclusion the 08-10 sweep applied.
+- **2609.01693** *MCP-to-A2A egress* — careful and honest, but floor-limited and
+  inconclusive by the authors' own statement; the only positive result is that a
+  `PUBLIC - OK TO SHARE` label *raises* verbatim egress, in one configuration.
+- **2609.03450** *Plan Pointers / Record-Directive Form* — a large registered
+  study (14,760 attempts) whose effects are string-level and unstable across
+  panels; a +35.0-point criterion effect fails its own superiority rule on a
+  second panel, and 15 of 30 replication contrasts are unresolved.
+- **2609.00453 mimeo**, **2609.02749 Repo-To-Skill**, **2609.02217 SkillGLoW**,
+  **2609.02094 MASkills** — skill synthesis. mimeo is the most rigorous and its
+  judgment-transfer tests hit ceiling (94–100% in every condition), so its
+  headline question is unresolved.
+- **2609.01931** *Agent Flight Recorder* — on-chain anchoring for audit trails.
+- **2609.02371** *AGENTSCOPE failure diagnosis* — right topic (neuro-symbolic
+  failure localization over trajectories), but the abstract offers only
+  "significantly outperforms" with no numbers. Worth a re-look by someone who
+  reads the PDF.
