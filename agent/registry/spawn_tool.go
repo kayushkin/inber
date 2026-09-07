@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -15,28 +16,66 @@ import (
 	"github.com/kayushkin/inber/internal/textutil"
 )
 
-// RegistryAgent represents an agent entry from the bus-agent registry.
+// RegistryAgent represents an agent entry from inber's own agent registry,
+// GET /api/agents. The field names are that route's wire contract: it is
+// served by server.handleAgents, which builds exactly this shape.
 type RegistryAgent struct {
 	Name         string `json:"name"`
 	Orchestrator string `json:"orchestrator"`
 	Enabled      bool   `json:"enabled"`
 }
 
-// fetchRegistryAgents queries the bus-agent API for registered agents.
-// Falls back to an empty list if the registry is unavailable.
+// registryBaseURL is the inber server this tool reads its agent list from.
+//
+// INBER_SERVER_URL is the name the rest of the fleet already uses for this
+// (kayushkin.com/main.go resolves the same route through the same variable and
+// the same default), so this joins the existing name rather than minting a
+// second one for one endpoint.
+func registryBaseURL() string {
+	if v := os.Getenv("INBER_SERVER_URL"); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	return "http://127.0.0.1:8200"
+}
+
+// fetchRegistryAgents reads the registered agents from inber's own
+// GET /api/agents and returns nil when it cannot get an answer.
+//
+// The route is inber's, not another service's. server/api_models.go's
+// handleAgents and server/agent_names.go's sortedAgentNames both name this
+// function as the consumer they sort their response for, so the producer and
+// the consumer are the same repository and the contract is checked in.
+//
+// ⚠️ Every failure returns nil, and both callers read nil as "no registry, so
+// allow anything" — the name check is off whenever this returns nothing. That
+// fail-OPEN choice is deliberately left exactly as it was; whether an
+// unreachable registry should instead be fatal is an open question and not one
+// this function may answer on its own. What did change is that failing is no
+// longer SILENT: each way of failing now says so, because a 200 carrying a body
+// this cannot read is a fault and used to be indistinguishable from a refused
+// connection.
 func fetchRegistryAgents() []RegistryAgent {
+	url := registryBaseURL() + "/api/agents"
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://localhost:8101/api/agents")
+	resp, err := client.Get(url)
 	if err != nil {
+		log.Printf("[spawn_tool] agent registry unreachable at %s: %v — agent-name validation is OFF", url, err)
 		return nil
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		log.Printf("[spawn_tool] agent registry %s: reading body: %v — agent-name validation is OFF", url, err)
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[spawn_tool] agent registry %s answered %s — agent-name validation is OFF", url, resp.Status)
 		return nil
 	}
 	var agents []RegistryAgent
 	if err := json.Unmarshal(data, &agents); err != nil {
+		log.Printf("[spawn_tool] agent registry %s answered %s but the body is not an agent list (%v) — agent-name validation is OFF",
+			url, resp.Header.Get("Content-Type"), err)
 		return nil
 	}
 	return agents
