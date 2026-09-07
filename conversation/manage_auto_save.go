@@ -85,13 +85,24 @@ func autoSaveToMemory(
 			continue
 		}
 
-		// Extract key sentences
-		sentences := extractKeySentences(content, 3)
-		if len(sentences) == 0 {
+		fragments := substantialLeadingFragments(content, 3)
+		if len(fragments) == 0 {
+			// This loop only reaches messages that are about to be
+			// truncated, so an extraction that found nothing is content
+			// leaving the process in both directions at once: the detail
+			// goes out of the live conversation and no memory row replaces
+			// it. Say so rather than moving on in silence — the same rule
+			// the failed Save below already follows.
+			//
+			// Whether an empty extraction should also BLOCK the truncation
+			// in manage.go, rather than only report it, is open and is not
+			// decided here: blocking makes pruning refuse to free the tokens
+			// the caller asked for. Todo 86347015-9924-40f4-99db-1d79c1e767ca.
+			log.Printf("[warn] auto-save extracted nothing from a %d-char assistant message for session %s; it is still being truncated, so the detail is lost", len(content), sessionID)
 			continue
 		}
 
-		fact := strings.Join(sentences, " ")
+		fact := strings.Join(fragments, " ")
 		importance := 0.5
 		if strings.Contains(lowerContent, "important") {
 			importance = 0.7
@@ -119,21 +130,37 @@ func autoSaveToMemory(
 	return saved, nil
 }
 
-// extractKeySentences extracts the first N sentences from text
-func extractKeySentences(text string, maxSentences int) []string {
-	// Simple sentence splitter (not perfect but good enough)
-	sentences := strings.FieldsFunc(text, func(r rune) bool {
+// substantialLeadingFragments splits text on sentence terminators, looks at
+// only the first maxFragmentsScanned pieces, and returns those longer than 20
+// bytes once trimmed.
+//
+// The name says "fragments" and not "sentences" because FieldsFunc splits on
+// every '.', so "1. First item." and "v2.1.4" are three and four pieces, not
+// one. It says "scanned" because the budget is spent on pieces this function
+// then rejects: a message opening with a numbered list burns the budget on
+// "1" and "2" and can return nothing at all. The old name, extractKeySentences,
+// promised "the first N sentences from text" and delivered none of those three
+// words; the caller reads an empty result as "nothing worth keeping" when it
+// often means "the budget went on digits".
+//
+// The 20-byte floor disagrees with the 10 in manage_text_utils.go, so a
+// fragment of 11-20 bytes is kept by the truncator and refused here. Which
+// threshold is right, and whether these two functions are one question or two,
+// is open — todo 86347015-9924-40f4-99db-1d79c1e767ca. Nothing about the
+// behaviour below has changed.
+func substantialLeadingFragments(text string, maxFragmentsScanned int) []string {
+	fragments := strings.FieldsFunc(text, func(r rune) bool {
 		return r == '.' || r == '!' || r == '?'
 	})
 
 	var result []string
-	for i, sentence := range sentences {
-		if i >= maxSentences {
+	for i, fragment := range fragments {
+		if i >= maxFragmentsScanned {
 			break
 		}
-		sentence = strings.TrimSpace(sentence)
-		if len(sentence) > 20 { // Skip very short fragments
-			result = append(result, sentence)
+		fragment = strings.TrimSpace(fragment)
+		if len(fragment) > 20 { // Skip very short fragments
+			result = append(result, fragment)
 		}
 	}
 
