@@ -31,9 +31,11 @@ const agentStoreBody = `[{"slug":"dagda","display_name":"Dagda","role":"builder"
 // a route on a different service entirely. It asserts on RequestURI rather
 // than URL.Path because Go's server decodes %2F back into a slash in the
 // latter, so a path assertion there passes either way.
-func routingRegistry(t *testing.T, status int, contentType, body string) *httptest.Server {
+func routingRegistry(t *testing.T, status int, contentType, body string) (*httptest.Server, *[]string) {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.Method+" "+r.RequestURI)
 		if r.RequestURI != "/api/agents" {
 			http.Error(w, "no such route", http.StatusNotFound)
 			return
@@ -42,6 +44,7 @@ func routingRegistry(t *testing.T, status int, contentType, body string) *httpte
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
+	return srv, &asked
 }
 
 // captureLog collects what the package writes to the standard logger while fn
@@ -66,7 +69,7 @@ func captureLog(t *testing.T, fn func()) string {
 // this function's source. Before this test the literal pointed at :8101, which
 // is dash — a service with no /api/agents handler at all.
 func TestFetchRegistryAgentsReadsInbersOwnAgentsRoute(t *testing.T) {
-	srv := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
+	srv, _ := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
 	defer srv.Close()
 	t.Setenv("INBER_SERVER_URL", srv.URL)
 
@@ -116,7 +119,7 @@ func TestRegistryBaseURLDefaultsToTheInberServer(t *testing.T) {
 // nil is unchanged — the fail-open half is deliberately not decided here — but
 // it is now reported instead of swallowed.
 func TestAnUnreadableBodyIsReportedRatherThanReadAsAnEmptyRegistry(t *testing.T) {
-	srv := routingRegistry(t, http.StatusOK, "text/html; charset=utf-8", "<!doctype html>\n<html></html>")
+	srv, _ := routingRegistry(t, http.StatusOK, "text/html; charset=utf-8", "<!doctype html>\n<html></html>")
 	defer srv.Close()
 	t.Setenv("INBER_SERVER_URL", srv.URL)
 
@@ -140,7 +143,7 @@ func TestAnUnreadableBodyIsReportedRatherThanReadAsAnEmptyRegistry(t *testing.T)
 // A non-200 reaches the message, rather than failing one step later in the
 // decoder and being reported as a malformed body.
 func TestANon200StatusReachesTheWarning(t *testing.T) {
-	srv := routingRegistry(t, http.StatusServiceUnavailable, "application/json", `{"error":"down"}`)
+	srv, _ := routingRegistry(t, http.StatusServiceUnavailable, "application/json", `{"error":"down"}`)
 	defer srv.Close()
 	t.Setenv("INBER_SERVER_URL", srv.URL)
 
@@ -159,7 +162,7 @@ func TestANon200StatusReachesTheWarning(t *testing.T) {
 // on. The fail-open behaviour is asserted so that changing it is a decision
 // somebody has to make against a red test, not a silent drift.
 func TestAnUnreachableRegistryIsReportedAndLeavesTheCheckOpen(t *testing.T) {
-	srv := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
+	srv, _ := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
 	srv.Close() // nothing is listening on that port now
 	t.Setenv("INBER_SERVER_URL", srv.URL)
 
@@ -200,7 +203,7 @@ func TestAgentStoreRowsDecodeIntoBlanksRatherThanFailing(t *testing.T) {
 
 // The description the model is shown lists the agents when the registry answers.
 func TestValidAgentsDescriptionNamesTheAgents(t *testing.T) {
-	srv := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
+	srv, _ := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
 	defer srv.Close()
 	t.Setenv("INBER_SERVER_URL", srv.URL)
 
@@ -214,12 +217,31 @@ func TestValidAgentsDescriptionNamesTheAgents(t *testing.T) {
 
 // validOrchestrators reports each distinct orchestrator once.
 func TestValidOrchestratorsAreDeduplicated(t *testing.T) {
-	srv := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
+	srv, _ := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
 	defer srv.Close()
 	t.Setenv("INBER_SERVER_URL", srv.URL)
 
 	got := validOrchestrators()
 	if len(got) != 2 {
 		t.Fatalf("got %v, want the two distinct orchestrators in the fixture", got)
+	}
+}
+
+// ⭐ The request target is asserted directly, because a routing double that
+// 404s a wrong path only proves the call was refused, not that the right route
+// was asked for. Both are true of a literal that names another service.
+func TestTheRequestTargetIsInbersAgentsRoute(t *testing.T) {
+	srv, asked := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
+	defer srv.Close()
+	t.Setenv("INBER_SERVER_URL", srv.URL)
+
+	if got := fetchRegistryAgents(); len(got) != 3 {
+		t.Fatalf("got %d agents, want 3", len(got))
+	}
+	if len(*asked) != 1 {
+		t.Fatalf("the server was asked %d times, want 1: %v", len(*asked), *asked)
+	}
+	if got := (*asked)[0]; got != "GET /api/agents" {
+		t.Fatalf("the tool asked for %q, want %q", got, "GET /api/agents")
 	}
 }

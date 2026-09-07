@@ -14,9 +14,11 @@ import (
 // wrong URL is half of what this file is about — the tool's default pointed at
 // a service with no such route. It asserts on RequestURI rather than URL.Path
 // because Go's server decodes %2F back into a slash in the latter.
-func deployDouble(t *testing.T, status int, contentType, body string) *httptest.Server {
+func deployDouble(t *testing.T, status int, contentType, body string) (*httptest.Server, *[]string) {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.Method+" "+r.RequestURI)
 		if r.RequestURI != "/api/forge/deploy" || r.Method != http.MethodPost {
 			http.Error(w, "no such route", http.StatusNotFound)
 			return
@@ -25,6 +27,7 @@ func deployDouble(t *testing.T, status int, contentType, body string) *httptest.
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
+	return srv, &asked
 }
 
 // A 200 carrying HTML is refused rather than reported as a started deploy.
@@ -34,7 +37,7 @@ func deployDouble(t *testing.T, status int, contentType, body string) *httptest.
 // discarded, the status was 200, and the tool told the model "Deploy started
 // (id: 0)" — a success message for work that had not happened.
 func TestAnHTMLBodyIsRefusedRatherThanReportedAsAStartedDeploy(t *testing.T) {
-	srv := deployDouble(t, http.StatusOK, "text/html; charset=utf-8", "<!doctype html>\n<html></html>")
+	srv, _ := deployDouble(t, http.StatusOK, "text/html; charset=utf-8", "<!doctype html>\n<html></html>")
 	defer srv.Close()
 	t.Setenv("BUS_AGENT_URL", srv.URL)
 
@@ -55,7 +58,7 @@ func TestAnHTMLBodyIsRefusedRatherThanReportedAsAStartedDeploy(t *testing.T) {
 // so this is not a hypothetical body — it is what the route that really owns
 // this path returns today.
 func TestAStubAnswerIsRefusedRatherThanReportedAsDeployZero(t *testing.T) {
-	srv := deployDouble(t, http.StatusOK, "application/json",
+	srv, _ := deployDouble(t, http.StatusOK, "application/json",
 		`{"status":"stub","message":"deploy not implemented yet"}`)
 	defer srv.Close()
 
@@ -71,7 +74,7 @@ func TestAStubAnswerIsRefusedRatherThanReportedAsDeployZero(t *testing.T) {
 // A non-200 reaches the message with its status, rather than being reported as
 // a bare empty error string.
 func TestANon200ReachesTheDeployError(t *testing.T) {
-	srv := deployDouble(t, http.StatusBadGateway, "application/json", `{"error":"pool is busy"}`)
+	srv, _ := deployDouble(t, http.StatusBadGateway, "application/json", `{"error":"pool is busy"}`)
 	defer srv.Close()
 
 	_, err := postDeploy(srv.URL, "probe", 1, "nightly-test")
@@ -90,7 +93,7 @@ func TestANon200ReachesTheDeployError(t *testing.T) {
 // id reaches the message. Without this the three refusals above are satisfied
 // by a function that refuses everything.
 func TestARealDeployResultIsStillReported(t *testing.T) {
-	srv := deployDouble(t, http.StatusOK, "application/json", `{"deploy_id":4171}`)
+	srv, _ := deployDouble(t, http.StatusOK, "application/json", `{"deploy_id":4171}`)
 	defer srv.Close()
 
 	out, err := postDeploy(srv.URL, "probe", 7, "nightly-test")
@@ -105,16 +108,28 @@ func TestARealDeployResultIsStillReported(t *testing.T) {
 	}
 }
 
-// A path the server does not route is refused, not read as an empty result.
-func TestAWrongPathIsRefused(t *testing.T) {
-	srv := deployDouble(t, http.StatusOK, "application/json", `{"deploy_id":1}`)
+// ⭐ The request target is asserted directly, because refusing a wrong path is
+// not the same as sending the right one.
+//
+// The first version of this test posted to base+"/api/forge" and checked that
+// the call was refused. It could not fail: postDeploy appends its own path, so
+// any literal — right or wrong — produced a route the double 404s, and the
+// test passed either way. Scoring caught it (the arm that shortens the literal
+// came back caught by four other tests and not by this one). Reading back what
+// the server was actually asked for is the only assertion here that observes
+// the literal.
+func TestTheRequestTargetIsTheForgeDeployRoute(t *testing.T) {
+	srv, asked := deployDouble(t, http.StatusOK, "application/json", `{"deploy_id":9}`)
 	defer srv.Close()
 
-	// The double 404s anything but /api/forge/deploy; posting to the base URL
-	// is what a dropped path segment would do.
-	_, err := postDeploy(srv.URL+"/api/forge", "probe", 1, "nightly-test")
-	if err == nil {
-		t.Fatal("a route the server does not have was reported as success")
+	if _, err := postDeploy(srv.URL, "probe", 1, "nightly-test"); err != nil {
+		t.Fatalf("a well-formed deploy result was refused: %v", err)
+	}
+	if len(*asked) != 1 {
+		t.Fatalf("the server was asked %d times, want 1: %v", len(*asked), *asked)
+	}
+	if got := (*asked)[0]; got != "POST /api/forge/deploy" {
+		t.Fatalf("the tool asked for %q, want %q", got, "POST /api/forge/deploy")
 	}
 }
 
