@@ -2037,3 +2037,51 @@ contract that is documented, not enforced.
   the escape and the sentence that says a fix must reach the handler. The one
   genuinely new item is a testing style: assert that a canary token is absent from
   the whole exported surface, not that the guard was invoked.
+
+## Harness-watch — 2026-09-08 (#11685, #11383, #11841): an approval is an unbounded wait, so it must not be a suspended future
+
+Written up in full in `agentic-design-patterns.md` (§ 2026-09-08). Short form:
+
+- **[#11685](https://github.com/aaif-goose/goose/pull/11685) (`14c00a45`) — tool
+  approval in the state machine.** `tool_confirmation_coordinator.rs` holds a
+  per-session state with a `turn_lock` held across the approval wait, a separate
+  submission lock, a `confirmations` map where `None` means unanswered, and a
+  `Notify`. The mechanism that matters: decisions are **persisted into the
+  conversation before the turn resumes**, and `resume_state_machine_turn` builds
+  a *new* machine over the same session and same logical turn. Nothing suspended
+  is kept in RAM, so approval survives disconnects and full session reloads. Two
+  invariants are pinned by tests — a second concurrent turn is
+  `Err("session already has an active turn")`, and **`first_answer_is_immutable`**:
+  answering an already-answered request id is an error, because a re-answerable
+  request is an escalation channel. `ActiveTurnGuard::drop` clears pending
+  requests so an aborted turn leaves no answerable ghosts.
+  inber has no approver at all — `engine/build_hooks.go:89-102` refuses
+  `NeedsApproval` outright and says so to the model — so this is the design to
+  copy *if* one is built, not a defect to file.
+- **[#11383](https://github.com/aaif-goose/goose/pull/11383) (`27d08b69`) —
+  preserve permission revocations across managers.** Two processes each held an
+  in-memory `permission.yaml` snapshot; the second writer serialised its older
+  map over the newer one and silently restored a revoked permission. Fix: file
+  lock → reload from disk **while holding the lock** → atomic replace, preserving
+  a symlinked target rather than the link. Honest about scope: it does not
+  invalidate live read caches in running processes. **Last-write-wins on a
+  whole-map config file is a permission-rollback bug wearing a config-file
+  costume.**
+- **[#11841](https://github.com/aaif-goose/goose/pull/11841) (`4fee10da`) —
+  count durable background turns.** Subagent turn counts were derived from
+  streamed `AgentEvent::Message` frequency, so one background answer reported
+  hundreds. `durable_assistant_turn_count` counts *user-visible contiguous
+  assistant blocks in the persisted child session*, collapsing fragments and
+  excluding compaction scaffolding and continuation prompts. **Count from the
+  durable record, not the stream** — stream events fragment on network and
+  provider behaviour. inber's counter is already `e.Turn.Counter`, incremented
+  per turn and restored through `RestoreSession`; no twin.
+
+Checked and boring: **#11827** is a protocol-version bump whose diff is 540/553
+lines of `Cargo.lock`. **#11798** deletes an 87-line timeout that had been put
+on a *blocking human password dialog* — too short for a person to type a
+password and conceptually wrong, but one line of insight. **#11789** deletes
+`local_model_registry.rs` (824 lines) in favour of reading the HF cache directly
+and puts `hf-hub` behind an optional feature — good dependency hygiene,
+local-inference specific. **#11745** rejects non-HTTPS Snowflake URLs across
+redirects; correct, single-provider, no design content.

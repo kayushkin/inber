@@ -1057,3 +1057,59 @@ does not have.
   watcher, no local schedules home, and no token refresh (delegated to auth-store).
 - **#13677 / #13647** (parent aborts to delegated subagents) — the whole abort-cascade theme
   was this file's 2026-08-31 entry. Not re-reported.
+
+## 2026-09-08: the guard was written, reviewed, and never once ran — plus what an imported transcript has to survive
+
+Three cline PRs this window, all with the same underlying question: *what does
+this component actually know, as opposed to what does it claim?* Written up in
+full in `agentic-design-patterns.md` (§ 2026-09-08); the short form:
+
+- **[#13835](https://github.com/cline/cline/pull/13835) (`adbfbd97`) —
+  `apply_patch` Add File refuses to overwrite.** The guard
+  `if (path in this.currentFiles) throw new DiffError('Add File Error: File already exists')`
+  existed all along in `PatchParser.parseAdd`, and had never fired: `loadFiles()`
+  populated `currentFiles` only from `extractFilesForOperations(lines, [UPDATE, DELETE])`,
+  so an ADD target was never in the map. Silent, total overwrite of an existing
+  file. The fix reads ADD targets from disk too and rejects in
+  `computePatchChanges`, i.e. before `applyChanges` writes anything, and the
+  `DiffError` propagates out of the executor so the model reads
+  `Add File Error: File already exists: note.txt` as its `tool_result`.
+  cline notes the hole is inherited verbatim from OpenAI's reference
+  `apply_patch.py` — **anyone who ported that reference tool ported the bug.**
+  The test to copy asserts the rejection *and* that the original bytes are
+  unchanged; asserting only the throw passes against a version that threw after
+  writing.
+- **[#13744](https://github.com/cline/cline/pull/13744) (`b9977a13`) — import
+  sessions from Claude Code, Codex and opencode.** No intermediate
+  representation by design; all three collapse onto Anthropic's four block
+  types. Claude Code's `.jsonl` is a `parentUuid` tree, not a list (a
+  user/assistant-only walk collapsed 123 messages to 1). Codex's user-role
+  `response_item`s are injected AGENTS.md context and must not be imported as
+  prompts. The three-pass `sanitizeImportedMessages` drops orphaned
+  `tool_result`s, rebuilds each answer as one consolidated results message in
+  `tool_use` order with explicit placeholders, and strips thinking signatures
+  because they only validate against the originating session. **History has to
+  survive being sent back to a provider.**
+- **[#13652](https://github.com/cline/cline/pull/13652) — Hub-managed Agent
+  Plugins.** Discovery is limited to `~/.agents/plugins` on the host and
+  workspace `.agents/plugins` is *deliberately* ignored, so opening a repository
+  cannot activate repository-controlled MCP servers. Containment is re-checked
+  after `${...}` expansion, not only before. Snapshot rule, stated: new sessions
+  pick up changes immediately, an already-running turn keeps the capabilities it
+  started with.
+- **[#13649](https://github.com/cline/cline/pull/13649)** retires built-in
+  `.clineignore` — it only filtered automatic context loading and any shell
+  command walked around it — in favour of a `PreToolUse` hook that cancels the
+  call. `.clineignore` itself is write-protected, found when the model edited the
+  ignore file to add `!key.pem` and then read the file. **An advisory filter is
+  not a control, and a policy file the model can edit is not a policy.**
+
+Checked and thin: **#13816** (silent shell-integration successes reported as
+`[Command exited with code 1]` with a clipboard snapshot attached; fixed by
+gating the fallback on the OSC 633 `CommandExecuted` marker) carries one real
+idea — *"empty output" and "capture failed" are different facts and conflating
+them lies to the model* — inside a pile of VS Code terminal plumbing. **#13785 /
+#13787 / #13727** are hub version-prompt release engineering; the only durable
+line is *don't prompt for something the user cannot act on*. **#13758** restores
+the proto3 JSON contract at the dispatcher rather than in every handler —
+correct instinct, no Go analogue.

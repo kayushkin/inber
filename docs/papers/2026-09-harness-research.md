@@ -868,3 +868,289 @@ solver tutorials — their largest measured gain, **80.9% → 96.4%**.
   failure localization over trajectories), but the abstract offers only
   "significantly outperforms" with no numbers. Worth a re-look by someone who
   reads the PDF.
+
+# 2026-09-08 sweep
+
+The arXiv Atom API answered this time — 150 most-recent entries each from
+`cs.SE`, `cs.MA`, `cs.AI` and `cs.CL`, 555 distinct papers spanning 2026-08-20 →
+2026-09-04, cross-checked against the `cs.SE` and `cs.MA` `/recent` listing
+pages. **Nothing exists newer than 2026-09-04**: 09-05 and 09-06 were the
+weekend and 09-07 was Labor Day, so the Monday announcement block carries Friday
+submissions. The real new window over the 09-04 sweep is one day. Deduped
+against 545 ids extracted from `docs/papers/` and `docs/comparisons/`; all ten
+below are absent from that set, and every date and title was read off
+`arxiv.org/abs/` rather than a search snippet.
+
+## 1. Sub-agent delegation was strictly dominated by a single agent with better retrieval
+
+[arXiv:2609.04898](https://arxiv.org/abs/2609.04898) — **RefactorPlatform: An Open-Source
+Harness for Controlled Evaluation of Repository-Scale Refactoring Agents** (2026-09-04, cs.CL).
+An evaluation harness that holds the environment fixed and varies one design axis at a time —
+model backbone, execution regime (baseline / retrieval-augmented / multi-agent), prompt
+specificity — over 100 multi-file RefactorBench tasks and four model families, with per-task
+token, diff and transcript logging and AST-based verification.
+
+- A lean retrieval-augmented **single** agent scores **86%** against **66%** for the sub-agent
+  configuration on matched tasks, and **no task passes under delegation that fails under
+  retrieval**. The sub-agent set is a subset, not a trade.
+- **AST-aware chunking beats naive token-window chunking by 25–30%** across all prompt modes.
+- **Naive retrieval falls *below* the retrieval-free baseline.** Retrieval is not free-standing
+  good; the chunking is doing the work.
+- Retrieval's accuracy gain absorbs its token overhead, so cost per *successful* refactoring is
+  unchanged.
+
+**What inber should consider.** This is the sharpest negative result on delegation this file has
+carried, and it lands on `docs/multi-agent-design.md` and `docs/async-spawning.md`. Before more is
+spent on spawn/fork machinery, run the same A/B on inber's own task set: one agent with better
+context assembly against spawned children. The chunking number separately argues that
+`docs/smart-truncation.md`'s unit of truncation should be AST-aware rather than token-window —
+`session/truncate.go`'s `truncateHeadTail` breaks on newlines, which is the crudest version of
+the thing that measured 25–30%.
+
+## 2. LLM-compressed memory does not survive a model change; fixed schemas do
+
+[arXiv:2609.05339](https://arxiv.org/abs/2609.05339) — **Does Your Agent's Memory Survive a
+Model Upgrade? A Controlled Study of Memory Portability** (2026-09-04, cs.AI). Four memory
+representations under a *writer model swap* — verbatim long-context history, chunked RAG,
+model-compressed natural-language notes, and a fixed-schema knowledge graph — over 48 synthetic
+histories with randomized answer codes and exact scoring.
+
+- Fixed-schema structures transfer essentially free: **+0.0004 ± 0.0020** accuracy change across
+  the swap.
+- Compressed NOTES are strongly model-coupled and shift **asymmetrically by +9.91 or −13.28
+  percentage points** depending on migration *direction*.
+- A 50/50 mixed embedding index captures only **4.96** of the **11.90** points available from a
+  full re-embed.
+- Decomposition: **80%** of the NOTES deficit is construction-time information loss; **81%** of
+  the RAG deficit is retrieval failure.
+- **Store-only repair of NOTES hit the 90% recovery target in 0 of 48 cases.** Keeping the raw
+  source history recovered **34 of 48**.
+
+**What inber should consider.** inber's persistent memory and `memory-store` write exactly the
+representation that measurably does not survive a model change — and the model *does* change:
+open todo `905a5e68` records that every run without an explicit `--model` fails over silently.
+Two concrete moves fall out. **Never delete the raw source transcript a memory was distilled
+from**, because store-only repair failed in all 48 cases. And treat an embedding-model change as
+all-or-nothing: a partial re-index forfeits most of the available gain. Worth reading against
+`docs/memory-extraction-evaluation.md`, which scores extraction quality and not portability.
+
+## 3. How you pack retrieved content matters as much as what you retrieve
+
+[arXiv:2609.04915](https://arxiv.org/abs/2609.04915) — **Compact-Memory LLM Agents via Online
+Max-Member Clustering and Atom-Aware Packing** (2026-09-04, cs.AI). An online clustered-memory
+pipeline with two parts: a cosine-gated max-member merge write rule, and an atom-aware *grouped*
+context packer. On AMA-Bench it reaches **83% of full-context quality at 32% of the token cost**
+at a 4k budget, beating the closest streaming-clustered baseline by **+3.5 to +6.0 pp (p<.001)**
+across the ~2.6k–5k regime over four seeds. The ablation is the useful number: **+5.7 pp** from
+the merge rule and **+5.0 pp** from grouped-versus-flat packing, roughly even. Reproduces on
+RealMem (+2.97 pp over Streaming-Proto, +1.65 pp over A-MEM) but is only on par with BM25-RAG,
+and the authors are explicit that the win is regime-bounded to roughly 2k–5k prompt tokens.
+
+**What inber should consider.** Five points from changing the *packer* alone, with the retriever
+untouched, is the cheapest experiment in this batch. `engine/turn_prompt.go:99-153` concatenates:
+stable memory blocks in `BuildContext` order into the system section, then fleet status, volatile
+blocks and every injector's output joined with `"\n"` into `VolatileContext`. Grouping by source
+before joining is a local change. Pairs with `2608.31057` from the 09-01 sweep — equal token
+budgets are not equal delivered context.
+
+## 4. Adding a tool can break a task that used to pass
+
+[arXiv:2609.04280](https://arxiv.org/abs/2609.04280) — **EVOHARNESSBENCH: Can Your Agents Keep
+Pace with an Evolving Harness?** (2026-09-03, cs.MA). Puts the non-stationarity in the *harness*
+rather than the task stream: 17 multi-stage harness streams built deterministically from
+verifier-based benchmarks — **802 tasks, 520 tools, 42 skills, 62 agents** — evolving along three
+axes (tools, skills, specialist agents), evaluated both for retention of previously-solved tasks
+and for whether accumulated experience stays useful. Three findings: **harness expansion alone
+degrades performance on previously-solved tasks** ("harness-induced forgetting"); self-evolution
+gains are inconsistent across stages, axes and environments; and retention and adaptation pull
+against each other. Weakness: the gaps are reported qualitatively rather than as one headline
+delta.
+
+**What inber should consider.** This is a measurement this fleet currently cannot make.
+`tool-store` and `bundle-store` exist to grow the tool and skill set over time, and this says
+adding a tool can silently break a task that used to pass. The mitigation is a regression suite
+pinned to a fixed task set, re-run whenever a bundle's member list changes — and `bundle-store`'s
+`/resolve` is the natural place to version the resolved set so a regression can be attributed to
+a specific harness delta rather than to the model.
+
+## 5. Building an agent, scored by deploying it
+
+[arXiv:2609.04611](https://arxiv.org/abs/2609.04611) — **τ^τ-Bench: An Environment for
+End-To-End, Realistic Agent Construction** (2026-09-04, cs.AI). Makes *building an agent* the
+task a coding agent is scored on: real business records, a client holding requirements, a
+production API, an inherited codebase, and serving-cost limits; the delivered agent is then
+deployed against held-out simulated users. Across **53 tasks in four domains** the strongest
+configuration — **Claude Opus 5 under Claude Code — passes 23.9%** against an expert-authored
+reference ceiling of **82.2%**. The named failure modes are behavioural, not capability limits:
+shallow queries instead of deep comprehension of the records, near-zero communication back to the
+client, and too little experimentation with architecture and serving spend — shipping the first
+design that runs.
+
+**What inber should consider.** The 58-point gap is almost entirely process, and two of the three
+failure modes are things a harness can *force* rather than hope for. "Communicates almost nothing
+to the client" is a delivery failure of the same family as `2608.29128` in the 09-01 sweep, where
+77% of failing runs had already reached the correct final state. A required check-in turn and an
+explicit "try a second architecture before committing" step are cheap interventions with a
+measurable target to beat.
+
+## 6. A reviewer must be a different model family — self-review buys nothing
+
+[arXiv:2609.04270](https://arxiv.org/abs/2609.04270) — **Reviewer Capability Governs Rejection
+Targeting, Not Repair Skill: Evidence from LLM Execute-Review-Revise Pipelines** (2026-09-02,
+cs.SE). Varies *reviewer* capability across a constant set of 100 olympiad maths problems and
+measures the outcome of every individual rejection.
+
+- A **cross-family mid-tier reviewer lifts final accuracy 12 points, 52% → 64% (p=0.0005), with
+  zero damaged answers.**
+- Same-model self-review has the **highest error-detection recall of any condition (0.85)** and
+  yields **no significant gain**: it rejects **2.1× as often** for a third the repair rate (15%
+  vs 43%, p=0.0074) and **falsely rejects 35% of its own correct answers against 2%** for the
+  cross-family reviewer (paired p=0.000015).
+- Self-review's low damage rate is revision *inertia*, not quality: of 18 false rejections, all 3
+  the executor complied with became wrong, and the 15 it ignored survived.
+- Below a capability floor the reviewer is inert — the weakest one changed **0 of 100** final
+  answers while doubling token cost.
+
+Honest scope: one configuration, 100 problems, framed by the authors as a controlled pilot.
+
+**What inber should consider.** If inber runs any execute-review-revise pattern across its
+agents, the reviewer must be a *different model family*, not the same model reviewing itself, and
+a too-weak reviewer is pure cost. The selection metric matters too: **detection recall is the
+wrong number to pick a reviewer on** — it was highest exactly where the outcome did not move.
+Repair rate and false-rejection rate are what tracked the result.
+
+## 7. Put the execution contract in the prompt
+
+[arXiv:2609.05232](https://arxiv.org/abs/2609.05232) — **Substrate-Aware AI Agents: Execution
+Context as a First-Class Input** (2026-09-04, cs.AI). Names "substrate blindness" — the absence
+of memory, wall-time and runtime limits from an agent's planning state — and tests it on
+numerical code generation across three frontier configurations, either from the task alone or
+with a **128 MB RAM / 10.0 s wall-time contract** stated in the prompt. Contract disclosure
+reduced peak process memory in **13 of 14** index-aligned comparisons and mean wall time in all
+three cohorts, up to **3.1× faster**. At a tighter 96 MB contract, correct-and-within-budget
+outcomes went from **0/5, 1/5, 0/5** to **4/5, 5/5, 3/5**, with cohort mean MaxRSS **49–74%
+lower**. The changes were structural — bounded blocking, float32 retention, upper-triangle
+traversal, memory-mapped buffers — not cosmetic.
+
+**What inber should consider.** The cheapest win in this batch, and inber already *has* the
+facts: forge slot limits, `repo-store`'s signature, and the per-job `timeout_seconds` the
+scheduler enforces by killing the process group. None of them reach the prompt. A one-line
+execution contract in the system prompt is a small change against a 0/5 → 4/5 effect. Caveat
+before over-reading it: a single narrow numerical task, not a repo-scale coding benchmark.
+
+## 8. Speculative macro commit — conditional, and inber has the snapshot primitive
+
+[arXiv:2609.03236](https://arxiv.org/abs/2609.03236) — **Speculative Macro Commit for Faster
+Tool-Using Agents** (2026-09-03, cs.AI). A two-tier runtime: a large authoritative actor produces
+the official trajectory while a small drafter continuously predicts and *executes* future action
+chains on an isolated environment snapshot. Recurring multi-action skeletons are mined from
+training traces into a macro library; when the actor's next call matches the first drafted
+action, the remaining pre-executed steps **and their observations** are committed. With
+Qwen3.5-27B INT4 as actor and Qwen3.5-4B as drafter it **matches sequential accuracy** while
+cutting latency **10.23% over Speculative Actions and 18.59% over sequential** on the τ²-Bench
+Telecom subset; on AppWorld it cuts wall time **7.7% over SA and 44.9% over sequential**, with a
+small completion-rate drop. Code released.
+
+**What inber should consider.** Filed as interesting-but-conditional. It needs an isolated
+environment snapshot to speculate against and a cheap drafter; forge's worktree slots are exactly
+that snapshot primitive. Two things to read before adopting: the AppWorld result trades some task
+completion for the 44.9%, and the whole mechanism assumes the *actor* is the latency bottleneck,
+which is much less true for an API client than for local inference.
+
+## 9. Non-arXiv: a recency prior that measurably hurt
+
+HuggingFace blog, **"Give Your Coding Agents a Memory You Own"** (funes) —
+<https://huggingface.co/blog/funes>, 2026-09-03, David Corvoysier. A memory layer that indexes
+agent session traces into a searchable local store: traces from Claude Code, Codex, pi and Hermes
+normalized to one turn-and-block format, chunked, embedded with a pinned local model, written to
+a Lance dataset; retrieval fuses vector search with BM25, reranks with a cross-encoder, reweights
+by recency and pulls in neighbouring chunks. Two numbers worth carrying: on handoff-versus-recall
+tasks, **recall was 8× cheaper than a written handoff on one task and 4× on another**, while
+**compaction failed outright on one of the two**; and on a 19,195-session corpus with 100 test
+questions, **hit@1 was 9/100 with a 30-day recency half-life and 19/100 with recency weighting
+disabled** — the recency prior actively hurt. Blog-post rigour, not paper rigour; 19/100 is a
+weak absolute number.
+
+**What inber should consider.** Two things. The recency result is a direct warning for any
+recency decay in `memory-store` — measure it rather than assuming it helps. And "compaction
+failed outright on one of two tasks" while retrieval-from-trace was 4–8× cheaper argues for
+making inber's session traces *queryable* rather than only compactable; the corpus already exists
+in `.inber/sessions.db`.
+
+## 10. Second tier — verified in window, not written up in full
+
+- [arXiv:2609.05279](https://arxiv.org/abs/2609.05279) — *Testing Interchangeability in LLM Agent
+  Teams* (2026-09-04). Swapping a role-matched agent between independently-formed teams costs
+  little in task score but raises **communication tokens per unit of progress by 16–63%** against
+  a placebo that reproduces the disruption without changing the occupant. Longer formation
+  histories worsen the penalty; greedy decoding reduces it. Relevant only if inber ever hot-swaps
+  an agent inside a running multi-agent session — and the cost shows up in tokens, not in the
+  success bit, which is the half a naive metric would miss.
+- [arXiv:2609.04875](https://arxiv.org/abs/2609.04875) — *Forgetting Without Restarting:
+  Execution-State Unlearning for Stateful LLM Agents* (2026-09-04, cs.CR). Deleting a plaintext
+  memory record **leaves leakage unchanged**; instruction-based forgetting collapses under
+  elicitation (**Leak@probes = 1.00**); source redaction still acts on the revoked preference in
+  **80% of episodes**. Provenance-Guided Selective Replay is indistinguishable from a full reset
+  at **up to 9× fewer recomputed tokens**. Directly applicable to what "delete a memory" should
+  mean in `memory-store`, which today almost certainly means the ineffective thing. Partly
+  serving-side (KV-cache cropping), so only the prompt and summary layers transfer to an API
+  client.
+
+## Screened and rejected, with the reason
+
+- **2609.04208** *AI Writes Code, Humans Pay the Debt* — appeared in the Monday 2026-09-07 `cs.SE`
+  listing with an in-window-looking id; the abs page reads **v1 2026-06-06**. Out of window, and
+  a registered-report protocol with no results yet. Recorded so the next sweep does not
+  re-screen it — this is precisely the failure mode the read-the-abs-page rule exists for.
+- **2609.04681** *Beyond Code Generation: Reliability, Verification, and Cost Economics in the
+  Agentic SDLC* — in window, on topic, and the authors state plainly *"No new model experiment is
+  claimed; numerical findings remain attributed to their original studies."* Its four terms
+  (Throughput Paradox, Production-Qualified Change, Verification Tax, SDLC Control Plane) are
+  decent vocabulary for writing up inber's cost story and nothing more.
+- **2609.04909** *Hallucination in LLM-based Automated Program Repair* — good numbers (**72.7%**
+  of 812 manually-analysed repairs contain repair hallucinations, including patches passing all
+  tests) but about APR model behaviour on Defects4J, not about anything a harness controls.
+- **2609.04629** *SiLR: Structure-Preserving Admission and Process Reward for LLM Tool Agents* —
+  the closest thing here to a permission-model paper, with real results (21/21 vs 0/21 recovery;
+  support-only admits **63.2% of 42,410 unsafe actions** where the product order admits 0).
+  Rejected because the construction rests on deterministic simulation (Gym-ANM, CityLearn) — the
+  shadow-execute-each-proposal premise does not exist for `Bash` or `Edit`. Worth a re-read by
+  whoever picks up `permission-store` step 2 for one argument alone: **a scalar risk score is
+  representationally insufficient and no threshold tuning fixes it.**
+- **2609.05269** *CONTINUITY: Security-Context Contracts for Composable LLM Agent Controls* —
+  clean result (**0 harmful effects across 2,560 parameterized attack instances**, all 700 benign
+  tasks completed, all 200 ambiguous cases escalated) but produced by the authors' own
+  deterministic fault-injection suite against their own reference verifier, with no external
+  baseline. The machinery (signed root grants, transition receipts, effect-bound execution
+  permits) is far heavier than anything inber's permission path could adopt. Flagged for
+  `permission-store`'s design docs, not for implementation.
+- **2609.04665** *Harness-agnostic detection and immunization of reward hacking in self-evolving
+  language models* — has numbers (0.763 vs 0.663 AUROC) but applies only to agents that
+  self-evolve against a visible score, which inber does not. Same exclusion as `2609.00829` /
+  `2609.02889` in the 09-04 sweep.
+- **2609.03192** *Where Reliability Lives* — serious and preregistered, with real numbers (one
+  falsehood cost ~900 futile actions per trusting run). Rejected for transfer, not quality: the
+  subject is a persistent simulated settlement with an append-only ledger and the authors
+  explicitly limit the claim to "one designed world."
+- **2609.04570** *Dynamic Adaptation of the LLM Context for Generating Routines with Coupled
+  Semantics* — beats Reflexion and OpenEvolve on 7 of 8 problems (p<0.01), but it is evolutionary
+  program search at 300–1000 evaluations per problem, a different regime from one interactive
+  session.
+- **2609.03915** *RuleMem* — headline "+27.47 points, 54.3% relative" is against the **mean of 14
+  baselines** rather than the best, which is not a comparison that survives scrutiny.
+  Conversational QA, not coding-agent memory.
+- **2609.01834** *Architecting Conversational Data Systems for Stateless LLM APIs: The Hydration
+  Proxy Pattern* — the one paper aimed squarely at prompt caching for a stateless API client, and
+  a pure pattern paper with no experiment and no numbers. Its "Context Stabilization Mandate" is
+  the principle already in `docs/cache-optimization.md`.
+- **2609.04167 SWE-Gate** (already covered in the 09-04 sweep), **2609.04075 PatchBench**,
+  **2609.04706 FinalityBench**, **2609.04667 ERPBench**, **2609.05374 CUA-Universe** —
+  benchmark-only, no transferable mechanism.
+- **2609.04094 DRACO**, **2609.04869**, **2609.04865 CoSkill**, **2609.05261 Trace2Tower**,
+  **2609.05019 TROVE** — agent *training* (RL credit assignment, skill induction for
+  fine-tuning). inber is an API client; nothing actionable.
+- **2609.04971 BeaconKV**, **2609.04895 Cache-Aware Joint Router Adaptation**,
+  **2609.04748 Quantization Amplifies Cache-Induced Divergence** — serving-side KV-cache work,
+  same structural exclusion the 08-10 and 09-04 sweeps applied.
+- **2609.04749 DCFA** — multi-agent failure attribution, right topic, no numbers in the abstract.
+  Same shape as `2609.02371`, which the 09-04 sweep parked for a PDF read; read them together.
