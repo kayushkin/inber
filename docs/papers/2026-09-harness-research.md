@@ -1154,3 +1154,142 @@ in `.inber/sessions.db`.
   same structural exclusion the 08-10 and 09-04 sweeps applied.
 - **2609.04749 DCFA** — multi-agent failure attribution, right topic, no numbers in the abstract.
   Same shape as `2609.02371`, which the 09-04 sweep parked for a PDF read; read them together.
+
+# 2026-09-09 sweep
+
+Four new. Every title, date and number below was read off `arxiv.org/abs/`
+rather than a search snippet, and all four were re-fetched by the parent job
+after the scout reported them — the scout's list of eight lost half to the
+dedupe check below.
+
+**Read this before running the next sweep: the dedupe grep this job has been
+using is incomplete, and it has been silently re-surfacing rejected papers.**
+The extractor matches `arxiv.org/abs/<id>`, so it only ever sees papers that
+were *accepted* and hyperlinked. Papers that were screened and **rejected** are
+written in the "Checked and carrying nothing" lists as bare bold ids —
+`**2609.05269** *CONTINUITY*` — with no link, so they are invisible to it. Four
+of this sweep's eight candidates came back "new" that way and were all rejected
+in the 09-08 sweep with reasons: `2609.05269` (CONTINUITY), `2609.03192` (Where
+Reliability Lives), `2609.04075` (PatchBench) and `2609.01736` (HEART). The id
+file held 478 ids; a plain `[0-9]{4}\.[0-9]{4,5}` scan over `docs/` finds the
+rest. Use this instead:
+
+```bash
+grep -rohE '\b26[0-9]{2}\.[0-9]{4,5}\b' docs/ | sort -u
+```
+
+A second gap, in the other direction: three of the survivors below were
+submitted 31 Aug – 2 Sep, inside the **09-01 and 09-02 sweeps' stated ranges**,
+and were not found then. Those sweeps ran off per-category listing pages after
+the arXiv Atom API returned `429`, and a listing page is recent-only — so a
+paper submitted late in the window can fall off the page before the sweep that
+claims to cover it. A stated date range is not evidence of coverage when the
+instrument is a listing page.
+
+## 1. Every local gate can be correct while the fleet overdraws by 48×
+
+[arXiv:2609.00275](https://arxiv.org/abs/2609.00275) — **The Irreversibility Budget: Fleet-Level
+Risk Accounting and Admission Control for Agent Operating Systems** (2026-08-31).
+
+The claim is about composition, not about any single gate being wrong. Controls check one effect
+at a time, so a fleet of individually authorized agents can overdraw its principal's risk under a
+shared trigger *"while every local gate stays correct."* The proposal is an `irreversibility
+budget`: a cumulative account of residual value-at-risk maintained per principal across agents,
+workflows and tenants, charged per effect below the agent and denying the marginal effect once the
+aggregate would overdraw. Their controlled study measures **per-effect gates admitting fleet-level
+overdraws of up to 48× the tenant's risk limit**, against a budget that holds every correctly
+charged run inside it. The authors are explicit that conservative, dependency-aware pricing is
+unsolved — this is a framing with one number, not a deployable design.
+
+**What inber should consider:** `guard.CheckTool` decides one call at a time and holds no state
+across the spawn tree — `guard/guard.go` takes a tool name and arguments, and `server/spawn.go`
+caps depth (`:139`) and count but carries no risk account downward. Ten sub-agents each
+individually approved for bounded `write_files`/`run_commands` are, jointly, approved for nothing
+anyone checked. The cheap version is not a value-at-risk model: it is one counter per **root**
+session, charged by children and read by the parent's guard, so that "how many destructive
+operations has this whole tree done" is a question the code can answer at all. Today it cannot,
+because there is no object that spans the tree. Note what a fix must decide and this paper does
+not: what a charge is denominated in. Count of dangerous calls is measurable and dumb; anything
+finer is the pricing problem the authors call the central open one.
+
+## 2. Cutting communication edges between agents makes inference more expensive
+
+[arXiv:2609.02264](https://arxiv.org/abs/2609.02264) — **Codebook Agent: Amortized Topology Design
+for LLM Multi-Agent Systems** (2026-09-02).
+
+The proposed method is a vector-quantized codebook and does not port — inber does not learn its
+topology. The three **negative** findings that motivate it do, and they are measured:
+
+- **Reward-filtered topologies collapse to about six distinct graphs even as codebook capacity
+  grows from 8 to 64.** Nearly all the available gain lives in a handful of shapes.
+- **Edge count is negatively correlated with measured token consumption, Pearson r ≈ −0.4.**
+  Sparsifying the communication graph makes inference *more* expensive, because an agent denied a
+  peer's result re-derives it.
+- A message-passing scorer over agent-profile nodes is **adjacency-invariant whenever agents share
+  a profile** — the default configuration of published benchmarks — so it cannot rank candidates
+  at all in that regime.
+
+Codebook Agent itself is most accurate on all six benchmarks (84.6 average against 83.0), emits a
+topology in 2.4 ms, and uses 21.9–33.2% fewer tokens.
+
+**What inber should consider:** the r ≈ −0.4 result contradicts the intuition that would drive any
+cost-motivated trim of inber's spawn fan-out or inter-agent result passing, and it points the
+opposite way from the finding this job carried on 2026-09-08, where a lean single agent with
+AST-aware retrieval beat a sub-agent configuration 86% to 66%. Those are consistent — *fewer
+agents* is cheaper, *fewer edges between the agents you already have* is not — and the pair is the
+argument for measuring rather than reasoning before changing either. inber has no per-turn token
+figure attributable to a sub-agent tree to measure with, which is the same missing counter as §1
+and as the already-open `7be5a692`. The "collapses to ~6 graphs" finding is the encouraging half:
+a small fixed set of hand-written spawn topologies is likely to capture most of the gain, so the
+learned machinery is not the part inber is missing.
+
+## 3. Late requirements invalidate twice as much code, and the burden does not decline over a session
+
+[arXiv:2609.03028](https://arxiv.org/abs/2609.03028) — **Requirements After the First Edit: Mining
+Late Requirement Emergence and Rework in Real-World Coding-Agent Sessions** (2026-09-02).
+
+**3,553 eligible SWE-chat sessions.** Post-implementation requirement arrivals are coded along
+three dimensions and, where repository state can be replayed, each arrival is linked to a proxy
+for rework: deletion or replacement of prior agent-authored lines. **A requirement's arrival is
+followed by roughly twice as much invalidation as matched non-requirement edits**, robust to
+user-turn and net-deletion checks. The authors are careful — not demonstrated as causal, several
+intervals wide. Two secondary results matter more than the headline: the burden shows **no
+detectable decline over a session**, and a controlled experiment found **advance warning produces
+no detected effect on overwriting** (delayed disclosure only relocates implementation to after the
+reveal).
+
+**What inber should consider:** the no-decline result is the one that bites, because it
+contradicts the assumption under every long-session design — that accumulated context makes later
+turns cheaper and safer. If a requirement arriving at turn 40 invalidates as much as one arriving
+at turn 4, then a fraction of a long session's spend is writing lines a later turn deletes, and
+that fraction is not shrinking as the session goes on. It is computable from data inber already
+stores: a turn that deletes lines an earlier turn in the same session wrote is detectable from the
+snapshot pairs in `snapshot-store`, which exists precisely to hold before/after content for
+`Edit`/`Write`. The honest caveat is that "advance warning produces no detected effect" kills the
+obvious response — a prompt asking the user to state requirements up front is the intervention the
+paper tested and failed to find an effect for. What a fix would have to decide is whether this
+becomes a *measurement* surfaced to the user or a *control* that interrupts, and the paper
+supports only the former.
+
+## 4. Halting on evidence sufficiency rather than on a turn limit
+
+[arXiv:2609.00237](https://arxiv.org/abs/2609.00237) — **Learning What to Retain: Gated-Memory
+Routing for Efficient Collaboration in Multi-Agent LLM Systems** (2026-08-31).
+
+Routing from the query alone cannot adapt to intermediate progress; routing from the full
+execution history forces every later decision to process every prior step. Between them: a learned
+Memory Write Gate that commits only non-redundant steps, a Retrieval Gate that serves each agent a
+compact subset, and an Adaptive Halting Controller that stops once memory holds sufficient
+evidence. Across five reasoning and code-generation benchmarks, **best average accuracy, +2.44
+points over the strongest baseline, with HumanEval inference cost down 31.9%** against that same
+baseline.
+
+**What inber should consider:** the gates are learned, so the mechanism does not transfer — logged
+here for the framing, which restates inber's compaction problem as *routing* rather than
+*summarization*. That is a real difference: summarization asks "what can I compress this into",
+routing asks "which of these steps does the next decision need", and the second question has a
+checkable answer. The transferable piece is the halting condition. inber ends a sub-agent run on a
+turn limit or on the model declaring itself done; "the accumulated state already answers the
+question" is a third condition, and it is the only one of the three that is cheap to evaluate
+without another model call. Weakest of the four here — no ablation isolates the halting controller
+from the two gates, so the 31.9% cannot be attributed to it.

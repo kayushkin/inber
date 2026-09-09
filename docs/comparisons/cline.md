@@ -1113,3 +1113,63 @@ them lies to the model* — inside a pile of VS Code terminal plumbing. **#13785
 line is *don't prompt for something the user cannot act on*. **#13758** restores
 the proto3 JSON contract at the dispatcher rather than in every handler —
 correct instinct, no Go analogue.
+
+## 2026-09-09: two messages that had to say more — a credential's whitespace, and a tool error the model can act on
+
+Both PRs this window are about a string that was technically correct and useless
+to whoever read it next.
+
+**[#13716](https://github.com/cline/cline/pull/13716) — sanitize credential
+fields when saving provider settings.** `sanitizeSecret()` now runs over
+`apiKey`, `auth.{apiKey,accessToken,refreshToken}`, `aws.*`, `gcp.*`, `sap.*`
+and every custom header *value*: it strips `/[\p{Cc}\p{Cf}]/gu` — BOM, zero-width
+space, bidi marks, CR/LF — trims, and returns `undefined` if only whitespace is
+left. The rationale is the transferable half: *"A pasted credential can carry
+invisible control or format characters … that make the provider reject it with a
+401 indistinguishable from a genuinely wrong key — while masked rendering hides
+the corruption from the user."* Three failures stack — the transport adds the
+character, the provider's error does not distinguish it, and the UI's own
+masking hides it — so the only place it can be caught is at the boundary where
+the value is stored.
+
+The rule: **a credential's whitespace is a property of how it was transported,
+not of the secret.** Normalize at the storage boundary — and never let "has
+whitespace" silently reclassify the value as not-a-credential.
+
+inber has the same exposure from the opposite end, and it is now measured.
+`redact/redact.go:220` refuses any value containing a space, tab, CR or LF, and
+`redact/redact.go:121` discards `AddLiteral`'s return value, so a credential
+with one trailing newline is dropped from the redactor's literal set in silence.
+On this host that particular case is not live, but a worse one is: the literal
+set is **empty** (`LiteralCount() = 0`, measured against the live server
+environment), because the only environment credential present is
+`AUTH_STORE_TOKEN` at 8 bytes against a `minimumLiteralSecretLength` of 12.
+Written up in `agentic-design-patterns.md` 2026-09-09 §1 and filed.
+`cmd/inber-server/authstore.go:79` is the direct twin of cline's fix — it
+`os.Setenv`s the resolved secret with no `TrimSpace` while trimming the *error*
+body four lines above at `:57`.
+
+**[#13970](https://github.com/cline/cline/pull/13970) — tell the model how to
+recover when `old_text` is null.** The old message was `"Parameter old_text is
+required when editing an existing file without insert_line"`: true, and it
+produced a loop, because models that fill an optional parameter with `null` tend
+to resend the identical call. The replacement names the file, distinguishes
+`null` from omitted, states both recovery routes, and ends **"Do not re-send
+this call unchanged."**
+
+The rule: **a tool error must name which argument, say what a valid value is,
+give the alternate route, and forbid the unchanged retry.** Otherwise the error
+is not a signal, it is a loop — and a loop is billed per iteration.
+
+inber's twin is filed. Five server tools hand the stdlib's error straight to the
+model (`server/workspace_tools.go:42,128,201`, `server/spawn_tools.go:39,112`),
+so the model reads `json: cannot unmarshal null into Go struct field
+.workspace_id of type string` — a Go type and a Go field name, no valid value,
+no alternate route, no instruction against resending. What makes it expensive
+rather than merely rude is what the error is wired into:
+`engine/build_hooks.go:157` increments `ConsecutiveErrors`, and
+`engine/turn_context.go:11-19` widens memory recall 6,000 → 20,000 → 35,000 →
+50,000 tokens at 1/3/5 errors, each rung re-billing the whole prompt by
+`agent/chain.go:337-342`'s own account. cline fixed the message; the second half
+of the question inber has to answer is whether a malformed-arguments result
+should count as an error rung at all.

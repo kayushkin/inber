@@ -9993,3 +9993,333 @@ costume**, and this host has several such files (agent-store, permission-store).
   is the other correct answer. The migration that reconstructs lineage from key
   substrings (`server/store.go:163`) is explicitly marked as a one-time
   migration and not a runtime read, which is the right boundary.
+
+## Harness-watch — 2026-09-09: the redactor is armed and covers nothing — measured `LiteralCount() = 0` against the live server environment, and the one credential it was built to catch is eight characters long
+
+Two open todos state, as settled background, that inber's egress redaction works
+and the remaining question is which *other* doors it should sit on.
+`51822d74` opens *"The fail-open half shipped 2026-07-31: `redact/` scans every
+provider request at the HTTP boundary and removes credentials before they leave
+the process"*; `d60ec4a3` contrasts three unprotected doors against the one that
+is covered — *"The same bytes reaching Anthropic are scrubbed; the same bytes
+reaching `chat.stream` are not."* Both are arguments about coverage that assume
+the covered door is covered.
+
+Measured on this host today, it is not.
+
+### The inber defect: every candidate the redactor was offered was refused, and a refusal is silent
+
+Run against the exact environment of the live `inber-server` (`/proc/1102/environ`),
+using the shipped package:
+
+```
+LiteralCount from the live server environment = 0
+  SSH_AUTH_SOCK      len=36  IsSecretVariableName=true  IsPlausibleSecretValue=false
+  AUTH_STORE_URL     len=21  IsSecretVariableName=true  IsPlausibleSecretValue=false
+  AUTH_STORE_TOKEN   len=8   IsSecretVariableName=true  IsPlausibleSecretValue=false
+
+shape-layer coverage of AUTH_STORE_TOKEN: findings=0  changed=false
+```
+
+Three variables are *named* as credentials by `IsSecretVariableName`
+(`redact/redact.go:195`) and all three are then refused by
+`IsPlausibleSecretValue` (`redact/redact.go:216`). Two of the refusals are
+correct and are the rules working as designed — `SSH_AUTH_SOCK` is a path,
+`AUTH_STORE_URL` is a URL, and redacting either would rewrite the agent's own
+working text. The third is not:
+
+- **`AUTH_STORE_TOKEN` is 8 bytes**, and `minimumLiteralSecretLength` is **12**
+  (`redact/redact.go:209`). It is refused for being short.
+- It matches **no builtin shape** either — the patterns at
+  `redact/redact.go:268-290` are all prefix-anchored (`sk-ant-`, `sk-proj-`,
+  `ghp_`, `AIza`, `eyJ`, `AKIA`, `Bearer …`) and an opaque 8-character token has
+  no prefix to anchor on. Probed directly: `findings=0`, string unchanged.
+
+So both layers miss it, and the value in question is the bearer token for
+auth-store on `:8303` — the credential that unlocks every *other* credential on
+this box.
+
+**It is reachable, not theoretical.** `shell_commands` runs `bash -c` with
+`cmd.Env = ensureDevToolsOnPath()` (`tool-store/tools/shell.go:81`), and
+`ensureDevToolsOnPath` is `os.Environ()` plus four PATH entries
+(`tool-store/tools/shell.go:140-141`). A session that runs `env`, or any command
+that echoes its environment, puts the token in a tool result, which enters the
+conversation and is sent to the provider on the next turn through the one
+transport the redactor does sit on — unredacted.
+
+**Why nobody saw it.** The refusal has no voice anywhere on the path:
+
+- `redact/redact.go:121` — `New()` loops `r.AddLiteral(label, value)` and
+  **discards the returned bool**. A named credential that is refused is dropped
+  with no error, no log, no counter.
+- `redact/redact.go:136-145` — `AddLiteral` returns `false` for two unrelated
+  reasons, *refused as implausible* (`:137`) and *already known* (`:140-143`).
+  Even a caller that wanted to fail loud cannot tell "this secret is uncovered"
+  from "this secret is already covered."
+- `agent/redaction.go:42-44` — the one caller that reads the bool uses it only
+  to decide whether to log a success line. `false` is silent.
+- `agent/redaction.go:28-30` — the armed line reports
+  `"egress redaction armed: %d live secret values from the environment"`. It
+  prints the count of what was **taken**, never what was **refused**, so `0`
+  reads as *"there were no secrets in the environment"* when the truth is
+  *"there was one and I would not take it."* Those are opposite facts and the
+  log gives them the same words.
+
+A safety net that rejected every candidate reports the same thing as one with
+nothing to catch. That is the failure this fleet's own directive is about — fail
+fast and loud, never silently produce a wrong result.
+
+**A second, narrower way in, from upstream.** cline
+[#13716](https://github.com/cline/cline/pull/13716) adds `sanitizeSecret()` over
+`apiKey`, `auth.*`, `aws.*`, `gcp.*` and every header value, stripping
+`/[\p{Cc}\p{Cf}]/gu` and trimming, with the rationale that *"a pasted credential
+can carry invisible control or format characters … that make the provider reject
+it with a 401 indistinguishable from a genuinely wrong key — while masked
+rendering hides the corruption from the user."* inber has the same exposure from
+the other end: `IsPlausibleSecretValue` refuses **any** value containing a space,
+tab, CR or LF (`redact/redact.go:220`), so a credential with one trailing
+newline is silently un-registered by the same discarded-bool path above. And
+`cmd/inber-server/authstore.go:79` does `os.Setenv("ANTHROPIC_API_KEY", secret)`
+with no `TrimSpace`, while the same function trims the *error* body four lines
+earlier at `:57`. Not filed as a live defect — this host's key is clean, and the
+`sk-ant-` shape would cover it anyway — but it is the same root cause as the
+measured one, so it belongs in the same fix.
+
+**What a fix would have to decide — do not decide it here.** The constant is not
+obviously wrong; `redact/redact.go:205-209` states its reasoning, that
+`SECRET_MODE=on` would otherwise redact every "on" in the payload, and a payload
+with every "on" removed is worse than one carrying a two-character non-secret.
+So:
+
+1. **Whether short-but-named values get a different matching rule rather than a
+   lower threshold.** Lowering `minimumLiteralSecretLength` to 8 applies to
+   every variable and re-opens exactly the corruption the constant prevents. A
+   word-boundary-anchored exact match for values between 8 and 12 characters is
+   narrower, but "is `\bXXXXXXXX\b` in the payload" is a different question from
+   "is this substring present," and the two disagree on tokens containing
+   punctuation.
+2. **Whether `AddLiteral`'s two false-cases must become distinct return values**
+   so `agent/redaction.go:42` can fail loud on *refused* while staying quiet on
+   *duplicate*.
+3. **Whether a named-but-uncovered credential is fatal at startup, a warning, or
+   a counter in the armed line.** Fatal is the honest reading of fail-closed and
+   would have stopped this from lasting; it also means a short unrelated
+   `*_TOKEN` variable anywhere in the environment refuses to let the server
+   start.
+4. Separately and upstream of all three: **whether `shell_commands` should see
+   the daemon's environment at all.** That is `51822d74` item 2 and is
+   deliberately still open; this finding raises its stakes but does not settle
+   it.
+
+Filed as a todo. Note what it does to the two todos above: `51822d74`'s framing
+of redaction as the shipped fail-open half, and `d60ec4a3`'s "the same bytes
+reaching Anthropic are scrubbed", are both true of the shape layer and false of
+the literal layer on this host. Neither needs refiling — they need this
+measurement attached, which is what the todo does.
+
+### The second inber defect: a raw `json.Unmarshal` error is handed to the model, and each one buys a wider recall and a fresh prompt bill
+
+cline [#13970](https://github.com/cline/cline/pull/13970) rewrote one tool error
+message. The old text was `"Parameter old_text is required when editing an
+existing file without insert_line"`. The new one names the file, distinguishes
+`null` from omitted, states both recovery routes, and ends **"Do not re-send
+this call unchanged."** The diff's own comment gives the reason: models that
+fill optional parameters with `null` tend to resend the identical failing call.
+The rule is that a tool error must name which argument, say what a valid value
+is, give the alternate route, and forbid the unchanged retry — otherwise the
+error is not a signal, it is a loop.
+
+Five of inber's server tools return the stdlib's error verbatim:
+
+- `server/workspace_tools.go:42`, `:128`, `:201`
+- `server/spawn_tools.go:39`, `:112`
+
+all of the shape `if err := json.Unmarshal([]byte(raw), &in); err != nil { return "", err }`.
+That error becomes model-visible text unmodified at `agent/chain.go:408`
+(`outcome.combined = fmt.Sprintf("error: %s", err)`), so a model that fills an
+optional parameter with `null` reads:
+
+```
+error: json: cannot unmarshal null into Go struct field .workspace_id of type string
+```
+
+which names a Go type and a Go struct field rather than the tool's parameter,
+offers no valid value, no alternate route, and no instruction against resending.
+`tools/root.go:106-110` already reasons that a wrapper must not replace *"the
+tool's own message about its own arguments with a worse one"* — the principle is
+right, but here the tool's own message is `encoding/json`'s.
+
+**What it costs is measurable and compounding.** The error flows through
+`hooks.OnToolResult(..., true)` → `engine/build_hooks.go:157`
+(`e.Turn.ConsecutiveErrors++`) → `engine/turn_context.go:11-19`, which widens the
+memory recall budget **6,000 → 20,000 → 35,000 → 50,000 tokens** at 1, 3 and 5
+errors. `agent/chain.go:337-342` states the consequence in its own words: each
+rung *"also rewrites the cached system-prompt prefix and pays for the whole
+prompt again."* So three identical resends of one malformed call — precisely the
+loop cline fixed — cost a full prompt re-bill three times over plus a
+50,000-token recall, for an error the model could have fixed on the first reply
+had the text told it how.
+
+**What a fix would have to decide — do not decide it here.**
+1. **Per-site or shared helper.** Writing the recovery text at each of the five
+   `Unmarshal` sites is accurate and grows with every new tool; a shared
+   argument-decoding helper that reads the target struct's field names and JSON
+   tags is one copy, but it has to invent the "what a valid value looks like"
+   half generically, which is the part that carries the value.
+2. **Whether a malformed-arguments result should increment `ConsecutiveErrors`
+   at all.** It is a *client* error the model can correct, not evidence the task
+   is going badly, and widening recall is the opposite of the useful response.
+   `agent/chain.go:337-342` already establishes the precedent that not every
+   error deserves a rung — but deciding which errors are "the model's fault"
+   is a classification, and this file has repeatedly shown that a classifier
+   whose default is benign is not a classifier.
+
+### codex #43959/#43943: a drain has three populations, not one
+
+codex [#43959](https://github.com/openai/codex/pull/43959) adds
+`app-server/src/turn_admission.rs` — an `Arc<Mutex<{closed, active}>>` plus a
+`watch::Sender<usize>`. On the first shutdown signal `ShutdownState::on_signal`
+calls `begin_drain()` **before** setting `requested`, so new
+`ThreadStart`/`Fork`/`Resume`/`TurnStart`/`TurnSteer`/`ReviewStart`/`CompactStart`
+requests get `server_draining_error` rather than being accepted. The termination
+condition changes from `running_turn_count == 0` to
+`running_turn_count == 0 && active_admissions == 0`.
+[#43943](https://github.com/openai/codex/pull/43943) pushes the same admission
+trait down into `core/src/session/turn_input.rs` so turns submitted off the RPC
+path are covered too.
+
+Two details are the transferable part. The sampling comment — *"Sample
+submissions first: one can publish a running turn before releasing its permit,
+and shutdown must observe that new turn"* — says the two counters must be read
+in the order that cannot produce a false zero. And requests that were admitted
+and then parked in the request-serialization queue **re-check the gate after
+dequeue** (`recheck_turn_admission`), because they were admitted before it
+closed. A drain has three populations: *running*, *admitted-but-not-started*,
+and *new*. Refuse the third, count the second, wait for both.
+
+**inber's side, and why it is not filed.** `server/queue.go:43` takes the
+session lock uncancellably — `smu.Lock()` with no context — before reaching the
+semaphore select at `:47` that *does* honour `ctx.Done()`. A caller whose
+context is already dead still blocks at `:43`. That is exactly codex's second
+population: work admitted into a queue no drain can see or refuse. It is **not**
+reachable today — the `main` lane is guarded by `injectIfBusy` upstream of
+`server/server.go:347`, and `server/spawn.go:302` enqueues under per-spawn-unique
+child keys, so contention on one key does not arise. Recorded rather than filed,
+with one adjacent fact that will matter to whoever builds a drain: **`sync.WaitGroup`
+appears nowhere under `server/`**, so `server/spawn.go:276`'s detached `go func()`
+running a whole sub-agent turn is joined by nothing. There is currently no object
+a drain could wait on. This sits directly on top of the already-open
+`ef6be5a4` (`Serve()` returns the instant the listener closes).
+
+### codex #43897/#43906: a cache key holds the stable identity and excludes the rotating secret
+
+New `model-provider/src/models_identity.rs` computes a SHA-256 over provider
+name, base URL, sorted query params, `requires_openai_auth`, `has_command_auth`,
+auth mode and — when auth is present — account id, user id, email and plan type.
+Every field is **length-prefixed** (`digest.update((value.len() as u64).to_le_bytes())`)
+so adjacent values cannot alias into the same digest. `ModelsCacheEntry` gains
+`identity: Option<String>` and a mismatch discards the entry. The deliberate
+exclusion is stated in the module doc: *"access tokens for ChatGPT are excluded
+so token rotation does not discard a catalog for the same account, user, and
+plan."*
+
+Include the token and every refresh throws away a valid cache; omit the account
+and one login's catalog is served to another. Both halves have to be chosen
+explicitly, and the length-prefixing is the detail a first implementation skips.
+
+**Nothing to file.** inber has no model-catalog cache — `server/api_models.go:18-29`
+proxies `modelStore.AllModelsWithStatus()` per request. Its two real caches are
+already identity-scoped: `agent/read_cache.go:49-73` keys on a canonicalised path
+resolved against an explicit `SetRoot`, pinned by `agent/read_cache_identity_test.go`.
+Recorded for whenever a catalog cache is added.
+
+### codex #43947: "could not refresh" and "is not authorized" are different facts
+
+`recover_after_failed_refresh` splits three cases that were previously one:
+(a) the refresh failed but the access token **has not actually expired** —
+return the ordinary error and keep going, explicitly *"Use actual expiry, not
+the 30-second refresh buffer"*; (b) it has expired — **re-read the credential
+store** before prompting, because *"Browser login can finish while the provider
+request is pending"*, adopting the replacement only if it is bound to the same
+validated issuer; (c) a definitive `TokenRefreshRejected` — require
+authorization immediately, even if the token has not expired.
+
+The rule: before escalating on a stale snapshot of shared state, re-read it —
+and never overwrite a replacement you did not write. This is the mechanism the
+already-open `7983aa25` needs (a session resolves its credential once and holds
+it for life, with no 401 handling anywhere); it is the *design* that todo is
+missing rather than a new defect, so it attaches there rather than filing again.
+
+### Checked and carrying nothing for inber
+
+- **codex [#43876](https://github.com/openai/codex/pull/43876) — detach hook
+  commands from the controlling terminal.** One production line:
+  `command.process_group(0)` becomes
+  `unsafe { command.pre_exec(detach_from_tty) }`, because a hook's `BASH_ENV`
+  or rc file touching the tty SIGTTOU-stops the whole hook. The surrounding
+  code already had a per-handler `timeout_sec`, `kill_on_drop(true)` and a
+  process group — all three are needed, and any one missing turns a hook into
+  an unbounded hold. inber's twin is real and **already filed twice**:
+  `engine/workflow_git.go:11-15` is a bare `exec.Command` + `CombinedOutput()`
+  with no context, timeout or `Setpgid`, reached from `Engine.Close()`
+  (`engine/engine.go:481`) via `finishSessionGit`, whose `autoCommit` defaults
+  **true** (`engine/workflow_hooks.go:165`) and which runs `ls-remote` and
+  `push` against the network. Todos `08f50e1f` (uncontained child, no deadline)
+  and `38bfe8c7` (`git status --porcelain` is a code-execution path) own it.
+  Two facts to add to `08f50e1f` rather than a third todo: `exec.CommandContext`
+  appears **nowhere in inber** (10 bare `exec.Command` sites, zero
+  `Setpgid`/`Setsid`), and `Server.Close()` (`server/server.go:166-171`) ranges
+  the session map calling `s.close()` **serially**, so one hung push means every
+  session after it in iteration order is never closed — and the reaper goroutine
+  (`server/session_reaper.go:85`) wedges permanently. The `Setpgid` half is the
+  one #43876 shows is easy to skip: `exec.CommandContext` kills only the direct
+  child, and `git push` spawns `ssh`/`git-remote-https`, which keeps the pipe
+  open so `CombinedOutput` still does not return.
+- **cline [#13887](https://github.com/cline/cline/pull/13887) — root sessions
+  crowded out of the scan window by child rows.** Checked three ways, no twin.
+  `server/store.go:432-440` `ListSessions` has **no `LIMIT` at all`**; sub-agent
+  requests are written under their own `childKey` (`server/spawn.go:281`), not
+  the parent's, so `RecentRequests`' `LIMIT` (`server/store.go:545-552`) cannot
+  be crowded by children. The one matching shape —
+  `session/db_sessions.go:124-135`, which selects `parent_id` and never filters
+  on it under `ORDER BY started_at DESC LIMIT ?` — has **zero callers**
+  repo-wide. A trap for whoever wires it, not a cost today.
+- **cline [#13199](https://github.com/cline/cline/pull/13199)** (checkpoints
+  re-hashing unchanged untracked files) and
+  **[#13960](https://github.com/cline/cline/pull/13960)** (refuse to index
+  `$HOME` or `/`) — no twin in either case, because both inber packages are
+  stubs: `checkpoint/checkpoint.go:50` is `ErrNotImplemented`, and
+  `codeindex/codeindex.go` never walks anything (`Open()` returns a struct,
+  `Refresh()`/`Search()`/`RepoMap()` return nil).
+- **cline [#13969](https://github.com/cline/cline/pull/13969)** — ask the user
+  how to continue when the mistake limit trips, instead of stopping silently.
+  No twin to the silent stop: inber has **no** mistake limit and never
+  terminates on repeated errors; `ConsecutiveErrors` only widens the memory
+  budget (`engine/turn_context.go:11-19`). The inverse gap — no ceiling at all —
+  is a design choice, and it is the other half of the second finding above.
+- **codex [#43949](https://github.com/openai/codex/pull/43949)** (transactional
+  thread attachment mutations) — inber uses **zero** SQL transactions repo-wide,
+  and `server/store.go:202-215` `DeleteSession` runs two unguarded `Exec`s, but
+  the failure mode is orphan rows in a local SQLite file, not a wrong answer on
+  any read path. Recorded, not filed.
+- **codex [#44002](https://github.com/openai/codex/pull/44002)** — reads like a
+  behaviour change, is not: `Option<Arc<ExecutedToolCallRecorder>>` becomes a
+  null-object `ExecutedToolCalls` so call sites stop re-reading the feature
+  flag. **codex [#43912](https://github.com/openai/codex/pull/43912)** — 7
+  production lines clearing a token-budget config flag; the rest is fixture
+  churn.
+- **codex [#43907] / [#43954] / [#43909] / [#44038]** (shell-snapshot capture,
+  filtering, protection, copied credentials) — codex captures a login shell's
+  environment into a replayable snapshot script. inber has no such concept;
+  `shell_commands` inherits the server environment directly, which is the first
+  finding above.
+- **dexto [#914](https://github.com/truffle-ai/dexto/pull/914)** (unified skills
+  contract), **goose fcff9378 / 1c3c5306** (Toolshim scoping, litellm streaming),
+  **opencode ea2d59d7 / ac1758c0** (OpenAI service tiers, Bedrock DeepSeek ids)
+  — no inber surface: no skill concept in Go source, zero `toolshim` or
+  `service_tier` occurrences, and no model-id rewriting beyond prefix-based
+  provider guessing at `agent/clients.go:135-148`.
+- **goose [#11603](https://github.com/block/goose/pull/11603)** (filter
+  scheduled-session content) — the cross-session-content surface is already
+  documented at `:3782`, `:3792`, `:3800` (`engine/fleet_status.go:47` emitting
+  another session's raw `Task`) and `:6483` (`server/session_context.go:51`).
