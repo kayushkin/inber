@@ -952,3 +952,143 @@ three because it is unconditional rather than model-specific.
   decision already open: CC's third independent discovery of the
   cache-after-tool-results gap strengthens the case for `a5b91a47` without
   settling which breakpoint gives way.
+
+## Harness-watch — 2026-09-10 (CC 2.1.261–2.1.267, and `mods`): twelve bullets in one release are the same bug — a tool list that moves mid-session is a prompt-cache miss and a dropped-thinking bug at once
+
+Five versions landed since the 09-04 sweep covered 2.1.260: **2.1.261, 2.1.263,
+2.1.265, 2.1.266, 2.1.267** (2.1.262 and 2.1.264 do not exist). 172 bullets, of
+which 109 are UI/IDE/installer noise — 43 of those tagged `[VSCode]`,
+`[Claude Code on the web]` or `[Claude Tag]`.
+
+### 1. The 2.1.267 cluster: one failure, twelve symptoms
+
+Twelve of 2.1.267's 53 bullets are the same class, and it is the class inber's
+open `a5b91a47` sits in. Every one is *something changed the tool block or the
+system prefix mid-session, so the cache missed and earlier thinking was
+discarded*:
+
+> "Fixed mid-session MCP and plugin tools being added to the tool list in
+> sessions without ToolSearch, which broke prompt-cache reuse; **supported models
+> now receive them as deferred definitions**"
+
+> "Fixed a tool that disappears mid-conversation, from a disconnected MCP server
+> or an upgrade, rewriting the tool list and **discarding earlier thinking**"
+
+> "Fixed resumed sessions **re-rendering tool descriptions instead of replaying
+> the recorded ones** when the first turn ran a tool"
+
+> "Improved prompt-cache stability: subagents and sessions started with
+> `--system-prompt` or `--append-system-prompt` now **record the system prompt
+> and tool definitions once** instead of re-rendering them"
+
+The answer CC converged on is one rule stated three ways: **the tool block and
+system prefix are recorded once and replayed, never re-derived** — plus a
+deliberate escape hatch, `--system-prompt-snapshot off`, *"to render the system
+prompt fresh on every request … (for iterating on prompt text)"*, which is the
+honest admission that a snapshot is the right default and the wrong behaviour
+while you are editing the prompt.
+
+Two things make this the sharpest CC entry in weeks. First, the coupling: a tool
+list that moves does not merely cost money, it **drops extended thinking**, which
+is a correctness loss, not a billing one. Second, this is the *fourth* independent
+harness to land on the same seam — goose #11429 (`goose.md:1784`), CC 2.1.251's
+`/cost` line, opencode's prefix-mismatch handling, and now twelve bullets at once.
+
+- **What inber should consider:** inber's exposure is the mirror image and is
+  already open. `bd706121` (all four `cache_control` blocks spent, nothing counts
+  them) and `21473046` (the cached system prefix is chosen by a per-message
+  relevance query, *so its own inputs bust it*) are the "prefix moves" half;
+  `a5b91a47` (breakpoints set once at turn start and never advanced) is the "tail
+  is never covered" half. CC's finding adds one fact those three do not carry:
+  **inber's `RepairThinkingSignatures` strip (`engine/turn_execute.go:45-49`) is
+  the same thinking loss CC is now treating as a bug to prevent rather than a
+  repair to apply.** Nothing new to file; this is evidence for the decision
+  already posed, and it argues the prefix-stability work should be sequenced
+  before any further thinking-repair work.
+
+### 2. The rest, ranked
+
+**2.1.265 — session resume after a crash, and a plugin directory that hot-reloads.**
+*"Fixed resume after the previous process died while a tool was running: the last
+prompt is no longer rewritten, and the interrupted tool call is kept and marked
+interrupted."* That is the same rule inber's `123a27c8` and `2b6cb49e` are about
+from the streaming end — an interrupted call must enter history *marked*, not
+silently repaired or silently dropped. Also *"a resume whose run journal is
+missing now fails with a clear error instead of rerunning every agent"* — fail
+loud beats replay. And `--plugin-dir` now takes a folder of plugins with children
+added or removed while running picked up.
+
+**2.1.265 — a Bash contract change that only affects harness modes.**
+*"Fixed non-interactive sessions (`-p` with stream-json input, Agent SDK, cloud
+sessions) resetting the shell working directory at each new user message; a `cd`
+now persists across turns."* Worth noting precisely because it was wrong only in
+the mode a harness drives, which is the mode nobody uses by hand.
+
+**2.1.261 — three context-accounting features.** `bashOutputMaxChars` and
+`taskOutputMaxChars` raise inline output *"up to 128K characters"* before spilling
+to a file; `/skill-doctor` *"shows which loaded skills go unused and what they
+cost in context, so you can prune them"*; and `/context` now uses a local
+estimate when the token-counting API is unavailable *"instead of extra
+small-model requests"*. The middle one is the interesting product idea — a
+per-skill context cost report — and it has no inber analogue because inber has no
+skill concept.
+
+**2.1.261 — two new permission gates.** The dangerous-`rm` prompt now catches
+`rm -rf` on positional parameters and inside double-quoted `sh -c` scripts; and
+auto mode *"treats a link that packs content into a public diagram renderer's URL
+as an upload to that site."* Both are for `permission-store`: the first is
+another shell construct its AST splitter must model (with the zsh `REPORTTIME`
+case from 2.1.260), the second is a data-exfiltration-by-URL class the splitter
+cannot see at all because it is not a shell question.
+
+**2.1.267 — fail closed, stated as a bug fix.** *"Fixed managed
+`allowedHttpHookUrls`, `httpHookAllowedEnvVars` and `allowedChannelPlugins` to
+**admit nothing, not everything, when unreadable**."* Same rule as `sec-default`'s
+`.catch(() => true)` below, arrived at independently in the same release.
+
+**2.1.266** is a one-bullet rollback: `CLAUDE_CODE_USE_GATEWAY` began forcing
+Cloud-gateway sign-in on its own in 2.1.265 and broke every request for setups
+that also set an API key. Worth one line only as another instance of the
+2.1.259/2.1.260 pattern — a tightening that reads as obviously correct, shipped
+and pulled one version later.
+
+### 3. `mods` — the hooks-module plugins, published as source
+
+[`d9c456d7`](https://github.com/anthropics/claude-code/commit/d9c456d7) / PR
+[#93215](https://github.com/anthropics/claude-code/pull/93215), +7,866/−0, all of
+it under `mods/`. **The word "mod" appears nowhere in `CHANGELOG.md`** — this
+shipped as source publication with no changelog entry.
+
+A mod is not a new extension type. `mods/README.md`:
+
+> A mod is a Claude Code plugin whose behaviour lives in a hooks module: one
+> `register(on, options)` entry that hooks the engine's events as functions
+> `($, e, next)`.
+
+So `hooks.json` gains exactly one key — `{"modules": ["./register.ts"]}` — and in
+exchange each hook becomes middleware around the engine's own operation rather
+than a shell subprocess with a stdout contract: it can rewrite the input, rewrite
+the result, `{deny: reason}`, or `next.to(e, 'append')` to skip intervening
+tiers. Classic shell hooks become one event family, `classic.*`, that a mod can
+wrap. It is in-process and the code makes that unambiguous — `mods/diff` holds
+`let isPaneOpen` across events, returns live component trees with callbacks, and
+holds cancellable `Timer` handles from `$.clock.every(...)`.
+
+The design content is in the three ordering rules, all analysed in
+`agentic-design-patterns.md` 2026-09-10 §4: provenance is a **tier**
+(`prepend`/`user`/`append`/`builtin`/`core`) with the *caller's* tier
+(`next.origin.tier`) kept separate from the *subject provider's* (`e.provider.tier`);
+`sec-default` exists because function hooks put the org's own settings within a
+user plugin's reach for the first time; and everything fails closed, including
+memoized failed reads. **There is no declared capability field** in either
+`plugin.json` or `hooks.json` — each README documents "What it calls on `$`" as
+prose, and the only enforced privilege boundary is that `next.to` is *"refused
+outside a managed tier"*.
+
+- **What inber should consider:** nothing here is an inber defect and none of it
+  is filed — inber has no plugin or hooks-module concept, and its hook surface is
+  Go function fields on a struct. The one carryable item is for
+  `permission-store`: caller-tier separate from provider-tier is what lets a
+  single rule say "the org's settings are not readable by a user plugin" without
+  enumerating callers, and it is the piece a first implementation of a tiered
+  policy engine skips.

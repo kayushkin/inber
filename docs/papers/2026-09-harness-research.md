@@ -1293,3 +1293,198 @@ turn limit or on the model declaring itself done; "the accumulated state already
 question" is a third condition, and it is the only one of the three that is cheap to evaluate
 without another model call. Weakest of the four here — no ablation isolates the halting controller
 from the two gates, so the 31.9% cannot be attributed to it.
+
+# 2026-09-10 sweep
+
+Screened against **484 distinct arXiv ids** already present under `docs/` (482 matched by
+`arxiv.org/abs/`, 307 by the bare `arXiv:` form, union 484). Existing coverage stops at
+**2609.05339**; the `cs.SE`, `cs.MA` and `cs.AI` recent listings for this window start at
+2609.05431, so the two ranges are almost disjoint and every id below is new. Every title
+and submission date was read off a fetched `arxiv.org/abs/` page; **2609.08371 and
+2609.09233 were re-fetched independently at the end of the sweep** and both matched.
+
+⚠️ **The three keyword WebSearches returned nothing usable — again.** Every hit was
+either outside the window (2311, 2506, 2601, 2603, 2605, 2606, 2607) or already in the
+seen set. All six papers below came from the per-category listing pages. This reproduces
+the 2026-09-01 warning verbatim; the listing pages are the instrument, and the searches
+are not worth the calls.
+
+## 1. Delegate on the contract, not on the size
+
+[arXiv:2609.09233](https://arxiv.org/abs/2609.09233) — **Subagents vs Agent Skills:
+Executing Reusable Knowledge for Long-Horizon Agentic Tasks** (2026-09-07, cs.AI/cs.CL/cs.LG).
+SkillsBench, 87 long-horizon tasks (64 with synthesizable contracts), across GPT-5.3 Codex,
+Kimi K2.6, Qwen3.5 2B/4B/9B, Mistral-Large-3, Gemma-4-12B and Ministral-3-8B.
+
+The A/B is exactly the one inber's spawn path makes implicitly: load a skill's instructions
+into the main context, or invoke it as a subagent with its own window. The result is
+conditional, and the condition is the finding — **subagents win only where the skill package
+exposes an explicit input/output contract.** On curated skills *without* contracts, in-context
+execution matched or beat delegation on every model. Subagents cut peak context on >80% of
+tasks for the strong models but cost substantially more total tokens through duplication
+across windows.
+
+⚠️ The abstract carries no numbers; the task counts and the >80% are from the v1 HTML full
+text. The title, date and the conditional claim are from the abs page.
+
+**What inber should consider:** make the *contract* the spawn predicate rather than the size
+of the work. A delegation with no declared input/output schema is, on this evidence, strictly
+worse than inlining — which is a refusal rule inber's `spawn_agent` could enforce cheaply.
+The peak-context result argues the second trigger should be **context pressure**, not turn
+count or task count: spawning as a relief valve is a different decision from spawning for
+parallelism, and inber currently has no way to express the difference. Note the tension with
+this doc's 2026-09-01 §2 — equal token budgets are not equal delivered context — which says
+the pressure signal has to be measured, not estimated from a count.
+
+## 2. Freeze the authority ceiling before reading anything untrusted
+
+[arXiv:2609.08371](https://arxiv.org/abs/2609.08371) — **Authority Is Not a String: A
+Capability-Scoped Harness for Prompt-Injection-Resistant Coding Agents** (2026-09-08, cs.SE).
+300 runs: 5 Python tasks × 5 injection surfaces × 4 authorization conditions × 3 trials, on a
+repair workflow where an orchestrator delegates to separate sub-agents.
+
+CapScope replaces *ambient authority* — naming a resource is enough to reach it — with typed
+capabilities held **outside the model context**, and fixes the task-wide authority ceiling
+from trusted inputs **before any repo file or tool output is read**. The injected effect
+executed in **33–47 of 75 runs at baseline against 3 of 75 with CapScope**, while repair
+completion barely moved: **68/75 against a baseline 68–72/75**. No model-side detection of
+malicious text is required, which is the part that makes it a harness result rather than a
+prompting result.
+
+**What inber should consider:** the ordering is the cheap half and it is a concrete change —
+**the grant set must be frozen at turn start, not recomputed as tool results arrive.** inber
+currently allows the opposite: three config setters mutate a live engine from the HTTP
+goroutine (`769860a6`), and `guard.go:113` documents that the caps are read *"between turns"*
+while the setters run whenever. The paper's second half — blocking capability leakage between
+sub-agents — is inber's spawn path exactly, and its live instance is already open as
+`e2d0b07b` (an assist-mode parent spawning a child measured `Allowed` on all four dangerous
+tools). Read alongside §6 below: CapScope is the in-process form, CAPMAS the cross-process one.
+
+## 3. Mid-run self-reported progress is worthless where a controller would use it
+
+[arXiv:2609.08589](https://arxiv.org/abs/2609.08589) — **The Unreliable Progress Bar: Can LLM
+Agents Reliably Report Task Progress Throughout Execution?** (2026-09-08, cs.SE/cs.AI/cs.CL).
+12 deployments on τ²-bench telecom, 9 on StageIF, 50,400 checkpoint positions over 12
+scenarios × 20 repetitions.
+
+Progress-reporting accuracy is **U-shaped**: 90.6–99.4% at pre-action checkpoints, collapsing
+to **5.8–11.5% mid-task**, recovering to 87.3–88.9% after completion. On StageIF the
+nonterminal-to-terminal gap spans **29.4 to 89.3 percentage points**; one deployment scored
+**97.4% terminal adherence against 8.2% across intermediate checkpoints**. Newer models fail
+*differently* rather than less — they turn conservative at the finish line instead of
+optimistic mid-run, so a controller tuned against an older model's bias is miscalibrated in
+the opposite direction.
+
+**What inber should consider:** any control decision keyed on a model-emitted "am I done"
+signal is reading a 5–11% accurate channel. inber has one such channel and it is load-bearing:
+the sideband `done` field, where **completing the last task fires the project's build command**
+(`agent/sideband.go:34-38`). That is a subprocess launched on a mid-task self-report. The
+paper does not say the field should go — the *terminal* reading is 87–99% accurate, and "the
+last task is done" is closer to terminal than to mid-task — but it does say that any *new*
+controller inber grows (a compaction trigger, a continuation gate, a spawn-relief valve as in
+§1) should key off observable state: tool-call outcomes, diff state, budget consumed. Pairs
+with the halting-on-evidence-sufficiency framing in the 2026-09-01 sweep §4.
+
+## 4. Compaction as swap rather than as loss
+
+[arXiv:2609.08318](https://arxiv.org/abs/2609.08318) — **AttnCompress: Dynamic
+Attention-Guided Trajectory Compression for Software Engineering Agents** (2026-09-08,
+cs.SE/cs.AI). **53.17% pass rate at 21.6% fewer tokens and 33.6% lower total cost.**
+
+Three mechanisms: structure-aware segmentation at perplexity spikes so code and log blocks are
+not cut mid-syntax; proxy-attention scoring of historical blocks against the agent's *current*
+reasoning; and a rolling window that can **recall** previously-dropped context as the task
+evolves.
+
+**What inber should consider:** the recall step is the one inber's compaction lacks entirely —
+a summarized region is gone, and `conversation/manage.go` has no path back. inber already has
+the storage for it (a memory store with recall budgets), so the change is addressability, not
+capacity. ⚠️ **But the tension with prompt caching is severe and this doc has recorded it
+before** (2026-09-03 §3): re-inserting an evicted block *splices* the history and invalidates
+every breakpoint after it, which on inber's current placement (`a5b91a47`: two breakpoints set
+once at turn start) means the whole turn. A recall that only ever **appends** — re-introducing
+the block at the tail as a fresh observation rather than restoring it in place — costs
+ordering fidelity and keeps the prefix. That trade is the decision, and nothing here settles it.
+
+## 5. The tool list is a prior, not a catalogue
+
+[arXiv:2609.09395](https://arxiv.org/abs/2609.09395) — **The Menu Is an Execution Prior:
+State-Path Tool Menus for Online Agents** (2026-09-08, cs.AI, EMNLP 2026 Main). On ToolBench,
+online success **0.737 → 0.898**, with the state-path menu covering complete tool chains using
+**32 tools where the official list needs 128**. Gains hold across executor model families.
+
+An encoder for what is runnable from the current state, a retriever covering executable and
+terminal actions, and a reranker that orders **producers before consumers**.
+
+**What inber should consider:** the reranker is nearly free and is claimed to matter
+independently of which tools are present — ordering producers before consumers in the tools
+array costs one sort. ⚠️ The 4× menu shrink is *not* free for inber and is close to a trap:
+Anthropic hashes tools first, so a menu that varies with state moves the very first thing in
+the cache prefix on every turn. That is the exact failure CC spent twelve bullets of 2.1.267
+repairing (`claude-code.md`, 2026-09-10 §1). Any menu work here has to be measured net of
+cache misses, and the static-ordering half is the part that carries no such cost.
+
+## 6. Attenuating delegation, so over-grant is structurally impossible
+
+[arXiv:2609.06500](https://arxiv.org/abs/2609.06500) — **CAPMAS: Capability-Based Delegation of
+Privileges in Multi-Agent Systems** (2026-09-06, cs.MA/cs.CR). Macaroon-based tokens supporting
+**offline, attenuating** delegation: a parent hands a child a strictly narrower token with no
+round trip to a central authority and without exposing user identity. Against OAuth 2.0 Token
+Exchange: **~30× faster delegation, 2× lower delegation latency, up to 3× lower bandwidth**,
+>90% perfect privilege-bundle retrieval within **17 ms** on schemas with 3,100+ endpoints, and
+a **99.5% reduction in unnecessary privileges** against propagating the full user privilege set.
+
+**What inber should consider:** attenuation is the property inber's spawn path is missing.
+Today a child's authority is set by policy and checked at use; a token that *cannot* be widened
+makes over-grant impossible by construction and needs no call to `permission-store` per tool
+use. This is the mechanism behind the rule already written down on 2026-08-14 — a child's
+authority is the *meet* of its parent's with read-only — which inber states and does not
+enforce (`e2d0b07b`). Recorded as design input for whenever that todo is answered; the macaroon
+machinery itself is far heavier than inber's single-process spawn needs.
+
+## Verified, numbers too weak to carry
+
+- [arXiv:2609.10263](https://arxiv.org/abs/2609.10263) — **What Should an Agent Forget?
+  Separating What Is Stored from What Is Used** (2026-09-09, cs.AI). A retained source archive
+  plus a *query-conditioned* memory view; same-slot replacement links suppress superseded facts
+  in current-state answers while intent-aware retrieval makes the old value eligible again for
+  historical queries. **The abstract states no numbers** — ablations are described only as
+  "largest score deficits". Logged because inber's memory store has a recall *budget* but one
+  view, so a superseded fact either stays and misleads or is dropped and is unrecoverable.
+- [arXiv:2609.07360](https://arxiv.org/abs/2609.07360) — **Scanning the Harness: An Empirical
+  Study of Supply-Chain Defects in AI Coding-Agent Configurations** (2026-09-07, cs.SE/cs.CR).
+  3,171 public repositories carrying Claude Code / Cursor / Copilot / Codex config; **16.0%
+  carry a confirmed security defect** — 9.8% install MCP servers with no pinned version, 3.8%
+  ship skills that pre-approve shell access, 3.1% pre-approve arbitrary execution. Raw scanner
+  rate was 25.5% before validation, so a third of automated hits were false. **No inber
+  surface** — inber has no skill or MCP-config ingestion. It is a live exposure for
+  `skill-store` (which ingests `SKILL.md` by cloning upstream repos) and `tool-store`
+  (`/provision` emits MCP config), where an unpinned-version and pre-approved-shell check at
+  ingest would apply the paper's detectors at the one chokepoint that sees every skill.
+- [arXiv:2609.09218](https://arxiv.org/abs/2609.09218) — **The Double Measurement Confound in
+  Agent Benchmarks** (2026-09-06, cs.SE). Argues agent benchmarks confound scaffold-made
+  decisions with model-made ones, and shape-based scoring with ground truth. **No extractable
+  effect sizes**, and the case study is materials-science, so transfer is unestablished.
+
+## Coverage, and the gaps
+
+Listings fetched: `cs.SE/recent` (2609.07224–2609.10502), `cs.MA/recent`
+(2609.05431–2609.10509), `cs.AI/recent` (2609.09226–2609.10451), 50 entries each. Roughly 650
+ids seen in total; 40 candidates were explicitly checked against the seen set and all 40 were
+new.
+
+Honest gaps, so the next sweep does not re-derive them:
+
+- **`cs.CL/recent` was not fetched.** That slice of the window is unscreened.
+- **The arXiv Atom API was not attempted** — prior sweeps recorded persistent 429s from this
+  host. Screening is therefore per-category and recent-only, not keyword-scoped across all
+  categories, so anything filed *only* under cs.CR, cs.LG or cs.DC in this window is missed.
+- **No prompt-caching paper was found in window.** One candidate is worth exactly one fetch
+  next sweep and was **not** verified here, so its date and numbers are unconfirmed:
+  `2608.14624` ("Learning Agent Execution for KV-Cache Management in Agentic Serving"), whose
+  claim that recurring fixed context is 53–62% of prompt tokens would bear directly on
+  breakpoint placement.
+- Also new, plausibly relevant, and **unfetched**: `2609.08472` (Beyond Agent Harnesses:
+  Cross-Substrate Authority), `2609.08327` (Tool Retrievers Are Underestimated), `2609.09646`
+  (RobustSGPO: Search-Space Control for Agent Harness Evolution), `2609.08355` (RepoNav),
+  `2609.07357` (EnvPilot), `2609.05553` (EdgeMem).

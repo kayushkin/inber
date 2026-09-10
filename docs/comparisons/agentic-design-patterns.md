@@ -10323,3 +10323,228 @@ missing rather than a new defect, so it attaches there rather than filing again.
   scheduled-session content) — the cross-session-content surface is already
   documented at `:3782`, `:3792`, `:3800` (`engine/fleet_status.go:47` emitting
   another session's raw `Task`) and `:6483` (`server/session_context.go:51`).
+
+## Harness-watch — 2026-09-10: a closed todo is worse than an unfiled one — 24 inber fixes are recorded as shipped on branches trunk has never seen, and two of the defects were re-found from scratch tonight
+
+### 1. The inber defect: the queue says these are fixed, and the tree says otherwise
+
+This run's dedupe step did its job and nearly threw the run away. Two findings
+derived independently from this week's upstream commits — the OpenAI turn loop's
+missing runaway cap, and an unguarded eight-byte slice in the display path —
+both matched an existing todo, so both were about to be dropped as duplicates.
+Both todos are closed `done`. Both defects are live.
+
+Measured tonight:
+
+```
+fix/* branches in ~/repos/inber:                    38
+  unmerged into origin/main:                        38   (all of them)
+  distinct unmerged branches named by a DONE todo:  23
+  distinct DONE todos naming such a branch:         24
+  branch tip dates:                         2026-08-03 .. 2026-09-07
+```
+
+`HEAD` and `origin/main` are both `9ed61de`. inber is **not** parked on a branch;
+the work is on 38 refs trunk has never seen.
+
+**`engine/turn_openai.go:55`** is still a bare `for {` — no round-trip counter,
+no `ctx.Err()` check at the head. `9fb35070`'s body says *"SHIPPED 2026-08-07 …
+the cap is now a property of a turn, not of a provider branch"* and names commit
+`79cb4cc`. That commit is real, and `git merge-base --is-ancestor 79cb4cc HEAD`
+exits 1; `git branch --contains` finds it on
+`fix/openai-turn-loop-runaway-cap` and nowhere else. `MaxAPICallsPerTurn`,
+`StopForAPICallCap` and `StopForCancelledTurn` match nothing repo-wide, and
+`engine/turn_openai_runaway_test.go` does not exist. The Anthropic loop's
+`const maxAPICalls = 50` (`agent/agent.go:336`) and head check (`:327-333`) are
+still on one loop of two — which is that todo's own title, five weeks after it
+was closed for being false.
+
+**`engine/display_tools.go:201`** is still `result.ID[:8]` on an id that comes
+from `memory_save`'s own JSON result, so anything under eight bytes panics in an
+interactive run's display path. `3eb35043` is closed; the fix
+(`textutil.Truncate(result.ID, 8)`) and its 105-line test exist only on
+`fix/memory-save-id-preview-cannot-panic-on-a-short-id`.
+
+The other 21 branches were not individually verified — they carry real code and
+tests (`fix/prune-gate-reads-tokens-freed` is +404/−31 over 8 files) but this
+entry claims only the two above as measured.
+
+**Why this is its own finding and not `21cacf42`.** That card is open,
+`needs-user-action`, and owns the fleet-wide *"what makes a nightly pass's branch
+LAND?"* question across 499 unmerged branches in 62 repos. **inber is not among
+its 38 parked repos** — inber sits on `main`, so it draws no individual attention
+there and its 38 branches vanish into the aggregate. And `21cacf42` measures
+*branches*; this measures *todo status*. Deciding not to land the branches answers
+that card and leaves this one untouched, because the todos would still read `done`.
+
+A closed todo actively suppresses re-discovery, which an unfiled finding does not.
+Filed as `9b790052-7a13-4e8b-9cb3-cc757b7169c8`, which states — and does not
+decide — whether `done` is the wrong status for "pushed, awaiting an attended
+merge", and whether the 24 should be reopened or refiled. ⛔ It explicitly does
+not answer `21cacf42`'s merge question.
+
+### 2. codex: capture at the step that acted, project at the edge for the receiver, never rewrite the record for either
+
+Five PRs in one day, and the principle is written into the codebase rather than
+inferred. `codex-rs/core/src/session/turn_context.rs:349-350` now carries this
+pair **eleven times**, on every turn-frozen accessor:
+
+> `/// Legacy: returns the frozen initial-turn model metadata.`
+> `/// Step-scoped consumers should use their captured StepContext::settings.`
+
+[#44243](https://github.com/openai/codex/pull/44243) threads an explicit
+`model_info` through history recording because *"History recording used the model
+captured at turn start, so switching models within a turn could apply stale image
+preparation and tool-output truncation rules."*
+[#44242](https://github.com/openai/codex/pull/44242) does the same for tool
+planning, deleting a standing `// TODO(CDXENT-441): use the step scoped model`.
+[#44248](https://github.com/openai/codex/pull/44248) saves the originating
+truncation budget onto the tool output and reuses it on replay.
+
+The half worth having is the **exception**.
+[#44249](https://github.com/openai/codex/pull/44249) deliberately does *not*
+freeze image detail into the record: storage keeps `detail: original` forever and
+the downgrade happens on a throwaway request copy per receiving model —
+`// Project for each receiving model without rewriting the prepared images.`, so
+*"switching back to a supporting model retains `original`"*. So the rule is
+two-sided: **what the producer did is captured immutably at the step that did it;
+what the consumer can accept is projected at the edge, on a copy.** Baking a
+receiver-specific downgrade into storage is the mirror-image bug of reading live
+config to render a past item.
+
+- **What inber should consider:** this refines the 2026-08-26 entry (`:6701`,
+  "a projection is not the record"), whose inber twin — the Anthropic provider
+  filter writing its projection back over the transcript — is already open as
+  `7c6a0ee4`. Nothing new to file: the producer direction is `905a5e68` (no model
+  column on `requests` to reconstruct which model produced a turn) and the
+  consumer direction is `7c6a0ee4`. What is new is that codex has now named both
+  directions as one rule, which is the argument for fixing them together rather
+  than as two unrelated repairs.
+
+### 3. goose #11697 and codex #44320: a nudge is a loop, and its termination flag must not be resettable by unrelated activity
+
+Same bug shape, two harnesses, one week, arrived at from opposite ends.
+
+[goose #11697](https://github.com/block/goose/pull/11697) is a **two-line
+deletion**. `goal_check_pending` was a volatile boolean cleared on *every tool
+call*; the nudge arm fires on `goal.is_some() && !goal_check_pending` and sets it
+true. So: model stops → nudge → model makes one more tool call → **flag reset** →
+model stops → nudge → *"repeat until `max_turns`"*. The catch-all arm that clears
+the goal and exits needed the flag already true *and* no tool called, so it
+rarely fired. The fix drops the reset and matches the state-machine path, which
+uses a persistent message-metadata flag. The regression test alternates a tool
+call and "goal is met": before, 10 provider calls; after, ≤4.
+
+[codex #44320](https://github.com/openai/codex/pull/44320) is the other end —
+adding the ceiling that goose's bug proved was load-bearing. A goal is marked
+`blocked` after **three consecutive empty automatic continuation turns**, with
+the streak reset spelled out rather than implied: *activity, user turns, or goal
+changes*, and only for automatically admitted turns.
+
+The rule: a flag meaning *"I already nudged"* must be cleared only by *"the thing
+I nudged about became untrue"*. Clearing it on adjacent activity turns a one-shot
+into an unbounded loop, and the loop is invisible because each individual nudge
+is correct.
+
+- **What inber should consider:** **checked, no twin, and the check is the
+  interesting part.** inber has no goal or auto-continuation concept
+  (`grep -i 'continuation\|nudge\|goal'` over the Go source finds one UTF-8
+  continuation-byte comment). Its one nudge-shaped mechanism is the budget notice
+  at `agent/agent.go:365-383`, and it terminates by construction rather than by a
+  flag: `forceSummary` withholds the tools block (`agent/agent_run.go:78`), so the
+  model cannot emit `tool_use` and the loop's only `continue` is unreachable.
+  That is a stronger guarantee than a flag, and it is worth writing down as the
+  reason this class does not apply — the cost of it is `8754300f` (the longest
+  prompt inber sends is a total cache miss), which is a price knowingly paid.
+  The one place the class *could* apply is `engine/turn_openai.go:55`, which has
+  no ceiling at all — see §1.
+
+### 4. claude-code: function hooks are a privilege-escalation surface, and the mitigation shipped in the same commit
+
+[`d9c456d7`](https://github.com/anthropics/claude-code/commit/d9c456d7) (PR
+[#93215](https://github.com/anthropics/claude-code/pull/93215), +7,866/−0)
+publishes the source of three **mods** — plugins whose `hooks.json` names a
+TypeScript module (`{"modules": ["./register.ts"]}`) instead of shell commands,
+giving each hook the signature `($, e, next)`: middleware around the engine's own
+operation, able to rewrite input, rewrite the result, deny, or skip other
+plugins. The event surface is far wider than classic hooks — `prompt.section`,
+`prompt.context`, `skill.prompt`, `settings.read`, `tool.register`, `tool.list`,
+`agent.spawn`, `engine.create` — and classic shell hooks become just another
+family, `classic.*`, that a mod can wrap.
+
+`sec-default` exists because of what that implies, and its README says so:
+
+> Some of what an organization sets today (its classic hooks, its managed
+> CLAUDE.md and rules, its settings, its MCP allowlist) was never within a
+> person's reach before function hooks; seated outermost, this plugin keeps
+> exactly those out of the user tier's reach and adds no policy of its own.
+
+The whole module is ten `on(...)` lines. Six are `next.to(e, 'append')` — skip
+the user tier entirely for org-owned events. `tool.register` denies a user-tier
+plugin adding tools when an MCP allowlist is in force, *"an empty array still
+counts as an allowlist"*. And everything fails closed, in three separate places,
+the clearest being `decidedByPolicy = (policy, decide) => policy.then(decide).catch(() => true)`
+— *"true (protect) when the read rejects or deciding throws"*. Failed reads are
+memoized too, so a flapping settings read cannot be retried into an allow.
+
+Two design points transfer regardless of the plugin model. **Provenance is a
+tier, not a boolean** (`prepend` / `user` / `append` / `builtin` / `core`), with
+`next.origin.tier` (who is asking) kept distinct from `e.provider.tier` (who
+supplied the subject). And **a name conflict is resolved by refusal, not
+override** — the `diff` mod's `registerCommand` catch leaves `host` null and every
+later hook short-circuits to `next(e)` when the built-in already holds `/diff`.
+
+- **What inber should consider:** this belongs to `permission-store`, not this
+  repo — inber has no plugin or hooks-module concept. The carryable pair is
+  (a) the tier model with caller-tier separate from provider-tier, which is what
+  lets one rule express "the org's own settings are not readable by a user
+  plugin" without enumerating callers, and (b) `.catch(() => true)`, which is the
+  same rule CC shipped independently in 2.1.267 ("Fixed managed
+  `allowedHttpHookUrls` … to **admit nothing, not everything, when unreadable**").
+  Recorded, not filed.
+
+### Checked this window, carrying nothing new for inber
+
+- **codex [#44288](https://github.com/openai/codex/pull/44288)** — write hook
+  stdin concurrently with draining stdout/stderr, and put stdin inside the
+  timeout: `// Drain output while sending input so neither pipe can block the
+  other`. Textbook, 38 net lines, and latent in any harness that pipes to a
+  subprocess — but inber's subprocess hazards are already owned by `08f50e1f`
+  and `38bfe8c7`, and inber's hook helpers write no stdin at all.
+- **codex [#44281](https://github.com/openai/codex/pull/44281) /
+  [#44293](https://github.com/openai/codex/pull/44293)** — budget the *assembled*
+  prompt, not the parts, reserving 256 tokens, and *"defer to synchronous review
+  without … dropping evidence to make it fit"*. Same rule as the guardian-context
+  entry at `:9647`; inber's twin (`3aa890b9`, unbounded context injectors) is
+  open.
+- **codex [#44341](https://github.com/openai/codex/pull/44341)** (+1487/−441) —
+  scope relay state to a login lifetime, retire the session on identity change:
+  `// A replacement must not retain the old logical client or replay its
+  unacknowledged results.` No inber surface — inber has no remote-control relay
+  — but it is the generation-scoping rule `44299` states as *"This process must
+  never hand an earlier generation's candidates to its successor."*
+- **codex [#44349](https://github.com/openai/codex/pull/44349)** — report `fork`
+  rather than `startup` as the session-start hook source, *"causing startup hooks
+  to run again even when their context was inherited from the parent."* inber's
+  fork inheritance is already audited (`docs/fork-inheritance-audit.md`) and its
+  live gap is the unmoded child (`e2d0b07b`), not the hook source.
+- **codex #44255 / #44273** (streamed remote compaction, legacy path deleted) —
+  one change in two commits: a flag retirement plus dead-code removal. **#44276**
+  is a single-condition fix, **#44297** is 13 test-only lines, **#44252** is a
+  core/extension boundary move with no stated behaviour change, and **#44289 /
+  #44327 / #44286** are Linux-WSL and Windows-ACL sandbox specifics. Plumbing;
+  do not read architecture into them.
+- **goose [#11938](https://github.com/block/goose/pull/11938)** — interrupted
+  headless runs must exit non-zero. No inber twin to check: `cmd/` holds one
+  binary (`inber-server`) with a single `os.Exit(1)`, and the CLI is a separate
+  repo.
+- **goose [#11411](https://github.com/block/goose/pull/11411)** — enforce the
+  20 MiB image cap *while* reading chunks, since `Content-Length` lies under gzip
+  and is absent under chunked encoding. inber has **zero** `io.LimitReader` or
+  `MaxBytesReader` repo-wide against five bare `io.ReadAll` sites, but the one
+  that matters (`agent/openai.go:68`) is already open as `f4b6e463`.
+- **cline** — the 2026-09-09/10 commits are desktop-app and provider-picker
+  fixes (Codex subscription model lists, ClinePass tiers, Windows title bar,
+  queued-prompt bubbles). **opencode** `5cd8e68f` ports a system prompt and
+  `a9a6fad0` requests summarized adaptive thinking; the rest is model-catalog and
+  console work. **dexto #914** was screened on 2026-09-09. No design content.

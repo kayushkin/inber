@@ -2085,3 +2085,69 @@ password and conceptually wrong, but one line of insight. **#11789** deletes
 and puts `hf-hub` behind an optional feature — good dependency hygiene,
 local-inference specific. **#11745** rejects non-HTTPS Snowflake URLs across
 redirects; correct, single-provider, no design content.
+
+## Harness-watch — 2026-09-10 (#11697, #11938, #11411): a one-shot flag cleared by unrelated activity is not a one-shot
+
+### 1. #11697 — the goal nudge fired until `max_turns`, and the fix is a two-line deletion
+
+[#11697](https://github.com/block/goose/pull/11697) removes two lines from
+`crates/goose/src/agents/agent.rs`. `goal_check_pending` is a volatile boolean,
+initialised `false`, that was **reset to `false` on every tool call**. The
+goal-nudge arm fires when `goal.is_some() && !goal_check_pending` and sets it
+true. The PR spells out the cycle:
+
+> 1. model stops → nudge fires, `goal_check_pending = true`
+> 2. model makes another tool call → **flag reset to `false`**
+> 3. model stops again → nudge fires again
+> 4. … repeat until `max_turns`
+
+The catch-all arm that clears the goal and exits was reachable only when the flag
+was already true *and* no tool had been called, *"so it rarely fired."* The fix
+drops the reset, matching `ops_retry.rs`, which uses a persistent `NUDGED`
+message-metadata flag *"for exactly this purpose."* The regression test
+alternates a tool call and plain text "goal is met" — the shape where the model
+makes one more call after a nudge before stopping: **before, 10 provider calls
+(runs to `max_turns`); after, ≤4.**
+
+The general rule, and it is worth stating separately from goose's goal feature: a
+flag meaning *"I already did X"* must be cleared only by *"X became untrue"*.
+Clearing it on adjacent activity converts a one-shot into an unbounded loop, and
+the loop is invisible in review because every individual nudge is correct. Read
+with codex [#44320](https://github.com/openai/codex/pull/44320) the same week,
+which adds the ceiling from the other end — a goal is `blocked` after three
+consecutive empty automatic continuations, with the streak reset enumerated
+(*activity, user turns, or goal changes*) rather than implied.
+
+**inber's side — checked, no twin, and the reason is worth keeping.** inber has
+no goal or auto-continuation concept; the only nudge-shaped mechanism is the
+budget notice at `agent/agent.go:365-383`. It cannot loop, because it does not
+depend on a flag at all: `forceSummary` withholds the tools block
+(`agent/agent_run.go:78`), the model therefore cannot emit `tool_use`, and the
+loop's single `continue` is unreachable on that path. Termination by construction
+beats termination by flag, and the price is already recorded as `8754300f` — the
+longest prompt inber ever sends is a total cache miss. The one loop with no
+ceiling of any kind is `engine/turn_openai.go:55`; see
+`agentic-design-patterns.md` 2026-09-10 §1 for why the todo that closed it is
+wrong.
+
+### 2. Also checked this window, nothing to import
+
+- **[#11938](https://github.com/block/goose/pull/11938)** — *"Make interrupted or
+  failed headless runs exit nonzero instead of reporting success. Interactive
+  cancellation remains unchanged."* The interactive/headless split is the right
+  distinction: a person who pressed Ctrl-C does not want a failing exit code, a
+  CI job does. No inber twin to check — `cmd/` holds one binary
+  (`inber-server`) with a single `os.Exit(1)`, and the CLI lives in `inber-cli`.
+- **[#11411](https://github.com/block/goose/pull/11411)** — enforce the existing
+  20 MiB image cap *while incrementally reading chunks*, rather than after the
+  body is in memory, *"preserving early `Content-Length`, HTTP status, and
+  timeout checks while avoiding a second full-body allocation."* The bug class:
+  a declared length is not a bound, because it lies under gzip and is absent
+  under chunked encoding. inber has **zero** `io.LimitReader`/`MaxBytesReader`
+  repo-wide against five bare `io.ReadAll` sites, but the one with a real
+  provider on the other end (`agent/openai.go:68`) is already open as
+  `f4b6e463`; the other four read local-service error bodies or inber's own
+  outgoing request.
+- **[#11697]**'s sibling security batch (#11603, #11604, #11612, #11613, #11427,
+  #11379) was screened on 2026-09-04 (`:1896`) and 2026-09-09; #11940, #11941,
+  #11888, #11894, #11945 and the eight dependabot bumps carry no design content.
