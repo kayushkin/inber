@@ -1092,3 +1092,32 @@ outside a managed tier"*.
   single rule say "the org's settings are not readable by a user plugin" without
   enumerating callers, and it is the piece a first implementation of a tiered
   policy engine skips.
+
+## Harness-watch — 2026-09-11 (CC 2.1.268): a fetch with no deadline, a denial that names its rule, and the tool list made byte-stable on the last three clouds
+
+[2.1.268](https://github.com/anthropics/claude-code/commit/536a2e23) — 75 bullets, 21 of them
+`[VSCode]`/`[web]`. Three carry design content.
+
+- *"Fixed WebFetch hanging indefinitely on a server that keeps the response open without
+  finishing; a fetch now fails after 300 seconds"* (`CLAUDE_CODE_WEBFETCH_DEADLINE_MS`). Checked
+  inber's twin: tool-store's `web_fetch` is `http.DefaultClient.Do` with no timeout and a bare
+  `io.ReadAll` (`tool-store/tools/web_fetch.go:47,56`), and the ctx it runs under carries no
+  deadline (`d9af91f9`). **Not filed** — it is unreachable: `tools.All()` is five tools
+  (`tools/tools.go:83-91`), `agent_tools` in agent-store has **0 rows**, so every session takes
+  `buildDefaultTools` and never sees `web_fetch`. It becomes live the day an agent lists it.
+- *"Improved auto mode denials: the message Claude receives now names the rule that blocked the
+  action and asks Claude to try a safer method and finish unrelated work before stopping to ask
+  you."* inber's refusal is `"%s mode allows read-only tools only"`
+  (`engine/build_hooks.go:96`) — the mode, not the rule, and no instruction about what to do
+  next. Already the subject of `d3342fe6`; this is the wording CC settled on.
+- *"Changed Bedrock, Vertex and Foundry sessions to keep the tool list byte-stable across a
+  conversation (late-connecting tools load deferred instead of rewriting it)"* and *"SDK
+  sessions using `excludeDynamicSections`: the first message is no longer re-rendered each
+  request"* — the 2.1.267 rule (`:956`) reaching the last surfaces it had not. Evidence for
+  `a5b91a47`/`bd706121`/`21473046`, nothing new to file.
+
+Also: deny rules now apply through symlinked spellings (`/etc`, `/tmp`, `/bin`) — for
+`permission-store`, and for `51822d74` when the `read_files` denylist is decided; and the
+`/compact` summary no longer mangles `$` sequences — checked, inber has no `$`-expanding sink
+on that path (`go vet -printf` clean, the only `ReplaceAllString` calls use literal replacements
+in `redact/`).

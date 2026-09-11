@@ -10548,3 +10548,79 @@ later hook short-circuits to `next(e)` when the built-in already holds `/diff`.
   queued-prompt bubbles). **opencode** `5cd8e68f` ports a system prompt and
   `a9a6fad0` requests summarized adaptive thinking; the rest is model-catalog and
   console work. **dexto #914** was screened on 2026-09-09. No design content.
+
+## Harness-watch — 2026-09-11: a revocation that one reader honours and the other ignores — codex spent the week making instructions, approvals and evidence *snapshots with a refresh rule*, and inber's `memory_forget` is enforced by `Search` and served anyway by the automatic context that opens every turn
+
+### 1. The inber defect of the week, measured
+
+[arXiv:2609.08258](https://arxiv.org/abs/2609.08258) found that no soft-revoking memory system
+enforces the revocation at retrieval unless the retrieval layer can see the mark. inber's mark
+is `importance = 0` (`memory-store/management.go:47`); `Search` filters `importance > 0`
+(`search.go:75`) and `BuildContext` filters `importance >= MinImportance` (`builder.go:64`) with
+the 0.4 default applied only when `!IncludeAlwaysLoad` (`builder.go:36-37`). inber sends
+`IncludeAlwaysLoad: true` (`memory/auto_context.go:101`) and `MinImportance: 0` from every branch
+of `contextBudget` (`engine/turn_context.go:8-39`). Measured on a throwaway store — three
+memories, two forgotten, asked as inber asks: `Search` returns 1, `BuildContext` returns 3, the
+forgotten always-load one **first**. Written up in `docs/papers/2026-09-harness-research.md`
+2026-09-11 §1 and filed. Two readers of one flag, one rule each: the pattern this file has
+carried since `5a96361d` (two selectors, two matching rules) and `f086536d` (two partitions, two
+rules), now on the one flag whose failure is an agent acting on a fact it was told to forget.
+
+### 2. codex, 50 PRs: a thing read at startup is a snapshot, and a snapshot needs a refresh rule
+
+The week's codex work is one idea applied to five objects — *what was true at startup is not
+what is true now, so record it, and say when it is re-read*:
+
+- **Instructions** — [#44675](https://github.com/openai/codex/pull/44675) reloads global
+  `AGENTS.md` "at model-request boundaries, including after tools within the same turn", keeps
+  the last good read on failure, suppresses repeat warnings until recovery, clears on removal,
+  serialises refreshes, and hands a **subagent the parent's applied snapshot, not the
+  provider**. [#44701](https://github.com/openai/codex/pull/44701) adds a host-supplied
+  thread-scoped provider composed *after* global and *before* repository instructions, with its
+  own 10,000-token budget and the same snapshot-inheritance rule. inber sits at both wrong
+  poles at once: the memory-built system prefix is re-queried every turn from a per-message
+  relevance query (`21473046`), while the agent's role is read once and then re-derived from
+  *live* config only on revival (`54a046c8`), and a spawned child gets neither a snapshot nor a
+  provider (`1aa15c17`, `b29f7a4d`). Nothing new to file; the decision those three pose is the
+  one codex just answered.
+- **Approvals** — [#44617](https://github.com/openai/codex/pull/44617) invalidates a cached
+  Guardian score when an `exec_command` widens its permissions; [#44575](https://github.com/openai/codex/pull/44575)
+  binds a background command's network review to the environment snapshot of the execution that
+  launched it, denies requests from an already-cancelled execution, and resolves a pending
+  approval as *denied* when the execution is cancelled mid-review. inber has no approver to
+  cancel (`c6dabd49`) and its `ApprovalFunc` is `func(tool, input string) bool` with no context
+  (`guard/guard.go:90`) — the day one is wired, it cannot be cancelled. Not filed: it is
+  unreachable until `c6dabd49` is decided, and filing the shape of a thing that does not exist
+  is how the queue got 154 rows.
+- **Evidence** — [#44569](https://github.com/openai/codex/pull/44569) removes action
+  truncation from Guardian review entirely: a reviewer that sees a cut action approves a thing it
+  did not see, so oversized actions go to synchronous review or to the user, never to a
+  truncated review. [#44570](https://github.com/openai/codex/pull/44570) keeps user instructions
+  and manual approvals complete and in order through transcript limits, and discards *optional*
+  evidence before shortening either. [#44493](https://github.com/openai/codex/pull/44493) moves
+  MCP tool descriptions out of the required action JSON into an optional, explicitly-untrusted
+  fragment capped at 400 tokens each. inber's guard classifies on the tool *name* only
+  (`guard/guard.go:177`, `isDangerous(tool)`), so it cannot be fooled by a cut argument because
+  it never reads one — which is `27dd7892`'s problem, not this one.
+- **Attribution** — [#44656](https://github.com/openai/codex/pull/44656) accumulates turn
+  metrics per resolved model, one histogram sample per model per token type, because a turn can
+  span a model switch and a compaction. inber's `79e0551c` and `7be5a692` are the two halves of
+  this. [#44521](https://github.com/openai/codex/pull/44521) separates *session isolation* (an
+  explicit `Inherit`/`Isolated` policy) from *attribution* (who spawned it) — the same split
+  `ceedbf75` asks for on the injection channel.
+- **Shutdown and config** — [#44523](https://github.com/openai/codex/pull/44523): `SIGTERM`
+  runs the same cleanup path as EOF, blocking stdio moves off the runtime threads, and a shared
+  45 s watchdog exits `1` if teardown stalls "even when logging is blocked" — `ef6be5a4` and
+  `2a7831d5` are inber's. [#44691](https://github.com/openai/codex/pull/44691) warns on
+  unrecognised config fields, up to three, with sources and *without values*, deduped across
+  startups. inber's `LoadConfig` (`server/config.go:75-82`) is a plain `json.Unmarshal` that
+  drops unknown fields silently — checked and **not filed**: the running unit passes no
+  `--config`, so the path is unexercised on this host and config comes from agent-store.
+
+### 3. What was checked and found not live
+
+For the record, so the next run does not re-derive them: the 2.1.268 `WebFetch` deadline
+(`web_fetch` unreachable — `agent_tools` has 0 rows, `tools.All()` is five tools); the `$`
+mangling in `/compact` (`go vet -printf` clean, no `$`-expanding sink); cline #13887's
+child-crowded listing (`/api/sessions/history` has no child filter to crowd); goose #11979's
+sender allowlist (absent by decision). One defect filed this run, none held back.

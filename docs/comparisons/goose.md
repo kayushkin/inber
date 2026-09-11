@@ -2151,3 +2151,14 @@ wrong.
 - **[#11697]**'s sibling security batch (#11603, #11604, #11612, #11613, #11427,
   #11379) was screened on 2026-09-04 (`:1896`) and 2026-09-09; #11940, #11941,
   #11888, #11894, #11945 and the eight dependabot bumps carry no design content.
+
+## Harness-watch — 2026-09-11 (#11979): an allowlist checked before pairing, and re-checked after
+
+[#11979](https://github.com/block/goose/pull/11979) adds `allowed_user_ids` to the gateway. The
+detail worth keeping is *where* the check sits: at the top of `handle_message`, **before** the
+pairing lookup, so it applies to already-paired users too — removing an id revokes. An
+allowlist consulted only at enrolment is a one-time gate; consulted per message it is a
+revocation channel. Unlisted senders get no reply and no pairing state, only a log line. inber's
+bus ingress (`bus.go`) has no sender allowlist at any point; that is a decision, not a defect,
+and it is not filed. #11768 and #11923 are a dependency edge and a policy doc; #11976 is a
+model-id table fix.

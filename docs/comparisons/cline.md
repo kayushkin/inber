@@ -1173,3 +1173,31 @@ rather than merely rude is what the error is wired into:
 `agent/chain.go:337-342`'s own account. cline fixed the message; the second half
 of the question inber has to answer is whether a malformed-arguments result
 should count as an error rung at all.
+
+## 2026-09-11: an acceptance that is one transaction, and a listing window that children crowd out
+
+**[#14039](https://github.com/cline/cline/pull/14039)** — event ingress persisted the event id
+*before* matching, so a failure after the first of two matching automations left a `failed`
+tombstone the duplicate check read as "processed", and redelivery was refused. Now one
+`BEGIN IMMEDIATE` transaction covers the event record, the queued runs, debounce state and the
+final status; failure rolls back everything and propagates; the producer can redeliver. The rule:
+a dedupe key written before the work it dedupes is a lost-work bug with a retry-proof cover.
+inber's bus ingress has no dedupe key at all (`c6c830da` — dropped on a full channel), so it has
+the opposite defect; nothing new.
+
+**[#13887](https://github.com/cline/cline/pull/13887)** — "every day all my tasks are gone": the
+history list over-fetched 2× the page and dropped child rows client-side; children sort after
+their root, so one session with more children than the window pushed itself and every older root
+out, and an empty page read as "history exhausted". Checked inber: `/api/sessions/history`
+(`server/api_sessions_history.go:104-190`) walks every transcript, sorts, then cuts to `limit`
+with **no** child filter, so it cannot lose a root this way — it returns children as peers
+instead, which is the bug `e37fc5f4`/`c81c4b63` already describe from the event side.
+
+**[#13886](https://github.com/cline/cline/pull/13886)** — an imported session's provenance was
+overwritten with `mode: "user"` on the first resume, "exactly when the errors we want to filter
+would happen". inber's `54a046c8` is the same shape one layer up: a revived session re-derives
+its role from live config. **[#13969](https://github.com/cline/cline/pull/13969)** — the
+mistake-limit stop was silent on desktop because the decision callback the CLI supplies was
+missing; a limit with no one to ask defaults to stopping, and stopping looked like a cancel.
+inber's `ConsecutiveErrors` has no limit to trip (`engine/turn_context.go:12-19` only widens
+recall), so there is no stop to be silent about — see `5a4138e1`.

@@ -1488,3 +1488,108 @@ Honest gaps, so the next sweep does not re-derive them:
   Cross-Substrate Authority), `2609.08327` (Tool Retrievers Are Underestimated), `2609.09646`
   (RobustSGPO: Search-Space Control for Agent Harness Evolution), `2609.08355` (RepoNav),
   `2609.07357` (EnvPilot), `2609.05553` (EdgeMem).
+
+# 2026-09-11 sweep
+
+The Atom API answered on the second try (`https://export.arxiv.org`, a `User-Agent` with a
+mailto, and 3 s between calls — the first call, over plain `http://`, returned an empty body,
+which is what the earlier "429" notes probably were). One keyword-scoped query across all
+categories, 120 most-recent entries, 2026-09-01 → 2026-09-10, deduped against the 119 `2609.*`
+ids already in this file. Every abstract below was read from the API, not a snippet. The
+`cs.CL/recent` gap from 09-08 is closed by the keyword scope; anything that matches none of the
+eight terms is still unseen.
+
+## 1. Soft-revoked memory is served anyway — and inber does exactly this, measured
+
+[arXiv:2609.08258](https://arxiv.org/abs/2609.08258) — **Revoked but Still Authoritative: An
+Empirical Study of Revocation Enforcement in Agent-Memory Systems** (2026-09-08). Five memory
+systems that revoke by *marking* rather than deleting, loaded with a revoked policy and its
+replacement, nine scenarios × nine models × six defence conditions. **No system enforces
+revocation by default**: the revoked fact is returned wherever the revocation label is not
+visible to the retrieval layer, it *outranks* its replacement, and the agent then takes the
+unsafe action. Their fix is a guard between the agent and any backend that withholds revoked
+rows and rows that conflict with their replacement.
+
+**inber has this defect, and it is measured rather than inferred.** `memory_forget` is a soft
+delete by `UPDATE memories SET importance = 0` (`memory-store/management.go:47`). `Search`
+honours it (`search.go:75`, `importance > 0`). The automatic context that opens *every* turn
+does not: `BuildContext` filters `WHERE importance >= ?` (`builder.go:64`) and only raises a
+zero floor to 0.4 when `!IncludeAlwaysLoad` (`builder.go:36-37`) — and inber asks with
+`IncludeAlwaysLoad: true` (`memory/auto_context.go:101`) and a `minImportance` that
+`contextBudget` returns as `0` on **every** path (`engine/turn_context.go:8-39`). So the floor
+is `>= 0` and a forgotten row is a candidate again. On a throwaway store: save an always-load
+memory at 0.8, a tagged one at 0.6 and a plain one at 0.5; forget the first two; ask exactly as
+inber asks. `Search` returns one row. `BuildContext` returns **all three — the forgotten
+always-load one at position 0**, because the always-load head is appended whether or not it
+fits, and the forgotten tagged one after the live one, because `calculateScore` starts from
+importance and adds 0.3 per matching tag plus a recency bonus, so a *recently* forgotten memory
+outscores an unmatched live one. The tool's own description (`memory/tools.go:190`) promises it
+"won't appear in search results", which is true, and is not the door that matters. Live stores
+carry 0 forgotten rows today (407 and 10 rows measured), so this is latent until the first
+forget — and the first forget of an always-load memory pins it to the front of the system array
+forever. Filed; the fix has to decide whether `BuildContext` filters `> 0` (keeping "0 means
+forgotten"), or forgetting becomes a column so it stops sharing a value with decay, and whether
+an always-load memory is forgettable at all.
+
+## 2. Eviction's damage is mostly irreversible, and the retrieval regime decides what you can measure
+
+[arXiv:2609.08279](https://arxiv.org/abs/2609.08279) — **What Eviction Destroys: A
+Restore-Counterfactual Audit of Forgetting in Agent Memory** (2026-09-08). For every wrong
+answer, reinstate the gold evidence and re-run the same reader: the error is *recoverable*
+(evidence retained, retrieval missed it), *irreversible* (evicted) or *residual* (wrong even with
+it). Under top-k retrieval at 80k tokens the irreversible share is 0.67–0.73 for FIFO, random and
+redundancy-aware eviction and 0.60 for LLM-importance; at 8k it is 1.00 for all four. Recoverable
+errors vanish under forced-gold injection by construction, so budget-accuracy curves are not
+comparable across retrieval regimes.
+
+- **What inber should consider:** memory-store's `DecayImportance` (×0.99 daily) and
+  `compaction.go:69` are eviction policies with no audit of this shape. The method is cheap to
+  copy — it needs only a per-question "was the evidence retained" flag — and it is the test that
+  would tell whether the token budgets in `contextBudget` lose answers irreversibly or merely
+  fail to retrieve them.
+
+## 3. Curate memories with read-only probes of the world, not from the transcript alone
+
+[arXiv:2609.11060](https://arxiv.org/abs/2609.11060) — **Grounding Agent Memory:
+Environment-Probing Curation for Enterprise Agents** (2026-09-10). A post-task curator restricted
+to completed trajectories keeps errors, overgeneralises partial evidence and retains stale
+knowledge. Giving the *curator* least-privilege read-only tools to check, scope and refresh
+candidate memories — task agent, retriever and write authority unchanged — raised CLBench pass
+rate 39% → 73% and halved task-agent cost, in a GitHub Copilot SDK harness, on Sonnet 4.6 and
+Opus 4.7.
+
+- **What inber should consider:** `extract.go` writes memories from the finished conversation
+  with no check against the repository they describe. This is the cheapest form of the
+  paper's idea: before a memory that names a file, a command or a port is saved, stat the file,
+  `--help` the command, read the unit. It also bears on `90296699` (the model chooses its own
+  provenance): a probe is a provenance the model cannot forge.
+
+## 4. Second tier — real, narrower
+
+- [arXiv:2609.09134](https://arxiv.org/abs/2609.09134) — **Co-Evolving Harnesses and Models**
+  (2026-09-08). Evolve a harness around a weak model, then fine-tune the weak model on an expert's
+  trajectories under that harness: performance *regresses* 4–30 points on all seven tasks,
+  because the weak model adopts the expert's planning style and no longer fits the harness
+  evolved around its own. On-policy correction of only the failing turn keeps both gains. The
+  transferable claim: a harness is fitted to a model's planning style, so swapping the model
+  under a tuned harness — `905a5e68`'s silent failover — is not a free substitution.
+- [arXiv:2609.09133](https://arxiv.org/abs/2609.09133) — **ExecCritic** (2026-09-08). When one
+  trajectory writes both patch and test, their errors agree; a separate Test agent with a
+  fail-closed harness that *freezes* the tests before repair is the fix. Tests from a weak Test
+  agent *lowered* resolve rate 61.2% → 57.3%; from a strong one raised it to 65.3%. A verifier
+  is not free-standing good — same shape as the 09-08 retrieval result.
+- [arXiv:2608.14624](https://arxiv.org/abs/2608.14624) — **CacheScout** (2026-07-16, the one the
+  09-08 sweep deferred). Serving-side: learns agent-to-agent execution transitions online to
+  drive KV eviction and prefetch, +10–18 pp hit rate, −18–45% TTFT on vLLM. The "53–62% fixed
+  context" figure is not in the abstract; do not cite it from here. Not applicable to an
+  API-served harness.
+
+## Screened and rejected, with the reason
+
+`2609.08273` MemForest (memory compression, 50% at 97% retained — a backend concern, no harness
+implication); `2609.09769` XAgent (SWE-bench-lite resolve rate, no design content); `2609.10416`
+TrajMark (trajectory watermarking); `2609.08919` Experience Funnel and `2609.08572` AgentGrad
+(training loops); `2609.11076` SaltBench (referee-gated benchmark protocol — sound, but a
+methodology paper); `2609.11728` (a position note: reproducibility practice *is* context
+engineering, one paragraph, no results). Also new in window and unfetched: `2609.10539`,
+`2609.10397`, `2609.08301` (Agent ATO, timeline visualisation from logs).
