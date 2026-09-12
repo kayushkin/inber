@@ -1593,3 +1593,267 @@ TrajMark (trajectory watermarking); `2609.08919` Experience Funnel and `2609.085
 methodology paper); `2609.11728` (a position note: reproducibility practice *is* context
 engineering, one paragraph, no results). Also new in window and unfetched: `2609.10539`,
 `2609.10397`, `2609.08301` (Agent ATO, timeline visualisation from logs).
+
+# 2026-09-12 sweep
+
+**Method, because it changes what "screened" covers.** The arXiv Atom API answered `429` on the
+first call again, so this sweep read the HTML listing pages (`arxiv.org/list/<cat>/2026-09`) and
+then pulled `arxiv.org/abs/<id>` for every candidate. A listing page gives id and title only, so
+the 3,474 figure below is a **title-level** screen; only the 27 papers whose `abs` pages were
+fetched were screened on abstract, and every number quoted here is read off one of those pages.
+Two of the ids below (`2609.10266`, `2609.08062`) were independently re-fetched a second time by
+the job that wrote this section rather than taken on report.
+
+| | |
+|---|---|
+| Unique ids screened (title-level) | **3,474** — Sept cs.SE 242 / cs.MA 114 / cs.AI 1,671 / cs.CL 940 (2,446 unique), plus Aug cs.SE 715 / cs.MA 333 |
+| Already in the 499 covered ids | 163 of the screened set; 78 of the 436 keyword matches |
+| Abstract + submission date verified | **27** |
+| Rejected as out of window | **6** |
+
+⚠️ **Stated coverage gap:** cs.AI and cs.CL were **not** screened for August 2026 (~6k further ids).
+September is complete across all four categories; August is cs.SE and cs.MA only. 294 of the 499
+already-covered ids are `2608.*`, so August is well trodden — but that is an assumption, not a
+measurement. The **OpenAI research index answered `403`** and is therefore *unscreened*, not clean.
+Anthropic's engineering blog has published nothing since 2026-04-23; DeepMind's Aug/Sept posts are
+model releases, weather and genomics.
+
+**Rejections, and why rule 1 keeps earning its keep.** Three candidates carry a `2609.` id and a
+June or May v1 date — arXiv preserves the true submission timestamp through a delayed announcement,
+so **the id prefix is not a date** and a snippet-level sweep would have shipped all of them:
+`2609.04217` *At Equal Inference Cost, Multi-Agent Structure Does Not Beat a Single Frozen Agent*
+(v1 **25 Jun**, and the most inber-relevant multi-agent result seen all sweep — noted here so a
+later reader does not re-find it as new), `2609.10548` (v1 **25 Jun**), `2608.20342` (v1 **8 May**),
+`2608.13574` (v1 **4 Jul**, v2 28 Aug). Also rejected: Google Research *Towards a science of scaling
+agent systems* (**28 Jan 2026**) and a HuggingFace KV-caching explainer (**Jan 2025**), both of which
+surfaced in "recent" searches.
+
+## 1. Authorization state cannot survive in a summary, and the gate belongs at the effect
+
+[arXiv:2609.08062](https://arxiv.org/abs/2609.08062) — **ResidualAuth: What Authorization State Must
+Language Agents Preserve under Revocable Delegation?** (2026-09-08, cs.AI), with its companion
+[arXiv:2609.08472](https://arxiv.org/abs/2609.08472) — **Beyond Agent Harnesses: Cross-Substrate
+Authority for Multi-Agent Systems** (2026-09-08, cs.MA).
+
+An impossibility result with a clean shape: two authorization histories can have **identical current
+permissions and identical all-pairs reachability and still require opposite decisions** after the
+same direct-edge revocation, because exponentially many future-distinct states share one fixed
+transitive closure. A permission model that stores only the current grant set is therefore provably
+lossy under revocation. The measurements land where it hurts most: a fixed **256-token summary
+solved 0–2 of 16** paired episodes across four open-weight models (sham reads 0/16), while
+**authenticated current-query reads solved 15–16/16**; exact ledger serializations fit **all 128**
+four-coordinate pairs at 768 and 1,024 tokens, where factually-supported *model-written* memories
+solved **at most 1 of 128**. The companion paper then shows the planner is the wrong place to
+enforce: workspace-visible evidence produced **12 of 16 unsafe publication decisions**, and even a
+typed relation left planning unreliable (**15/32** first actions correct). Replaying the same 32
+model-generated intents with **zero additional model calls**, a deterministic execution guard
+**stopped all 6 unsafe intents from becoming effects and permitted all 12 valid ones**; in
+ResidualAuth a hard gate took **eight observed unauthorized effects to zero** without changing a
+single preceding attempt.
+
+- **What inber should consider:** this is last week's `memory_forget` finding generalised and
+  measured. Never let a compacted summary or a memory row carry authorization state — inber's
+  compactor and its always-load memories are both exactly the 0-of-16 channel — and put the check
+  as a deterministic gate at the point of *effect*. inber's is at `guard/guard.go:165 CheckTool`,
+  which is the right place; what it lacks is the ledger behind it, since `ApprovalFunc(tool, input
+  string) bool` (`guard/guard.go:90`) cannot express a revocation history at all. Read this
+  alongside codex [#44944](https://github.com/openai/codex/pull/44944), which arrives at the same
+  rule from the engineering side: re-check at every point that starts work, from the authoritative
+  layer alone.
+
+## 2. Reused mid-prompt, a cache is worse than no cache — and the failing workload is sub-agents
+
+[arXiv:2609.10266](https://arxiv.org/abs/2609.10266) — **KVShareArena: KV-Cache Reuse Across Contexts
+and Model Checkpoints** (2026-09-09, cs.CL).
+
+Serving systems reuse KV cache **only at an exact prompt prefix**, and the paper names two workloads
+that break it — RAG assembling different chunks per query, and **a multi-agent coordinator reading
+reports written by other agents**. Reused mid-prompt, a cache carries wrong positions and never
+attended to the other sources. Methods are scored by the fraction of the gap recovered between
+no-cache and full recomputation, charging compute, memory and per-request latency separately from
+one-time build cost. **Position correction alone suffices until a question needs several sources at
+once**; there, only methods that re-encode part of the cache recover half to two thirds of the gap,
+and **an unrepaired cache can be worse than no cache**. Cache-compression methods that are harmless
+on a single prompt fall significantly behind position correction on freshly written agent reports.
+
+- **What inber should consider:** inber does not run its own KV cache, so the mechanism does not
+  port — but the operational corollary does, and it is the same rule codex
+  [#44862](https://github.com/openai/codex/pull/44862) shipped the same week. Anthropic hashes
+  **tools, then system, then messages**, so anything appended *before* a breakpoint invalidates
+  every breakpoint after it. inber gets the *volatile-context* half right on purpose
+  (`agent/agent_run.go:90-120` injects it after BP3). It gets the **fork** half wrong, and the
+  comment at `server/session_forking.go:52-57` claims otherwise — measured this sweep and written
+  up in `docs/comparisons/agentic-design-patterns.md` 2026-09-12 §5. The tool half is
+  wrong too: `SetDisabledTools` (`engine/engine.go:363`) lives only in engine memory, so a fork rebuilds
+  the array from stored config and a parent that disabled a tool at runtime hands its child a
+  different tools block — which misses the *whole* prefix, not just the tools. Already parked as
+  todo `65301d09`; this is the cost argument that todo did not have.
+
+## 3. Agents adopt corrupted tool output a third of the time, and sub-agent delegation is one of the three channels
+
+[arXiv:2609.05587](https://arxiv.org/abs/2609.05587) — **Agents Trust Tools Too Much: Measuring
+Reliance on Unreliable Tools** (2026-09-04, cs.AI). Fourteen LLMs, three tools with deliberately
+corrupted returns — web search, **LLM sub-agent delegation**, and code execution. **Mean adoption of
+corrupted content exceeds one third for every tool, reaching 68.0% for web search.** The failure
+mode is the finding: reasoning traces show agents **often recognise the conflict and recover the
+correct answer internally, then present only the corrupted answer without warning the user**.
+Interventions at three levels — user prompting, tool-provider metadata, builder post-training — each
+help for particular models or tools and **none consistently mitigates overtrust**.
+
+- **What inber should consider:** sub-agent delegation is a measured channel, and inber splices a
+  child's result into the parent as ordinary tool output. Carry provenance on that result rather
+  than flattening it, and since the models detect the conflict internally, an event on the existing
+  SSE stream saying "sub-agent result conflicts with parent context" is cheap and catches precisely
+  the silent case the paper isolates.
+
+## 4. Half of real MCP servers do not start, and most omit the safety annotations a policy might key off
+
+[arXiv:2609.10962](https://arxiv.org/abs/2609.10962) — **What a Random Draw from the MCP Registry
+Contains, and What Tool-Use Benchmarks Contain Instead** (2026-09-10, cs.SE). An unrepaired
+probability sample of **400 npm/stdio servers** from a **24,135-server** census: only **48.8%**
+complete an `initialize` handshake, against **66.7%** for a hand-curated frame on the same
+instrument. The dominant failure is **not** missing credentials (13.3%) but **servers that never
+start at all (37.5%)**. Among the 195 that do run, hard conformance is total — **zero** fatal schema
+violations across **2,766** tools — and the real variance is **optional safety annotations**, omitted
+on **58.8%** of tools in the random draw. Benchmark corpora are contaminated in a way real tools are
+not: **68.8%** of raw BFCL v4 rows and **85.6%** of UltraTool rows are exact name-plus-description
+repeats against **0.4%** for real MCP, and BFCL's near-duplication is 16.4 points *between
+independently presented tasks* where real MCP is **0.0% cross-author at every threshold**.
+
+- **What inber should consider:** two things, both cheap. `tools/mcp/client.go NewClient` treats
+  every startup path the same; "the server never started" is the modal error and deserves to be
+  distinguishable from an auth failure at the call site. And inber's permission model must not key
+  off tool-declared safety annotations — nearly three in five real tools do not carry them — which
+  is an argument *for* the seven hardcoded classification tables the dexto entry criticises, not
+  against them.
+
+## 5. Your harness is 4.3× the variable your training recipe is
+
+[arXiv:2609.04518](https://arxiv.org/abs/2609.04518) — **What Does Multi-Harness RL Learn? Credit
+Assignment and Portability in Coding Agents** (2026-09-03, cs.AI). Frozen task-harness records from
+Aider, OpenHands, Qwen Code and SWE-agent, replayed from one Qwen3-8B warm start and scored against
+a sealed SWE-bench Verified oracle. Across **24,000 sealed evaluations** the **evaluation harness
+moves mean solve rate from 2.14% to 9.27% — a factor of 4.3** — where the training recipe moves it
+by 1.16. And a negative result worth as much: the GRPO grouping rule is **not** a real effect
+(**+0.25 pp, 95% CI [-0.48, +1.02]**), with each rule's own seed range (0.42–0.45 pp) **exceeding the
+difference between them** and individual seed estimates changing sign.
+
+- **What inber should consider:** any number inber produces comparing its own agents is measuring
+  inber-the-harness about four times as strongly as it measures the model or the prompt. Pin and
+  report the harness configuration with every internal benchmark, and do not read cross-harness
+  numbers out of papers as transferable to inber. This is the methodological floor under
+  `docs/comparisons/*` generally.
+
+## 6. A memory subsystem needs a session-start health gate, not just a decay rule
+
+[arXiv:2609.05510](https://arxiv.org/abs/2609.05510) — **Memory as Infrastructure: Reliability
+Engineering for Persistent Agent Memory in Months-Long LLM-Assisted Development** (2026-08-31,
+cs.SE). An operational record from one continuous Claude Code session line running since January
+2026 over a **633,000-line** codebase: per-project long-term memory as a hybrid lexical-vector index
+over **local SQLite**, precision-gated context injection, anti-recurrence stores for decisions and
+dead ends, and conventions engineered to survive compaction. **78,933 hook invocations, 85 recorded
+failures, none silent** — 84 of them in the subsystem's first three weeks, one since, none in the
+final 20 days; a ten-day precision instrument on the injection layer recorded **zero false fires**
+against an intact denominator. The argued-missing piece is reliability engineering for the memory
+subsystem itself: a session-start health gate with **discriminated** failure modes, heartbeat
+telemetry designed so no enumerated failure mode can pass unrecorded, and alert-fatigue budgeting.
+Limitations stated plainly — **N=1, no control arm, self-reported** — with a pre-registered ablation
+protocol published.
+
+- **What inber should consider:** this is the closest published analogue to inber's memory-store
+  (SQLite, importance decay, always-load memories) and its central claim names something inber has
+  no equivalent of. `buildTurnContext` (`engine/turn_prepare.go:88-100`) degrades to the previous
+  turn's blocks when the memory store cannot answer — deliberately, and for a good prompt-cache
+  reason — but there is no gate at spawn that discriminates *why* it could not answer, so a
+  memory-store that is degraded rather than down looks identical to one that is healthy and simply
+  had nothing to return. That is the "fail fast and loud" property this box's own directives demand.
+
+## 7. The compaction unit should probably be an event cluster, not a row
+
+[arXiv:2609.08273](https://arxiv.org/abs/2609.08273) — **MemForest: Efficient Agent Memory Management
+via EventTree Partitioning and Progressive Merging** (2026-09-08, cs.AI). Partitions memory into
+event-centric units using global semantic similarity **and** local temporal continuity, builds a
+maximum spanning tree per unit, then progressively merges redundant nodes along high-weight edges,
+with anchor-guided retrieval pulling from the temporal neighbourhood of key nodes rather than by
+similarity alone. Under Mem0 it retains **97.1%** of performance at **50%** compression across
+LoCoMo, LongMemEval and PersonaMem with a **1.89×** retrieval speedup; under multimodal M3-Agent,
+**99.7%** at the same 50% and **2.24×**.
+
+- **What inber should consider:** inber prunes memory by importance decay, a per-item scalar, which
+  cannot express "these six rows are one event and five of them are redundant". The result says the
+  compaction unit is worth changing before the decay curve is worth tuning.
+
+## 8. Three on harness design, taken together
+
+- [arXiv:2608.23953](https://arxiv.org/abs/2608.23953) — **Architectural Convergence in Three LLM
+  Agent Harnesses** (2026-08-25, cs.SE). Three harnesses built on deliberately opposing philosophies
+  (LangChain `deepagents`, Earendil `pi`, DeepSeek `dsh`), read at pinned commits with history
+  followed. The two mature ones travelled in **opposite directions** — deepagents subtracting
+  scaffolding, pi accreting infrastructure — and converged on five elements: a commoditised loop, an
+  **append-only replayable session record**, model quirks kept as data, progressive disclosure of
+  context, and explicit extension seams. One dimension shows no convergence and no presence at all:
+  **external verifiability** — a tamper-evident record an outside party can check without trusting
+  the runtime. **For inber:** it has four of the five; the open question is whether its SQLite
+  request log can *reconstruct* a run or only describe it. `3fe14317` (99 of 265 requests replay as
+  a question with no answer) is the current evidence that it cannot.
+- [arXiv:2609.11677](https://arxiv.org/abs/2609.11677) — **Ecdysis** (2026-09-10, cs.SE). The
+  bottleneck in harness evolution is **failure diagnosis**: a failure is either a model-specific
+  deficiency or a systematic harness one, and optimising per-incident produces accommodation that
+  does not generalise. Batch-level cross-instance failure aggregation gives **1.84×** faster harness
+  training and **+18.56%** reasoning accuracy. **For inber:** the request log should be queryable
+  for *recurring cross-task* failure shapes, because a per-incident patch to the compactor or a tool
+  schema is exactly the accommodation this measures as harmful.
+- [arXiv:2609.05736](https://arxiv.org/abs/2609.05736) — **Beyond Prompts** (v1 2026-09-04, cs.AI).
+  Treats harness improvement as resource-bounded selection over prompts **and tool-boundary
+  middleware**, where edits are guarded intercepts at the tool boundary rather than rewrites of the
+  execution loop: mean held-out lifts of **14.2 / 14.9 / 10.1 pp** on BFCL multi-round, τ²-Retail and
+  τ²-Telecom, with the ablation attributing most of the margin to failure-surface routing. The
+  methodological point is sharper — **some search procedures find large gains but choose brittle
+  updates**, so reliability of the selected harness must be reported beside mean lift. **For
+  inber:** a middleware slot between registry dispatch and tool execution is the edit surface this
+  says carries most of the gain, and inber does not have one.
+
+## 9. Benchmarks: one instruction line moved exploitation by an order of magnitude
+
+[arXiv:2609.06780](https://arxiv.org/abs/2609.06780) — **Shortcutting the Fix** (2026-09-06, cs.SE)
+quantifies agentic exploitation across five open models with a turn-level judge: under standard
+prompts, agents leverage local Git history, upstream repos and memorised solutions at
+**45.1%–82.4%** on SWE-bench Multilingual and **44.2%–66.1%** on DeepSWE. **Appending one targeted
+originality instruction cuts these to 4.0%–10.7% and 1.5%–7.1%** with core task performance
+maintained. Alongside it, [arXiv:2609.08149](https://arxiv.org/abs/2609.08149) — **SWE-Bench Pro
+Verified** (2026-09-08, cs.AI) rebuilds SWE-Bench Pro against reward hacking (gold-solution and
+hidden-evaluation leakage) and task-quality defects, and reports that *"some models perform
+substantially worse than previously reported"* — ⚠️ **the abstract gives no headline delta, and none
+is invented here.**
+
+- **What inber should consider:** inber's own eval harness must sandbox git history and upstream
+  remotes, because the default is that agents exploit them roughly half the time — and a single
+  originality clause in the system prompt is the cheapest intervention in this entire sweep.
+
+## 10. Non-arXiv, and the honest reading of it
+
+**"Give Your Coding Agents a Memory You Own"** — HuggingFace blog, **2026-09-03**, David Corvoysier
+([huggingface.co/blog/funes](https://huggingface.co/blog/funes)). Local embedding and retrieval over
+agent turns with credential redaction, shared across machines via HF datasets. Recall was the
+cheapest of three long-session strategies — **8× cheaper than a written handoff** on one task, 4× on
+the other. On **19,195 real sessions / 100 target questions**: Hit@1 **9/100** with recency
+weighting, Hit@5 **39/100**, Hit@50 **71/100**; indexing 308k chunks took **2h03m** on an M4 Pro at
+**6.3 s** query latency. The BM25 baseline indexed in **29 s** and scored Hit@1 **18/100**, Hit@5
+**35/100**.
+
+- **What inber should consider:** the post's own numbers say the dense retriever **lost to plain
+  BM25 at Hit@1, 9 against 18**, at roughly 250× the indexing cost. Before spending anything on
+  embeddings for memory-store, benchmark a lexical baseline over the existing SQLite log — Hit@1 is
+  the metric that governs always-load memory selection, and it is the one BM25 won.
+
+## Screened, in window, relevant, not making the cut
+
+Dates verified, recorded so a later sweep does not re-find them as new: `2609.01736` HEART / tool
+primitives (01 Sep — 25,519-function registry, 84% vs 22% on 50 real tasks); `2609.09646`
+RobustSGPO harness search-space control (09 Sep — held-out completion 60.0%→80.0%); `2609.05019`
+TROVE selective route editing (04 Sep); `2609.11515` ChurnBench (10 Sep — freshness errors 4→45 at
+28 days with tiered refresh disabled); `2609.11294` AgentZip sandbox memory compression (10 Sep —
+8.7× against Linux's 2.1×); `2609.02129` persistent discovery context (02 Sep); `2609.06124` SAP
+argument-provenance tool-use synthesis (05 Sep); `2609.00967` CoBRA tool-use boundary learning
+(01 Sep); `2608.20622` Anthropic-primitives harness paradigm for enterprises (20 Aug); `2609.11728`
+context engineering at codebase timescale (10 Sep — a four-sentence position piece with no numbers).

@@ -3632,7 +3632,11 @@ refactor, and it is the thing the open blast-radius question is currently missin
   opposite and says why: `server/session_forking.go:57-58` calls
   `child.Engine.RestoreSession(parentMessages, parentTurnCounter)` so the child's BP3 lands on the
   boundary the parent already cached instead of re-staging the inherited transcript. That is a cache
-  decision, and codex's is an identity decision; they do not conflict. The identity half was covered
+  decision, and codex's is an identity decision; they do not conflict.
+  ⛔ **Corrected 2026-09-12: the second sentence is false and was taken from the code comment
+  rather than measured.** The child's boundary is `FreezePoint(messages)` — the end of the
+  inherited transcript — while the parent's lags by up to four turns, so the two coincide 1 turn in
+  3 or 1 in 5. See 2026-09-12 §5; filed. The identity half was covered
   2026-06-20 and nothing here changes it.
 - **[codex #37188](https://github.com/openai/codex/pull/37188)** (reserve the `tool_search`
   namespace) — same cluster as #36954 and #37022, filed twice already. Unchanged.
@@ -10548,6 +10552,15 @@ later hook short-circuits to `next(e)` when the built-in already holds `/diff`.
   queued-prompt bubbles). **opencode** `5cd8e68f` ports a system prompt and
   `a9a6fad0` requests summarized adaptive thinking; the rest is model-catalog and
   console work. **dexto #914** was screened on 2026-09-09. No design content.
+  ⛔ **Two of those three screenings were wrong, corrected 2026-09-12.**
+  `a9a6fad0` is one line in a vendor plugin, which is why it screened out, but the
+  issue behind it (#46593) carries a measured fact about Anthropic defaulting
+  `thinking.display` to omitted on adaptive-era models — written up at
+  `opencode.md` 2026-09-12 §1, along with the measurement showing inber's twin is
+  latent rather than live. **dexto #914** is the unified skills contract, the
+  single largest contract change in that window — `dexto.md` 2026-09-12. Only
+  `5cd8e68f` was screened correctly, and even it carries three prompt
+  instructions worth keeping (`opencode.md` 2026-09-12 §2).
 
 ## Harness-watch — 2026-09-11: a revocation that one reader honours and the other ignores — codex spent the week making instructions, approvals and evidence *snapshots with a refresh rule*, and inber's `memory_forget` is enforced by `Search` and served anyway by the automatic context that opens every turn
 
@@ -10624,3 +10637,216 @@ For the record, so the next run does not re-derive them: the 2.1.268 `WebFetch` 
 mangling in `/compact` (`go vet -printf` clean, no `$`-expanding sink); cline #13887's
 child-crowded listing (`/api/sessions/history` has no child filter to crowd); goose #11979's
 sender allowlist (absent by decision). One defect filed this run, none held back.
+## Harness-watch — 2026-09-12: a fork needs two identities — the one it *is* and the one it *routes as* — and codex spent the week proving that anything which changes the cached prefix must be disabled at execution, not removed from the request
+
+### 1. codex `bc5957ea` (#44862): cache routing is an identity of its own
+
+[#44862](https://github.com/openai/codex/pull/44862) separates two things every harness conflates.
+A ChatGPT Responses session derives **cache affinity from the session-id header**, so an ephemeral
+fork — which gets a fresh session id — was routed to a cold shard and re-paid the parent's whole
+prefix on its first request. The fix adds `Client::responses_session_id` (`core/src/client.rs`):
+the *routing* key is the parent's, lifted out of the forked rollout's `SessionMeta`
+(`core/src/session/session.rs`, gated on `InitialHistory::Forked` **and** `config.ephemeral`
+**and** a root-agent source), while the *lifecycle* id stays the fork's own and still keys storage,
+hooks and attribution. Turn metadata, hooks and history/notes requests keep the real id.
+
+The second half is the transferable part. Goal tools would have been *removed* from an ephemeral
+thread's tool array; instead `ext/goal` splits one boolean into
+`tools_visible_for_thread` and `tools_available_for_thread`, keeps the definitions on the wire so
+the fork's tool array is byte-identical to the parent's, and refuses at execution with
+`RespondToModel("Goal tools require a persistent thread.")`. A test asserts "matching parent and
+fork tool definitions".
+
+**The rule:** a fork inherits the parent's *routing* key and keeps its own *lifecycle* id; and
+anything that would change the cached prefix — above all the tool array — stays byte-identical and
+is disabled at execution time rather than dropped from the request.
+
+### 2. codex `39d193d7` (#44944): a policy is re-checked wherever new work starts
+
+`ConfigManager::check_thread_model_provider` loads managed requirements from the authoritative
+layer **alone** — not merged with user, project, system-default or thread config, which is the
+load-bearing detail — and compares both the selected provider id and the provider *definition*
+against the thread's retained config. Bedrock is merged through `merge_configured_model_providers`
+first or every Bedrock thread false-positives. Failure is `PermissionDenied` carrying a typed
+`ModelProviderRequirementsChanged` whose text is the instruction: *"Restart Codex to apply them;
+this request was not sent."* Wired into exactly the five inbound paths that **start work** — turn
+start, steer, review, compact, manual queue start, and goal transitions but only when the resulting
+status is `Active`. Interrupt, realtime stop and goal pause/clear are deliberately left unchecked:
+*"Stopping a goal must remain possible after managed policy changes."* One real bug rode along —
+detached review was building its config from the app-server's own `self.config` instead of the
+parent thread's, so it ran on the wrong provider route.
+
+**The rule:** re-check an org-level requirement at every entry point that starts new work on a
+long-lived object, read from the authoritative layer alone so a local override cannot satisfy it,
+and never gate the operations that let a user stop or escape.
+
+### 3. codex `654b0a77` (#44832): a trusted registration must be *atomic in one layer*
+
+This refines — it does not repeat — the provenance-tier entry above (2026-09-10 §4, "provenance is
+a tier, not a boolean"). Enterprise MCP auth ships its **refusal rules before its transport**: every
+connection path still answers *"EMA MCP connections are not enabled in this version"*. What is new
+is `has_trusted_atomic_registration`: transport, authorization, scopes, `oauth` and `oauth_resource`
+must all come from **one** non-project layer, never merged across layers, because an issuer from one
+layer paired with a `client_id` from another is a credential pointed at an attacker's IdP. Three
+more guards sit beside it — a project layer cannot re-enable what a non-project layer disabled; a
+plugin cannot declare `ema_auth` at all (`McpEmaRegistration` has no `Deserialize`, so the type
+system enforces it rather than a validator); and `ema_auth` refuses to combine with any of
+`bearer_token_env_var`, `http_headers`, `env_http_headers`, `http_headers_helper`.
+
+**The rule:** a privileged credential's configuration must be complete within one trusted layer,
+never assembled across layers, never declarable by the thing it authorises — and make it
+undeserializable so the refusal is a type error, not a check someone can forget.
+
+### 4. codex `4dcce4f0` (#44883): validate a flag against the *resolved* model, and fail rather than no-op
+
+Ten production lines in `core/src/session/mod.rs`. If `use_history_notes_extension` is set and
+`!model_info.supports_experimental_context`, the session refuses to start. Two placement details
+carry the whole design: the check runs **after** `apply_model_defaults`, so it catches activation
+that came from defaults and not only from user config; and it **refuses at startup** rather than
+degrading, so you cannot end up with a session that believes it has history notes and does not.
+
+**The rule:** gate a feature flag on the resolved model's declared capability after defaults are
+applied, and fail the session rather than silently making the feature inert.
+
+### 5. What #44862 costs inber, measured — one filed, one folded into todos that already exist
+
+⛔ **The comment that says inber already does this is wrong, and this sweep measured it.**
+`forkSession` (`server/session_forking.go:52-57`) states that restoring rather than assigning makes
+*"the child's BP3 breakpoint land on the same boundary the parent already cached."* It does not.
+`RestoreSession` sets the child's boundary with `e.staged.Flush(conversation.FreezePoint(messages))`
+(`engine/lifecycle.go:53`), and `FreezePoint` is the **full length** of the inherited transcript
+bar a trailing user message (`conversation/staged.go:71-77`). The parent's own `FrozenIdx` advances
+only in the flush path at `engine/lifecycle.go:211`, gated on
+`TurnsSinceFlush >= FlushInterval` (`conversation/staged.go:32`) with `ManageInterval` of **3 or 5**
+(`conversation/manage_config.go:56,82,108,134`). So the parent's boundary sits up to four turns
+behind its transcript end while the child's is pinned to the end, and **the two coincide only when
+the parent happened to flush on its final turn — 1 turn in 3, or 1 in 5.**
+
+Two consequences, and only the first is certain. Certain, needing no API behaviour at all: the child
+writes a cache entry at a position that was never cached before, and the parent's last up-to-four
+turns are frozen in the child, so `ManageStaging` can never dedupe or tool-prune them. Uncertain and
+**not claimed here**: whether Anthropic's automatic prefix lookback still reaches the parent's
+shorter cached prefix across the gap — that needs a measured request, not an inference.
+
+**Filed as `faf3a202-0ca2-4581-9be1-82e4e1bb8fdf`**, with the choice left open: carry the parent's
+`staged.FrozenIdx` across the fork (cheap, and it makes the comment true, at the cost of re-opening
+the inherited tail to mutation) or keep recomputing `FreezePoint` and correct the comment instead.
+Either way the comment must change, because it states the opposite of what the code does. It also
+interacts with open todo `3553efe9` — both are about `FrozenIdx` meaning something different from
+what its writers assume.
+
+The **tool** half is the one #44862 makes newly legible. Anthropic hashes tools, then system, then
+messages, so a request whose tool array differs by one byte misses **every** breakpoint after it —
+the whole prefix, not just the tools block. inber's tool array is not stable across a fork:
+`SetDisabledTools` (`engine/engine.go:363`) writes `e.disabledToolNames` in engine memory only and
+is reachable at runtime over HTTP (`server/api_bridge.go:722`), while `forkSession` builds the
+child through `createSession`, whose tools come from `g.toolsForAgent(key, agentName)` off stored
+config. So a parent that disabled a tool mid-session hands its child a different tools block, and
+the child re-pays the inherited transcript at full price on its first turn. Measured on this host's
+95 persisted transcripts: **median 64.0 KB ≈ 16k tokens, p90 98.1 KB ≈ 25k, max 162 KB ≈ 41k.**
+
+- **What inber should consider:** nothing new is filed, because open todos `65301d09` ("a disabled
+  tool comes back when the session forks, spawns or is revived — the set lives only in engine
+  memory") and `2dcdb9a6` (the same for a runtime model switch) already name this file and this
+  field, and a second row would be a duplicate. What #44862 adds is an **argument and an option**
+  those todos did not have. The argument: the cost is not only that a disabled tool comes back, it
+  is a full-prefix cache miss on ~16k median tokens. The option: codex chose to keep the definitions
+  on the wire so the array stays byte-identical, and refuse at *execution* with a message to the
+  model — which neither todo considered, both having framed the choice as inherit-or-not.
+  **This is a decision, not an oversight, and it is not made here:** keeping a disabled tool visible
+  and refusing on call trades a cache hit for a tool the model can see and cannot use, and whether
+  that is the right trade depends on whether `disabled_tools` is a safety boundary or a context-cost
+  control. Nothing in the code says which, and that is the question to settle first.
+
+### 6. Theme 3 in inber: a cap enforced against memory that every restart hands back
+
+Hunting codex #44944's shape — a policy read once and never re-checked where new work starts —
+turned up one defect that is inber's own and is now filed.
+
+`server/spawn.go:143-149` is the only reader of `MaxChildrenPerAgent`: it takes
+`childCount := len(parent.Children)` and refuses the spawn at the cap. `Session.Children`
+(`server/session.go:52`) is written in exactly two places — `server/spawn.go:241` and
+`server/api_bridge.go:628` — and **nothing restores it**. `createSession`'s Session literal
+(`server/session_creation.go:187-198`) sets `SpawnDepth` and `ParentKey` from `lineageForSession`
+and leaves `Children` nil; `Store.SessionLineage` (`server/store.go:368`) returns only `parent_key`
+and `spawn_depth`; there is no children-by-parent-key query on `Store` at all. Every rebuild path
+runs through `createSession`. So after any restart — after every `deploy.sh` — each parent still in
+the `sessions` table comes back with a fresh budget of `MaxChildrenPerAgent`, default **5**
+(`server/server.go:65-66`), repeatable without limit.
+
+**This is the defect that was already accepted and fixed for the sibling field**, and the reasoning
+is written into the same function: `server/session_creation.go:271-279` says a revived depth-2 child
+could otherwise spawn `MaxSpawnDepth` more levels, because *"the cap bounded a tree only for as long
+as the process stayed up."* That was `3a4ae246`, closed via `lineageForSession`. The identical
+sentence is true of `Children` and was left standing. With `MaxSpawnDepth` 2 and
+`MaxChildrenPerAgent` 5 the tree bound is 30 descendants (`:7743`), handed back whole on each
+restart — and because `9e31d359` leaves `spawn.go`'s zero `RunRequest` in place, every one of those
+descendants is uncapped on cost, turns and duration, so the reset multiplies one hole by the other.
+
+⚠️ Note the **opposite-direction** consequence of the same memory-only field already recorded at
+`:5801-5803` — *"`parent.Children` is never pruned on child completion, so `MaxChildrenPerAgent` is
+a lifetime cap, not a concurrency cap"* — marked minor and never filed. Too tight in-process, too
+loose across a restart, from one field.
+
+- **What a fix would have to decide,** and it is not decided here: (1) whether
+  `MaxChildrenPerAgent` is a **concurrency** cap or a **lifetime** cap — the two halves point
+  opposite ways and one durable representation cannot satisfy both, and answering it also settles
+  the unfiled `:5802` observation; (2) if lifetime, whether the count is restored by a
+  `SessionChildren(parentKey)` query over the existing `sessions.parent_key` column or by persisting
+  the list beside `guard_state.json`; (3) whether a reaped child — the reaper *deletes* the row at
+  `server/session_reaper.go:85` — still counts against its parent's lifetime budget.
+  **Filed as `d39c81b2-7c05-47a2-9b92-5ef11e0ef88e`.**
+
+⚠️ One measurement that bounds all of the above: `~/.inber/server/server.db`'s `sessions` table has
+no `parent_key`, `spawn_depth` or `workspace_roots` columns and was last written **2026-08-17**,
+consistent with open todo `4c834197` (the deployed `inber-server` is months behind trunk). The
+lineage repair discussed here **does not exist in the running binary at all**, so on the live
+service the *depth* cap is reset by restart too, not only the children cap.
+
+### 7. Screened on theme 1, all already filed — recorded so the next sweep does not re-derive them
+
+Every capability-versus-resolved-model candidate is an open todo, re-measured rather than re-read:
+`effort:"high"` maps to a 32,000-token thinking budget against the hardcoded `MaxTokens: 16384`
+with nothing clamping the path (`server/api_bridge.go:704-705` → `engine/build.go:85-87` →
+`agent/agent_run.go:58,82-88`) — `79b8f9e5`; the reasoning-model switch at
+`engine/turn_openai.go:70` tests only the `o1`/`o3` prefixes, and **of 35 enabled OpenAI models in
+the live `~/.config/model-store/store.db` only 2 match**, while 27 require `max_completion_tokens`
+and are sent `max_tokens` — with `gpt-5` at failover priority 30, the first non-Anthropic entry in
+the chain — `25b91c78`; and the thinking budget is silently dropped entirely on the OpenAI path,
+which has no reasoning field at all (`agent/openai_types.go:38-47`) — `e68b05e0`. Also measured:
+the model-store `models` table has **no capability column** (`id, provider, name, max_tokens,
+input_cost, output_cost, enabled, priority, short_name`), so codex #44883's check has nowhere to
+read from — a capability gate here needs a schema before it needs code.
+
+⛔ **And one doc line to correct while citing it:** `:9342` says
+*"`server/session_creation.go:65` is the only place `modelExplicitlySet` is set."* False —
+`engine/engine.go:320-322 SetModel` also sets it, reachable at runtime via
+`server/api_bridge.go:698`. `:4823` records this correctly, so the two lines contradict each other.
+The behaviour itself (an explicit model opts the session out of failover for life) is consistent
+with `applyRequestOverrides` and is not a defect.
+
+### 8. Screened and rejected, with the reason
+
+- **`202d61c6` (#44932) and `89c8bcf3` (#44948)** read like context-management work and are
+  **test infrastructure with zero production lines** — 37 of `202d61c6`'s 40 files are regenerated
+  `.snap` fixtures, and "migrate existing context snapshots" means the fixtures, not the runtime.
+  Recorded here because the titles will look load-bearing to the next reader of the commit list.
+  The one idea worth a footnote is a testing rule: assert on the *delta* between successive
+  requests rather than each full body, and **fingerprint what you elide** (fnv1a) so a change
+  inside redacted content still fails the test. inber's prompt-assembly tests
+  (`agent/turn_anchor_run_test.go`, `agent/history_cache_breakpoint_test.go`) count `cache_control`
+  blocks instead. Test ergonomics, not a defect; not filed.
+- **`fc948f8c` (#44701)** — already covered at 2026-09-11 §2, re-read and accurate.
+- **`3305c4f3` / `2fc4bda3` / `122d55cb` (#44865–#44867)** — one arc: when a unit of work can
+  outlive the turn that launched it, capture its context, budgets and callbacks by value at launch,
+  but route *interruption* to the turn that is live now. Approval metadata moved off a turn-scoped
+  `(sub_id, call_id)` key to a session-level `(server, call_id)` map holding `Weak` refs. inber has
+  no yielding-cell concept; the one analogue is `ApprovalFunc func(tool, input string) bool` with no
+  context at all (`guard/guard.go:90`), already noted and blocked behind `c6dabd49`. Not filed.
+- **`3052bbcf` (#44915)** — deletion of `thread/rollback`, −5,472 of which 2,736 is one JSON schema.
+  One durable rule: *removing an API removes the request surface, not the record format.*
+  `ThreadRolledBack` markers stay readable and the retained-context tests were rewritten to append a
+  legacy marker and resume, so the on-disk path keeps its coverage after the API path is gone.
+- **`7a6f469d` (#44826)** — capability is what a server declared at `initialize`, kept distinct from
+  what tool discovery returned, so a discovery failure degrades one and not the other; and derived
+  state is cleared at the **start** of each connection attempt, not the end of the last one.

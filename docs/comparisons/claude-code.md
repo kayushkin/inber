@@ -1121,3 +1121,120 @@ Also: deny rules now apply through symlinked spellings (`/etc`, `/tmp`, `/bin`) 
 `/compact` summary no longer mangles `$` sequences — checked, inber has no `$`-expanding sink
 on that path (`go vet -printf` clean, the only `ReplaceAllString` calls use literal replacements
 in `redact/`).
+
+## Harness-watch — 2026-09-12 (CC 2.1.269, and the `mods` contract read properly): a privacy gate evaluated once at session start is a gate you walk around by changing the session
+
+### 1. What the 2026-09-10 `mods` entry above does not have
+
+`:1055` covers `d9c456d7`'s tier model, fail-closed default and name-conflict-by-refusal, and all
+of that stands. Four things it omits, found by reading `mods/sec-default/README.md` and
+`mods/diff/hooks/register.ts` rather than the top-level README:
+
+- **The event surface is ~30 events, not the eight quoted.** `sec-default`'s "everything else" row
+  enumerates it: `classic.*`, `prompt.section`, `prompt.context`, `prompt.submit`, `skill.prompt`,
+  `attribution.text`, `settings.read`, `tool.describe`, `tool.register`, `tool.list`, `tool.call`,
+  `tool.check`, `command.describe`, `command.register`, `command.run`, `agent.offer`, `agent.spawn`,
+  `agent.list`, `turn.*`, `session.*`, `ui.*`, `fs.*`, `http.fetch`, `process.run`, `store.*`,
+  `clock.*`, `model.*`, `mcp.call`, `audio.*`, `engine.create`.
+- **Registration takes a structured matcher, not a regex.** `on(event, matcher?, handler)`, where
+  the matcher key is the event's own subject field and the value is a string or an array —
+  `on('tool.call', {tool: [...Tools.EDITING_TOOLS]}, …)`,
+  `on('command.run', {command: ['clear','resume']}, …)`. Strictly better than classic hooks'
+  string matcher, and the piece a first implementation skips.
+- **`engine.create` is a fold, and it is how capabilities are injected.** telemetry's entire module
+  is `on('engine.create', ($, e, next) => ({...await next(e), telemetry}))` — the `$` object every
+  plugin above it receives is **built by the chain**, so `$.telemetry` exists only where the
+  telemetry mod is seated. There is no declared capability field anywhere; a plugin discovers a noun
+  by its presence, and `diff`'s README states the contract for absence: *"where it is absent the
+  rows are dropped and nothing else changes."* This is the deepest idea in the tree.
+- **`tool.list` runs the chain twice and merges by ownership.** `sec-default` awaits both
+  `next.to(e,'append')` (the listing past the user tier) and `next(e)` (the listing through every
+  tier), then takes org-owned tools from the first and everything else from the second; a refusal
+  from either, or an unreadable policy, leaves the org listing whole. **Rule: when an untrusted tier
+  must be allowed to edit part of a collection, compute both the trusted and the untrusted answer
+  and merge per row by owner — do not try to express it as a single-pass filter.** That is the
+  concrete mechanism `permission-store` would need the day it grows a subject.
+
+### 2. `1a7c76e0` — telemetry gating, and the rule that generalises
+
+Four changes, three of them real. **The memoization of both the environment read and the credential
+was deleted**: `deps.environment()` and `deps.authorize()` now run on *every* row, credential last,
+right before the POST, because *"a session that has since moved to a third-party provider or a cloud
+gateway sends nothing more."* The `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` escape hatch that let a
+host keep telemetry flowing on Bedrock/Vertex/Foundry is **gone with no override**.
+`NODE_ENV === 'test'` was removed from the off-switch — a privacy gate should not be decided by an
+ambient variable that means something else. And the emitter is serialized
+(`queue = turn.catch(() => undefined)`), so rows go one at a time, a failed row does not poison the
+chain, and N concurrent `log()` calls no longer trigger N concurrent `authorize()`.
+
+**The rule: a privacy gate evaluated once at session start is a gate that can be walked around by
+changing the session.** This is `agentic-design-patterns.md` 2026-09-11 §2 (codex: a thing read at
+startup is a snapshot and needs a refresh rule) arriving independently from the privacy side, and
+sharper for it — cross-referenced there rather than restated.
+
+Riding along: `use.name` → `use.tool` on a tool-use record, i.e. the mods API renaming a field
+called `name` because it was not the name of the thing it sat on.
+
+### 3. `2142ecec` / `8939decc` — the diff backend seam, and a commit that is purely a rename
+
+`Backend` is a capability **record**, not a class:
+`{repository, baseModes, words, fetchDiff, fetchFileHunks, headKeyOf}`. `backendOf(host, probes)`
+consults installed probes in insertion order, each returning `null` to defer, with git last. Four
+details, in descending value:
+
+- **The user-facing vocabulary is part of the backend contract.** `BackendWords` carries `base`
+  (`"HEAD"`), `diffCommand` (`"git diff"`), `lister` (`"git"`) and `untrackedNoteOf(...)`. The pane
+  never types the word "git": presentation stays at the edge, but the **nouns** come from the
+  provider.
+- **A persisted enum preference is re-validated against the current provider's vocabulary** —
+  `const mode = stored && probed.baseModes.includes(stored) ? stored : null`. Parsing a stored enum
+  successfully is not the same as it still being offered.
+- **The backend closes over a getter for the host, not the host**, because *"a backend pinned under
+  one `session.start` keeps reading through whatever host a later `session.start` bound"* — and
+  `refresh` snapshots the mutable module ref once (`const pinned = backend`) so a re-pin mid-refresh
+  cannot mix results.
+- **`8939decc` is a one-line comment rename and the most on-message commit of the week.** *"The
+  plugin's backend-extension point"* → *"Where a host adds backends to the plugin."* It was never a
+  general extension point — `INSTALLED_BACKEND_PROBES` is reachable only by a host that compiles the
+  module in, before `register` runs — and the whole commit is de-overclaiming the name. That is this
+  box's names-must-tell-the-truth directive, shipped upstream as its own commit.
+
+### 4. CC 2.1.269 (`df52d04a`) — seven items, five with content
+
+2.1.263 is one empty bullet; 2.1.265–2.1.268 are already covered at `:956` and `:1096`. 2.1.269 is
+new:
+
+- **`claude plugin eval`** — a plugin ships its own eval suite, the host runs it, and the output is
+  scored reproducible JSON + HTML. The release's real capability. Directly relevant to skill-store
+  and bundle-store: a registry entry could carry a suite the *registry* runs, which is a stronger
+  claim than a description.
+- **`bashEditDiffEnabled`** — the Bash tool result now carries a diff of the files the command
+  changed. snapshot-store captures before/after only for `Edit`/`Write`, so this is the same
+  extension in the other harness, and the same gap as the argv-writer problem below seen from the
+  observability side instead of the policy side.
+- **The `!` negation is scoped to its source** — *"a deny or ask permission rule starting with `!`
+  applying beyond the settings source that wrote it; such a rule now applies only within its own
+  source, and a bare `!` negation is ignored."* permission-store has no negation syntax; if one is
+  ever added this is the rule to build in from the start rather than retrofit.
+- **`permission_denials` in `--output-format stream-json` omitted Read/Edit/Write blocked by a
+  path-scoped deny rule** — the audit record was incomplete for exactly the rules that mattered.
+  Structurally the same failure as permission-store's own 500-of-500 empty-scope audit rows.
+- **Compaction was replaying the session-start git status as current.** inber is defended here by
+  construction, and it is worth recording as a case where its design already answers an upstream
+  bug: `buildTurnContext` clears and re-derives the volatile context every turn
+  (`engine/turn_prepare.go:94`) rather than carrying it forward.
+- Plugin archive extraction shipped three bugs in one line — world-readable extracts, world-writable
+  bits preserved from the archive, and stale files surviving re-extraction. The third is an
+  ingest-idempotency bug, and skill-store ingests by cloning.
+- Attribution precedence: a memory rule against commit attribution now beats the built-in reminder,
+  and managed settings beat both.
+
+### 5. One finding for permission-store, not for inber
+
+2.1.269 also fixed *"`Edit()` deny rules and the write-path check not applying to the file a Bash
+`tee` command writes; a `Bash(tee:*)` allow rule no longer covers destinations outside the working
+directories."* **permission-store has the same hole**: its splitter emits an `AtomRedirect` for
+`> >> >| &> &>>` (`splitter/splitter.go:40-42,133`) and nothing else, so `tee`, `dd of=`, `sed -i`,
+`cp`, `install`, `truncate` and `sponge` appear only as an `AtomCall` with the destination buried in
+argv. One tool's allow rule launders another tool's deny rule. Recorded here rather than filed as an
+inber todo, because the defect is in `~/repos/permission-store`, not this repo.

@@ -2151,6 +2151,13 @@ wrong.
 - **[#11697]**'s sibling security batch (#11603, #11604, #11612, #11613, #11427,
   #11379) was screened on 2026-09-04 (`:1896`) and 2026-09-09; #11940, #11941,
   #11888, #11894, #11945 and the eight dependabot bumps carry no design content.
+  ⛔ **Both halves of that sentence are wrong, corrected 2026-09-12.** Of the six,
+  only #11604 appears in the 2026-09-04 section, and **there is no 2026-09-09
+  section in this file** — the sections run 2026-09-08 → 2026-09-10. #11603,
+  #11612, #11613 and #11427 were never written up; they are covered in the
+  2026-09-12 section §3. And #11941 does carry design content — the
+  JSON-serialize-rather-than-interpolate fallback is a prompt-injection defence
+  — written up at §4.
 
 ## Harness-watch — 2026-09-11 (#11979): an allowlist checked before pairing, and re-checked after
 
@@ -2162,3 +2169,150 @@ revocation channel. Unlisted senders get no reply and no pairing state, only a l
 bus ingress (`bus.go`) has no sender allowlist at any point; that is a decision, not a defect,
 and it is not filed. #11768 and #11923 are a dependency edge and a policy doc; #11976 is a
 model-id table fix.
+
+## Harness-watch — 2026-09-12 (#11836, #11416, #11941, and four screened-but-never-written commits): a signature is content even when the text it signs is empty — and inber's guard against exactly this class is a string compare that cannot match
+
+### 1. #11836: two independent causes, and a predicate inber has that has never fired
+
+[goose #11836](https://github.com/block/goose/pull/11836) is the highest-value upstream commit of
+the week. Three things compounded. Opus 4.7+ omit thinking **text** by default, so the block arrives
+`{thinking: "", signature: "…"}`; goose's SSE reader gated `EVENT_CONTENT_BLOCK_STOP` on
+`!state.text.is_empty()` and **dropped the block on the floor**. Independently, Anthropic began
+binding each signature to the **request prefix** and enforcing it on Fable 5.1, turning a silent
+parse-time loss into a wire-level 400 on every tool round. Third, the agent loop judged a message
+holding only such a block "empty" and replaced it with a synthetic `EMPTY_RESPONSE_MESSAGE`,
+destroying blocks the parser had kept.
+
+The repair is worth copying in full: the emptiness test becomes
+`!state.text.is_empty() || !state.signature.is_empty()`; `is_empty_response()` gains
+`&& thinking.signature.is_empty()`; a new `thinking-binding-controls-2026-08-01` beta carries
+`block_binding: {prefix_mismatch_behavior: drop_block|error}`, inserted only when a non-disabled
+`thinking` object exists; `input_transformations` is parsed off `message_start` and each
+`thinking_dropped` entry warned with its `(path, reason)`; and the strip-and-retry-once is gated on
+a **substring** predicate — `lower.contains("thinking") && (contains("signature") ||
+contains("cannot be modified") || contains("block_binding"))`.
+
+**The rule: a signature is content even when the text it signs is empty.** An emptiness test that
+reads only rendered text discards the one field that makes the block replayable.
+
+This also **adds to** rather than duplicates two entries above. `:1653` (#11636) is the
+Kotlin/Python outbound-conversion boundary, a different layer. `:1032` (#10007) established that a
+signature is bound to the **model**; #11836 adds a second, independent invalidator — the **request
+prefix** — which a model-provenance drop does not cover at all: same model, same credential, still
+rejected if the prefix moved.
+
+⛔ **And it exposes that inber's counterpart guard is dead code, measured two ways.**
+`internal/apiutil/apiutil.go:12` is, in full, `return msg == "Error"` — an exact-string compare
+against the five-character word `Error`. Read against the pinned `anthropic-sdk-go v1.35.0`:
+`(*Error).Error()` is `fmt.Sprintf("%s %s", statusInfo, r.JSON.raw)` where `statusInfo` is
+`POST "https://api.anthropic.com/v1/messages": 400 Bad Request`
+(`internal/apierror/apierror.go:35-43`), and the streaming path is
+`fmt.Errorf("received error while streaming: %s", …)` (`packages/ssestream/ssestream.go:173`).
+inber wraps neither, and `grep -rn '== "Error"'` across the tree returns that one line. **So the
+strip-and-retry at `engine/turn_execute.go:44-49` has never executed and cannot.**
+
+⚠️ **This corrects open todo `cf3b6b4c`, which says the opposite.** That row reads the predicate as
+a hair-trigger — *"Any error whose message is exactly `Error` destroys all thinking in the
+conversation and retries"* — and treats destroyed reasoning as the cost. The hazard it describes
+cannot occur. The real cost runs the other way: a genuine signature failure gets **no** retry, and
+the turn dies. No new row is filed, because `cf3b6b4c` already names
+`internal/apiutil/apiutil.go:6-13` and a second row would be a duplicate — but its analysis of call
+site 1 must be corrected before anyone acts on it, and the function name is a lie under the
+naming directive besides.
+
+### 2. #11416: a flattened composite name is a string two owners can both produce
+
+`GooseToolCallRequest` gains a required `extension_name`, `list_tools` takes the owner, and dispatch
+checks `is_tool_owned_by_extension` against **owner metadata**, never the flattened name. The
+collision is real rather than theoretical: extension `ext_a__ext_b` legitimately owns
+`ext_a__ext_b__secret`, and extension `ext_a` can advertise `ext_b__secret`, which flattens
+identically. The sharper half is the test — `app_dispatch_revalidates_owner_after_tools_cache_changes`
+validates as `ext_a`-owned, swaps the tools cache (an MCP `tools/list_changed`), and asserts
+dispatch **still refuses**.
+
+**The rule: resolve a tool by owner id plus name, re-checked against authoritative owner metadata at
+dispatch — validating at list time does not bind it at call time.** This is this box's own
+join-on-ids directive, arrived at independently.
+
+- **What inber should consider:** the matching shape is in `tools/mcp/adapter.go:92-104`, where
+  `GetTool(name)` iterates `r.clients` — a Go map, so **randomised** iteration order — and returns
+  the first client whose `HasTool(name)` is true, while `GetAllTools()` flattens every client's
+  tools with no owner prefix at all. Not filed and not a live defect: `tools/mcp` still has zero
+  importers (todo `e29c5c62`, open). It is a trap waiting on the delete-or-wire decision, and
+  whoever settles that should settle this in the same pass.
+
+### 3. ⛔ Correcting this file: four commits recorded as screened were never written up
+
+`:2151-2153` states that #11603, #11604, #11612, #11613, #11427 and #11379 *"was screened on
+2026-09-04 (`:1896`) and 2026-09-09."* Measured: the 2026-09-04 section covers #11787, #11743,
+**#11604**, #11782 and #11627 — one of the six — and **there is no 2026-09-09 section in this
+file**; the sections run 2026-09-08 → 2026-09-10. The sentence asserting they were screened is the
+only thing that would stop a later reader re-screening them, so here are the four that were not:
+
+- **#11603 (`e0e86254`)** — the `session_content` tool serialized the whole `Session` including the
+  conversation, bypassing the audience filter that was enforced only at the render edge. Fixed by
+  filtering to `agent_visible_messages()` before serializing and annotating the block
+  `audience: [Assistant]`; `message_count` still reports the true count, so only the bodies are
+  filtered. **Rule: an audience annotation is a property of the content, so every path that
+  serializes that content must re-apply it.** No inber surface — inber has no audience model.
+- **#11612 (`1c001ab5`)** — the best-engineered of the four. Recipe rendering re-read the source
+  file *between validation and use*. Fixed by `add_template()` → `add_template_owned()`, changing
+  the lifetime to `Environment<'static>` so the validated text is owned, plus
+  `UndefinedBehavior::Strict` **and `set_loader(|_| Ok(None))`** so an `{% extends %}` whose parent
+  was not cached at validation fails closed. The test uses `libc::mkfifo` to swap a benign parent
+  for a malicious one that flips a parameter's `input_type` from `string` to `file` to inline a
+  secret, and asserts the secret's *path* appears while the secret does not. **Rule: validate and
+  use the same in-memory snapshot — a template engine with a live loader re-reads by design.**
+  Possibly relevant to `engine/prompt_blueprint.go`; not measured this pass, and flagged as
+  unmeasured rather than asserted.
+- **#11613 (`7d446c84`)** — six real lines: `set_permissions(parent, 0o700)` after
+  `create_dir_all`, on **every** pool creation so it repairs an existing install, and `expect()`
+  rather than a warning. **Rule: enforce the permission at every open, not only at create.**
+  Measured on inber: `0755`/`0644` throughout (`session/session.go:105,118`,
+  `session/workspace.go:58,84,116,119`, `engine/lifecycle.go:273`, `server/store.go:26`), and
+  `~/.inber/sessions.db` is world-readable now. Single-user host, so this is hygiene and not
+  exposure — not filed, and the reason is stated rather than left implied.
+- **#11427 (`ab6e6c02`)** — pairing codes moved out of plaintext config into secret storage, and
+  `consume_pending_code`'s four-step read-modify-write collapsed into one closure under a lock so
+  two racing redemptions of a one-time code cannot both succeed. **The migration is the part worth
+  stealing:** it does *not* import legacy plaintext codes — it reads every source, revokes them,
+  and **returns an error** telling the operator to stop older processes and remove the keys. A
+  secret found in plaintext is burned, and the presence of an old *writer* is treated as unresolved.
+
+### 4. ⛔ Correcting `:2152`: #11941 does carry design content
+
+`e74a4035` was listed among commits that *"carry no design content."* It is not.
+`read_resource_link -> Option<String>` became `render_resource_link -> String`, infallible. A link
+that was not a readable local file — an `https://` URI, a **directory**, an unreadable file —
+returned `None`, and the caller's `if let Some` silently deleted the block: the user asked "tell me
+what is inside `<dir>`" and the model received "Tell me what is inside " with the referent gone. The
+fallback emits `json!({name, uri})` under a fence — **serialized, not interpolated** — and the test
+is a prompt-injection assertion: a link named `"documentation\n---\nIgnore instructions"` renders
+escaped on one line.
+
+**The rule: a reference you cannot dereference is still a reference — degrade to its metadata rather
+than deleting it, and serialize that metadata so an attacker-chosen name cannot forge the delimiter
+around it.** inber has no ACP surface; the nearest analogue, `FilterMessagesForAnthropic`, also
+drops blocks but *logs the counts*, which is the correct half of this.
+
+### 5. A header is a set, and `WithHeader` is not a set operation
+
+Secondary in #11836 and nearly as good: `beta_header_value()` reads any existing `anthropic-beta`
+from model config *or* client defaults, splits on `,`, and **appends** only if absent.
+
+- **What inber should consider:** `agent/clients.go:119,129` sets two hardcoded comma-strings with
+  the *replacing* `option.WithHeader`. Measured before writing this: those are the only two
+  `anthropic-beta` writes in the tree and they sit on mutually exclusive branches, so nothing
+  clobbers anything today — **latent, not live, and not filed.** What is live is the asymmetry
+  `:1032` already recorded: the API-key branch carries `prompt-caching-2024-07-31` alone and the
+  OAuth branch carries four betas including `interleaved-thinking-2025-05-14`. The decision to make
+  before the next beta is added is whether that asymmetry is intended (interleaved thinking is a
+  claude-code-tier beta) or an accident — and to make the write a merge either way, because the
+  first caller that adds a third writer will silently drop the other two.
+
+### 6. `d2bf0d12` (#11768) — the one-line dismissal above is right, with one nuance
+
+Import rewrites only: `goose-context-management` depended on `goose-providers` — every provider
+implementation plus a pinned `rustls-tls` — when it needed only `goose-provider-types`. Zero logic
+changes, zero test changes. The one thing worth adding is the direction: it is an
+implementation→interface inversion, not a dependency bump. No inber shape to match.

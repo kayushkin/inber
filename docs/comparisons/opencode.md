@@ -932,3 +932,91 @@ One nuance worth keeping from #12673 that the cline.md entry omits: cline
 deliberately **removed** the tool name from the rejection string, on the grounds
 that tool results are already paired with their tool-call blocks. That cuts
 against inber's `RefuseToolCall` interpolating it — cosmetic, not filed.
+
+## Harness-watch — 2026-09-12 (#48269, #48057): a capability flag the registry already hands you must not be re-derived from the model names you happened to recognise
+
+### 1. `a9a6fad0` (#48269) — ⛔ correcting this repo's own screening of it
+
+`agentic-design-patterns.md:10549` files this SHA under "checked and not worth a finding — model-catalog
+and console work, no design content." That screening should be revised. The diff is one line in a
+vendor plugin, which is why it screened out, but the linked issue carries a measured fact.
+
+In `plugin/github-copilot/models.ts`:
+
+```diff
+ thinking: {
+   type: "adaptive",
+-  ...(model.api.id.includes("opus-4.7") ? { display: "summarized" } : {}),
++  display: "summarized",
+ },
+```
+
+still gated on `remote.capabilities.supports.adaptive_thinking`, a capability flag from Copilot's
+`/models` response that did not change. Issue #46593 gives the cause and the measurement:
+**Anthropic defaults `display` to omitted on adaptive-era models**, so `claude-sonnet-5`,
+`claude-opus-4.8` and everything newer returned a reasoning part with `text: ""` — confirmed by the
+reporter with a live A/B on raw `--format json`. The `opus-4.7` substring was correct the day it was
+written and silently wrong for every adaptive model shipped afterwards.
+
+**The rule: an opt-in the registry already tells you the model supports must be sent on the strength
+of that capability flag, never on the subset of model names you recognised when you wrote the
+line.** Third upstream instance of the technique (`agentic-design-patterns.md:1570`; goose #10439 at
+`goose.md:1450`; now this) and the first where the deleted allowlist was a *model-id substring*
+rather than a provider name — this box's no-hardcoded-allowlists directive being learned upstream
+the expensive way.
+
+**What it means for inber, measured rather than inferred.** `agent/agent_run.go:82-88` is unchanged
+since the 2026-08-18 entry, and inber sets no `Display` anywhere in the tree. The pinned
+`anthropic-sdk-go v1.35.0` already carries the field on **both** param types —
+`ThinkingConfigAdaptiveParam.Display` (`message.go:6236`) and `ThinkingConfigEnabledParam.Display`
+(`:6300`), enum `summarized`|`omitted`. If #46593's default applied here, inber's thinking text
+would arrive empty, `result.Thinking += block.Thinking` (`:293`) would accumulate nothing,
+`OnThinking("")` would fire, and `engine/display_content.go:10` would print a `💭 thinking...`
+header over silence — thinking requested, enabled and billed, rendered as nothing.
+
+⚠️ **It does not currently happen, and this sweep measured that rather than assuming either way.**
+Across the 95 persisted transcripts under `~/.inber/server/sessions/`: **1,095 thinking blocks, 0
+with empty text, 0 missing a signature.** Sampled content is ordinary prose. The reason is the model
+set — `~/inber-workspace/agents.json` runs `claude-sonnet-4-5` and `claude-opus-4-6`, both
+pre-adaptive, with budgets of 0 or 2048. **So this is latent, not live, and it is not filed.** It
+becomes live the first time an agent config names an adaptive-era model. Two further caveats worth
+keeping attached: #46593 measured `type: "adaptive"` and inber sends `type: "enabled"`, so whether
+an adaptive-only model accepts `enabled` and defaults the same way is **not** established by this
+commit; and the SDK giving both param types the identical enum is strong circumstantial evidence,
+not a measurement. One request against an adaptive model would settle it — and the 2026-08-20
+entry's own lesson about not substituting an inference for a measurement applies to this paragraph
+as much as to the code.
+
+### 2. `5cd8e68f` (#48057) — a verbatim port, and three instructions inside it that are not
+
+Two files, +48/−0: a 46-line `gpt-astra.txt` and one routing line. The PR states it is a **verbatim
+copy** from opencode v2 `dbd9b18f3d` minus the apply_patch guidance, and that checks out — nothing
+here was authored. **On prompt caching there is nothing:** `provider()` is pure static-file
+selection returning `[string]` and all dynamic content lives in a separate `environment()` effect.
+That separation is correct and pre-existing; do not read a caching change into this commit.
+
+Structurally a 57% cut rather than a rewrite (46 lines against `gpt.txt`'s 107), and most of the
+delta is style policing. Three instructions are not:
+
+- ⭐ **Mid-turn message semantics, stated in the prompt** — *"treat new messages received during
+  ongoing work as steering the active task rather than replacing it … Replace the task only when the
+  user clearly cancels it or requests an incompatible objective."* This is the **complement** to the
+  2026-06-19 entry at `:452`, not a duplicate. That entry settled the *transport* of a steering
+  message: do not wrap it, because the wrapper busts the cache. Astra settles the *semantics* —
+  having arrived unwrapped and therefore indistinguishable from a fresh instruction, what should the
+  model do with it? Stripping the wrapper for cache reasons **removes the only signal that said
+  "this is steering,"** so the prompt is where it has to be reconstituted. The two entries should be
+  read together.
+- **An explicit trust declaration for harness-injected content** — the prompt names harness-injected
+  reminder blocks as harness instructions rather than user-authored content. inber injects volatile
+  context into the last user message (`agent/agent_run.go:90-120`) with no such declaration, so that
+  content is currently indistinguishable from something the user typed.
+- **Anti-safety-theatre steering** — *"Do not introduce unsolicited warnings, disclaimers, approval
+  flows, or safety/compliance checklists due to hypothetical risk,"* alongside delegation default-off
+  and no tests for reversible low-impact changes. All three suppress self-generated process overhead.
+
+⚠️ One skeptical note on the routing, and an irony worth recording: `gpt-6` is tested **before**
+`codex` inside the `gpt` branch, so a future `gpt-6-codex` gets Astra rather than the Codex prompt —
+and `gpt-5-codex` already exists, which is why the inner check is there at all. In the same window,
+#48269 deletes a model-id substring gate for silently mishandling every model released after it was
+written, and #48057 adds a new one.

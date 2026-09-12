@@ -391,3 +391,96 @@ is no second table to keep in sync. That is a better version of what the 06-02 e
 ("emit a versioned transparent presentation hint blob"), and if inber ever consolidates these tables
 it should copy the declaration-at-registration shape and the never-sent-to-the-model guarantee
 together — the second is what keeps a presentation field from quietly becoming context cost.
+
+## Harness-watch — 2026-09-12: one canonical lookup key, and the second key deleted rather than reconciled ([PR 914](https://github.com/truffle-ai/dexto/pull/914))
+
+Merged 2026-09-08, 83 files, +1842/−2039 — of which roughly 50 files are mechanical renames, so
+read the contract and skip the churn.
+
+**What was deleted.** `SkillSource { id, list(), get?, readFile?, invoke?, refresh? }`, composed by
+a `CompositeSkillManager` holding an ordered array and flattened with a first-wins `seen` set, and
+resolved by `entry.summary.id === id || entry.summary.displayName === id` — where `displayName` came
+from the SKILL.md's **first `#` heading**, so it changed whenever anyone retitled a skill and two
+skills from different key spaces could resolve on one string. Core also appended its own
+`WorkspaceSkillSource` to whatever the host supplied.
+
+**The replacement is three methods, all required, no optionals:** `list()`, `load(name)`,
+`readFile(name, path)`, against an injected `Skills`. `SkillSummary.description` is now **required**;
+`LoadedSkill` is deliberately **shape-invariant** — an instruction-only skill returns
+`supportingFiles: []`, `baseDirectory: null` rather than omitting fields, so "not implemented" and
+"not found" stop being the same answer. `refresh()` disappeared because the reference host
+rediscovers roots on every operation and caches nothing. `invoke_skill` + `read_skill` collapse into
+one `skill_load`, and the one genuine capability *removal* is `invoke_skill`'s
+`args: Record<string,string>` — skills are no longer parameterized, they are documents you load.
+
+**The rule: give a capability exactly one canonical lookup key with no alias, display-name or
+source-precedence fallback, and let the core hold only `list`/`load`/`read` against an injected
+implementation while the host owns discovery, storage and resolution.**
+
+⚠️ **This answers the question `claude-code.md:918` left open.** That entry recorded CC's skill
+name/alias split and closed with *"the alias question is real for anything that addresses a skill by
+the string a user types."* Dexto had exactly that hole and **fixed it by deleting the second key
+rather than reconciling the two** — `local-skills.test.ts` pins it, `skills.load('Audit')` (the old
+displayName for `review:audit`) now returns `null`. Two harnesses, one failure mode, opposite
+remedies; that contrast is the centre of gravity here.
+
+**How a skill reaches the model: three levels, no truncation at any of them.** The system prompt
+lists the *entire* catalog as `name - description` every turn, no cap and no per-turn resolution;
+`skill_load {name}` returns the whole instructions plus the `supportingFiles` list plus
+`baseDirectory`; `skill_load {name, path}` returns one file whole. Two consequences for this repo's
+own notes: it corroborates `agentic-design-patterns.md:946` ("progressive disclosure picks files,
+not fractions") **and supplies the mechanism** — returning the file list *with the body* is what
+makes level 3 discoverable without a directory listing or a Bash tool. And it is a data point
+**against** `agentic-design-patterns.md:741`'s hybrid recommendation being the emerging consensus:
+dexto lands hard on the static-catalog side.
+
+**Skills carry no capability, and it is enforced rather than merely absent.** A bundle may contain
+`mcps/*.json`, but `skill_create`'s own description calls them *"inert bundled files"* and
+`skill-bundle.integration.test.ts` asserts the negative directly — `skill_load` on `mcps/echo.json`
+returns the file's *text*, and the result has no `bundledMcpServers`. There is also no per-skill
+enable/disable anywhere, which is a surface regression against cline #11219.
+
+**Path safety is worth lifting verbatim; the error semantics are worth refusing.**
+`isSafeRelativeSkillPath` is exported precisely so the zod schema and the storage layer enforce the
+*identical* predicate, and `readFile` then layers three checks: lexical (leading `/` or `\`, a
+Windows drive letter, `..` split on both separators), lexical resolve (`path.resolve` must start
+with `${skillDirectory}${sep}`), and **physical — `fs.realpath` on directory, target and SKILL.md,
+then re-derive and re-check.** Layer 3 is what catches a symlink escape and the one a hand-rolled
+version always misses. The read path is the opposite: an unreadable SKILL.md, unparseable YAML, a
+frontmatter `name:` disagreeing with the directory basename, and a duplicate name **all make a skill
+vanish from the catalog with no log and no warning** — `DiscoveredSkill` even has a
+`warnings?: string[]` field that nothing populates.
+
+⚠️ **The rename did not propagate to their HTTP surface**, which matters if anyone writes a client
+against it: `GET /skills/{id}` still destructures `const { id } = …` and passes it to
+`skills.load(id)` — a name in a slot labelled id — and `skill_create` returns
+`{id: skillId, name: skillId}`, two fields carrying one string. By this box's rename-up-the-stack
+rule that is the lie that ships.
+
+- **What inber should consider — and the honest framing is that skill-store is already the boundary
+  dexto just drew.** This is upstream converging on inber's shape, not an inber gap: a `Skills`
+  adapter over skill-store is a thin HTTP client (`list()` → `GET /skills`, `load(name)` →
+  `GET /skills/{id}/files/SKILL.md`, and `filesLocation: 'hosted'` is exactly skill-store's case).
+  **Reject dexto's choice of key.** Its canonical name is `basename(dirname(skillFile))`, and
+  skill-store ingests *whole upstream repos*, so two upstreams each shipping `code-review/SKILL.md`
+  is the expected steady state rather than a hypothetical — skill-store is already immune, because
+  `UNIQUE(source_id, name)` lets the collision exist, `installations.target_path UNIQUE` catches it
+  at install, and every join is on skill-store's own integer id. Four things worth lifting: the
+  **required-description derivation ladder** (frontmatter → first non-blank non-heading line →
+  a generated fallback, so no catalog row is ever bare); **returning the supporting-file list with
+  the body**; **the three-layer path check** if skill-store ever serves supporting files over HTTP,
+  which it already does for SKILL.md; and **one roots function** consumed by ingest, writes and
+  search-path reporting, since dexto's own bug was three call sites with three different lists. One
+  thing to refuse outright: the silent-drop set — a skill disappearing because someone mistyped a
+  frontmatter key is exactly what this box's fail-fast directive exists to prevent.
+
+⚠️ **bundle-store: almost nothing maps, and "bundle" is a false cognate.** In dexto a skill bundle
+is *one* skill directory plus its `handlers/`, `scripts/` and `mcps/` — not a curated inheritable
+set. Dexto has no composition primitive for skills at all; its nearest analogue is the image plus
+`enabledTools`, fixed at deploy time, with no `extends`, no `/resolve` and no tag matching. The one
+useful signal is corroboration: dexto refuses to let a skill carry tools and enforces it with a
+test, which is bundle-store's own stance (skills and tools as siblings joined by id, names for
+display only) arrived at independently — and the direct counterpoint to `cline.md:86`'s
+"skills travel bundled inside plugins". Also note dexto's explicit **no-compat-shim** migration
+stance: it removed the exported APIs outright, reasoning that it controls every consumer.
+skill-store cannot assume that about its HTTP clients.

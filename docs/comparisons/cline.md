@@ -712,7 +712,9 @@ supplied a real one.
 ### 2. A command that exits non-zero is a success everywhere except the prose
 
 [cline #13358](https://github.com/cline/cline/pull/13358) sets `$ErrorActionPreference='Stop'` in the
-`run_commands` PowerShell wrapper. Without it a pipeline raising a non-terminating error per item emitted
+`run_commands` PowerShell wrapper. ⚠️ **Updated 2026-09-12:** #13815 has since made this entry's
+account of *nested* scripts stale — an unwrapped nested script now **inherits** that `Stop`, where
+before the nested child ran with its own default `Continue`. See the 2026-09-12 section §1. Without it a pipeline raising a non-terminating error per item emitted
 one error record per file — measured at 10,001 stderr lines and 1.3 MB on a 10,000-file tree — **and
 still resolved as SUCCESS with exit 0**. Two separable claims: a failure must terminate the command rather
 than continue through the rest of the work, and the harness must not report the result as success.
@@ -1201,3 +1203,131 @@ mistake-limit stop was silent on desktop because the decision callback the CLI s
 missing; a limit with no one to ask defaults to stopping, and stopping looked like a cancel.
 inber's `ConsecutiveErrors` has no limit to trip (`engine/turn_context.go:12-19` only widens
 recall), so there is no stop to be silent about — see `5a4138e1`.
+
+## Harness-watch — 2026-09-12 (#14025, #13815, #14004, #13974): the wrapper's own parser is a layer the model cannot see, and a dispatcher must never await the work it dispatched
+
+None of these four appears in this file or in `agentic-design-patterns.md`.
+
+### 1. #14025 + #13815 — one change at two depths
+
+`46ba1d32` is the executor half. `ShellInvocation` gains an `executable` field, because unwrapping a
+nested shell **can change which binary runs**; `parseNestedPowerShellCommand` strips one redundant
+`powershell|pwsh [-flags] -Command "<script>"` layer per pass; `getPowerShellEdition` classifies by
+**executable basename only** — `powershell(.exe)` → windows, `pwsh(.exe)` → core — with no version
+probe. `decodePowerShellDoubleQuotedString` is edition-sensitive in exactly two places
+(`` `u{…} `` and `` `e `` are PowerShell 7 only), and **the decoding edition is the outer shell's,
+not the requested inner one**: the parser that owns the string decides.
+
+The unwrap allowlist is narrow and every entry is justified. Only `-NoLogo`, `-NonInteractive` and
+`-NoProfile` may precede `-Command`, and **`-NoProfile` is mandatory** — without it the nested shell
+would load the user's profile, which the profile-less outer bootstrap cannot reproduce, so it keeps
+its own process. `-ExecutionPolicy`, `-File`, `-WorkingDirectory` and abbreviations all abort the
+unwrap. `e4f1df2c` is the prompt half: the tool description now names the exact edition and adds
+*"Write commands directly; do not wrap them in another `${executable} ${-Command}` invocation."*
+
+The bug underneath is the good part. cline's PowerShell path feeds the command through a **stdin
+bootstrap executed as outer PowerShell source**, so a model-written
+`powershell -NoProfile -Command "Get-ChildItem | Where-Object { $_.Name -like '*.ts' }"` had `$_`
+interpolated to empty **by the outer parser, before the nested shell existed** — one error per
+enumerated item, looking like a hang, while the nested child still **exited 0**. Single-quoting
+avoids the interpolation but loses embedded double quotes, so there was no correct way to write it.
+
+**The rule: when a harness executes model-written text inside a wrapper it controls, the wrapper's
+own parser is a layer the model cannot see — name it in the tool description or collapse the
+redundant nesting before parsing, and never let a helpful outer parse silently consume the inner
+script's variables.**
+
+Two contrast points are worth more than the PR alone.
+⛔ **`:713-717` above is now stale**: that entry (#13358) described the bootstrap setting
+`$ErrorActionPreference='Stop'`, and an unwrapped nested script now **inherits** that `Stop` where
+before the child ran with `Continue`. And `agentic-design-patterns.md:7510-7512` records codex
+#41232 *probing and caching* the PowerShell version; cline decided the opposite — classify by name,
+never probe, because a version string is volatile prompt text and a probe is a startup cost. Two
+harnesses, opposite answers, one week apart.
+
+- **What inber should consider:** the transfer is thin but real. The anti-wrapper sentence is
+  PowerShell/cmd only; the POSIX branch gets no such guidance. inber's shell tool lives in
+  tool-store as a hardcoded `bash -c` (`tool-store/tools/shell.go:76`) and its description never
+  names the shell, so `bash -c` quoting semantics are undocumented to the model. Not an inber-repo
+  defect, so not filed here.
+
+### 2. #14004 — the title under-describes it by about two thirds
+
+"Prevent polling stalls" covers four mechanisms. The dominant one: `tick()` guarded on
+`this.ticking`, and the old body was `await Promise.allSettled(claims.map(c => this.executeClaim(c)))`
+**inside** the guarded region with `ticking = false` in the `finally` after it. Since `executeClaim`
+awaits a whole agent turn, **the runner claimed no new work of any kind while any single run was in
+flight.** Fixed by launching executions into a tracked set, releasing `ticking` immediately, and
+moving the `allSettled` outside. The other three: `start()` awaited the first tick before installing
+the interval; per-spec concurrency was enforced **after** `claimDueRuns` had already burned an
+`attempt_count`, and because the claim query was `ORDER BY scheduled_for LIMIT n`, a backlog of
+blocked siblings from one saturated spec **starved every other spec** (replaced by correlated
+subqueries inside the existing `BEGIN IMMEDIATE`, with the selector re-run `LIMIT 1` in a loop so
+capacity is re-evaluated per claim); and after system sleep the runner saw its own live run as
+lease-expired and double-started it, fixed by renewing locally-active claims *before* querying for
+expired work.
+
+Riding along and arguably better material: **terminal status is now persisted before the report is
+written.** Previously `writeCronRunReport` ran first and its path was passed into `completeRun`, so
+a filesystem failure meant the run was never marked done, its lease expired, and **the agent turn
+re-ran**. Cancellation goes through an `AbortController` and an interrupted run is recorded
+`cancelled`, **not requeued** (*"not automatically replayed after possibly performing external
+work"*), and run telemetry is wrapped in a bare try/catch because *"observability must never prevent
+scheduled work from running or completing."*
+
+**The rule: a dispatcher must never await the work it dispatched — serialize only the claim, enforce
+capacity inside the same transaction that hands it out, and persist terminal status before any side
+effect that can fail.**
+
+- **What inber should consider:** measured, and the answer is that `~/repos/scheduler` does **not**
+  have the dominant stall — `internal/cron/cron.go:65-77` keys an in-memory `inFlight` map per job
+  id and robfig runs each entry in its own goroutine, so a long job drops only its own overlapping
+  ticks. Single process, no DB claim, no lease, so the capacity-race and sleep/resume classes do not
+  apply either. Recorded as a negative result so the next sweep does not re-derive it.
+
+The timezone half carries the better rule and a live scheduler gap:
+`timezone` defaults to the resolved local zone **only for recurring** schedules — a one-time
+schedule keeps the caller's value untouched, because a one-off carries an absolute instant and a
+zone on it would be a lie — and the default is communicated to the model in the schema's
+`.describe()` rather than left to inference. `preserveRoutineCron` returns the **original** cron
+string when the form's timing fields are untouched, so an unrelated edit cannot downgrade an
+advanced expression. **A default is a create-time decision: resolve it once at creation and store
+it, because defaulting at read or save time silently rewrites records the user never touched.**
+⚠️ `~/repos/scheduler` stores no zone at all — `cron.New()` is called with no `WithLocation`
+(`internal/cron/cron.go:46,56,136`) and `grep -rn CRON_TZ --include=*.go` returns nothing, so the
+only `CRON_TZ` on this box lives inside job 82's free-text `schedule` string. `cron.ParseStandard`
+accepts the prefix but never requires or preserves it, so a `PATCH` that forgets to retype
+`CRON_TZ=America/Los_Angeles` silently moves the job to host-local time with nothing reporting it.
+Not an inber-repo defect, so not filed here; the fix would have to decide between a zone column
+(correct, needs a migration) and a PATCH that refuses a schedule edit dropping a previously-present
+`CRON_TZ=` (cheap, catches only the drop case).
+
+### 3. #13974 — mostly plumbing, three axes are not
+
+About 30 of 34 files are skippable — lockfile, a fourth `createOTLP*` in the shape of the existing
+three, remote-config schema churn, a RUNBOOK. `langfuse-telemetry.ts` is not, and three of its four
+decisions were added as **review-fix commits inside the same PR**, which is the tell:
+
+- **Deterministic whole-task sampling.** `fnv1a32(samplingKey) % 100 >= percent`, key = first
+  non-empty of `sessionId` → `conversationId` → `distinctId`. Every request in a task decides
+  identically and retries decide identically, so a sampled trace is never a fragment — and below
+  100% with no key it stays **off** rather than deciding per request.
+- **Fail-closed consent, re-read per stream**, because AI-SDK spans bypass the wrapper that enforces
+  opt-out for events and metrics. Only `ENOENT` reads as opted-in; malformed JSON — explicitly
+  *"a torn read while the non-atomic writer is mid-rewrite"* — returns opted-out. The comment is the
+  rule: *"consent that cannot be verified is not consent."*
+- **One export path per host, identified by a marker its creator stamped.** Export fan-out is
+  processor-level, so attaching the direct span processor to a host-registered provider ships every
+  span twice. The previous structural sniff (`has addSpanProcessor/forceFlush/shutdown`)
+  **misclassified a console-only tracer as the relay**; replaced by an `OTLP_TRACE_RELAY_MARKER`
+  stamped only when a real OTLP processor was created, parked on the provider reached through the
+  OTel API global *"which survives bundled module duplication where a module-level registry would
+  not."*
+
+⚠️ Do **not** read the content flag as privacy-by-default: `recordInputs`/`recordOutputs` default
+false, but the PR body is candid that rollout ships content **on** from first activation with no
+metadata-only phase planned. It is a kill switch, not a posture.
+
+**The rule: a second enablement path for telemetry inherits none of the first path's guards.**
+Partial overlap with `agentic-design-patterns.md:6138` (goose #11381, redaction scope) on the content
+axis only. inber emits no traces, so there is no direct transfer.
