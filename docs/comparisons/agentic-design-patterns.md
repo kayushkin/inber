@@ -10850,3 +10850,187 @@ with `applyRequestOverrides` and is not a defect.
 - **`7a6f469d` (#44826)** — capability is what a server declared at `initialize`, kept distinct from
   what tool discovery returned, so a discovery failure degrades one and not the other; and derived
   state is cleared at the **start** of each connection attempt, not the end of the last one.
+
+## Harness-watch — 2026-09-13: an archive that promises "verbatim" and stores 0.875% of the bytes — codex spent the week deciding what a compaction prompt is allowed to *contain*, and inber's answer to the same question is a rendering that drops the tool traffic and then tells the model it did not
+
+Window: upstream commits after the 2026-09-12 sweep (`38ad266`), i.e. `2026-09-12T04:22Z` onward.
+Only claude-code and codex landed anything past that line; cline, goose, opencode and dexto were
+fully covered by yesterday's entries and are re-screened below rather than re-read.
+
+### 1. The inber defect: three call sites assert the compaction archive is complete, and the function that builds it is a summary renderer
+
+This is the filable finding, and it was found by chasing codex [#45090](https://github.com/openai/codex/commit/8d3c6cc1)
+(*"Preserve conversation context and separate next actions in recaps"*), which spends its whole
+diff on the question *what is the compaction prompt allowed to contain, and what happens to what it
+excludes*. inber has never asked the second half.
+
+`SummarizeConversation` builds one string and uses it for **two** jobs with opposite requirements:
+
+```go
+oldText := messagesToText(oldMessages)          // conversation/summarize.go:51
+…
+summary, cutOff, err := generateSummary(ctx, client, oldText, …)   // :63  — job 1: the prompt
+…
+memStore.Save(memory.Memory{
+    Content: oldText,                                              // :86  — job 2: the archive
+    Summary: fmt.Sprintf("Full conversation history (%d turns, ~%d tokens) …", …),  // :88
+})
+```
+
+Job 1 wants a *lossy* rendering — that is what a summarization prompt is for. Job 2 is the only
+surviving copy of the turns, because `engine/lifecycle.go:111` is `e.Messages = summarized` and the
+caller writes that across both `messages.json` copies. One string cannot be both, and
+`messagesToText` (`conversation/message_utils.go:154`) is unambiguously built for job 1:
+
+- **`:172` → `extractToolResultText` → `:198`** — `textutil.TruncateWith(result, 200, "...")`.
+  Every tool result is cut to 200 bytes.
+- **`:166`** — `fmt.Sprintf("[tool_use: %s]", block.OfToolUse.Name)`. The tool call's **input is
+  dropped entirely**; only the name survives. Which file was read, which command was run, which
+  patch was applied — none of it is in the archive.
+- **`:162-173`** — the block walk handles `OfText`, `OfToolUse`, `OfToolResult` and nothing else,
+  so thinking blocks are dropped silently.
+
+**Measured, not read.** A three-message fixture — one `read_files` call on
+`/etc/very/important/config.yaml`, one 20,800-byte result — run through `messagesToText`:
+
+| | bytes |
+|---|---|
+| original tool result | 20,800 |
+| **entire archived rendering**, all three messages | **282** |
+| fraction of the tool result retained | **0.875%** |
+| tool-call input (`path`, `limit`) | **absent** |
+
+Now the part that makes it a defect rather than a design choice. Three separate call sites tell a
+reader the archive is complete, and the sharpest one tells the **model**:
+
+```go
+// conversation/summarize.go:157-158  — injected into the live prompt
+"[The %d condensed turns are archived verbatim. memory_expand(id=\"%s\") returns them.]"
+```
+
+```go
+// conversation/summarize.go:88
+Summary: "Full conversation history (%d turns, ~%d tokens) from session %s"
+```
+
+```go
+// engine/lifecycle.go:117, :119-120
+// "…name the archive, which is the only remaining copy of the turns."
+Log.Warn("… (full text archived as %q)", …)
+```
+
+"Archived verbatim" is false by a factor of ~114 on the fixture above, and it is the most expensive
+possible way to be false: a model told the detail is recoverable **will not re-read the file or
+re-run the command** — it will call `memory_expand`, receive a 200-byte stub ending in `...`, and
+carry on. The pointer was the fix; nobody checked what it pointed at.
+
+⚠️ **`summaryFooter`'s own doc comment (`:138-152`) is where this hid.** It is a careful, correct
+argument that the archive *"was a write with no reachable read"*, and it gates the pointer on two
+conditions — the archive was saved, and `memory_expand` is on the wire. Both are about
+*reachability*. Neither is about *fidelity*, and the comment's confidence reads as having checked.
+
+**The sibling path already does it right, which is what rules out house style.**
+`StashLargeContent` (`conversation/stash.go:163`) — the other writer that takes content out of a
+conversation — saves `Content: content` (`:193`), the bytes untouched, and refuses to write at all
+when nothing can recall them (`:179-181`). Compaction is the one that renders first and saves the
+rendering.
+
+**What a fix has to decide, and this job is not deciding it:**
+1. **Does the archive get its own renderer, or the raw `[]MessageParam`?** A faithful archive is
+   either a second full-fidelity text rendering (cheap, still lossy at the edges) or the marshalled
+   message array (exact, and a schema the `memory_expand` reader has to handle). These are
+   different blast radii — the second changes what a stored memory row can contain.
+2. **Or is the honest move to fix the three sentences instead?** Keeping a lossy archive and saying
+   so — *"a condensed record; tool output is truncated to 200 bytes and tool inputs are not
+   kept"* — is a one-line change and strictly better than today. It is also a decision that
+   compaction is allowed to be permanently destructive, which is the user's to make, not this job's.
+3. **Is the 200-byte cut still the right size for job 1?** Untouched here either way: `90b13448`
+   already established the *first* 200 bytes is the wrong end for a failing command, and fixed only
+   the `is_error` label.
+
+Filed as noteboard todo `a066fbc1-0cfa-4850-a308-9ef90ab1f741`. **The prior art is worse than it first looks, and I had the order backwards until
+I checked `git log -S`.** The "archived verbatim" sentence landed in `69f9e7b` on **2026-08-01**
+(*"Tell the model where the turns a compaction took away went"*). `efafc69` landed **the next day**,
+2026-08-02 (*"Tell the summarizer which tool calls failed"*) — it edited `messagesToText`, the very
+function that makes the previous day's sentence false, and its todo `90b13448` even wrote *"the
+summary then replaces those turns, and is archived to memory, so a fact this rendering drops leaves
+the conversation with it."* It reasoned about the archive, in the right file, one day after the
+promise shipped, and fixed only the `is_error` label. So this is not a claim that rotted over time;
+it was false on arrival and survived a direct visit.
+
+### 2. codex [#45090](https://github.com/openai/codex/commit/8d3c6cc1) + [#45089](https://github.com/openai/codex/commit/f16c2237) — the recap prompt as a bounded, *selected*, schema-checked artifact
+
+Worth reading as one design even though it shipped as two commits. The old recap prompt had a
+**900-byte** limit; the new `RecapPrompt` has a 32 KiB ceiling over instructions *and* history
+(an 8,192-token estimate). Four rules, in descending transferability:
+
+- **Selection, not truncation, is the first move.** *"Select up to eight answered exchanges plus a
+  pending request, preserving adjacent steering and progress messages. Drop older whole exchanges
+  before excerpting both ends of oversized messages, while retaining the newest answer and pending
+  correction."* Drop **whole units** first; excerpt only when dropping is exhausted; and when you
+  do excerpt, take **both ends**, not the head. inber does the opposite at every step:
+  `messagesToText` excerpts (head-only, 200 bytes) and never drops, and `findTurnBoundary` selects
+  by position alone.
+- **The response is a checked schema, and an over-long one is rejected.** `summary` required,
+  `next_action` nullable, bounded to 700 and 200 characters, *"reject malformed or oversized
+  responses."* This is the guardian-context rule from `:9651` §3 arriving again — **validation
+  refuses, rendering trims** — and it is the direct answer to inber's open
+  `SummaryWasCutOffAtTokenLimit` (todo `2a0289a6`), which today accepts the fragment and records
+  that it did. codex picked one of the three answers that todo lists. Not filing that as a defect:
+  it is already an open, correctly-framed decision.
+- **Separating `next_action` from `summary` is the non-obvious half.** A recap that mixes "what was
+  done" with "what to do next" gets the second read as the first. codex renders it as a separately
+  styled `Next:` line. inber's summary prompt asks for *"any unresolved questions or next steps"* as
+  **item 5 of 5 in one prose blob** (`conversation/summary_generation.go:47`), which is exactly the
+  merge codex just undid.
+- **`#45089`: the automatic recap delay went 3 min → 30 min**, and *"create the timer before
+  spawning its task"* — the ordering fix that keeps a fast-completing task from racing a timer that
+  does not exist yet. Also *"use Tokio's clock"* rather than host uptime, so the deadline is
+  testable. inber's compaction trigger is message-count only (`ShouldSummarize`,
+  `conversation/summarize.go:13`), so it has no timer to get wrong — noted as not-applicable rather
+  than as a gap.
+
+### 3. codex [#45094](https://github.com/openai/codex/commit/b04a2c26) — measured against inber, and inber is **clear**. Do not re-chase this.
+
+*"Estimate history tokens from content instead of serialized envelopes … message IDs, metadata, and
+JSON escaping inflate token estimates without adding model-visible content."* inber deliberately
+does the thing codex moved away from: `estimateMarshalled`
+(`conversation/manage_text_utils.go:131`) is `json.Marshal(v)` → `memory.EstimateTokens` (len/3),
+and its comment (`:95-97`) claims the result *"runs slightly high … the safe direction for an
+overflow guard."* Three ways that could have been wrong, all measured over the **95 persisted
+transcripts** under `~/.inber/server/sessions`:
+
+| hypothesis | measured | verdict |
+|---|---|---|
+| Go's `json.Marshal` HTML-escapes `<` `>` `&` into 6-byte `<`, inflating code-heavy results | **1.0037×** aggregate (+7,754 tokens of 2,098,309); worst transcript 1.0314× | negligible — hypothesis wrong |
+| envelope overhead (field names, quotes, braces) is more than "slight" | **1.112×** aggregate, **1.090×** median, worst transcript **1.367×** | "slightly high" is accurate |
+| an image block prices its base64 payload at len/3 instead of ~(w·h)/750 — potentially ~100× | `grep` for `OfImage`/`ImageBlockParam`/`base64`/`MediaType` across the tree returns **zero non-test hits** | **latent, not live** — inber constructs no image blocks |
+
+So the whole of codex's change is, for inber today, a ~9% conservative bias in the safe direction.
+**Nothing filed.** Recording the numbers because the 9-11% figure is the thing a future sweep needs
+in order to not re-derive it, and because the image row becomes live the moment inber grows a tool
+that returns an image — at which point `estimateMarshalled` is a real defect and this table is the
+starting point.
+
+### 4. Screened, nothing to carry
+
+- **claude-code**: 14 commits past the line, all `mods` (`b5932767`, `50f8bb0b`, `485170e0`,
+  `b95b0150`, `ee2315b0`, `f56a6257`, `bf4322ff`, `748e0c4a`, `4632d1a7`, CI seats and merges).
+  These are the internal tidy-up of the contract `:1125` (2026-09-12) already read properly — types
+  moved into per-noun folders, declarations narrowed to *announced* tools and modes, a test kit of
+  `mock.clock`/`mock.store`/`mock.env`, ASCII-only quoting, one-`describe`-per-file. Real
+  engineering, no new contract. The one line worth remembering is `f56a6257` renaming `MemoryClock`
+  → `MockClock`: a fake named for its implementation, renamed for its role.
+- **codex** `b4c864dd` (cancel pending title generation after a manual rename — *"ignore late start
+  and completion events so canceled requests cannot affect newer requests"*): a genuinely good
+  stale-response rule, **not applicable** — inber has no session auto-titling
+  (`grep` for `GenerateTitle`/`autoName`/`SetName` across `session/ server/ engine/`: zero hits).
+- **codex** `b979d4f1` (feature flag for async user messages, *"keep the tool unavailable to
+  subagents"*) — a capability gated by agent depth, which inber already expresses through per-role
+  tool lists. `b966240b`, `7efa9d96`, `33bdf976`, `0818b655`, `944d6fd1` are TUI; `a592c38c`,
+  `ee6814bf`, `53c542d9`, `727e4869` are build/CI.
+- **opencode** `95daf906` (*"restore session options and reasoning boundaries"*) — the one opencode
+  commit yesterday's entry did not name. Read this sweep: it is ACP-transport-local
+  (`packages/opencode/src/acp/service.ts` +157/-36), and inber speaks no ACP. Screened, not carried.
+- **cline, goose, dexto**: newest commits predate the 2026-09-12 sweep line; covered by
+  `cline.md:1207`, `goose.md:2173`, `dexto.md:395`. **aider** and **roo-code** pushed nothing.

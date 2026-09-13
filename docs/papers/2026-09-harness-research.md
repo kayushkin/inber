@@ -1857,3 +1857,179 @@ TROVE selective route editing (04 Sep); `2609.11515` ChurnBench (10 Sep — fres
 argument-provenance tool-use synthesis (05 Sep); `2609.00967` CoBRA tool-use boundary learning
 (01 Sep); `2608.20622` Anthropic-primitives harness paradigm for enterprises (20 Aug); `2609.11728`
 context engineering at codebase timescale (10 Sep — a four-sentence position piece with no numbers).
+
+---
+
+# Harness-watch — 2026-09-13
+
+⚠️ **Read the window before reading the findings.** arXiv announces Sun–Thu 20:00 ET, so Friday and
+Saturday submissions are invisible on a Sunday run. An advanced-search filtered on
+`submitted_date` from 2026-09-11 to 2026-09-16 across all of cs returns **zero results**: the newest
+public batch is the one announced Friday 09-11, carrying submissions dated **10 Sep 2026**. The
+entire "new since the 09-12 sweep" window is therefore that one batch — which the 09-12 sweep had
+already partly screened (`2609.11060` is from it). ~400 titles screened, ~250 unique after dedup,
+across six advanced-search queries and three HuggingFace daily-papers pages; every id below had its
+abstract page fetched and `[Submitted on 10 Sep 2026]` confirmed with no earlier version.
+
+**Operational note for whoever owns the cron:** a Sunday run is structurally the worst slot for this
+job — it returns a batch the Friday run already saw. Moving `harness-watch` to Tue–Fri, or widening
+the window to 7 days and deduping on reported ids, would fix it. Also, `export.arxiv.org/api` hard
+rate-limits this host (bare `Rate exceeded.` through five retries at 20 s spacing); the
+advanced-search HTML with `date-date_type=submitted_date` is the reliable path **and prints the v1
+date inline**, which makes the date check cheap. Not changing the schedule here — that is the
+operator's call.
+
+**Lab blogs: nothing.** Anthropic's engineering index has nothing newer than 2026-04-23.
+
+## 1. Harness-vs-model attribution, made a training rule — arXiv:2609.11677
+
+*Ecdysis: Efficient and Effective Training of Runtime Harnesses for LLM Agents* (cs.SE, cs.AI,
+v1 10 Sep 2026) — <https://arxiv.org/abs/2609.11677>
+
+The bottleneck in harness evolution is **failure attribution**: an observed failure is either a
+model-specific deficiency or a systematic harness deficiency, and optimizing against individual
+failures produces "unnecessary model-specific accommodation" that overfits. Ecdysis aggregates
+failures across task instances in batches to isolate recurring cross-task patterns:
+**1.84× speedup in harness training** and **+18.56% reasoning accuracy** in the resulting harnesses.
+
+- **What inber should consider:** this is the formal version of the question this job asks every
+  week. Before changing scaffolding in response to a bad bench run, require the failure to recur
+  across ≥N distinct sessions in `agent-bench`'s logs. A one-off failure is evidence about the
+  *model*, not the harness, and patching it is how scaffolding accretes dead accommodation code.
+  inber has the corpus to enforce this (`~/.inber/server/sessions`, 95 transcripts) and no rule
+  that does.
+
+## 2. Do expensive housekeeping while the parent is blocked on the model — arXiv:2609.11294
+
+*Memory Compression for High-Fanout Agent Sandboxes* (cs.AI, cs.OS, v1 10 Sep 2026) —
+<https://arxiv.org/abs/2609.11294>
+
+AgentZip compresses across *non-identical* pages in the one-task-many-sandboxes case, and — the
+portable part — **schedules compression during LLM waiting periods** so it never contends with
+foreground tool execution. **8.7× reduction in sandbox-owned memory** against 2.1× for stock Linux;
+prefetching plus execution-phase-aware scheduling cuts the slowdown from **3.1× to 1.40×**.
+
+- **What inber should consider:** the scheduling idea costs almost nothing and does not need the
+  compression. A parent blocked on `Messages.New` is idle for seconds at a time, and that is exactly
+  when memory-store compaction, snapshot writes and workspace flushes should run. Gate background
+  work on *"the parent is awaiting a model response"* rather than on memory pressure or a timer.
+
+## 3. Staleness is governed by refresh scheduling, not by age — arXiv:2609.11515
+
+*ChurnBench: A Drift-Aware Benchmark Demonstrating That Refresh Scheduling, Not Cache Age, Governs
+Staleness in Agentic AI* (cs.SE, v1 10 Sep 2026) — <https://arxiv.org/abs/2609.11515>
+
+Generates the data fabric as a *timeline* with an append-only ground-truth ledger, so an answer
+correct at retrieval time but wrong at evaluation time is labelled a **freshness error**, distinct
+from a reasoning error. Across cache ages of **1, 14 and 28 days the freshness errors were 7, 4 and
+4** — age does not predict staleness. Ablating tiered refresh takes 28-day freshness errors from
+**4 to 45** while leaving 1-day identical.
+
+- **What inber should consider:** memory-store's decay is an age function, and this is direct
+  evidence that age is the wrong variable. The one that matters is a TTL set **per entity against
+  its own rate of change** — a memory about a stable API contract and a memory about a running
+  deploy need different refresh policy, not different ages. Second, cheaper item: bench scoring
+  currently reads a stale fact and a bad inference as the same wrong answer; separating them is what
+  makes the first measurable at all.
+
+## 4. Compression ratio belongs per-item, not per-threshold — arXiv:2609.11192
+
+*FlexComp: One Model for Every Ratio in Context Compression* (cs.CL, v1 10 Sep 2026) —
+<https://arxiv.org/abs/2609.11192>
+
+Existing soft-context compressors fix the ratio at training time and apply it uniformly. FlexComp
+samples the memory budget per instance during training, then picks it per input. Cascade routing
+**preserves >98% of the mildest ratio's accuracy at up to 266× average compression**; a learned
+predictor hits **158–236× within 0.7 F1**, cutting context KV cache **50%** and improving decoding
+throughput **47%** at serving batch sizes.
+
+- **What inber should consider:** the load-bearing claim is that the ratio should be chosen per
+  item. inber compacts on one global trigger (`ShouldSummarize`, message count) and renders every
+  message through one rule, which spends the same budget on a 200-byte acknowledgement and a 20 KB
+  build log. Relevant to this week's `messagesToText` finding: the fix there is a selection policy,
+  and this is evidence a *uniform* policy is the wrong shape regardless of which way it is tuned.
+
+## 5. The measured case for `ask` as a third verdict — arXiv:2609.11264
+
+*Can AI Remediate Backend Failures Safely? GuardedAct with Blast-Radius-Aware Sandboxing* (cs.DC,
+cs.SE, v1 10 Sep 2026) — <https://arxiv.org/abs/2609.11264>
+
+Simulates each candidate action in a digital-twin sandbox, estimates blast radius, assigns a risk
+label, then auto-executes only low-risk actions and escalates the rest. On five faults injected into
+DeathStarBench: **87.4% recovery**, collateral damage cut **79.7%** (25.6% → 5.2%), for **~8 s**
+added mean time to recovery.
+
+- **What inber should consider:** this prices the `allow | deny | ask` verdict permission-store
+  already returns — the entire benefit sits in the *escalate* branch and it costs ~8 s. The sharper
+  note is about the key: their risk label comes from **simulated blast radius**, not from the tool
+  name, and a rule keyed on `(tool name, RE2 pattern)` — which is exactly permission-store's
+  shape — cannot express *"this particular `rm` touches 40 services."* Not a defect; a stated
+  ceiling on what that rule language can ever decide.
+
+## 6. An approval is not a token, and must be revalidated at redemption — arXiv:2609.11596
+
+*From Intent to Execution Grant: An Execution-Boundary Conformance Profile for High-Risk AI Actions*
+(cs.CR, v1 10 Sep 2026) — <https://arxiv.org/abs/2609.11596>
+
+EBL-Core makes the final transition from candidate action to execution authority a verifiable
+contract. The key move: **an ALLOW decision is not an authority-bearing token** — it merely supports
+a separate Execution Grant validated at redemption time. Reference implementation matched expected
+outcomes on **34 static vectors and 15 lifecycle checks**; over **100 trials, 32 concurrent
+redemption attempts yielded exactly one successful redemption per trial**, and **100 Revoke–Redeem
+races** all reached valid terminal outcomes. The authors explicitly disclaim production readiness.
+
+- **What inber should consider:** the right shape for any flow where a human approves at T and the
+  tool fires at T+30 s. A cached "approved" boolean is precisely the anti-pattern. This is the same
+  rule as the 2026-09-11 entry (*a thing read at startup is a snapshot with a refresh rule*) and the
+  2026-09-12 privacy-gate entry, arriving a third time from the authorization side — at which point
+  it is worth treating as settled rather than as three coincidences.
+
+## 7. Second tier — verified in window, narrower
+
+- **arXiv:2609.11682** *COBRA-Skills: Contextual Bandit-Guided Evolution for Agent Skill
+  Optimization* (cs.AI). Budgeted candidate evaluation via contextual-bandit prioritization:
+  strongest average across six benchmarks and three models at **55–58% lower optimization cost than
+  SkillOpt**, using only **50 unique optimization examples per benchmark**. Reports remaining
+  **robust to changes in the agent harness** — which is the useful bit for skill-store: skill quality
+  measured on one harness appears to transfer, so evaluation need not be repeated per harness bridge.
+- **arXiv:2609.11209** *REVA: Reusable Evidence View Aggregation for Context-Efficient RAG Serving*
+  (cs.LG, cs.CL, cs.IR). Carries a **negative result worth more than its positive one**: modern
+  compressors have unstable gains over **simple truncation** and can add substantial inference-time
+  latency. REVA itself mines historical attention traces into a document-keyed, budget-agnostic
+  score store reused across queries — **+1.0–5.8 points**, **5.3–15.6× lower compression overhead**,
+  **<40 ms** added latency. Take the truncation baseline seriously before building anything clever
+  for memory-store retrieval; and note the scores are per-document and amortizable across sessions,
+  which suits a persistent store.
+- **arXiv:2609.11744** *Building py-kvcache: External KV Caching for vLLM with NVMe SSDs* (cs.DC).
+  **2.0× faster than LMCache** at 80k tokens, within **~4%** of native vLLM KV offload — but the
+  negative result is the one to keep: on an H100 the average request from the Bailian trace **falls
+  below the break-even point** and GPU memory alone retains enough prefixes. Self-hosted paths only;
+  irrelevant to Anthropic prompt caching, which is server-side. Argues against any global
+  cache-everything policy in favour of a measured per-deployment break-even.
+- **arXiv:2609.11381** *Agent-Integrated Software: Interaction Contracts and Continuous Assurance*
+  (cs.SE, cs.AI). **Position paper, no experimental numbers** — flagged as such. Names the
+  coordination problem when users revise goals and mutate shared objects *while delegated execution
+  continues*, which is exactly inber's message-injection-into-a-running-session case. Vocabulary,
+  not evidence.
+
+## Screened and rejected, with the reason
+
+**Adjacent, verified in window, not carried:** `2609.11737` ORCH (+63.97% mission score over four
+baselines, 25 wildfire missions, up to 50 agents — embodied/robotics coordination; the one portable
+line is that performance is **not monotonic in model scale**); `2609.11216` Legible Failures (linear
+probes recover correct in-context bindings the model got wrong, +0.196 over a 0.125 baseline across
+16 checkpoints — interpretability, not harness work); `2609.11414` SWRouter (multi-turn model
+routing, +16.26%); `2609.11728` Reproducibility in the Age of Agentic AI (three-sentence opinion
+abstract, no measurement).
+
+⚠️ **Rejected on the date check — six titles that looked perfect and were revisions.** All six
+render as "Submitted 10 September, 2026" on the arXiv *search* page, which prints the revision date,
+not v1. This is the same trap that cost the 09-12 sweep six rejections, and it will keep recurring:
+- `2608.01347` *Prompt-Induced Waste in Coding Agents: Reasoning, Effort, Harness Design, and
+  End-to-End Cost* — v1 **2 Aug 2026**
+- `2608.11350` *Self-Evolving Embodied Agents via Skill-Harness Evolution* — v1 11 Aug 2026
+- `2609.05903` *EvoSafeHarness* — v1 5 Sep 2026
+- `2609.09134` *Co-Evolving Harnesses and Models* — v1 ~9 Sep 2026, below the 09-10 bar
+- `2605.05868` *SkillScope: Fine-Grained Least-Privilege Enforcement for Agent Skills* — v1
+  **7 May 2026**
+- `2602.11243` *Evaluating Memory Structure in LLM Agents* — v1 **11 Feb 2026**
