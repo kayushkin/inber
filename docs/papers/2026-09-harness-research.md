@@ -2033,3 +2033,239 @@ not v1. This is the same trap that cost the 09-12 sweep six rejections, and it w
 - `2605.05868` *SkillScope: Fine-Grained Least-Privilege Enforcement for Agent Skills* — v1
   **7 May 2026**
 - `2602.11243` *Evaluating Memory Structure in LLM Agents* — v1 **11 Feb 2026**
+
+# 2026-09-15 sweep
+
+Window 2026-08-16 → 2026-09-15. **~1,130 titles screened.** The arXiv Atom API answered
+**429** from this host again, so the `cs.SE`, `cs.MA` and `cs.AI` HTML listing pages were
+read instead (2026-08 and 2026-09), plus HuggingFace daily papers for Sept 9/11/12/14/15
+and targeted search. Every id below was verified by fetching `arxiv.org/abs/<id>` and
+reading the **submission history**, and the three load-bearing ones — 2609.14758,
+2609.11999, 2608.22928 — were re-fetched and re-read independently after the sweep.
+All 861 ids already present in `docs/papers/*.md` and
+`docs/comparisons/agentic-design-patterns.md` were extracted and each finalist grepped
+against them: **every id here returns 0 occurrences.** Prior coverage stopped at
+2609.11744 (Sept 12), so Sept 12–15 was untouched ground.
+
+⚠️ **Coverage is partial and the gap is stated rather than hidden.** cs.AI/2026-09 lists
+2,240 entries and ~371 were seen; cs.SE/2026-08 lists 715 and ~134 were seen (ids ≥
+2608.16262). A follow-up should page those with `show=100` steps — `show=250` overruns the
+fetch. Treat "not found this sweep" as weak evidence, not absence.
+
+⚠️ **Four papers with 2609 ids had out-of-window v1 dates.** A 2609 id does not mean a
+September v1; moderation delays announcement. They are named in the rejects below so the
+next sweep does not re-chase them.
+
+## 1. A tool that fails *softly* is where the fabrication is — and one sentence fixes 94% of it
+
+[arXiv:2609.14758](https://arxiv.org/abs/2609.14758) — **Fabrication After Tool Failure:
+Tool-Augmented Agents Assert Values Their Tools Did Not Return** (v1 2026-09-13). 1,024
+items, 16 domains, 8 tool-failure types, the tool call enforced and the payload guaranteed
+unusable. 14.10% of responses asserted a value the tool never returned. The split is the
+result: **0.0% when the tool returned `status:error`, 45.3% when it returned `status:ok`
+carrying a redacted, corrupt, stale, empty or truncated value.** It reproduces under nine
+production frameworks' shipped prompts (24.67% under CrewAI's) and **none of the nine says
+what the model should do when a tool fails.** Appending one sentence requiring the model to
+emit `retrieval_status: OK|FAILED` before answering took 14.10% → **0.87%**, transferred
+unchanged into three foreign scaffolds, and the emitted flag is faithful 99.7–99.9%.
+
+- **What inber should consider:** the honest error path is already safe — the exposure is
+  every tool that answers success with a payload the model cannot use. inber's tool surface
+  now lives in tool-store rather than `~/repos/inber/tools/`, so this is a tool-store audit,
+  not an inber one, and it was not run this sweep. The prompt half is cheap and belongs in
+  the shared system prompt; the emitted flag then gives a regex-grade runtime detector worth
+  logging to log-store.
+
+## 2. Bash beat typed tools on both score and tokens, and stacking typed tools on top added nothing
+
+[arXiv:2609.11999](https://arxiv.org/abs/2609.11999) — **Is Bash All You Need? An Empirical
+Study of Tool Interfaces for Enterprise Digital Worker Agents** (v1 2026-09-10). Five tool
+interfaces (typed; typed+bash; bash alone; bash+persistent synthesized tools; programmatic
+tool calling) on TheAgentCompany and APEX-Agents, Opus-4.8 and GPT-5.5. **Bash alone beat
+typed tools by 21.8–24.5 pp on TheAgentCompany and 4.8–7.4 pp on APEX-Agents while using
+19–72% fewer total tokens.** Adding typed tools or persistent tool synthesis on top of bash
+produced *no detectable pooled gain*.
+
+- **What inber should consider:** this cuts against expanding the provisioned tool
+  catalogue. Before adding tools, A/B one agent with shell only against its current
+  provisioned set and read the token bill. The caveat that keeps it honest: typed
+  provisioning is what grant-store and permission-store gate against, and a shell-only agent
+  is one tool call the rule engine cannot see inside — so this is an argument about the
+  *default* set, not about deleting the catalogue.
+
+## 3. Ten short sessions beat one long session by 355 Elo
+
+[arXiv:2609.15309](https://arxiv.org/abs/2609.15309) — **When Agents Slow Down:
+Understanding LLM Agents' Test-Time Strategies via Elo-per-token Analysis** (v1
+2026-09-14). Tracks the best solution at each token budget and aggregates with
+Bradley-Terry across benchmarks whose score scales differ. Four agents, four open-ended
+benchmarks, sessions to 100M tokens. On FrontierCS Polyomino Packing, **parallel sessions
+beat one long session by +264 Elo and ten short sessions beat it by +355 Elo.**
+
+- **What inber should consider:** adopt Elo-per-token in `agent-bench`. inber currently
+  scores a harness change per run, so it cannot distinguish a real gain from one that just
+  spent more — which is the exact confound this metric removes. Also the strongest
+  empirical support yet for preferring the fork/parallel path over one long session.
+
+## 4. Verifier *evidence* diversity is worth 41 points; verifier *model* diversity is worth 11
+
+[arXiv:2609.10969](https://arxiv.org/abs/2609.10969) — **Engineering Reliable Commit Gates
+for Agentic AI** (v1 2026-09-10). 48 task templates → 2,880 scenarios over six fault
+regimes, with a 2×2 separating verifier-model diversity from evidence-source diversity.
+**A cross-model vote over shared evidence approved 62.9% of unsafe proposals; an
+independent evidence source cut that to 22.9% — a 40.9 pp source effect against 11.3 pp for
+model diversity.** In a live HTTP/SQLite study, after-check races defeated verifier-only
+gates, while a full atomic guard recorded **no unsafe effects across 216 episodes**.
+
+- **What inber should consider:** a second model reading the same tool-call payload buys
+  ~11 pp, not the ~41 pp the pattern is usually credited with — so where a verdict matters,
+  spend the budget on an independent source, not another opinion. The race result is the
+  sharper one for this host: permission-store's `PreToolUse` prehook checks and then the
+  call executes separately, which is precisely the shape the paper shows a race defeats.
+
+## 5. A supervisor who can only opine costs 51.5% more tokens and makes the output worse
+
+[arXiv:2609.14767](https://arxiv.org/abs/2609.14767) — **Loop-Back Authority in LLM Agent
+Teams** (v1 2026-09-13). Holds five agents, roles, prompts, tools, models and data fixed and
+varies exactly one link: whether a Manager may reject a worker's output and force revision.
+43 paired products, 86 runs. **The flat organization won on Utility (d = 0.42, p = 0.009)
+and Writing Clarity (d = 0.34, p = 0.030).** Hierarchical reports hedged 53% more, each
+revision loop cost 0.14 points of clarity, the hierarchical writer's *first draft* was
+indistinguishable from the flat output — the gap opens inside the loop — and the
+supervisory tier cost **51.5% more tokens for no quality gain**. Deterministic spec accuracy
+was at ceiling in both arms.
+
+- **What inber should consider:** keep a reviewer only where it runs a deterministic check,
+  and drop the loop-back where it can only opine. This lands directly on producer's reviewer
+  pattern and on the `demo-worker -review` stage, whose reviewer reads open-ended output and
+  cannot formally approve anyway.
+
+## 6. A reviewer that reads the worker's conclusion relays it instead of checking it
+
+[arXiv:2609.07680](https://arxiv.org/abs/2609.07680) — **Audit Without Verification: When
+LLM Accountability Layers Relay Rather Than Check** (v1 2026-09-07). Auditors recovered the
+true fault origin **4.1% of the time against a 20% random baseline** — worse than chance.
+**Deleting the agents' `conclusion` field lifted it to 45.2%, +41.2 pp.** They falsely
+accused a clean episode 34.4%/62.6% of the time.
+
+- **What inber should consider:** read together with §5 this is one rule — a reviewer must
+  be given evidence, never the worker's summary of it. Anywhere inber hands a reviewing
+  agent a child's completion message (`deliverResult`, `agent/agent.go:300-311`), the
+  conclusion travels with it; §4 says the fix is an independent source, and this says the
+  minimum is to strip the conclusion.
+
+## 7. Remembered facts have no model of time, and the superseded one retrieves just as well
+
+[arXiv:2608.20685](https://arxiv.org/abs/2608.20685) — **Temporal Validity on Real Software
+Histories** (v1 2026-08-21). When a function is renamed or an endpoint moves, the old and
+new values retrieve at near-identical similarity. From 707 real GitHub issues they extract
+130 clean atomic state transitions. **A deterministic (subject, relation, object)
+supersession memory reached 0.91 accuracy against RAG's 0.57–0.59; forced to answer, RAG
+served the superseded value 36–38% of the time and an LLM reranker did not help, while
+supersession drove it to ~0 — at RAG latency (~2.1 s vs ~18 s for the reranker).** Scope
+stated honestly: only ~18% of real fixes are clean atomic transitions.
+
+- **What inber should consider:** this is the same wound as the `memory_forget` finding of
+  2026-09-11 (todo on `memory-store/management.go:47`) seen from the other side — there a
+  revoked memory was served anyway, here a *superseded* one is. A supersession relation is a
+  small schema change in memory-store, and the reranker result says explicitly not to pay
+  for an LLM pass instead.
+
+## 8. Orchestration shape should be chosen per task, not per deployment
+
+[arXiv:2609.13890](https://arxiv.org/abs/2609.13890) — **Learning How Much to Collaborate:
+Difficulty-Aware Topology Selection for Multi-Agent Code Generation** (v1 2026-09-12). Five
+topologies over 614 problems. **Hierarchical collaboration's advantage swings from 2.4
+pass@1 points on the easiest third to 21.1 on the hardest — at roughly 10× the token
+cost.** Picking per task by predicted success minus cost gives **77.7% pass@1 at 40% of the
+cost**, against 73.6% for always-hierarchical.
+
+- **What inber should consider:** inber picks orchestration shape statically, so it pays the
+  10× tax on the easy two-thirds. Note this sits in tension with §5, which found hierarchy
+  *harmful* on open-ended writing — the reconciliation is that hierarchy pays only when the
+  task is hard **and** the supervisor can verify.
+
+## 9. Two on evolving the skill and procedure libraries from execution traces
+
+- [arXiv:2609.08228](https://arxiv.org/abs/2609.08228) — **SE-GoS** (v1 2026-09-08).
+  Training-free evolution of a skill-retrieval graph from execution traces, retrieval
+  pipeline unchanged. One evolution round lifted reward **52.4% → 59.4% while cutting input
+  tokens by ~a third** versus full skill loading, and transferred to a held-out split with a
+  5.4-point gain. **For inber:** skill-store serves skills by text search with no feedback
+  loop. Log retrieved-vs-actually-used per session; rewriting the retrieval-facing
+  description from that is the cheap half and needs no graph.
+- [arXiv:2609.09153](https://arxiv.org/abs/2609.09153) — **Procedural Graphs** (v1
+  2026-09-08). Procedural knowledge as (procedure, relation, procedure) triplets, with a
+  refiner that contrasts failed against successful trajectories and keeps rejected edits to
+  discourage repetition. **+10.10 over AutoGuide on GDPval, +9.00 over ExpeL on BFCL v3;
+  first or joint-first in 21 of 24 settings.** ⚠️ Those figures are from Table 1 of the v1
+  HTML — the abstract carries no numbers. **For inber:** inber's memory stores facts, not
+  procedures; this is the shape for turning session history into reusable "what to do next",
+  which noteboard workspaces are hand-maintaining today.
+
+## 10. Fork and restore have a decidable safety condition, and inber derives none of it
+
+[arXiv:2608.22928](https://arxiv.org/abs/2608.22928) — **When Can Agents Safely Checkpoint,
+Fork, Restore, and Merge? Exact Checking for Execution Edits** (v1 2026-08-24). A decision
+procedure returning all safe continuations or a checkable proof that none exists, covering
+checkpoint plus the six forms of fork/restore/merge, mechanized in Lean with executable
+tests. Its contribution is deriving what each edit must preserve **from the execution
+record**, rather than taking that requirement as input. The hazard it names: an edit cannot
+undo an authorization already granted or a tool request already sent, so it can
+double-authorize an action or discard a still-required result.
+
+- **What inber should consider:** `forkSession` derives nothing of the sort —
+  `docs/fork-inheritance-audit.md` walks what it carries, and the answer is six things
+  chosen by hand. The cheap first step is the tool-request half: refuse a fork or restore
+  whose cut point leaves a `tool_use` without its `tool_result`. That is not hypothetical
+  here — the 2026-09-15 entry in `agentic-design-patterns.md` shows inber's head-drop
+  producing exactly that orphan.
+- ⚠️ **Honest caveat:** a formal result with proofs and tests, not benchmark deltas. Carried
+  because it is the only in-window paper aimed straight at inber's forking semantics.
+
+## 11. Second tier — verified in window, narrower
+
+| id | title | v1 | headline number | angle |
+|---|---|---|---|---|
+| [2609.13321](https://arxiv.org/abs/2609.13321) | SkillSeam: auditing agent skill collections | 10 Sep | bland triggers pushed routing conflicts 3/32 → 30/32 and inflated loaded-skill tokens **3.7×**; alias duplication 0/32 → 15/32 noncanonical routes | six runnable perturbation tests skill-store has no equivalent of |
+| [2609.09815](https://arxiv.org/abs/2609.09815) | UnitBoost: a merge operator, not a manager model | 9 Sep | beats input-matched generative managers by **0.048–0.076**; FanOutQA cell F1 0.4778 → 0.5524 | the orchestrator need not be generative — deterministic order-free merge with unit provenance |
+| [2609.14839](https://arxiv.org/abs/2609.14839) | Efficiency Hallucination in code optimization | 13 Sep | **100% over-edit rate on already-optimal code**, 9 models / 180 runs; guardrails gave 44.4% correct abstention at **0% false abstention** | agents cannot decline to act; abstention has to be a scored outcome |
+| [2609.12017](https://arxiv.org/abs/2609.12017) | Auditing the Praxa AI pipeline's metrics | 10 Sep | 121 of 8,395 durations pinned at int32 max; p99 client-recorded **2,147,483,647 ms vs 38,118 ms** server-side; a "94.39% input reduction" becomes 46.54% scoped correctly | cautionary for usage-store: client-reported timings, scope-dependent reduction claims |
+| [2609.05677](https://arxiv.org/abs/2609.05677) | Who maintains agent skills? | 4 Sep | 873 commits, 254 substantive edits across 5 repos; **every edit human-authored or human-merged** | baseline for skill-store curation: public practice is human-governed, AI-assisted |
+| [2609.15877](https://arxiv.org/abs/2609.15877) | Agentic code review at Ericsson | 14 Sep | 200+ issues, 96% accuracy, 69% rated important | industrial evidence that specialized skills + project context beat generic review |
+| [2609.14721](https://arxiv.org/abs/2609.14721) | Two-dimensional study of MCP | 13 Sep | 802 publications, 33,319 repos; **93.7% of repos use MCP as enabling tech**, not extending or securing it | landscape for tool-store's MCP surface; thin on engineering |
+
+## Screened and rejected, with the reason
+
+**Out of window — v1 verified earlier than 2026-08-16 despite a 2609 id.** This is the trap
+the verify-the-abs-page rule exists for; four hits this sweep.
+
+- `2609.11957` *Look Before You Leap: Pre-Action Verification for LLM Agents* — **v1
+  2026-08-09.** A real loss: 95.8% invalid-command catch at 10% FPR, line-number edits
+  corrupt 99.1% of files under a one-line shift. It is also absent from every doc here, so
+  it is worth a **retroactive** add rather than a rejection.
+- `2609.05441` *When Does Memory Help? A Cost-Aware Evaluation of Long-Term Memory in
+  Tool-Using LLM Agents* — **v1 2026-07-26.** Also a loss (MERIT, 23,440 episodes; swapping
+  memory implementation moves task success up to 60 points). Same recommendation.
+- `2609.11941` *A Case-Bundle Operating Model … OpenFOAM CFD* — v1 2026-07-15.
+- `2609.00015` *OpenAgentFlow* — v1 2026-08-14, two days short.
+
+**In window, no measured result:** `2609.12039` Reality Is the Final Verifier; `2609.13334`
+The Agentic Company OS; `2609.06543` Unified Policy Architecture; `2609.09671` Consort
+(pre-registered hypothesis only); `2609.10248` A-JIT; `2609.11023` RCL; `2609.13261` From
+Process Loss to Assembly Bonus; `2609.05824` Diversity-Aware Skill Routing (relevant, but
+reports only "improves recall and full coverage").
+
+**Off-domain:** `2609.11561` Memory as Plans (robot manipulation); `2609.10297` TRACE
+(GUI/visual tokens); `2609.13645` ForgeTrain (training, not harnesses); `2609.12748`
+Mechanics of a Swarm (incident forensics); `2609.06783` AURA-Eval (counts, no deltas);
+`2609.02067` ToolGate (benchmark construction).
+
+**Nothing new on compaction or prompt caching this window.** Every candidate chased was
+either already covered here — ContextPipe `2609.00749`, AttnCompress `2609.08318`,
+KVShareArena `2609.10266`, CacheBridge `2609.00891` — or out of window (2605–2607). If
+compaction is the cycle's question, these docs already hold the state of the art.
+
+**Blogs:** nothing in window from Anthropic Engineering (indexed posts are 2026-07 or
+earlier). One HuggingFace post, *"Give Your Coding Agents a Memory You Own"* (2026-09-03),
+is in window and carries no measurements.

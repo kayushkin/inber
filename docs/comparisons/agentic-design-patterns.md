@@ -11034,3 +11034,189 @@ starting point.
   (`packages/opencode/src/acp/service.ts` +157/-36), and inber speaks no ACP. Screened, not carried.
 - **cline, goose, dexto**: newest commits predate the 2026-09-12 sweep line; covered by
   `cline.md:1207`, `goose.md:2173`, `dexto.md:395`. **aider** and **roo-code** pushed nothing.
+
+---
+
+## Harness-watch — 2026-09-15: a mid-turn steer is merged into the tool_result message that happened to be open, and that merge defeats the one guard keeping inber's emergency head-drop on a turn boundary
+
+codex spent the week giving *steered user input* — text the user sends while a turn is
+already running — a record type of its own. inber has the same feature and gives it no
+record at all: it appends the steer as a text block onto `messages[len-1]`, which at that
+point in the loop is always the user message carrying the batch of `tool_result` blocks.
+Every downstream reader that identifies a message by its shape then misreads that message.
+
+### 1. The inber defect, measured and executed
+
+`agent/agent.go:350-357` appends the steer into the open tool_result message:
+
+```go
+lastIdx := len(*messages) - 1
+for _, text := range injected {
+    (*messages)[lastIdx].Content = append((*messages)[lastIdx].Content,
+        anthropic.ContentBlockParamUnion{OfText: &anthropic.TextBlockParam{
+            Text: "\n\n[New message from user while you were working]\n" + text}})
+}
+```
+
+`agent/agent.go:369-381` does the same with `[BUDGET LIMIT REACHED]`. `messages` is
+`&e.Messages` (`engine/turn_execute.go:42`), so the merge is persisted, not request-local.
+
+`conversation/message_utils.go:29-42` decides what a turn is:
+
+```go
+for _, block := range msg.Content {
+    if block.OfToolResult == nil {
+        return true          // ← the steer's text block lands here
+    }
+}
+return false
+```
+
+The appended block is `OfText`, so `OfToolResult == nil`, so a tool round-trip that
+received a steer now reports itself as the start of a user turn. **Confirmed by running
+it**, not by reading it: a pure tool_result message answers `false`; the same message with
+the literal from `agent.go:354` appended answers `true`.
+
+That function's own doc comment says it exists to stop exactly this — "counting user-role
+messages counts tool round-trips as turns … a 3.3x overcount" — and todo
+`0fd94a61-cf25-4b6e-a21d-04e0e29cab2d` closed that bug. The steer path reopens it through a
+different door.
+
+**Measured over the 95 persisted transcripts in `~/.inber/server/sessions`:** 83 steer
+markers in 22 transcripts, 60 tool round-trips falsely counted as turn boundaries across 21
+of them. Fleet-wide that is a 1.045× overcount (1408 counted vs 1348 real), but it is
+concentrated, and the concentration is where it hurts: in `agent:claxon:main` — the
+orchestrator — **3 of the last 8 retained boundaries are not turns**, so
+`KeepRecentTurns: 8` retains five real turns and reports eight.
+
+Three readers consume this:
+
+- `conversation/summarize.go:40` — the compaction split point. Compaction keeps fewer real
+  turns than configured and summarizes more of them.
+- `conversation/message_utils.go:128-133` — the "%d turns condensed" line written into the
+  summary. The number handed to the model is the inflated one.
+- `engine/build.go:133-140` — **the sharp one.** The emergency head-drop walks forward to
+  the first `StartsUserTurn` specifically so the cut lands on a turn boundary and never
+  between an assistant `tool_use` and its results. A steered tool_result message satisfies
+  that test, so the walk stops there, and `messages = messages[dropTo:]` makes a message
+  full of `tool_result` blocks the head of the conversation — with the `tool_use` that
+  produced them in the message just dropped.
+
+`RepairDanglingToolUse` does not catch it: it repairs the opposite orphan (an assistant
+`tool_use` with no following user message). Executed against the head-dropped slice it
+reports **0 repairs and leaves the leading orphan `tool_result` in place**.
+`RepairMissingToolResults` (`conversation/repair.go:153`) would be the closer fit and has
+**no callers anywhere in the tree**.
+
+The blast radius is worse than a failed turn. `BeforeRequest` is reached only from the
+context-length retry at `agent/agent_run.go:207-219`, and that path writes the result back
+with `*messages = pruned` **before** the retry is issued and regardless of whether it
+succeeds. So an overflow 400 on a steered session can leave `e.Messages` permanently
+headed by an orphan `tool_result`, and nothing on the next turn removes it.
+
+**What a fix has to decide — do not pick one unattended:**
+
+- **Give the steer its own user message** rather than merging it. Honest to every reader,
+  and it is what the comments at `session/turn_counter.go:21` and
+  `conversation/message_utils.go:22` already describe. But it lands a user message directly
+  after a user message, which `RepairAlternation` exists to collapse, and it moves the
+  `cache_control` anchor at `agent/agent.go:555` off the tool_result message — repricing
+  the turn.
+- **Keep the merge and make `StartsUserTurn` ignore the known injection literals.** Cache-
+  safe and one function, but it makes turn accounting depend on matching text, which is
+  precisely what todo `2bd78eb0` is filed about — a tool result containing that literal
+  would then move the compaction boundary.
+- **Keep the merge and fix only the head-drop**, by requiring the boundary message to carry
+  no `tool_result` at all. Narrowest, kills the wedge, leaves the accounting drift.
+
+Filed as a todo. See also the correction to `2bd78eb0` below.
+
+### 2. codex [#45506](https://github.com/openai/codex/commit/b9bfc0af) — steered input is its own kind of record
+
+codex adds `PersistContext::SteeredUserInput` and `allows_background_persistence()` so
+input arriving mid-turn is checkpointed asynchronously instead of blocking the next model
+request. The latency win is not the interesting part. The interesting part is that codex
+gives steered input **its own context variant**, and explicitly refuses to let it change
+how the things around it are treated: *"tool outputs retain synchronous persistence even in
+mixed batches."* Steered input and tool output arrive together and are kept distinguishable
+anyway.
+
+- **What inber should consider:** inber makes the opposite call at `agent/agent.go:350-357`
+  — the steer is not a record, it is bytes appended to whatever message was open — and
+  section 1 is the bill for it. Even keeping the merge, the block could carry a marker that
+  `StartsUserTurn` and the head-drop can key on by **type or structure** rather than by
+  text.
+
+### 3. cline [#14125](https://github.com/cline/cline/commit/722b640c) — retryability is a typed signal, and some attempts must never be retried
+
+cline re-issues a failed turn up to 3 times (1s → 2s → 4s, capped 15s), deciding
+retryability from the AI SDK's typed `isRetryable` flag at the model boundary and falling
+back to HTTP status and message matching only when the typed signal is absent. The rule
+worth stealing is the exclusion list: auth failures, context-window overflow and 4xx never
+retry, and neither does **an attempt that already streamed visible output** or **an attempt
+with provider-executed tool activity**.
+
+Against inber: both of inber's turn-level classifiers are message matching with no typed
+tier under them — `isContextLengthError` (`agent/agent.go:23-32`, four substrings, works)
+and `IsThinkingSignatureError` (`internal/apiutil/apiutil.go:12`, `msg == "Error"`, which
+matches nothing the SDK produces; open todo `cf3b6b4c` names that line). There is no
+transient-error retry at the turn level at all, so a stream that dies mid-answer — the
+common failure on a long turn — is not re-issued.
+
+- **What inber should consider:** if a transient retry is ever added, cline's two exclusions
+  are the ones inber most needs, because `agent/agent_run.go:165-199` already streams
+  deltas straight to the user through `OnTextDelta`. Note also that inber's existing
+  context-length retry re-issues through `a.provider.Complete` — non-streaming — even when
+  the original call was streaming, so a successful retry delivers no deltas at all.
+
+### 4. Screened, carrying nothing — recorded so the next sweep does not re-derive it
+
+- **codex [#45549](https://github.com/openai/codex/commit/529bcb2f)** (preserve streamed
+  answers and plans when turns terminate) — **inber is already clear, do not re-chase.**
+  `agent/agent_run.go:227-240` (`deliveredText`) and `agent/agent.go:396-405` keep the text
+  a failed stream delivered, append it with an `incompleteResponseNotice`, and deliberately
+  drop `tool_use` blocks because a cut-off one would have no matching result.
+- **goose [#11932](https://github.com/block/goose/commit/a23a8cd5)** (auto-compact 100%
+  treated as disabled) — a UI clamp in `AlertBox.tsx`, but the shape is worth one check:
+  a config that reads as on while the feature does nothing. inber's nearest equivalent is
+  `DefaultStashConfig()` (`conversation/stash.go:101-109`), which returns `Enabled: true`
+  with empty `RecallToolNames`, so `CanRecallStashedContent()` is false and nothing stashes.
+  That is **deliberate and documented fail-closed** (`stash.go:44-53`) and
+  `engine.stashConfigForTurn` fills the field per turn. Not a defect.
+- **codex [#45579](https://github.com/openai/codex/commit/19286b88)** (copy thread
+  attachments into non-ephemeral forks) — the copy-with-new-ids, atomic, before-publish,
+  idempotent-on-resume shape is good, but inber has no attachment concept and
+  `docs/fork-inheritance-audit.md` already walks what its fork does and does not carry.
+- **codex `ea3c4848`** (share MCP tool specs until results are selected) — `Arc<ToolSpec>`
+  refcounting to avoid cloning unselected schemas. Memory refactor, no change to what
+  reaches the model.
+- **claude-code**, ~50 commits — all `mods` plugin-SDK and diff-viewer work: focus rings,
+  wheel scrolling, `$.clock` as events, test-file layout. UI surface inber does not have.
+- **goose [#11837](https://github.com/block/goose/commit/ffda0a4b)** (keep streamed thinking
+  ahead of text and tool calls; duplicate signed blocks draw a 400) — real provider
+  constraint, and inber sends `interleaved-thinking-2025-05-14` (`agent/clients.go:119`).
+  inber's normal loop is correct: it appends `resp.ToParam()` whole (`agent/agent.go:414`),
+  preserving thinking. The one place it strips thinking while keeping `tool_use` is
+  `RepairThinkingSignatures` (`conversation/repair.go:238-246`), which would produce exactly
+  goose's 400 — but its only live caller is behind `IsThinkingSignatureError`, which never
+  fires. Latent behind a dead gate; folded into `cf3b6b4c` rather than filed separately.
+- **aider** and **roo-code** pushed nothing this window. **opencode**'s 30-odd commits are
+  model-catalog (DeepSeek V4.1 Flash), Console billing/keys and TUI auth-error surfacing;
+  `a9a6fad0` (summarized adaptive thinking) was screened and answered in the 2026-09-14
+  entry. **dexto**'s newest is `3b220fd9` (2026-09-08, unified skills contract), already
+  covered at `dexto.md:395`.
+
+### 5. A correction to an open todo, measured false this sweep
+
+Todo `2bd78eb0-994a-4867-9180-15afa2face30` (the steer wrapper has no escaping) records,
+under *"Two ways this could have been worse, checked and found false"*:
+
+> **Nothing parses these literals.** … `StartsUserTurn` discriminates on block **type**, not
+> on text. So a forged literal cannot move inber's turn accounting or its compaction
+> boundary — only the model's belief.
+
+Half of that is right and half is wrong. It is right about a **forged** literal: text sitting
+inside a `tool_result` block cannot move the boundary, because the discrimination is on type.
+It is wrong about the **genuine** steer, which is appended as a separate `OfText` block and
+therefore does move the boundary — measured in section 1, and executed. The reassurance has
+stood since 2026-08-21 and reads as a reason not to look here.
