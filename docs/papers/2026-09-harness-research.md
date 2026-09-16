@@ -2269,3 +2269,231 @@ compaction is the cycle's question, these docs already hold the state of the art
 **Blogs:** nothing in window from Anthropic Engineering (indexed posts are 2026-07 or
 earlier). One HuggingFace post, *"Give Your Coding Agents a Memory You Own"* (2026-09-03),
 is in window and carries no measurements.
+
+---
+
+# Harness-watch — 2026-09-16
+
+~440 titles screened (cs.SE / cs.MA / cs.AI / cs.CL `recent` for Sep 14–16, two date-ordered
+keyword searches on KV/prefix caching and on context compaction, HuggingFace daily papers for
+Sep 16). **18 abstract pages opened and read individually**; every id below was grepped
+against the 899 arXiv ids already in `docs/papers/*.md` and `agentic-design-patterns.md` and
+returns zero hits. Prior coverage stopped at `2609.15877`, so `2609.16xxx`–`2609.17xxx` was
+untouched ground. **~41 rejected as out of window**, all from the keyword searches.
+
+⚠️ **Two method notes, both load-bearing for the next sweep.** (1) `curl` to arxiv.org from
+this host has returned **429 on every request since 2026-09-01** — four sweeps running; use
+WebFetch against `arxiv.org/list/<cat>/recent?show=100`, and note that
+`/search/advanced` with `date-filter_by=date_range` returned the bare form with no results
+this time, so plain `/search/?searchtype=all&order=-announced_date_first` is the endpoint
+that works. (2) The id-prefix trap runs **both** ways: `2608.14624` carries an August id and
+a **16 July 2026** submission date, `2606.13097` a June id and a **29 July** date. Of the 18
+abs pages actually opened this sweep, none had an out-of-window v1 — so the fresh-listing
+route is cheaper than search for this window.
+
+## 1. Context trimming has a cliff, and it is not where the token budget is
+
+**[arXiv:2609.16461](https://arxiv.org/abs/2609.16461)** — *Protocol-Preserving Context
+Trimming for Agentic Workflows.* v1 **15 Sep 2026**. Five trimming strategies across retained-
+context levels and workflow-complexity classes. **Conventional strategies: ~60% mean token
+savings at 66.6–77.3% task success and 85.5–88.6% protocol adherence. Protocol-aware: 92.2%
+success. Adaptive guardrails: 96.0% success / 96.3% adherence / 1.0% cascading failure at
+56.0% savings. A retained budget of ≤25% raised failure odds 10.92× against ≥50% (p<0.001)**,
+with the critical threshold rising with workflow complexity.
+
+- **What inber should consider:** the budget half is good news — `engine/build.go:121` sets
+  `cfg.TokenBudget = contextWindow / 2`, exactly the safe side of the cliff, overriding the
+  flat `TokenBudget: 50000` every role config carries
+  (`conversation/manage_config.go:55,81,107,133`), which is 25% of a 200k window and lands on
+  the wrong side. The exposure is the **protocol** half: the head-drop at
+  `engine/build.go:132-153` caps by message count with no protocol-state test, and cuts at
+  `StartsUserTurn`, which a steered `tool_result` message satisfies — the orphan already
+  recorded on 2026-09-15. This paper is the number that prices it.
+  ⚠️ Take the protocol-aware part, **not** the adaptive part: a per-turn variable retained
+  budget moves the frozen boundary both cache breakpoints anchor to
+  (`agent/agent.go:445-520`), so inber would pay it back in cache misses.
+
+## 2. Every delegation tier throws away about half of what the leaves found
+
+**[arXiv:2609.17464](https://arxiv.org/abs/2609.17464)** — *Decomposition Buys Integrity, Not
+Yield.* v1 **15 Sep 2026**. **Retention exponent δ = 0.34 [0.30, 0.38] on 600 production
+deep-research traces by three identifications that do not share a failure mode; per-level
+constant C = 0.571 [0.527, 0.615] over 16,082 hops; brief-drift μ = 0.939, so per-tier
+penalty Cμ = 0.536.** A hazard model over **743,819 production tool calls** finds delegation
+"does not respond to a filling context and is instead an opening move", and **0.7–11.3% of
+sessions are worth delegating against 7.8% that do**.
+
+- **What inber should consider:** `MaxSpawnDepth` defaults to **2** (`server/spawn.go:139-140`),
+  so on this paper's own constant a grandchild's findings reach the root at 0.536² ≈ **0.29**
+  — while inber bills the child its full model and tool set at spawn. Two cheap moves: treat
+  depth-2 as a *yield* decision rather than only a runaway guard (depth buys root-context
+  relief and cost, never yield); and test the opening-move claim directly against inber's own
+  `requests` table — if inber's spawns also cluster at turn 1 regardless of context fill, the
+  spawn decision is a prior, not a measurement.
+
+## 3. The tool interface cannot express what a retry needs to know
+
+**[arXiv:2609.15397](https://arxiv.org/abs/2609.15397)** — *When Tool Calls Succeed but
+Workflows Fail.* v1 **14 Sep 2026**. Separates events in the world from the runtime's
+*observations* of them, derives eight recurring external-effect anomalies under retries,
+speculation, concurrency and partial failure, then measures expressiveness: **across 98,291
+tools exposed by registered MCP servers, none of the required boundary capabilities is fully
+expressible** in the standard annotation vocabulary.
+
+- **What inber should consider:** inber retries (`agent/agent_run.go:206` prunes and re-issues
+  once on a context-length error), and a retry after a tool call whose effect may already have
+  landed is exactly the duplicated-effect case — nothing in that path asks whether the effect
+  is idempotent, compensable or stageable. Pairs with the already-filed `2609.00072` (typed
+  MCP fields expose *that* it failed, never a cause): together they say **do not build a repair
+  path that reads anything off the tool boundary.** Retry only on failures inber can attribute
+  to its own API call, unless idempotency is declared somewhere inber owns — tool-store.
+
+## 4. Tool identity is not stable — but inber's name join is defended, and this sweep checked
+
+**[arXiv:2609.14119](https://arxiv.org/abs/2609.14119)** — *Same Name, Different Server: A
+Security Census of Silent Drift in MCP.* v1 **12 Sep 2026**. Full public registry: **21,643
+servers, 72,606 version records**, source fetched for 14,353, scanner accuracy measured
+against 414 hand-labeled findings. **51.1% of multi-version servers changed what they
+advertise between versions, 40.6% silently, and 4.2% redirected their remote endpoint to a
+different host while keeping their registry identity.** Silent drift carries **OR = 2.96
+[2.56, 3.42]** for a high-severity finding; stars are near-useless as a proxy (OR = 0.78 per
+log star).
+
+- **What inber should consider — and the answer is less than it first looks.** `guard/guard.go:319-337`
+  classifies tools by string-matching the name, and the file's own comment records this
+  failing once when tool-store renamed `write_file` → `write_files`. But `knownToolNames`
+  (`guard/classification_test.go`) builds its set from tool-store's compiled-in `All()` **and
+  from the constructors by name**, so a rename moves the set and `TestClassifiedToolsExist`
+  fails the build. The runtime-drift case this census measures needs MCP, and `tools/mcp`
+  still has zero non-test importers. **Not a live defect**; the live gap is the nine
+  unclassified names already filed as `9eeba694`. Worth keeping as the reason to key the
+  classification on a tool-store **id** if MCP tools ever become reachable.
+
+## 5. Guardrails learned from failure traces, measured on Claude Code
+
+**[arXiv:2609.16287](https://arxiv.org/abs/2609.16287)** — *AgentGuard.* v1 **14 Sep 2026**.
+Mines recurring execution-failure patterns from real coding-agent traces, generalizes them
+into instruction-level constraints, and activates only the rules relevant to the current
+instruction. **642 documented failure traces over 382 repository tasks; learned from 461/282,
+evaluated on a disjoint 100. With Claude Code on Claude Haiku 4.5: Abnormal Execution Rate
+69.0% → 26.7%, Successful Task Completion 21.7% → 35.0%.**
+
+- **What inber should consider:** inber's guard is eight tool names with no notion of a
+  *conditional* constraint (this tool, in this instruction context). The transferable half
+  needs no ML — inber already persists whole sessions, so mining its own `session.jsonl` for
+  the "modified unrelated files / rewrote tests / ignored failed validation" patterns would
+  produce the rule set, and 69.0→26.7 is the reason to bother.
+  ⚠️ Caveat: measured on Haiku 4.5, whose 21.7% baseline is low enough that the +13.3 pp
+  completion gain may not survive a frontier model.
+
+## 6. A memory store with no supersession serves the stale fact — and a bigger window makes it worse
+
+**[arXiv:2609.16073](https://arxiv.org/abs/2609.16073)** — *The Immutable Past.* v1 **13 Sep
+2026**. Names *Semantic Shadowing*, proves Asymptotic Recall Decay for dense retrieval, and
+demonstrates a **Majority Vote Trap: increasing the retrieval context window paradoxically
+degrades generation accuracy** by diluting attention under semantic equivalence. **Over
+137,760 memory chunks with continuous accumulation sweeps, standard RAG and timestamp
+re-ranking both degrade severely while their temporal-dominance operator recovers >90%
+conflict-resolution accuracy.**
+
+- **What inber should consider:** `memory/auto_context.go:96-107` injects memories nobody
+  asked for on **every turn**, filtered only by tags, `MinImportance` and `TokenBudget` —
+  no recency term, no supersession relation, nothing that notices two retrieved memories
+  contradicting each other; extraction writes them with `Source: "extraction"` and an
+  importance score and nothing else (`conversation/extract.go:168-169`). Two consequences:
+  the older duplicate of a superseded fact retrieves as well as the new one, and **raising
+  `TokenBudget` to inject more memories is the Majority Vote Trap, not a fix** — the opposite
+  of the intuition. Same wound as the filed `2608.20685`, approached formally, and aggravated
+  because the injection lands in the **system prompt**, so a stale memory is also a cached one.
+
+## 7. The counterweight: a structured memory lost to plain vector RAG by 22 points
+
+**[arXiv:2609.16730](https://arxiv.org/abs/2609.16730)** — *LSREP / ICE v2.* v1 **15 Sep 2026**.
+A longitudinal replay protocol applied to a typed-store + retrieval-fusion memory middleware.
+Private instantiation (1,985 turns, 219 probes, 52 checkpoints): near-zero quality difference
+from vector-RAG while selecting 32% fewer fragments and using 6.6% *more* prompt tokens. Then
+the public diagnostic: **on LongMemEval it loses to pure vector-RAG 50.8% vs 72.8%
+(evidence-only) and 43.0% vs 69.5% (full-S), paired differences −22.0 [−26.6, −17.4] and
+−26.5 [−31.3, −21.8]**, and its own fidelity audit finds procedural retrieval defective.
+
+- **What inber should consider:** read this immediately after §6, which is why they are in
+  this order. A structured memory layer is **not** automatically better than the semantic
+  search inber already has, and the loss only surfaced because a public endpoint was tested
+  beside the private one. inber's memory is evaluated by neither — `memory/` has
+  `reference_expansion_test.go` and nothing that scores retrieval quality. The cheap adoption
+  is the **protocol**, not the architecture: before changing `AutomaticContextRequest`,
+  measure current retrieval on a public long-memory benchmark so a "fix" that costs 22 points
+  is visible.
+
+## 8. Persistent state carries poisoned content for hours after detection
+
+**[arXiv:2609.17320](https://arxiv.org/abs/2609.17320)** — *Emergence World.* v1 **15 Sep
+2026** (also HuggingFace daily papers, 2026-09-16). Eight parallel worlds of ten agents from
+identical starting conditions; **across 16 days, >850,000 LLM calls and nearly 50 billion
+tokens**, with persistent memory, created tools and shared institutions, then three stress
+events delivered through ordinary interaction surfaces. **No world achieved full resilience
+across all three. Detection did not ensure containment: systems recognized threats while
+still interacting with the adversarial content, writing it into their own persistent memory,
+and acting on it up to 46 hours later.**
+
+- **What inber should consider:** the **write** path, not the read path.
+  `BackgroundExtractMemories` (`conversation/extract.go:22`) distils session content into
+  durable memories with `Source: "extraction"`; a tool output that arrived from outside inber
+  and got summarized into a memory is afterwards indistinguishable from a fact the operator
+  stated, and `AutomaticContextRequest` then injects it into every later session's system
+  prompt. The 46-hour figure is why provenance **on the write** is worth more than filtering
+  on the read. The mixed-population result also bears on inber's ten differently-configured
+  agents sharing one `MemStore` with nothing recording which agent wrote a memory.
+
+## Second tier — verified in window, did not make the cut
+
+- **[2609.17394](https://arxiv.org/abs/2609.17394)** *Coding Agents Have Converged* (15 Sep) —
+  top two entries both resolve **396/500** on SWE-bench Verified, top ten share 285 successes
+  and 51 failures, **within-model scaffold ranges reach 29.8 pp against the top thirty's
+  8.8-pt spread**, and exact paired McNemar separates **0 of 29** adjacent pairs. Held back
+  only because the actionable half duplicates the Elo-per-token bullet filed from `2609.15309`
+  on 2026-09-15 — **fold it into that entry rather than writing a new one.**
+- **[2609.13463](https://arxiv.org/abs/2609.13463)** *Root-Cause Attribution Is a Search
+  Problem* (11 Sep) — lifts GPT-5.5's F1 **0.349 → 0.498** on MegaRCA-Mix. Same reason
+  DUOTRACE was logged and not actioned: inber has no attribution step to improve.
+- **[2609.16053](https://arxiv.org/abs/2609.16053)** *REALM* (13 Sep) — 75.97% on LoCoMo
+  (+7.17), 65.11% on LongMemEval (+1.31). A whole graph-memory architecture for a +1.31 on
+  the benchmark §7 shows structured memory losing 22 points on. Read with §7 or not at all.
+- **[2609.13582](https://arxiv.org/abs/2609.13582)** *Same Patient, Different Order* (11 Sep) —
+  **all 43 ordering groups emitted a different set of orders across five identical runs**, and
+  **22 of 43 got the same failing verdict for materially different behaviour**. Held back:
+  two sub-10B 4-bit models, and the paper says no rate generalises.
+- **[2609.17306](https://arxiv.org/abs/2609.17306)** *Mo' Models, Mo' Problems* (15 Sep) —
+  directly relevant to `engine/failover.go`: **expanding the candidate pool often degrades
+  performance below the top base model, and selection within a single model family is best.**
+  Rejected under the report-the-number rule — the abstract states direction, no figure. Worth
+  re-checking, because it is the independent argument for the provider-filtered chain that
+  todo `905a5e68`'s amendment asks for.
+- **[2609.16305](https://arxiv.org/abs/2609.16305)** *BLINDSPOT* (14 Sep) — 22 attack
+  families, 2,500+ trajectories at 14.7 turns average; results self-labelled "preliminary"
+  with no figure. Re-check on v2.
+
+## Rejected after opening the abstract
+
+`2609.16302` Assurance Envelopes (14 Sep) — authors state "downstream agent benefit remains
+open". `2609.13637` PAI-Bench (12 Sep) — single target samples, counts out of 8 and 48.
+`2609.16669` Memory-Skill Isomorphism (15 Sep) — on-topic for skill-store, but n=1 and
+self-described as "a selected-task post-selection existence signal". `2609.17346` *Where
+Should a Document Live?* (15 Sep) — good numbers (KV Cartridges +10 pts at oracle, +29 in
+multi-document retrieval) but the mechanisms are fine-tuning and KV-cartridge injection,
+neither reachable for an API client.
+
+## Caching and compaction specifically
+
+**Nothing new clears the bar, matching the 2026-09-15 finding.** Two date-ordered searches
+returned in-window hits only at `2609.10266` (KVShareArena, filed), `2609.08566` (biometric
+multi-user KV, off-domain) and `2609.11231` (operating rooms, off-domain). The two fresh
+serving-side papers — `2609.16215` *Where Should the KV Cache Live?* and `2609.17109`
+*Shared-Prefix KV Reuse Across Standard LoRA Adapters* — are both server-side, and inber is a
+client, the same reason `2608.30830` was carried as context rather than action. **If prompt
+caching is the cycle's question, these docs still hold the state of the art.**
+
+**Blogs:** nothing in window. HuggingFace daily papers for 2026-09-16 surfaced 12 items, one
+on-topic (§8). Anthropic Engineering, DeepMind and Microsoft Research were not re-indexed —
+the 2026-09-15 sweep found Anthropic's indexed posts still dated 2026-07 or earlier, and one
+sweep is enough for that cadence.

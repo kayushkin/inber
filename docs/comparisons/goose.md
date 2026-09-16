@@ -2316,3 +2316,30 @@ Import rewrites only: `goose-context-management` depended on `goose-providers` �
 implementation plus a pinned `rustls-tls` — when it needed only `goose-provider-types`. Zero logic
 changes, zero test changes. The one thing worth adding is the direction: it is an
 implementation→interface inversion, not a dependency bump. No inber shape to match.
+
+## Harness-watch — 2026-09-16 (#11247): the choice of execution loop is a parameter of the request, not a property of the payload
+
+[`b8b17c62`](https://github.com/block/goose/commit/b8b17c62) threads an explicit
+`use_state_machine: bool` through all ~12 call sites of `Agent::reply` (cli, gateway,
+orchestrator, subagent_handler, scheduler), with ACP reading it from
+`args.meta.goose.unrolledAgentLoop` and the env flag as fallback. The deleted line carries
+the lesson: dispatch was
+`if state_machine::enabled() || bang_shell_command(&user_visible_message_text(&user_message)).is_some()`
+— **a user message starting with `!` silently selected the other execution loop.** That
+clause is gone, `bang_shell_command` is unexported, and `bang_shell_not_executed_in_legacy_loop`
+pins that the same text is now inert prose on the loop that does not implement it.
+
+- **What inber should consider:** `engine/turn_execute.go:29` picks its loop from
+  `e.modelClient.IsOpenAI()` — derived from the model string, which three different things
+  can move, one of them an automatic failover no caller requested. The control-frame half of
+  that bill is filed (`fc6323ca`, `9fb35070`, `ec9c7122`, `df1de352`); this sweep found the
+  data-loss half — on the OpenAI loop the completed answer never reaches `chat.outbound`,
+  because `server/bus.go:143-145` accumulates the outbound text only from `delta` events and
+  `engine/turn_openai.go` never fires `OnTextDelta`. Full write-up in
+  `agentic-design-patterns.md` **2026-09-16 §1-2**.
+
+Also screened, carrying nothing: `ed359351` (#11619) adds EUrouter as pure
+`definitions/eurouter.json` with no Rust — the right shape, and a reproach to inber's
+hardcoded provider switch in `agent/clients.go`, but not a defect; `53672c3f` (#12011,
+gpt-live) needs a realtime surface inber does not have; `bfe2d996`, `426967db`, `abb47465`,
+`1c5d8092` are desktop, release, npm publish and docs.

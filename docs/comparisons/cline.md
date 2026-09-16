@@ -1331,3 +1331,50 @@ metadata-only phase planned. It is a kill switch, not a posture.
 **The rule: a second enablement path for telemetry inherits none of the first path's guards.**
 Partial overlap with `agentic-design-patterns.md:6138` (goose #11381, redaction scope) on the content
 axis only. inber emits no traces, so there is no direct transfer.
+
+## Harness-watch — 2026-09-16 (#14120, #14141, #14116): a per-token event must not cross a per-event boundary
+
+**[#14120](https://github.com/cline/cline/commit/94980446)** — the hub forwarded every
+`AgentRuntimeEvent` to a client-contributed `onEvent` hook as a capability round trip
+carrying the full session snapshot, **and the agent loop awaited it**: ~200–300 KB of
+serialization, one persisted `capability.requested` row, four log lines and a blocking IPC
+hop *per token*. Fixed with a three-name denylist (`assistant-text-delta`,
+`assistant-reasoning-delta`, `tool-updated`) checked in `createHookProxies` before the round
+trip, plus `PRAGMA synchronous = NORMAL` so the surviving rows stop costing an fsync each.
+The rule: **decide which events are payload and which are progress, and let only payload
+cross a boundary whose cost is per-event.**
+
+Measured against inber: **already clear on the sub-agent axis** — `server/spawn.go:73-99`
+drops `delta`, `tool_call` and `tool_result` from the child→parent forward and relays only
+`status`/`thinking`, with the reason written down; `OnThinking` is per-block, not per-chunk
+(`agent/agent_run.go:290-297`); the bus fan-out is one marshal and one buffered NATS publish
+per delta. **Not clear on the SSE axis:** `server/api_run.go:60-66` writes and flushes per
+event synchronously from inside the model-stream read loop, and `server/api.go:42-45` builds
+its `http.Server` with no `WriteTimeout` — grepped, there is no read, write or idle timeout
+anywhere under `server/`. Filed; the stall was not reproduced, only the absence of every
+bound.
+
+**[#14141](https://github.com/cline/cline/commit/e21b5903)** — `firstGeneratedModelId` took
+the head of a release-date-ordered catalog mixing tiers, so the default drifted to whichever
+free model shipped last; the fix filters on the required tier and the test asserts the tier,
+not an id. **The rule: when you take "the first entry" of a catalog you do not own, filter on
+the property you actually require — the sort order is not that property.** inber's
+`engine/failover.go:47-56` takes the first healthy-or-unknown entry of model-store's
+unfiltered `FailoverChain()`; the live chain interleaves `gpt-5` at priority 30 behind five
+anthropic rows, so failover can cross providers — and therefore cross *execution loops*.
+Recorded as an amendment on todo `905a5e68`, which already names that file.
+
+**[#14116](https://github.com/cline/cline/commit/17529c8c)** (SSH remote environments, ~3,400
+lines) — two rules survive the size: a discovery record is reclaimed **only on `ESRCH`**,
+because a permission error or a failed probe is not proof of death; and
+`assertProfileUpdateAllowed` refuses to change host/user/port of an existing environment at
+all, and the identity file while connected — the identity a live resource was reached with is
+immutable for its lifetime. inber's `server/pidfile.go:34-36` treats any
+`proc.Signal(0) != nil` as "gone", folding `EPERM` into `ESRCH`; unreachable on a single-uid
+host, so a note rather than a finding.
+
+Screened, carrying nothing: `36905f11` (#14055) PowerShell prompt wording, same family as the
+2026-09-12 entry; `82b8e1fa` (#13368) and `d718dd16` webview catalog filtering and a
+TypeScript type-parameter break; `128ec277` decouples a Bedrock test from the generated
+catalog (a test must not read its premise from an artifact someone else regenerates — no
+inber analogue, its engine tests use fakes); `desktop/*` UI.

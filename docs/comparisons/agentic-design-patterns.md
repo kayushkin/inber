@@ -11220,3 +11220,196 @@ inside a `tool_result` block cannot move the boundary, because the discriminatio
 It is wrong about the **genuine** steer, which is appended as a separate `OfText` block and
 therefore does move the boundary — measured in section 1, and executed. The reassurance has
 stood since 2026-08-21 and reads as a reason not to look here.
+
+## Harness-watch — 2026-09-16: two loops, one control frame — and on the second loop the answer itself never reaches the bus
+
+goose spent the week making the *choice of execution loop* an explicit parameter of the
+request. inber has two loops and infers the choice from the model string. The control-frame
+half of that bill is already filed four times over (`fc6323ca`, `9fb35070`, `ec9c7122`,
+`df1de352`) and is not re-litigated here. What is new this sweep is that the divergence
+reaches further than the control frame: on the second loop the assistant's completed answer
+is **never published to `chat.outbound` at all**, so a bus consumer gets status, tool traffic
+and a `done` marker with no reply in it.
+
+### 1. goose [#11247](https://github.com/block/goose/commit/b8b17c62) — the loop is a declared parameter, never an inferred one
+
+`Agent::reply` gains an explicit `use_state_machine: bool` threaded through all ~12 call
+sites; ACP reads it from `args.meta.goose.unrolledAgentLoop`. The deleted line is the better
+half: dispatch used to read
+`if state_machine::enabled() || bang_shell_command(&user_visible_message_text(&user_message)).is_some()`
+— **a user message beginning with `!` silently selected the other execution loop.** That
+clause is gone, `bang_shell_command` is dropped from the module's exports, and the new test
+`bang_shell_not_executed_in_legacy_loop` asserts the same text is now inert prose on the loop
+that does not implement it.
+
+**The rule: when a process has two turn-execution loops with different guarantees, the choice
+of loop is a declared parameter of the request — never a property inferred from the payload
+or from ambient state — and the loops' guarantee sets are part of that contract.**
+
+- **What inber should consider:** `engine/turn_execute.go:29` branches on
+  `e.modelClient.IsOpenAI()`, derived from the model string, which is set by a per-request
+  field, by a mid-session config POST, *and* by an automatic failover no request asked for
+  (§4). Nothing declares which loop a session is entitled to, so nothing can refuse a switch
+  that would drop a guarantee the session holds.
+
+### 2. The inber defect this exposed: on a non-streaming provider the reply is lost on the bus
+
+Measured and filed. `engine/turn_openai.go` **never fires `OnTextDelta`** — grepped, the file
+mentions only `OnResponse` (`:101`) and `OnMessageID`. Downstream, `server/bus.go:143-145`
+accumulates `fullText` **only** from `ev.Kind == "delta"`, and `:179` gates
+`PublishOutbound` on `fullText.Len() > 0`. The completed text does exist — `server/server.go:408-417`
+emits it as a `done` event — but `server/bus_delta.go:41-43` drops `done` through its
+`default:` branch, pinned by the repo's own
+`TestBusDeltaKeepsDoneAndUnknownKindsOffTheStream`, and `NewDoneDelta` carries no text.
+
+So a bus consumer (si → Discord/Telegram) on an OpenAI/Google/OpenRouter/Ollama-served
+session sees `loading_agent`, tool traffic, `done` — and **no answer**, with no error
+anywhere. The HTTP SSE path is unaffected: `server/api_run.go:60-66` writes every event kind
+including `done`. `server/spawn_delivery.go:131,151-158` carries the identical gate.
+
+This is the same root as `fc6323ca` — one loop does not go through the machinery the other
+does — but it is a different mechanism with a different fix, and it is **data loss rather
+than a dropped guarantee**, so it is filed separately as
+`b389001b-1920-4e64-a572-5828ab2115a8`.
+
+- **What a fix has to decide, and this sweep does not decide it:** whether the authoritative
+  completed text comes from the `done` event (which would also end the Anthropic path's
+  dependence on having streamed at all), or whether the OpenAI path must stream —
+  `agent/openai_types.go` already declares `Stream bool` and `runOpenAITurn` never sets it.
+
+### 3. cline [#14120](https://github.com/cline/cline/commit/94980446) — decide which events are payload and which are progress
+
+cline proxied every `AgentRuntimeEvent` to a client-contributed `onEvent` hook as a
+capability round trip carrying the full session snapshot — **and the agent loop awaited it**:
+~200–300 KB of serialization, a persisted row, four log lines and a blocking IPC hop *per
+token*. The fix is a three-name denylist (`assistant-text-delta`,
+`assistant-reasoning-delta`, `tool-updated`) checked before the round trip, plus
+`PRAGMA synchronous = NORMAL` so the surviving rows stop costing an fsync each.
+
+**The rule: a per-token event may cross an in-process boundary; it may not cross a boundary
+whose cost is per-event unless something on the other side consumes it.**
+
+- **Measured against inber, and inber is already clear on the sub-agent axis.**
+  `server/spawn.go:73-99` drops `delta`, `tool_call` and `tool_result` from the child→parent
+  forward and relays only `status`/`thinking` as `agent_update`, with the reason written
+  down. `OnThinking` fires once per completed block, not per chunk
+  (`agent/agent_run.go:290-297`). The bus fan-out is one marshal and one buffered NATS
+  publish per delta — no snapshot, no row, no round trip.
+- **Where it does bite: the SSE writer.** `server/api_run.go:60-66` does
+  `fmt.Fprintf(w, …)` + `Flush()` per event, reached synchronously from
+  `server/session.go:100` ← `engine/build_hooks.go:133` ← `agent/agent_run.go:189` — i.e.
+  from inside the loop consuming the model stream — and `server/api.go:42-45` builds
+  `&http.Server{Addr, Handler}` with **no `WriteTimeout`** (grepped: zero
+  `WriteTimeout`/`ReadTimeout`/`IdleTimeout` anywhere under `server/`). A reader that is
+  stalled rather than closed applies unbounded backpressure straight into the model-stream
+  read loop, and `withoutCallerCancellation` (`server/session.go:117-124`) deliberately drops
+  the caller's cancellation, so nothing else bounds it. Filed as
+  `059a7ef4-fdd9-4a14-8b80-278d592bd225`; the stall itself was **not reproduced**, only the
+  absence of every bound. ⚠️ A blanket `WriteTimeout` is the wrong fix — it is measured from
+  the start of the request, so on an SSE endpoint it caps the whole stream.
+
+### 4. cline [#14141](https://github.com/cline/cline/commit/e21b5903) — filter on the property you require, not on the catalog's sort order
+
+`firstGeneratedModelId` took the head of a release-date-ordered catalog mixing paid, free and
+`:free` ids, so the default silently drifted to whichever free model shipped last. The fix
+restricts the pick to ids carrying the required tier, and the regression test asserts the
+tier rather than a model id.
+
+- **Against inber — this sharpens an already-filed todo rather than opening a new one.**
+  `engine/failover.go:47-56` accepts the first chain entry that is healthy *or unknown*, and
+  `fallbackChain()` (`:64-77`) returns model-store's `FailoverChain()` unfiltered by
+  provider. Confirmed live: the enabled chain interleaves at priority 30
+  (`claude-fable-5-1`/5, `claude-opus-4-6`/10, `claude-sonnet-4-6`/15, …, **`gpt-5`/30**).
+  Todo `905a5e68` already names this file and even asks "whether a silent cross-provider swap
+  is ever acceptable". What this sweep adds is **what the swap actually costs**: crossing to
+  `gpt-5` is not a change of cost and capability, it is a change of *execution loop* — onto
+  the loop with no `LimitCheck`, no `InjectCheck` and no API-call cap (`fc6323ca`), whose
+  reply never reaches the bus (§2). And the crossing is likeliest exactly when it is worst:
+  an Anthropic outage marks every anthropic row unhealthy, which is precisely the condition
+  that walks the chain past them. Recorded as an amendment on `905a5e68`.
+
+### 5. codex [#45806](https://github.com/openai/codex/commit/7f83d492) — gate a privileged capability on *position*, not identity
+
+Six lines plus 176 of test: before parsing arguments and before raising any install
+elicitation, the plugin-install handler checks whether the calling thread is the **root**
+thread and errors to the model if not. Both request shapes get the same gate, and it fires
+before the side-effecting work rather than at it.
+
+- **Against inber — an amendment to `f82e1a82`, not a new row.** `server/agent_tools.go:8`
+  is `isOrchestrator := agentName == g.config.DefaultAgent` — identity, not position — and
+  that case is handed `MergeWorkspaceTool`, `RejectWorkspaceTool`, `FixWorkspaceTool`,
+  `ListWorkspacesTool` (`:24-31`), which rebase onto main, push to origin and delete
+  worktrees. Nothing between the spawn tool and the child's tool set asks whether the session
+  is a root: `server/spawn_tools.go:74-76` advertises every configured agent as spawnable with
+  no exclusion, `server/spawn.go:170-172` checks only that the name resolves, and
+  `server/session_creation.go:126` sets `ExtraTools: g.toolsForAgent(key, agentName)`.
+  Measured on this host: the default agent is **claxon** (agent-store `harness.default_agent_id = 1`)
+  and `GET :8200/api/agents` returns claxon inside the spawnable list of 18 — so a claxon
+  child would come up holding its parent's worktree-lifecycle tools. `f82e1a82` (amended this sweep) names this
+  exact line but asks a different question (may the default be *guessed*); its decision list
+  (a/b/c) has no position-vs-identity option, which is the gap this closes.
+  ⚠️ **Not executed** — spawning a child is a write and out of scope for a read-only sweep,
+  so the last link is inferred from `session_creation.go:126` → `agent_tools.go:24-31`.
+
+### 6. Screened, carrying nothing — recorded so the next sweep does not re-derive it
+
+- **codex `ffae9792` (#45845)** revert-thread-on-prompt-edit — 16 files, all under `tui/`.
+- **codex `5bf132cd` (#45825)** nonfatal clock reads — the transferable half is emitting
+  `<current_date status="unavailable"/>` rather than omitting the field, because a silently
+  dropped field leaves the model trusting the last value it saw. inber injects **no current
+  date into the prompt at all** (grepped `engine/`, `agent/`, `memory/`, `tools/`), so this
+  is a design gap with nothing to correct.
+- **codex `ced02c5c` (#45822)** opt-in response-body limits — inber has five `io.ReadAll`
+  sites and **zero** `http.MaxBytesReader`, and 12 handlers decode with a bare
+  `json.NewDecoder(r.Body)`. All behind an API key or a trusted provider: hardening, not a
+  defect.
+- **codex `f2b5b81f`/`4d280702` (#45820/#45807)** interrupted-turn recovery — inber is clear
+  on the sharp version (an unpaired `tool_use` after restart): `RepairDanglingToolUse` runs
+  on all three load paths *and* again every turn at `engine/turn_prepare.go:56-61`. The gap
+  is that `EndTurn` is called from the `OnResponse` hook (`engine/build_hooks.go:192-209`),
+  i.e. *before the tools in that response run*, so a process killed mid-tool leaves a fully
+  closed row indistinguishable from a completed turn — and `GetTurns` has no callers anyway.
+  A gap with no live wrong answer; documented, not filed.
+- **codex `58e2e8cf` (#45812)** — connections keyed by destination **and** routing header
+  **and auth revision**, and request setup rebuilt after a credential refresh.
+  `engine/model_client.go:35` keys its one-entry cache on model id alone with the credential
+  baked in at construction; that is the already-filed `7983aa25`.
+- **codex #45789/#45782/#45736/#45729 (Guardian)** — covered by the 2026-09-11
+  snapshots-with-a-refresh-rule entry. **#45854, #45852, #45849, #45837, #45830, #45813,
+  #45831, #45817, #45809, #45805, #45794, #45760, #45779, #45780, #45755** and the analytics
+  cluster (#45762-#45772, #45739-#45742) — TUI, Windows/WSL sandbox, daemon packaging, or
+  UI-only. Note on #45849: the Go analog would be a timer recreated inside a loop-select, and
+  inber has **zero** `time.After(` outside tests.
+- **claude-code `7dd06361` (#94594)** — confirmed to be in the already-dismissed bucket: all
+  12 files under `mods/diff/`, the plugin-SDK sample, not the product. Its rule ("the
+  session's start asks nothing of the repository; git runs at first need") is sound lazy-init
+  hygiene with no inber counterpart. The rest of the window is `mods` and diff-viewer UI.
+- **goose `ed359351` (#11619)** — a whole provider added as `definitions/eurouter.json` and
+  nothing in Rust. inber splits provider knowledge three ways, including a hardcoded
+  `case "openai", "google", "openrouter", "ollama"` in `agent/clients.go` with a `default:`
+  that assumes OpenAI-compatible. A directive smell against "single source of truth", not a
+  live defect. **`53672c3f` (#12011)** gpt-live — no realtime surface here. **`bfe2d996`,
+  `426967db`, `abb47465`, `1c5d8092`** — desktop, release, publish, docs.
+- **cline `17529c8c` (#14116)** SSH remote environments (~3,400 lines) — two rules worth
+  keeping: a discovery record is reclaimed **only on `ESRCH`** (a failed probe is not proof
+  of death), and host/user/port of a live environment are immutable for its lifetime.
+  `server/pidfile.go:34-36` folds `EPERM` into `ESRCH`, which is unreachable on a single-uid
+  host — a note, not a finding. **`36905f11`, `82b8e1fa`, `d718dd16`, `128ec277`, desktop/\***
+  — prompt wording, catalog filtering, UI.
+- **opencode** — the previous sweep's characterisation holds; `e03db9bc`, `403627b0`,
+  `5cf4e135`, `df23b7f9`, `199a4cdb`, `228e9095`, `7f209437`, `a97622c8` are a dev merge, a
+  DeepSeek catalog entry, Console key routing, billing source, a dep bump, an SVG, retired
+  e2e specs, and a TUI auth-error surface. **aider**, **roo-code** and **dexto** pushed
+  nothing this window.
+
+### 7. Measured false this sweep — a reassurance worth keeping
+
+The MCP silent-drift census (`2609.14119`, papers doc §4) points straight at
+`guard/guard.go:319-337`, where `isReadOnly` and `isDangerous` are two hardcoded name
+switches, and the file's own comment records that this failed once when tool-store renamed
+`write_file` → `write_files`. **It is not a live defect, and this sweep checked rather than
+assumed.** `knownToolNames` (`guard/classification_test.go`) builds its set from
+tool-store's compiled-in `All()` **and from the constructors by name**, so a rename moves the
+set and `TestClassifiedToolsExist` fails the build; the runtime-drift case the census
+measures needs MCP, and `tools/mcp` still has zero non-test importers. The live gap here
+remains the nine unclassified names already filed as `9eeba694`, not the name-vs-id join.
