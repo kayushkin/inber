@@ -1378,3 +1378,48 @@ Screened, carrying nothing: `36905f11` (#14055) PowerShell prompt wording, same 
 TypeScript type-parameter break; `128ec277` decouples a Bedrock test from the generated
 catalog (a test must not read its premise from an artifact someone else regenerates — no
 inber analogue, its engine tests use fakes); `desktop/*` UI.
+
+## Harness-watch — 2026-09-17 (#14195): arm compaction on the tokens the provider counted, not on an estimate
+
+[`cb0092e3`](https://github.com/cline/cline/commit/cb0092e3) ([#14195](https://github.com/cline/cline/pull/14195)).
+cline's compaction trigger compared a ~3 chars/token estimate against the window. Dense
+content (disassembly, minified source, image dumps) tokenizes far tighter than that, so
+Terminal-Bench runs reached 261,699 of 262,144 real input tokens with **zero** compaction
+attempts, and their last turns got 445 output tokens. The fix keeps the estimate as the
+floor (it is the only number before the first response) and divides the input budget by
+`max(1, actual/estimate)` from the previous request, capped at 4. Scaling the budget rather
+than the trigger also shrinks the retention target, so a compaction armed on the real
+number does not keep too much and overflow again. The factor only ever tightens. Two
+details from the PR matter as much as the idea: the actual count was dropped by a layer
+that rebuilt the context field by field, so the first "validation" run armed on the
+estimate alone and was reported as proof; and the follow-up gap is that an agentic
+summarizer that returns nothing should fall back to mechanical truncation, not retry
+every turn.
+
+Measured in inber today (read, not run): every prune gate reads an estimate only.
+`engine/lifecycle.go:182` (emergency flush at `TokenBudget*2`) and
+`conversation/manage.go:221-226` (`ShouldPrune`'s token branch) both price the message list
+with `conversation.EstimateTokens`, which is marshalled JSON through memory-store's
+`(len+2)/3` (`memory-store/tokens.go:14`). The previous call's real counts are already in
+hand — `agent/agent_run.go:270` records `InputTokens`, `CacheReadInputTokens` and
+`CacheCreationInputTokens` per call — and no gate consults them. JSON escaping probably
+makes the estimate run *high* on ordinary prose, which is why this has not bitten; it runs
+low on exactly cline's dense cases. Not filed as a todo: the gap is already the subject of
+open todos `939d5fdc` (no gate can price a whole request) and `0db2e05c` (short heavy
+conversations are never pruned), and nobody has measured an inber session that hit the
+window under the estimate. Note the trap that `f2282060` already records: Anthropic's
+`input_tokens` excludes cache reads, so "actual" has to be the sum of all three fields.
+
+- **What inber should consider:** when `939d5fdc`'s step 2 is decided, feed the gates
+  `input + cache_read + cache_creation` from the last call as a tightening factor over the
+  estimate, the way #14195 does — and test that the number survives every layer between
+  `agent_run.go` and `lifecycle.go`, since that hop is where cline's first attempt lost it.
+
+Screened, carrying nothing new for inber: goose [#12062](https://github.com/block/goose/pull/12062)
+(subagent system prompt made byte-stable by moving the session id to the first user
+message and sorting tool names out of a `HashMap`) — inber's tool list comes from the
+`AgentConfig.Tools` slice in order (`engine/build_tools.go:27`) and `BuildSystemPrompt`
+(`engine/turn_prompt.go:83`) renders no session id, so neither cause exists here. codex
+#46075 (children take the step's captured model, not the turn's initial one), #46072 (file
+images counted in context budgets — inber sends no image blocks), #46044, #46042; goose
+#12070 (recipe settings outrank env vars for subagent model), #12094.
