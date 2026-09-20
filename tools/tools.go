@@ -4,6 +4,8 @@
 package tools
 
 import (
+	"os"
+
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 	toolstoretools "github.com/kayushkin/tool-store/tools"
@@ -66,17 +68,35 @@ func RecentFiles(rootDir string) agent.Tool {
 	return wrap(toolstoretools.RecentFiles(rootDir))
 }
 
-// Browser returns a tool that controls a browser via PinchTab.
-func Browser() agent.Tool { return wrap(toolstoretools.Browser()) }
+// The tool-store tools package reads no environment variable: it is told where
+// PinchTab, Brave and the scheduler are. inber is a command-line program with
+// no settings registry, so it reads the variables those tools always read, here,
+// when the tool is built. An empty URL means tool-store's own default.
 
-// WebSearch returns a tool that searches the web via Brave Search API.
-func WebSearch() agent.Tool { return wrap(toolstoretools.WebSearch()) }
+// Browser returns a tool that controls a browser via PinchTab, found through
+// PINCHTAB_URL and PINCHTAB_TOKEN.
+func Browser() agent.Tool {
+	return wrap(toolstoretools.Browser(toolstoretools.PinchtabConnection{
+		BaseURL: os.Getenv("PINCHTAB_URL"),
+		Token:   os.Getenv("PINCHTAB_TOKEN"),
+	}))
+}
+
+// WebSearch returns a tool that searches the web via Brave Search API with the
+// key in BRAVE_API_KEY.
+func WebSearch() agent.Tool { return wrap(toolstoretools.WebSearch(os.Getenv("BRAVE_API_KEY"))) }
 
 // WebFetch returns a tool that fetches a URL and extracts readable text.
 func WebFetch() agent.Tool { return wrap(toolstoretools.WebFetch()) }
 
-// Scheduler returns a tool that interacts with the scheduler HTTP API.
-func Scheduler() agent.Tool { return wrap(toolstoretools.Scheduler()) }
+// Scheduler returns a tool that interacts with the scheduler HTTP API, found
+// through SCHEDULER_URL and SCHEDULER_TOKEN.
+func Scheduler() agent.Tool {
+	return wrap(toolstoretools.Scheduler(toolstoretools.SchedulerConnection{
+		BaseURL: os.Getenv("SCHEDULER_URL"),
+		Token:   os.Getenv("SCHEDULER_TOKEN"),
+	}))
+}
 
 // All returns standard file system tools.
 // Note: RepoMap and RecentFiles require configuration (rootDir, patterns) and must be added explicitly.

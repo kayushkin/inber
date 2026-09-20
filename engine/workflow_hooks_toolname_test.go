@@ -61,6 +61,11 @@ func TestWorkflowHookNamesMatchNoRealTool(t *testing.T) {
 	for _, name := range []string{
 		tools.RepoMap("", nil).Name,
 		tools.RecentFiles("").Name,
+		// Built with where an outside service is, so tool-store's init cannot
+		// register them either.
+		tools.Browser().Name,
+		tools.WebSearch().Name,
+		tools.Scheduler().Name,
 		tools.TaskPlan("").Name,
 		tools.Scratchpad("", "").Name,
 		tools.Deploy().Name,

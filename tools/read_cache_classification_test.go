@@ -43,6 +43,11 @@ func everyToolName(t *testing.T) []string {
 	for _, name := range []string{
 		RepoMap("", nil).Name,
 		RecentFiles("").Name,
+		// Built with where an outside service is, so tool-store's init cannot
+		// register them either.
+		Browser().Name,
+		WebSearch().Name,
+		Scheduler().Name,
 		TaskPlan("").Name,
 		Scratchpad("", "").Name,
 		Deploy().Name,
