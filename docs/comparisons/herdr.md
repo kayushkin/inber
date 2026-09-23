@@ -72,7 +72,7 @@ doesn't fall back to idle (Grok); a prompt wait reports `agent_prompt_stalled` a
 hanging. State inference from a TUI is a swamp, and Herdr has already mapped it.
 
 > **Design write-up**: the reliability work below is specified for implementation in
-> `~/repos/llm-bridge-server/SESSION-STATE-RELIABILITY.md` — hardening the shared `derivation.go`
+> `~/repos/llm-bridge-server/docs/SESSION-STATE-RELIABILITY.md` — hardening the shared `derivation.go`
 > state machine (which inber sessions also flow through) plus a passive PTY-mode classifier.
 
 **Inber connection**: inber's harness bridges (llm-bridge-claudecode et al.) get structured lifecycle

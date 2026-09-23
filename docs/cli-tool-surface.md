@@ -2,7 +2,7 @@
 
 ## Scope
 
-This doc covers the `inber` CLI specifically as a client of inber-the-runtime — interactive chat, single-shot runs, inber-hosted session inspection, inber-runtime-specific config. **Cross-harness and cross-store operations** (memory, notes, bus, agent dispatch, tool-store invocation) **are not in scope here** — those live behind the `bridge` CLI documented in `~/repos/llm-bridge-server/CLI-SURFACE.md`.
+This doc covers the `inber` CLI specifically as a client of inber-the-runtime — interactive chat, single-shot runs, inber-hosted session inspection, inber-runtime-specific config. **Cross-harness and cross-store operations** (memory, notes, bus, agent dispatch, tool-store invocation) **are not in scope here** — those live behind the `bridge` CLI documented in `~/repos/llm-bridge-server/docs/plans/CLI-SURFACE.md`.
 
 The earlier framing of "inber CLI as universal tool surface" was a holdover from when inber was the orchestrator. Now that inber is one harness among many, only inber-runtime-specific operations belong on this binary.
 
@@ -24,7 +24,7 @@ These all operate on inber's HTTP API and have nothing to do with cross-harness 
 
 ## What inber-cli should NOT expose
 
-Listed in `~/repos/llm-bridge-server/CLI-SURFACE.md`. Briefly:
+Listed in `~/repos/llm-bridge-server/docs/plans/CLI-SURFACE.md`. Briefly:
 
 - `inber agent ask <slug>` — cross-harness delegation. Belongs on `bridge agent ask`.
 - `inber memory ...` — memory-store is a service. Belongs on `bridge memory ...`.
@@ -53,4 +53,4 @@ These improve the developer experience whether the consumer is a human at a term
 - [ ] stderr format standardized
 - [ ] `inber <cmd> --help` consistent
 
-The cross-harness CLI surface (everything previously described in this doc as "missing subcommands") is deferred to `bridge-cli`. See `~/repos/llm-bridge-server/CLI-SURFACE.md` for the design.
+The cross-harness CLI surface (everything previously described in this doc as "missing subcommands") is deferred to `bridge-cli`. See `~/repos/llm-bridge-server/docs/plans/CLI-SURFACE.md` for the design.
