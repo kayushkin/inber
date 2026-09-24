@@ -3,6 +3,7 @@ package server
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"time"
 
@@ -49,6 +50,11 @@ type Config struct {
 	// fatal check). Valid names: "nats", "agent-store", "workspace",
 	// "anthropic-key".
 	RequireChecks []string `json:"require_checks,omitempty"`
+
+	// SettingsHandler serves GET /settings: the environment variables the
+	// command declared, as llm-bridge's servicesettings describes them. The
+	// command builds it; Serve refuses to start without one.
+	SettingsHandler http.Handler `json:"-"`
 }
 
 // AgentConfig defines one agent.
@@ -59,7 +65,7 @@ type AgentConfig struct {
 	Workspace string   `json:"workspace"`          // repo root / cwd
 	Model     string   `json:"model"`
 	Thinking  int64    `json:"thinking"`
-	Tools     []string `json:"tools"`             // tool allowlist (empty = all)
+	Tools     []string `json:"tools"` // tool allowlist (empty = all)
 
 	// WorkspaceRoots is every repository of the forge workspace this agent was
 	// spawned into, filled in at spawn time alongside Workspace and never read

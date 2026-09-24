@@ -47,6 +47,17 @@ cd "$REPO_DIR"
 echo "==> Compiling inber-server..."
 go build -o /tmp/inber-server-build ./cmd/inber-server
 
+# The new binary builds its settings registry from the environment at boot and
+# refuses to start on one it cannot read. Check the running service's
+# environment against the new declarations while the old binary still serves.
+# The test prints a verdict, never a value.
+LIVE_PID="$(systemctl --user show -p MainPID --value "$UNIT_NAME" 2>/dev/null || echo 0)"
+if [[ -n "$LIVE_PID" && "$LIVE_PID" != "0" ]]; then
+  echo "==> Checking the live environment against the settings declarations..."
+  go test -count=1 -run '^TestTheLiveProcessEnvironmentBuildsARegistry$' ./cmd/inber-server \
+    -args -live-environment-file="/proc/$LIVE_PID/environ"
+fi
+
 echo "==> Stopping service..."
 systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
 sleep 1

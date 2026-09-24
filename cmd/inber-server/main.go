@@ -21,13 +21,14 @@ import (
 	"github.com/kayushkin/inber/agent/registry"
 	"github.com/kayushkin/inber/logger"
 	"github.com/kayushkin/inber/server"
+	"github.com/kayushkin/llm-bridge/servicesettings"
 )
 
 func main() {
 	addr := flag.String("addr", ":8200", "API listen address")
 	configFile := flag.String("config", "", "Config file (JSON)")
 	requireChecks := flag.String("require", "", "Comma-separated allowlist of selftest checks that are fatal at startup (nats,agent-store,workspace,anthropic-key). Unlisted checks are demoted to WARN. Empty = legacy default (agent-store only).")
-	apiKeyFromAuthStore := flag.String("api-key-from-auth-store", "", "If non-empty, resolve ANTHROPIC_API_KEY from auth-store (http://localhost:8303) at startup using this value as X-Auth-App. Requires AUTH_STORE_TOKEN env var.")
+	apiKeyFromAuthStore := flag.String("api-key-from-auth-store", "", "If non-empty, resolve ANTHROPIC_API_KEY from auth-store (AUTH_STORE_URL, default http://127.0.0.1:8303) at startup using this value as X-Auth-App. Requires AUTH_STORE_TOKEN.")
 	flag.Parse()
 
 	if err := run(*addr, *configFile, *requireChecks, *apiKeyFromAuthStore); err != nil {
@@ -37,10 +38,15 @@ func main() {
 }
 
 func run(addr, configFile, requireChecks, apiKeyApp string) error {
+	settings, err := newSettingsRegistry(servicesettings.ProcessEnvironment())
+	if err != nil {
+		return fmt.Errorf("settings: %w", err)
+	}
+
 	if apiKeyApp != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := resolveAnthropicFromAuthStore(ctx, apiKeyApp); err != nil {
+		if err := resolveAnthropicFromAuthStore(ctx, apiKeyApp, settings.String(settingAuthStoreURL), settings.String(settingAuthStoreToken)); err != nil {
 			return fmt.Errorf("resolve anthropic credential: %w", err)
 		}
 	}
@@ -70,23 +76,7 @@ func run(addr, configFile, requireChecks, apiKeyApp string) error {
 		cfg.RequireChecks = checks
 	}
 
-	// Wire bus integration from env vars.
-	if natsURL := os.Getenv("NATS_URL"); natsURL != "" {
-		cfg.NatsURL = natsURL
-	} else if cfg.NatsURL == "" {
-		cfg.NatsURL = "nats://localhost:4222"
-	}
-	if busToken := os.Getenv("BUS_TOKEN"); busToken != "" {
-		cfg.BusToken = busToken
-	}
-
-	// Wire OpenClaw proxy from env vars.
-	if ocURL := os.Getenv("OPENCLAW_URL"); ocURL != "" {
-		cfg.OpenClawURL = ocURL
-	}
-	if ocToken := os.Getenv("OPENCLAW_TOKEN"); ocToken != "" {
-		cfg.OpenClawToken = ocToken
-	}
+	applySettings(&cfg, settings)
 
 	g, err := server.New(cfg)
 	if err != nil {
@@ -127,6 +117,27 @@ func run(addr, configFile, requireChecks, apiKeyApp string) error {
 	}()
 
 	return g.Serve(ctx)
+}
+
+// applySettings lays the environment's settings over cfg. A set variable wins
+// over the config file; an empty one leaves the file's value, and the bus falls
+// back to defaultNatsURL when neither names one.
+func applySettings(cfg *server.Config, settings *servicesettings.Registry) {
+	if natsURL := settings.String(settingNatsURL); natsURL != "" {
+		cfg.NatsURL = natsURL
+	} else if cfg.NatsURL == "" {
+		cfg.NatsURL = defaultNatsURL
+	}
+	if busToken := settings.String(settingBusToken); busToken != "" {
+		cfg.BusToken = busToken
+	}
+	if openClawURL := settings.String(settingOpenClawURL); openClawURL != "" {
+		cfg.OpenClawURL = openClawURL
+	}
+	if openClawToken := settings.String(settingOpenClawToken); openClawToken != "" {
+		cfg.OpenClawToken = openClawToken
+	}
+	cfg.SettingsHandler = settingsHandler(settings)
 }
 
 // buildConfigFromRegistry builds server config from agent-store.

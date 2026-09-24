@@ -14,24 +14,19 @@ import (
 )
 
 // resolveAnthropicFromAuthStore fetches the Anthropic credential routed to
-// the given app from the auth-store service and sets ANTHROPIC_API_KEY in
+// the given app from the auth-store at baseURL and sets ANTHROPIC_API_KEY in
 // the process environment. It must be called before any code reads the env
-// var.
-//
-// Env:
-//
-//	AUTH_STORE_URL    base URL (default http://127.0.0.1:8303)
-//	AUTH_STORE_TOKEN  bearer token (required)
+// var. baseURL and token are the auth_store_url and auth_store_token settings;
+// the token is required.
 //
 // Fails loud on any error — never falls back to ambient ANTHROPIC_API_KEY
 // (CLAUDE.md "single source of truth").
-func resolveAnthropicFromAuthStore(ctx context.Context, app string) error {
+func resolveAnthropicFromAuthStore(ctx context.Context, app, baseURL, token string) error {
 	if app == "" {
 		return fmt.Errorf("auth-store app name is empty")
 	}
 
-	base := strings.TrimRight(envOr("AUTH_STORE_URL", "http://127.0.0.1:8303"), "/")
-	token := os.Getenv("AUTH_STORE_TOKEN")
+	base := strings.TrimRight(baseURL, "/")
 	if token == "" {
 		return fmt.Errorf("AUTH_STORE_TOKEN env var is required when --api-key-from-auth-store is set")
 	}
@@ -84,11 +79,4 @@ func resolveAnthropicFromAuthStore(ctx context.Context, app string) error {
 		"auth_type": r.AuthType,
 	})
 	return nil
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

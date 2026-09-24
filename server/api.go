@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/kayushkin/inber/logger"
@@ -10,6 +11,9 @@ import (
 
 // Serve starts the HTTP API server. Blocks until ctx is cancelled.
 func (g *Server) Serve(ctx context.Context) error {
+	if g.config.SettingsHandler == nil {
+		return errors.New("serve: no settings handler: the command must set Config.SettingsHandler")
+	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/run", g.handleRun)
@@ -39,6 +43,10 @@ func (g *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/sessions", g.handleBridgeSessions)
 	mux.HandleFunc("/sessions/", g.handleBridgeSessionRouter)
 
+	// Only GET: no setting is Editable, and no route here has a gate a write
+	// could sit behind.
+	mux.Handle("GET /settings", g.config.SettingsHandler)
+
 	server := &http.Server{
 		Addr:    g.config.ListenAddr,
 		Handler: mux,
@@ -54,8 +62,8 @@ func (g *Server) Serve(ctx context.Context) error {
 	}()
 
 	logger.WithComponent("api").Info("API server starting", map[string]interface{}{
-		"address":      g.config.ListenAddr,
-		"agent_count":  len(g.config.Agents),
+		"address":       g.config.ListenAddr,
+		"agent_count":   len(g.config.Agents),
 		"default_agent": g.config.DefaultAgent,
 	})
 
