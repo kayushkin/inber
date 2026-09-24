@@ -435,7 +435,7 @@ plain tool output. The persistence-on-tool-result detail matters: without
 it, rich payloads get lost the moment the session reloads, and we end up
 re-fetching or losing fidelity. Worth a sketch in
 `docs/multi-agent-design.md` or a new `docs/mcp-apps.md` before
-prototyping — there is a real chance llmux/dash diverge on how they want
+prototyping — there is a real chance two hosts diverge on how they want
 to render `ui://` resources, so the *backend payload contract* should be
 nailed down first.
 
