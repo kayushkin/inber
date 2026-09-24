@@ -23,7 +23,7 @@ func TestBuildHooksForwardsTheToolIDToTheDisplayHooks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &Engine{}
 			if tc.withSession {
-				engineSession, err := sessionMod.New(t.TempDir(), "claude-sonnet-4-5-20250929", "test", "", nil)
+				engineSession, err := sessionMod.New(t.TempDir(), "claude-sonnet-4-5-20250929", "test", "", nil, "")
 				if err != nil {
 					t.Fatalf("building the engine's session: %v", err)
 				}

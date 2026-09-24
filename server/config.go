@@ -51,6 +51,19 @@ type Config struct {
 	// "anthropic-key".
 	RequireChecks []string `json:"require_checks,omitempty"`
 
+	// AgentStorePath is the agent-store database agents are loaded from, and
+	// the one status queries read. Empty means agent-store's default path. The
+	// command sets it from AGENT_STORE_PATH; a config file cannot.
+	AgentStorePath string `json:"-"`
+
+	// LogstackURL is where every session's log is also sent. Empty sends it
+	// nowhere else. The command sets it from LOGSTACK_URL.
+	LogstackURL string `json:"-"`
+
+	// Blueprint turns on prompt blueprint diffs for every session. The command
+	// sets it from INBER_BLUEPRINT.
+	Blueprint bool `json:"-"`
+
 	// SettingsHandler serves GET /settings: the environment variables the
 	// command declared, as llm-bridge's servicesettings describes them. The
 	// command builds it; Serve refuses to start without one.

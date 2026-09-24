@@ -62,7 +62,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 
 	// Phase 2: Load agent configuration
 	phaseStart = time.Now()
-	agentName, identityText, agentConfig, err := loadAgentConfig(cfg.AgentName, cfg.CommandName, cfg.ModelExplicitlySet)
+	agentName, identityText, agentConfig, err := loadAgentConfig(cfg.AgentStorePath, cfg.AgentName, cfg.CommandName, cfg.ModelExplicitlySet)
 	if err != nil {
 		return nil, timing, err
 	}
@@ -90,7 +90,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 
 	// Phase 4: Setup session management and workspace
 	phaseStart = time.Now()
-	session, sessionDB, workspace, messages, turnCounter, err := setupSession(repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach)
+	session, sessionDB, workspace, messages, turnCounter, err := setupSession(repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach, cfg.LogstackURL)
 	if err != nil {
 		return nil, timing, fmt.Errorf("failed to setup session: %w", err)
 	}
@@ -154,7 +154,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 
 	// Phase 8: Setup agent registry
 	phaseStart = time.Now()
-	agentRegistry, err := setupAgentRegistry(e.AgentConfig, cfg.ExtraTools, e.Client, repoRoot, modelClient, e.modelStore, e.MemStore)
+	agentRegistry, err := setupAgentRegistry(e.AgentConfig, cfg.ExtraTools, e.Client, repoRoot, modelClient, e.modelStore, e.MemStore, cfg.AgentStorePath, cfg.LogstackURL)
 	if err != nil {
 		return nil, timing, err
 	}

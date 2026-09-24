@@ -132,7 +132,7 @@ func New(cfg Config) (*Server, error) {
 
 	// Open agent-store for status queries.
 	var as *agentstore.Store
-	if a, err := agentstore.Open(""); err != nil {
+	if a, err := agentstore.Open(cfg.AgentStorePath); err != nil {
 		logger.WithComponent("server").Warn("agent-store unavailable", map[string]interface{}{
 			"error": err,
 		})

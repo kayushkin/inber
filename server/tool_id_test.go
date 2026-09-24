@@ -14,7 +14,7 @@ import (
 // streamEventToBridge alone would not have caught the display hook that took no
 // id at all, which is what was actually wrong.
 func TestToolEventsCarryTheProvidersToolID(t *testing.T) {
-	engineSession, err := sessionMod.New(t.TempDir(), "claude-sonnet-4-5-20250929", "test", "", nil)
+	engineSession, err := sessionMod.New(t.TempDir(), "claude-sonnet-4-5-20250929", "test", "", nil, "")
 	if err != nil {
 		t.Fatalf("building the engine's session: %v", err)
 	}

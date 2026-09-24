@@ -164,7 +164,7 @@ func TestCumulativeCostIsNotReportedAsTurnCost(t *testing.T) {
 // End to end through the real adapter: what a session actually puts on the wire.
 //
 // The unit tests above all call the mapper directly. This one drives
-// LogAssistant on a real Session with LOGSTACK_URL set, and reads the HTTP body
+// LogAssistant on a real Session given a logstack URL, and reads the HTTP body
 // logstack would have received — so it also covers the doorway, where the cache
 // counts were being dropped before.
 func TestSessionPostsCountableAssistantTurn(t *testing.T) {
@@ -186,9 +186,7 @@ func TestSessionPostsCountableAssistantTurn(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("LOGSTACK_URL", server.URL)
-
-	sess, err := New(t.TempDir(), "claude-sonnet-4-5", "claxon", "", nil)
+	sess, err := New(t.TempDir(), "claude-sonnet-4-5", "claxon", "", nil, server.URL)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -13,10 +13,9 @@ import (
 //
 //	go test -run TestTheLiveProcessEnvironmentBuildsARegistry ./cmd/inber-server -args -live-environment-file=/proc/<pid>/environ
 //
-// deploy.sh runs it against the running service before it stops it. Today it
-// cannot fail — inber-server owns no prefix and every setting is a string —
-// but the library reads still to move here include INBER_BLUEPRINT, which will
-// be a boolean, and the check should already be in the deploy when it can.
+// deploy.sh runs it against the running service before it stops it.
+// inber-server owns no prefix, so the one way it fails is INBER_BLUEPRINT set
+// to something that is not a boolean.
 var liveEnvironmentFile = flag.String("live-environment-file", "", "a /proc/<pid>/environ to build the settings registry from")
 
 // Only the verdict is printed, never a value: an environment holds secrets.
@@ -37,8 +36,8 @@ func TestTheLiveProcessEnvironmentBuildsARegistry(t *testing.T) {
 	if len(variables) == 0 {
 		t.Fatalf("%s holds no variables: that is not a process environment", *liveEnvironmentFile)
 	}
-	// New's error quotes a value it cannot parse. Every setting here is a
-	// string, so no refusal can carry a secret.
+	// New's error quotes a value it cannot parse. The only setting it can
+	// refuse is INBER_BLUEPRINT, which is not a secret.
 	if _, err := newSettingsRegistry(servicesettings.MapEnvironment(variables)); err != nil {
 		t.Fatalf("the new binary would refuse to start in this environment: %v", err)
 	}

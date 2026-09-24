@@ -44,6 +44,8 @@ type EngineConfig struct {
 	ExtraTools       []agent.Tool        // additional tools injected by server
 	ContextInjectors []ContextInjector   // extra system prompt sections from server
 	Injections       <-chan string        // mid-run message injection channel
+	AgentStorePath   string               // agent-store database to load agents from ("" = agent-store's default)
+	LogstackURL      string               // where session logs are also sent ("" = nowhere else)
 
 	// Display
 	Display *DisplayHooks

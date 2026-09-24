@@ -10,7 +10,7 @@ import (
 func TestSession_TruncateLargeToolResult(t *testing.T) {
 	tmpDir := t.TempDir()
 	
-	sess, err := New(tmpDir, "test-model", "test-agent", "", nil)
+	sess, err := New(tmpDir, "test-model", "test-agent", "", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestSession_TruncateLargeToolResult(t *testing.T) {
 func TestSession_SmallToolResultNotTruncated(t *testing.T) {
 	tmpDir := t.TempDir()
 	
-	sess, err := New(tmpDir, "test-model", "test-agent", "", nil)
+	sess, err := New(tmpDir, "test-model", "test-agent", "", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

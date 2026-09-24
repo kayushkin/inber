@@ -58,14 +58,15 @@ func initializeConfigs(cfg EngineConfig) (conversation.StashConfig, conversation
 	return stashCfg, extractCfg
 }
 
-// loadAgentConfig loads agent configuration from the registry.
-func loadAgentConfig(agentName string, commandName string, modelExplicitlySet bool) (string, string, *registry.AgentConfig, error) {
+// loadAgentConfig loads agent configuration from the agent-store database at
+// agentStorePath ("" = agent-store's default).
+func loadAgentConfig(agentStorePath, agentName string, commandName string, modelExplicitlySet bool) (string, string, *registry.AgentConfig, error) {
 	var identityText string
 	var resolvedAgentName string
 	var agentConfig *registry.AgentConfig
 
 	// Load from agent-store (the only source of truth)
-	registryCfg, err := registry.LoadConfig()
+	registryCfg, err := registry.LoadFromAgentStore(agentStorePath)
 	if err != nil || registryCfg == nil {
 		return "", "", nil, fmt.Errorf("failed to load agent config from agent-store: %v", err)
 	}
@@ -146,7 +147,7 @@ func setupMemoryStore(ctx context.Context, repoRoot, identityText, agentName str
 // resumable state: the persisted transcript and the turn count that produced it.
 // The two are loaded in the same branch on purpose — a turn count restored
 // without its transcript describes messages that are not there.
-func setupSession(repoRoot, agentName, commandName string, newSession, detach bool) (*sessionMod.Session, *sessionMod.DB, *sessionMod.Workspace, []anthropic.MessageParam, int, error) {
+func setupSession(repoRoot, agentName, commandName string, newSession, detach bool, logstackURL string) (*sessionMod.Session, *sessionMod.DB, *sessionMod.Workspace, []anthropic.MessageParam, int, error) {
 	var session *sessionMod.Session
 	var sessionDB *sessionMod.DB
 	var workspace *sessionMod.Workspace
@@ -231,7 +232,7 @@ func setupSession(repoRoot, agentName, commandName string, newSession, detach bo
 	// warning below the failure was one turn away from a crash it described as
 	// avoided. There is nothing to degrade to: a logger with no file open logs
 	// nothing, and every caller here treats the session as writable.
-	session, err = sessionMod.New(logsDir, "", agentName, "", nil)
+	session, err = sessionMod.New(logsDir, "", agentName, "", nil, logstackURL)
 	if err != nil {
 		return nil, nil, nil, nil, 0, fmt.Errorf("create session logger in %s: %w", logsDir, err)
 	}
@@ -291,16 +292,17 @@ func createModelClient(model string, store *modelstore.Store, auth *aiauth.Store
 	return modelClient, resolvedModel, anthropicClient, nil
 }
 
-// setupAgentRegistry creates agent registry if spawn tools are needed.
+// setupAgentRegistry creates agent registry if spawn tools are needed. It
+// loads agents from agentStorePath and sends its sessions' logs to logstackURL.
 //
 // extraTools is the caller's injected set. It is a gate input and not just a
 // merge input: see needsAgentRegistry.
-func setupAgentRegistry(agentConfig *registry.AgentConfig, extraTools []agent.Tool, client *anthropic.Client, repoRoot string, modelClient *agent.ModelClient, modelStore *modelstore.Store, memStore memory.MemoryStore) (*registry.Registry, error) {
+func setupAgentRegistry(agentConfig *registry.AgentConfig, extraTools []agent.Tool, client *anthropic.Client, repoRoot string, modelClient *agent.ModelClient, modelStore *modelstore.Store, memStore memory.MemoryStore, agentStorePath, logstackURL string) (*registry.Registry, error) {
 	if !needsAgentRegistry(agentConfig, extraTools) {
 		return nil, nil
 	}
 
-	reg, err := registry.New(client, filepath.Join(repoRoot, "logs"))
+	reg, err := registry.New(client, filepath.Join(repoRoot, "logs"), agentStorePath, logstackURL)
 	if err != nil {
 		Log.Warn("failed to create agent registry: %v", err)
 		return nil, err
@@ -511,7 +513,7 @@ func setupMemoryProfiling(enabled bool, logPath string) (*MemoryProfiler, error)
 
 // initAgent loads agent identity from registry and resolves the model.
 func (e *Engine) initAgent(cfg EngineConfig) error {
-	agentName, identityText, agentConfig, err := loadAgentConfig(cfg.AgentName, cfg.CommandName, cfg.ModelExplicitlySet)
+	agentName, identityText, agentConfig, err := loadAgentConfig(cfg.AgentStorePath, cfg.AgentName, cfg.CommandName, cfg.ModelExplicitlySet)
 	if err != nil {
 		return err
 	}
@@ -555,7 +557,7 @@ func (e *Engine) initMemory(ctx context.Context, cfg EngineConfig) error {
 
 // initSession sets up JSONL logging, workspace, and message persistence.
 func (e *Engine) initSession(cfg EngineConfig) error {
-	session, sessionDB, workspace, messages, turnCounter, err := setupSession(e.repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach)
+	session, sessionDB, workspace, messages, turnCounter, err := setupSession(e.repoRoot, e.AgentName, cfg.CommandName, cfg.NewSession, cfg.Detach, cfg.LogstackURL)
 	if err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
@@ -613,7 +615,7 @@ func (e *Engine) initWorkflow(cfg EngineConfig) {
 		e.forgeHook = forgeHook
 	}
 
-	agentRegistry, err := setupAgentRegistry(e.AgentConfig, cfg.ExtraTools, e.Client, e.repoRoot, e.modelClient, e.modelStore, e.MemStore)
+	agentRegistry, err := setupAgentRegistry(e.AgentConfig, cfg.ExtraTools, e.Client, e.repoRoot, e.modelClient, e.modelStore, e.MemStore, cfg.AgentStorePath, cfg.LogstackURL)
 	if err == nil {
 		e.agentRegistry = agentRegistry
 	}
@@ -676,11 +678,6 @@ func (e *Engine) initLimitsAndProfiling(cfg EngineConfig) {
 	}
 
 	e.Cache.BlueprintEnabled = cfg.Blueprint
-	if !e.Cache.BlueprintEnabled {
-		if v := os.Getenv("INBER_BLUEPRINT"); v == "1" || v == "true" {
-			e.Cache.BlueprintEnabled = true
-		}
-	}
 
 	pruneCfg := e.pruneConfig()
 	e.staged = conversation.NewStagedConversation(pruneCfg.ManageInterval)

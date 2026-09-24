@@ -18,7 +18,7 @@ import (
 func TestNewOwnsTheAgentSegment(t *testing.T) {
 	root := t.TempDir()
 
-	session, err := New(root, "", "testagent", "", nil)
+	session, err := New(root, "", "testagent", "", nil, "")
 	if err != nil {
 		t.Fatalf("New failed on a writable root: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestNewOwnsTheAgentSegment(t *testing.T) {
 func TestNewAddsNoAgentSegmentWithoutAnAgentName(t *testing.T) {
 	root := t.TempDir()
 
-	session, err := New(root, "", "", "", nil)
+	session, err := New(root, "", "", "", nil, "")
 	if err != nil {
 		t.Fatalf("New failed on a writable root: %v", err)
 	}
@@ -81,13 +81,13 @@ func TestNewAddsNoAgentSegmentWithoutAnAgentName(t *testing.T) {
 func TestNewSeparatesAgentsUnderOneRoot(t *testing.T) {
 	root := t.TempDir()
 
-	first, err := New(root, "", "claxon", "", nil)
+	first, err := New(root, "", "claxon", "", nil, "")
 	if err != nil {
 		t.Fatalf("New failed for claxon: %v", err)
 	}
 	defer first.Close()
 
-	second, err := New(root, "", "fionn", "", nil)
+	second, err := New(root, "", "fionn", "", nil, "")
 	if err != nil {
 		t.Fatalf("New failed for fionn: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestNewSeparatesAgentsUnderOneRoot(t *testing.T) {
 func TestLogsRootIsTheRootNewIsHandedForARepository(t *testing.T) {
 	repoRoot := t.TempDir()
 
-	session, err := New(LogsRoot(repoRoot), "", "claxon", "", nil)
+	session, err := New(LogsRoot(repoRoot), "", "claxon", "", nil, "")
 	if err != nil {
 		t.Fatalf("New failed under the logs root of a writable repository: %v", err)
 	}

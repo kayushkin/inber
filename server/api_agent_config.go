@@ -174,7 +174,7 @@ func (g *Server) handleAgentConfigPatch(w http.ResponseWriter, r *http.Request) 
 
 // reloadRegistry refreshes the agent config from agent-store.
 func (g *Server) reloadRegistry() {
-	cfg, err := registry.LoadFromAgentStore("")
+	cfg, err := registry.LoadFromAgentStore(g.config.AgentStorePath)
 	if err != nil {
 		logger.WithComponent("server").Warn("failed to reload registry", map[string]interface{}{"error": err})
 		return

@@ -41,10 +41,6 @@ var libraryReadsAwaitingConversion = map[string][]string{
 	"server/selftest.go": {"reads ANTHROPIC_API_KEY, which its declaration list does not declare"},
 	// The egress redactor's snapshot of every value: todo 5e-1.
 	"agent/redaction.go": {"reads the environment through os.Environ, which no declaration can be held to"},
-	// Session, agent-store and blueprint: todo 5e-2.
-	"session/session.go":       {"reads LOGSTACK_URL, which its declaration list does not declare"},
-	"agent/registry/config.go": {"reads AGENT_STORE_PATH, which its declaration list does not declare"},
-	"engine/engine_new.go":     {"reads INBER_BLUEPRINT, which its declaration list does not declare"},
 	// Tools: todo 5e-3.
 	"tools/tools.go": {
 		"reads PINCHTAB_URL, which its declaration list does not declare",
@@ -122,6 +118,48 @@ func TestTheSettingsGiveTheServerTheSameValuesItAlwaysRead(t *testing.T) {
 	}
 	if fromFile.SettingsHandler == nil {
 		t.Error("applySettings left the server with no settings handler, and Serve refuses to start without one")
+	}
+
+	// The three the library packages used to read themselves. Unset, they are
+	// agent-store's default path, no logstack and no blueprint, as before.
+	if bare.AgentStorePath != "" || bare.LogstackURL != "" || bare.Blueprint {
+		t.Errorf("nothing set: agent-store %q, logstack %q, blueprint %v", bare.AgentStorePath, bare.LogstackURL, bare.Blueprint)
+	}
+	withLibraryReads, err := newSettingsRegistry(servicesettings.MapEnvironment(map[string]string{
+		"AGENT_STORE_PATH": "/tmp/agents.db",
+		"LOGSTACK_URL":     "http://localhost:8088",
+		"INBER_BLUEPRINT":  "1",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromLibraryReads server.Config
+	applySettings(&fromLibraryReads, withLibraryReads)
+	if fromLibraryReads.AgentStorePath != "/tmp/agents.db" || fromLibraryReads.LogstackURL != "http://localhost:8088" || !fromLibraryReads.Blueprint {
+		t.Errorf("set: agent-store %q, logstack %q, blueprint %v", fromLibraryReads.AgentStorePath, fromLibraryReads.LogstackURL, fromLibraryReads.Blueprint)
+	}
+}
+
+// INBER_BLUEPRINT used to be on for exactly "1" and "true" and silently off for
+// anything else. Now it takes what strconv.ParseBool takes, and any other value
+// stops the server at start rather than being read as off.
+func TestTheBlueprintSwitchIsOnForTrueOffForFalseAndRefusesAnythingElse(t *testing.T) {
+	for value, want := range map[string]bool{"1": true, "true": true, "TRUE": true, "0": false, "false": false, "": false} {
+		registry, err := newSettingsRegistry(servicesettings.MapEnvironment(map[string]string{"INBER_BLUEPRINT": value}))
+		if err != nil {
+			t.Errorf("INBER_BLUEPRINT=%q refused: %v", value, err)
+			continue
+		}
+		var cfg server.Config
+		applySettings(&cfg, registry)
+		if cfg.Blueprint != want {
+			t.Errorf("INBER_BLUEPRINT=%q gave blueprint %v, want %v", value, cfg.Blueprint, want)
+		}
+	}
+	for _, value := range []string{"yes", "on", "enabled"} {
+		if _, err := newSettingsRegistry(servicesettings.MapEnvironment(map[string]string{"INBER_BLUEPRINT": value})); err == nil {
+			t.Errorf("INBER_BLUEPRINT=%q was accepted; it used to mean off without saying so", value)
+		}
 	}
 }
 

@@ -111,7 +111,7 @@ func TestStopCancelsTheTurnContext(t *testing.T) {
 // Engine.RunTurn to context.Background() and that is how this test fails: not
 // on an assertion, but on the network call an interrupted turn made anyway.
 func TestInterruptStopsATurnAlreadyInFlight(t *testing.T) {
-	engineSession, err := sessionMod.New(t.TempDir(), "claude-sonnet-4-5-20250929", "test", "", nil)
+	engineSession, err := sessionMod.New(t.TempDir(), "claude-sonnet-4-5-20250929", "test", "", nil, "")
 	if err != nil {
 		t.Fatalf("building the engine's session: %v", err)
 	}

@@ -26,7 +26,7 @@ func endTwoTurns(t *testing.T) (logsDir, sessionID, sessionDir string) {
 
 	logsDir = t.TempDir()
 	session, err := New(logsDir, "claude-sonnet-4-20250514", "test-agent", "",
-		registryWithTwoDifferentlyPricedModels(t))
+		registryWithTwoDifferentlyPricedModels(t), "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

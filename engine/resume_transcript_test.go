@@ -32,7 +32,7 @@ func TestSetupSessionRefusesAnUnreadableTranscript(t *testing.T) {
 		t.Fatalf("write transcript: %v", err)
 	}
 
-	_, _, _, _, _, err := setupSession(repoRoot, agentName, "chat", false, false)
+	_, _, _, _, _, err := setupSession(repoRoot, agentName, "chat", false, false, "")
 
 	if err == nil {
 		t.Fatal("a corrupt transcript started a fresh session; the next turn would overwrite it")
@@ -51,7 +51,7 @@ func TestSetupSessionRefusesAnUnreadableTranscript(t *testing.T) {
 func TestSetupSessionTreatsAMissingTranscriptAsAFreshStart(t *testing.T) {
 	repoRoot := t.TempDir()
 
-	_, sessionDB, _, messages, turnCounter, err := setupSession(repoRoot, "brigid", "chat", false, false)
+	_, sessionDB, _, messages, turnCounter, err := setupSession(repoRoot, "brigid", "chat", false, false, "")
 	if sessionDB != nil {
 		defer sessionDB.Close()
 	}

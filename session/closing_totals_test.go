@@ -30,7 +30,7 @@ func closingEntryAfterTurn(t *testing.T, tokens TurnTokens) Entry {
 	t.Helper()
 
 	session, err := New(t.TempDir(), "claude-sonnet-4-20250514", "test-agent", "",
-		registryWithTwoDifferentlyPricedModels(t))
+		registryWithTwoDifferentlyPricedModels(t), "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestClosingEntryTokensAndCostDescribeTheSamePrompt(t *testing.T) {
 // land in the cost and not in the counts.
 func TestClosingEntryReadsTokenTotalsUnderTheMutex(t *testing.T) {
 	session, err := New(t.TempDir(), "claude-sonnet-4-20250514", "test-agent", "",
-		registryWithTwoDifferentlyPricedModels(t))
+		registryWithTwoDifferentlyPricedModels(t), "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

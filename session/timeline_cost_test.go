@@ -251,7 +251,7 @@ func TestSessionCostCountsTheCacheTraffic(t *testing.T) {
 
 	newSession := func(t *testing.T) *Session {
 		t.Helper()
-		session, err := New(t.TempDir(), model, "cost-test", "", store)
+		session, err := New(t.TempDir(), model, "cost-test", "", store, "")
 		if err != nil {
 			t.Fatalf("new session: %v", err)
 		}

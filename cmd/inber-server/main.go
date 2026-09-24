@@ -60,7 +60,7 @@ func run(addr, configFile, requireChecks, apiKeyApp string) error {
 		}
 		cfg = loaded
 	} else {
-		cfg = buildConfigFromRegistry()
+		cfg = buildConfigFromRegistry(settings.String(settingAgentStorePath))
 	}
 
 	cfg.ListenAddr = addr
@@ -137,12 +137,16 @@ func applySettings(cfg *server.Config, settings *servicesettings.Registry) {
 	if openClawToken := settings.String(settingOpenClawToken); openClawToken != "" {
 		cfg.OpenClawToken = openClawToken
 	}
+	cfg.AgentStorePath = settings.String(settingAgentStorePath)
+	cfg.LogstackURL = settings.String(settingLogstackURL)
+	cfg.Blueprint = settings.Boolean(settingBlueprint)
 	cfg.SettingsHandler = settingsHandler(settings)
 }
 
-// buildConfigFromRegistry builds server config from agent-store.
-func buildConfigFromRegistry() server.Config {
-	regCfg, err := registry.LoadConfig()
+// buildConfigFromRegistry builds server config from the agent-store database
+// at agentStorePath ("" = agent-store's default).
+func buildConfigFromRegistry(agentStorePath string) server.Config {
+	regCfg, err := registry.LoadFromAgentStore(agentStorePath)
 
 	agents := make(map[string]server.AgentConfig)
 

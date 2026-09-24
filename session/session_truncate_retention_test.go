@@ -28,7 +28,7 @@ func TestSessionDoesNotRetainTruncatedToolOutput(t *testing.T) {
 		retentionAllowed = 16 << 20
 	)
 
-	session, err := New(t.TempDir(), "test-model", "test-agent", "", nil)
+	session, err := New(t.TempDir(), "test-model", "test-agent", "", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

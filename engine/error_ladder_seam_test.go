@@ -18,7 +18,7 @@ import (
 // 35,000, and does not rewrite the cached prompt prefix a second time.
 func engineWithSession(t *testing.T) *Engine {
 	t.Helper()
-	s, err := sessionMod.New(t.TempDir(), "test-model", "tester", "", nil)
+	s, err := sessionMod.New(t.TempDir(), "test-model", "tester", "", nil, "")
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}

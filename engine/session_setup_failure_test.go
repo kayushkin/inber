@@ -56,7 +56,7 @@ func TestZeroValueSessionPanicsOnItsCommonestCall(t *testing.T) {
 func TestSetupSessionFailsLoudlyWhenTheLogDirectoryCannotBeCreated(t *testing.T) {
 	root := blockedLogsRepoRoot(t)
 
-	session, _, _, _, _, err := setupSession(root, "testagent", "chat", true, true)
+	session, _, _, _, _, err := setupSession(root, "testagent", "chat", true, true, "")
 	if err == nil {
 		t.Fatalf("setupSession succeeded against an unwritable logs path; it returned session %#v", session)
 	}
@@ -93,7 +93,7 @@ func TestSetupSessionFailsLoudlyWhenTheLogDirectoryCannotBeCreated(t *testing.T)
 func TestSetupSessionWritesExactlyOneAgentSegment(t *testing.T) {
 	root := t.TempDir()
 
-	session, _, _, _, _, err := setupSession(root, "testagent", "chat", true, true)
+	session, _, _, _, _, err := setupSession(root, "testagent", "chat", true, true, "")
 	if err != nil {
 		t.Fatalf("setupSession failed on a writable root: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestSetupSessionWritesExactlyOneAgentSegment(t *testing.T) {
 func TestSetupSessionStillSucceedsOnAWritableRoot(t *testing.T) {
 	// The counterweight: the failure above must be caused by the blocked path,
 	// not by setupSession refusing every temp root.
-	session, _, _, _, _, err := setupSession(t.TempDir(), "testagent", "chat", true, true)
+	session, _, _, _, _, err := setupSession(t.TempDir(), "testagent", "chat", true, true, "")
 	if err != nil {
 		t.Fatalf("setupSession failed on a writable root: %v", err)
 	}

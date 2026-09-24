@@ -21,7 +21,7 @@ import (
 func breakdownFor(t *testing.T, params *anthropic.MessageNewParams) (turn string, dir string) {
 	t.Helper()
 
-	sess, err := New(t.TempDir(), "claude-sonnet-4-20250514", "test", "", nil)
+	sess, err := New(t.TempDir(), "claude-sonnet-4-20250514", "test", "", nil, "")
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}

@@ -102,6 +102,26 @@ func applyRequestOverrides(cfg *engine.EngineConfig, req RunRequest) {
 	}
 }
 
+// engineConfigFor is the engine configuration a new session starts from, before
+// the request's overrides: the agent's model and workspace, the server's tools
+// and context, and the settings the command read from the environment.
+func (g *Server) engineConfigFor(key, agentName, repoRoot string, workspaceRoots []engine.WorkspaceRoot, ac AgentConfig, injections chan string) engine.EngineConfig {
+	return engine.EngineConfig{
+		AgentName:        agentName,
+		RepoRoot:         repoRoot,
+		WorkspaceRoots:   workspaceRoots,
+		Model:            ac.Model,
+		Thinking:         ac.Thinking,
+		CommandName:      "serve",
+		Injections:       injections,
+		ExtraTools:       g.toolsForAgent(key, agentName),
+		ContextInjectors: g.contextInjectorsFor(key, agentName),
+		AgentStorePath:   g.config.AgentStorePath,
+		LogstackURL:      g.config.LogstackURL,
+		Blueprint:        g.config.Blueprint,
+	}
+}
+
 // createSession creates a new session with a fresh engine.
 func (g *Server) createSession(ctx context.Context, key, agentName string, ac AgentConfig, req RunRequest, onEvent func(StreamEvent)) (*Session, error) {
 	injections := make(chan string, 10)
@@ -115,17 +135,7 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 		return nil, err
 	}
 
-	cfg := engine.EngineConfig{
-		AgentName:        agentName,
-		RepoRoot:         repoRoot,
-		WorkspaceRoots:   workspaceRoots,
-		Model:            ac.Model,
-		Thinking:         ac.Thinking,
-		CommandName:      "serve",
-		Injections:       injections,
-		ExtraTools:       g.toolsForAgent(key, agentName),
-		ContextInjectors: g.contextInjectorsFor(key, agentName),
-	}
+	cfg := g.engineConfigFor(key, agentName, repoRoot, workspaceRoots, ac, injections)
 
 	applyRequestOverrides(&cfg, req)
 

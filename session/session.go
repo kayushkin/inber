@@ -95,7 +95,9 @@ func shortID() string {
 // agentName identifies the agent (for multi-agent support).
 // parentID is the parent session ID (empty string for root sessions).
 // modelStore provides model cost information (can be nil).
-func New(logsDir, model, agentName, parentID string, modelStore *modelstore.Store) (*Session, error) {
+// logstackURL is where the session's entries are also sent; empty sends them
+// nowhere else. inber-server declares it as LOGSTACK_URL.
+func New(logsDir, model, agentName, parentID string, modelStore *modelstore.Store, logstackURL string) (*Session, error) {
 	// Create agent-specific subdirectory
 	agentDir := logsDir
 	if agentName != "" {
@@ -137,9 +139,8 @@ func New(logsDir, model, agentName, parentID string, modelStore *modelstore.Stor
 		truncateCfg:  DefaultTruncateConfig(),
 	}
 
-	// Initialize logstack adapter if URL is configured
-	if url := os.Getenv("LOGSTACK_URL"); url != "" {
-		s.logstack = NewLogstackAdapter(url, agentName, s.sessionID)
+	if logstackURL != "" {
+		s.logstack = NewLogstackAdapter(logstackURL, agentName, s.sessionID)
 	}
 
 	// Log session start

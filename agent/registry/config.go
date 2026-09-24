@@ -2,8 +2,6 @@ package registry
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	agentstore "github.com/kayushkin/agent-store"
@@ -62,23 +60,14 @@ type RegistryConfig struct {
 	OpenClaw *OpenClawConfig
 }
 
-// agentStoreDBPath returns the path to the agent-store database.
-// Uses AGENT_STORE_PATH env var, or defaults to ~/.config/agent-store/agents.db.
-func agentStoreDBPath(override string) string {
-	if override != "" {
-		return override
-	}
-	if p := os.Getenv("AGENT_STORE_PATH"); p != "" {
-		return p
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "agent-store", "agents.db")
-}
-
-// LoadFromAgentStore loads agent configs from the agent-store database.
-// This is the only source of truth for agent configuration.
+// LoadFromAgentStore loads agent configs from the agent-store database at
+// dbPath; empty means agent-store's own default path. This is the only source
+// of truth for agent configuration. inber-server declares the path as
+// AGENT_STORE_PATH and hands it down.
 func LoadFromAgentStore(dbPath string) (*RegistryConfig, error) {
-	dbPath = agentStoreDBPath(dbPath)
+	if dbPath == "" {
+		dbPath = agentstore.DefaultPath()
+	}
 
 	store, err := agentstore.Open(dbPath)
 	if err != nil {
@@ -166,10 +155,4 @@ func LoadFromAgentStore(dbPath string) (*RegistryConfig, error) {
 		Default: defaultSlug,
 		Agents:  configs,
 	}, nil
-}
-
-// LoadConfig loads agent configuration from agent-store.
-// This is the primary entry point for loading config.
-func LoadConfig() (*RegistryConfig, error) {
-	return LoadFromAgentStore("")
 }

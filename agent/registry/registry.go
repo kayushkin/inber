@@ -19,6 +19,7 @@ type Registry struct {
 	modelClient   *agent.ModelClient // unified client (Anthropic or OpenAI)
 	modelStore    *modelstore.Store  // model store for creating per-agent clients
 	logsDir       string
+	logstackURL   string // where each agent's session log is also sent; empty sends it nowhere else
 	default_      string
 	configs       map[string]*AgentConfig
 	agents        map[string]*agent.Agent
@@ -29,9 +30,11 @@ type Registry struct {
 	openclawAgents []string // Agents that route to OpenClaw
 }
 
-// New creates a registry using agent-store as the source of truth.
-func New(client *anthropic.Client, logsDir string) (*Registry, error) {
-	cfg, err := LoadFromAgentStore("")
+// New creates a registry using agent-store as the source of truth, read from
+// agentStorePath (empty means agent-store's default). Each agent's session log
+// is also sent to logstackURL, unless it is empty.
+func New(client *anthropic.Client, logsDir, agentStorePath, logstackURL string) (*Registry, error) {
+	cfg, err := LoadFromAgentStore(agentStorePath)
 	if err != nil {
 		return nil, fmt.Errorf("load from agent-store: %w", err)
 	}
@@ -39,6 +42,7 @@ func New(client *anthropic.Client, logsDir string) (*Registry, error) {
 	r := &Registry{
 		client:       client,
 		logsDir:      logsDir,
+		logstackURL:  logstackURL,
 		default_:     cfg.Default,
 		configs:      cfg.Agents,
 		agents:       make(map[string]*agent.Agent),
@@ -170,7 +174,7 @@ func (r *Registry) GetSession(name string) (*session.Session, error) {
 		return nil, fmt.Errorf("agent %q not found", name)
 	}
 
-	sess, err := session.New(r.logsDir, cfg.Model, name, "", r.modelStore)
+	sess, err := session.New(r.logsDir, cfg.Model, name, "", r.modelStore, r.logstackURL)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}

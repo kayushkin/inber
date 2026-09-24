@@ -30,7 +30,7 @@ func TestSetupSession_ResumeLoadsTheTurnCountWithTheTranscript(t *testing.T) {
 	repoRoot := t.TempDir()
 	persistedWorkspace(t, repoRoot, "tester", 9, 9)
 
-	_, _, _, messages, turnCounter, err := setupSession(repoRoot, "tester", "chat", false, false)
+	_, _, _, messages, turnCounter, err := setupSession(repoRoot, "tester", "chat", false, false, "")
 	if err != nil {
 		t.Fatalf("setupSession: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestSetupSession_NewSessionDiscardsTheTurnCount(t *testing.T) {
 	repoRoot := t.TempDir()
 	persistedWorkspace(t, repoRoot, "tester", 9, 9)
 
-	_, _, _, messages, turnCounter, err := setupSession(repoRoot, "tester", "chat", true, false)
+	_, _, _, messages, turnCounter, err := setupSession(repoRoot, "tester", "chat", true, false, "")
 	if err != nil {
 		t.Fatalf("setupSession: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestSaveResumableState_WritesTheTurnCountBesideTheTranscript(t *testing.T) 
 
 	e.saveResumableState()
 
-	_, _, _, messages, turnCounter, err := setupSession(repoRoot, "tester", "chat", false, false)
+	_, _, _, messages, turnCounter, err := setupSession(repoRoot, "tester", "chat", false, false, "")
 	if err != nil {
 		t.Fatalf("setupSession: %v", err)
 	}

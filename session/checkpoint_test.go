@@ -27,7 +27,7 @@ func sessionAfterRoundTrips(t *testing.T, roundTrips int) *Session {
 	t.Helper()
 
 	session, err := New(t.TempDir(), "claude-sonnet-4-20250514", "test-agent", "",
-		registryWithTwoDifferentlyPricedModels(t))
+		registryWithTwoDifferentlyPricedModels(t), "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
