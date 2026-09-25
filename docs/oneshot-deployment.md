@@ -79,7 +79,7 @@ Current unit's `ExecStart=/home/kayushkincom/bin/inber serve --addr :8200` becom
 ```ini
 ExecStart=/home/kayushkincom/bin/inber --addr :8200 --require=nats,workspace --api-key-from-auth-store=inber-server
 Environment=AUTH_STORE_URL=http://127.0.0.1:8303
-Environment=AUTH_STORE_TOKEN=changeme
+Environment=AUTH_STORE_TOKEN=__AUTH_STORE_TOKEN__
 Environment=NATS_URL=nats://localhost:4222
 Environment=LOGSTACK_URL=http://localhost:8088
 Environment=HOME=/home/kayushkincom
