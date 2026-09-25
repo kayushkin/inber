@@ -99,8 +99,15 @@ func (e *Engine) buildSpecialTool(toolName string) *agent.Tool {
 	return nil
 }
 
-// findStandardTool looks for a tool in the default registry.
+// findStandardTool looks for a tool among the ones that reach an outside
+// service, built with the engine's connections, then in the default registry.
 func (e *Engine) findStandardTool(toolName string) *agent.Tool {
+	for _, tool := range tools.ToolsThatReachOutsideServices(e.toolConnections) {
+		if tool.Name == toolName {
+			return &tool
+		}
+	}
+
 	// First check the default registry for registered tools. The root is
 	// applied to the whole set in buildTools, not here.
 	if tool := tools.GetTool(toolName); tool != nil {

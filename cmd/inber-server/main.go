@@ -22,6 +22,7 @@ import (
 	"github.com/kayushkin/inber/logger"
 	"github.com/kayushkin/inber/server"
 	"github.com/kayushkin/llm-bridge/servicesettings"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 func main() {
@@ -140,6 +141,11 @@ func applySettings(cfg *server.Config, settings *servicesettings.Registry) {
 	cfg.AgentStorePath = settings.String(settingAgentStorePath)
 	cfg.LogstackURL = settings.String(settingLogstackURL)
 	cfg.Blueprint = settings.Boolean(settingBlueprint)
+	cfg.ToolConnections = toolstoretools.OutsideServiceConnections{
+		Pinchtab:    toolstoretools.PinchtabConnection{BaseURL: settings.String(settingPinchtabURL), Token: settings.String(settingPinchtabToken)},
+		BraveAPIKey: settings.String(settingBraveAPIKey),
+		Scheduler:   toolstoretools.SchedulerConnection{BaseURL: settings.String(settingSchedulerURL), Token: settings.String(settingSchedulerToken)},
+	}
 	cfg.SettingsHandler = settingsHandler(settings)
 }
 

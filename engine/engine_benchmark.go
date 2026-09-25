@@ -56,6 +56,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 		modelExplicitlySet: cfg.ModelExplicitlySet,
 		toolInputsCache:    make(map[string]string),
 		contextInjectors:   cfg.ContextInjectors,
+		toolConnections:    cfg.ToolConnections,
 		noHooks:            cfg.NoHooks,
 		injections:         cfg.Injections,
 	}
@@ -154,7 +155,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 
 	// Phase 8: Setup agent registry
 	phaseStart = time.Now()
-	agentRegistry, err := setupAgentRegistry(e.AgentConfig, cfg.ExtraTools, e.Client, repoRoot, modelClient, e.modelStore, e.MemStore, cfg.AgentStorePath, cfg.LogstackURL)
+	agentRegistry, err := setupAgentRegistry(e.AgentConfig, cfg.ExtraTools, e.Client, repoRoot, modelClient, e.modelStore, e.MemStore, cfg.AgentStorePath, cfg.LogstackURL, cfg.ToolConnections)
 	if err != nil {
 		return nil, timing, err
 	}

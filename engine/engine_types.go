@@ -8,6 +8,7 @@ import (
 	"github.com/kayushkin/inber/guard"
 	sessionMod "github.com/kayushkin/inber/session"
 	modelstore "github.com/kayushkin/model-store"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 // ---------------------------------------------------------------------------
@@ -46,6 +47,7 @@ type EngineConfig struct {
 	Injections       <-chan string        // mid-run message injection channel
 	AgentStorePath   string               // agent-store database to load agents from ("" = agent-store's default)
 	LogstackURL      string               // where session logs are also sent ("" = nowhere else)
+	ToolConnections  toolstoretools.OutsideServiceConnections // where the browser, web search and scheduler tools reach their services
 
 	// Display
 	Display *DisplayHooks

@@ -4,8 +4,6 @@
 package tools
 
 import (
-	"os"
-
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 	toolstoretools "github.com/kayushkin/tool-store/tools"
@@ -41,10 +39,10 @@ func init() {
 	// ripgrep removed as dedicated tool — encourages grep-then-read two-turn
 	// pattern when reading the file directly is one turn. Still available via
 	// shell_commands ("rg ...") when truly needed for large-scale searches.
-	DefaultRegistry.Register(NewAgentToolAdapter(Browser()))
-	DefaultRegistry.Register(NewAgentToolAdapter(WebSearch()))
+	// Browser, WebSearch and Scheduler are not here: each reaches an outside
+	// service, and the registry is built before anyone can say where that is.
+	// ToolsThatReachOutsideServices builds them.
 	DefaultRegistry.Register(NewAgentToolAdapter(WebFetch()))
-	DefaultRegistry.Register(NewAgentToolAdapter(Scheduler()))
 }
 
 // File system tools
@@ -68,34 +66,37 @@ func RecentFiles(rootDir string) agent.Tool {
 	return wrap(toolstoretools.RecentFiles(rootDir))
 }
 
-// The tool-store tools package reads no environment variable: it is told where
-// PinchTab, Brave and the scheduler are. inber is a command-line program with
-// no settings registry, so it reads the variables those tools always read, here,
-// when the tool is built. An empty URL means tool-store's own default.
-
-// Browser returns a tool that controls a browser via PinchTab, found through
-// PINCHTAB_URL and PINCHTAB_TOKEN.
-func Browser() agent.Tool {
-	return wrap(toolstoretools.Browser(toolstoretools.PinchtabConnection{
-		BaseURL: os.Getenv("PINCHTAB_URL"),
-		Token:   os.Getenv("PINCHTAB_TOKEN"),
-	}))
+// Browser returns a tool that controls a browser through the PinchTab at
+// connection. An empty BaseURL means tool-store's default.
+func Browser(connection toolstoretools.PinchtabConnection) agent.Tool {
+	return wrap(toolstoretools.Browser(connection))
 }
 
-// WebSearch returns a tool that searches the web via Brave Search API with the
-// key in BRAVE_API_KEY.
-func WebSearch() agent.Tool { return wrap(toolstoretools.WebSearch(os.Getenv("BRAVE_API_KEY"))) }
+// WebSearch returns a tool that searches the web through the Brave Search API
+// with braveAPIKey.
+func WebSearch(braveAPIKey string) agent.Tool {
+	return wrap(toolstoretools.WebSearch(braveAPIKey))
+}
 
 // WebFetch returns a tool that fetches a URL and extracts readable text.
 func WebFetch() agent.Tool { return wrap(toolstoretools.WebFetch()) }
 
-// Scheduler returns a tool that interacts with the scheduler HTTP API, found
-// through SCHEDULER_URL and SCHEDULER_TOKEN.
-func Scheduler() agent.Tool {
-	return wrap(toolstoretools.Scheduler(toolstoretools.SchedulerConnection{
-		BaseURL: os.Getenv("SCHEDULER_URL"),
-		Token:   os.Getenv("SCHEDULER_TOKEN"),
-	}))
+// Scheduler returns a tool that uses the scheduler HTTP API at connection. An
+// empty BaseURL means tool-store's default.
+func Scheduler(connection toolstoretools.SchedulerConnection) agent.Tool {
+	return wrap(toolstoretools.Scheduler(connection))
+}
+
+// ToolsThatReachOutsideServices returns Browser, WebSearch and Scheduler, built
+// with connections. This package reads no environment variable for them: the
+// program that builds the engine owns that configuration (inber-server declares
+// it in its settings).
+func ToolsThatReachOutsideServices(connections toolstoretools.OutsideServiceConnections) []agent.Tool {
+	return []agent.Tool{
+		Browser(connections.Pinchtab),
+		WebSearch(connections.BraveAPIKey),
+		Scheduler(connections.Scheduler),
+	}
 }
 
 // All returns standard file system tools.

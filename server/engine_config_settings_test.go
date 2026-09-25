@@ -1,6 +1,10 @@
 package server
 
-import "testing"
+import (
+	"testing"
+
+	toolstoretools "github.com/kayushkin/tool-store/tools"
+)
 
 // The three settings the command reads for the engine reach every session's
 // engine configuration. Before 2026-09-24 the engine read them from the
@@ -13,5 +17,22 @@ func TestEverySessionsEngineGetsTheServersAgentStoreLogstackAndBlueprint(t *test
 
 	if cfg.AgentStorePath != "/tmp/agents.db" || cfg.LogstackURL != "http://localhost:8088" || !cfg.Blueprint {
 		t.Fatalf("engine got agent-store %q, logstack %q, blueprint %v", cfg.AgentStorePath, cfg.LogstackURL, cfg.Blueprint)
+	}
+}
+
+// The tool connections reach every session's engine too. Before 2026-09-25 the
+// tools package read them from the environment when the tool was built.
+func TestEverySessionsEngineGetsTheServersToolConnections(t *testing.T) {
+	connections := toolstoretools.OutsideServiceConnections{
+		Pinchtab:    toolstoretools.PinchtabConnection{BaseURL: "http://pinchtab:1", Token: "pinchtab-token"},
+		BraveAPIKey: "brave-key",
+		Scheduler:   toolstoretools.SchedulerConnection{BaseURL: "http://scheduler:2", Token: "scheduler-token"},
+	}
+	g := &Server{config: Config{ToolConnections: connections}}
+
+	cfg := g.engineConfigFor("bridge-test", "claxon", t.TempDir(), nil, AgentConfig{Name: "claxon"}, make(chan string))
+
+	if cfg.ToolConnections != connections {
+		t.Fatalf("engine got tool connections %+v, want %+v", cfg.ToolConnections, connections)
 	}
 }

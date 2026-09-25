@@ -7,6 +7,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/session"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 func TestToolScoping(t *testing.T) {
@@ -37,7 +38,7 @@ func TestToolScoping(t *testing.T) {
 		},
 		agents:   make(map[string]*agent.Agent),
 		sessions: make(map[string]*session.Session),
-		tools:    NewToolRegistry(),
+		tools:    NewToolRegistry(toolstoretools.OutsideServiceConnections{}),
 	}
 
 	// Test minimal agent only gets the tools it's configured for
@@ -107,7 +108,7 @@ func TestInvalidToolHandling(t *testing.T) {
 		},
 		agents:   make(map[string]*agent.Agent),
 		sessions: make(map[string]*session.Session),
-		tools:    NewToolRegistry(),
+		tools:    NewToolRegistry(toolstoretools.OutsideServiceConnections{}),
 	}
 
 	// Attempt to create agent should fail due to invalid tool
@@ -137,7 +138,7 @@ func TestEmptyToolsList(t *testing.T) {
 		},
 		agents:   make(map[string]*agent.Agent),
 		sessions: make(map[string]*session.Session),
-		tools:    NewToolRegistry(),
+		tools:    NewToolRegistry(toolstoretools.OutsideServiceConnections{}),
 	}
 
 	// Should be able to create agent with no tools

@@ -5,6 +5,7 @@ import (
 
 	"github.com/kayushkin/llm-bridge/msg"
 	"github.com/kayushkin/llm-bridge/servicesettings"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 // serviceName is inber-server's name in its own settings description.
@@ -27,6 +28,11 @@ const (
 	settingAgentStorePath = "agent_store_path"
 	settingLogstackURL    = "logstack_url"
 	settingBlueprint      = "blueprint"
+	settingPinchtabURL    = "pinchtab_url"
+	settingPinchtabToken  = "pinchtab_token"
+	settingBraveAPIKey    = "brave_api_key"
+	settingSchedulerURL   = "scheduler_url"
+	settingSchedulerToken = "scheduler_token"
 )
 
 // defaultAuthStoreURL is where auth-store is asked for the Anthropic
@@ -38,7 +44,7 @@ const defaultAuthStoreURL = "http://127.0.0.1:8303"
 const defaultNatsURL = "nats://localhost:4222"
 
 // settingDefinitions declares every environment variable cmd/inber-server
-// reads. The library packages it builds on still read eight more themselves;
+// reads. The library packages it builds on still read more themselves;
 // settings_test.go lists them, and each list names the todo that moves it here.
 //
 // Nothing is Editable: GET /settings is as open as every other route on :8200,
@@ -63,6 +69,16 @@ func settingDefinitions() []servicesettings.Definition {
 			Description: "logstack's base URL. Every session's log entries are also posted there. Empty sends them nowhere else."},
 		{Key: settingBlueprint, EnvironmentVariable: "INBER_BLUEPRINT", Kind: msg.ServiceSettingKindBehaviour, ValueType: msg.ServiceSettingValueTypeBoolean, Default: "false",
 			Description: "Log a prompt blueprint, and its diff from the last one, on every turn of every session. Takes true or false (1, t and their capitals too); any other value stops the server at start."},
+		{Key: settingPinchtabURL, EnvironmentVariable: "PINCHTAB_URL", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString,
+			Description: "PinchTab's base URL, which the browser tool drives. Empty means tool-store's default, " + toolstoretools.DefaultPinchtabURL + "."},
+		{Key: settingPinchtabToken, EnvironmentVariable: "PINCHTAB_TOKEN", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
+			Description: "The bearer the browser tool sends to PinchTab. Empty sends none."},
+		{Key: settingBraveAPIKey, EnvironmentVariable: "BRAVE_API_KEY", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
+			Description: "The Brave Search API key the web search tool sends. Empty makes every web search answer that the key is not set."},
+		{Key: settingSchedulerURL, EnvironmentVariable: "SCHEDULER_URL", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString,
+			Description: "The scheduler's base URL, which the scheduler tool calls. Empty means tool-store's default, " + toolstoretools.DefaultSchedulerURL + "."},
+		{Key: settingSchedulerToken, EnvironmentVariable: "SCHEDULER_TOKEN", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
+			Description: "The bearer the scheduler tool sends to the scheduler. Empty sends none."},
 	}
 }
 

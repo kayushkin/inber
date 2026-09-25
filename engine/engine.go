@@ -49,6 +49,7 @@ import (
 	"github.com/kayushkin/inber/tools"
 	"github.com/kayushkin/inber/trace"
 	modelstore "github.com/kayushkin/model-store"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 // ---------------------------------------------------------------------------
@@ -112,6 +113,7 @@ type Engine struct {
 	restoredTurnCounter int // turn count read back by initSession, installed by initLimitsAndProfiling
 	toolInputsCache     map[string]string
 	contextInjectors    []ContextInjector
+	toolConnections     toolstoretools.OutsideServiceConnections // where the browser, web search and scheduler tools reach their services
 	workflowHooks       *WorkflowHooks
 	forgeHook           *forge.Hook
 	forgeDB             *forge.Forge
@@ -158,6 +160,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 		modelExplicitlySet: cfg.ModelExplicitlySet,
 		toolInputsCache:    make(map[string]string),
 		contextInjectors:   cfg.ContextInjectors,
+		toolConnections:    cfg.ToolConnections,
 		noHooks:            cfg.NoHooks,
 		injections:         cfg.Injections,
 	}

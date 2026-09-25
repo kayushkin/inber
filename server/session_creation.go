@@ -118,6 +118,7 @@ func (g *Server) engineConfigFor(key, agentName, repoRoot string, workspaceRoots
 		ContextInjectors: g.contextInjectorsFor(key, agentName),
 		AgentStorePath:   g.config.AgentStorePath,
 		LogstackURL:      g.config.LogstackURL,
+		ToolConnections:  g.config.ToolConnections,
 		Blueprint:        g.config.Blueprint,
 	}
 }

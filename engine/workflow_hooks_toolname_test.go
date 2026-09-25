@@ -63,9 +63,9 @@ func TestWorkflowHookNamesMatchNoRealTool(t *testing.T) {
 		tools.RecentFiles("").Name,
 		// Built with where an outside service is, so tool-store's init cannot
 		// register them either.
-		tools.Browser().Name,
-		tools.WebSearch().Name,
-		tools.Scheduler().Name,
+		tools.Browser(toolstoretools.PinchtabConnection{}).Name,
+		tools.WebSearch("").Name,
+		tools.Scheduler(toolstoretools.SchedulerConnection{}).Name,
 		tools.TaskPlan("").Name,
 		tools.Scratchpad("", "").Name,
 		tools.Deploy().Name,

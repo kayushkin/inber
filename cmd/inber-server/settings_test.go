@@ -18,6 +18,7 @@ import (
 	"github.com/kayushkin/inber/server"
 	"github.com/kayushkin/llm-bridge/msg"
 	"github.com/kayushkin/llm-bridge/servicesettings"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 // repositoryRoot is where the source scan starts: this package is
@@ -41,14 +42,8 @@ var libraryReadsAwaitingConversion = map[string][]string{
 	"server/selftest.go": {"reads ANTHROPIC_API_KEY, which its declaration list does not declare"},
 	// The egress redactor's snapshot of every value: todo 5e-1.
 	"agent/redaction.go": {"reads the environment through os.Environ, which no declaration can be held to"},
-	// Tools: todo 5e-3.
-	"tools/tools.go": {
-		"reads PINCHTAB_URL, which its declaration list does not declare",
-		"reads PINCHTAB_TOKEN, which its declaration list does not declare",
-		"reads BRAVE_API_KEY, which its declaration list does not declare",
-		"reads SCHEDULER_URL, which its declaration list does not declare",
-		"reads SCHEDULER_TOKEN, which its declaration list does not declare",
-	},
+	// The deploy tool, which posts to retired forge: todo 5e-3 left it for the
+	// user to decide whether to delete the tool rather than configure it.
 	"tools/deploy.go": {
 		"reads BUS_AGENT_URL, which its declaration list does not declare",
 		"reads INBER_AGENT, which its declaration list does not declare",
@@ -137,6 +132,32 @@ func TestTheSettingsGiveTheServerTheSameValuesItAlwaysRead(t *testing.T) {
 	applySettings(&fromLibraryReads, withLibraryReads)
 	if fromLibraryReads.AgentStorePath != "/tmp/agents.db" || fromLibraryReads.LogstackURL != "http://localhost:8088" || !fromLibraryReads.Blueprint {
 		t.Errorf("set: agent-store %q, logstack %q, blueprint %v", fromLibraryReads.AgentStorePath, fromLibraryReads.LogstackURL, fromLibraryReads.Blueprint)
+	}
+
+	// The tool connections the tools package used to read itself. Unset, they
+	// are empty, which tool-store reads as its default URLs and no credential.
+	if bare.ToolConnections != (toolstoretools.OutsideServiceConnections{}) {
+		t.Errorf("nothing set: tool connections %+v", bare.ToolConnections)
+	}
+	withToolConnections, err := newSettingsRegistry(servicesettings.MapEnvironment(map[string]string{
+		"PINCHTAB_URL":    "http://pinchtab:1",
+		"PINCHTAB_TOKEN":  "pinchtab-token",
+		"BRAVE_API_KEY":   "brave-key",
+		"SCHEDULER_URL":   "http://scheduler:2",
+		"SCHEDULER_TOKEN": "scheduler-token",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromToolConnections server.Config
+	applySettings(&fromToolConnections, withToolConnections)
+	wantToolConnections := toolstoretools.OutsideServiceConnections{
+		Pinchtab:    toolstoretools.PinchtabConnection{BaseURL: "http://pinchtab:1", Token: "pinchtab-token"},
+		BraveAPIKey: "brave-key",
+		Scheduler:   toolstoretools.SchedulerConnection{BaseURL: "http://scheduler:2", Token: "scheduler-token"},
+	}
+	if fromToolConnections.ToolConnections != wantToolConnections {
+		t.Errorf("set: tool connections %+v, want %+v", fromToolConnections.ToolConnections, wantToolConnections)
 	}
 }
 

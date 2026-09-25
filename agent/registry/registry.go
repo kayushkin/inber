@@ -10,6 +10,7 @@ import (
 	"github.com/kayushkin/inber/memory"
 	"github.com/kayushkin/inber/session"
 	modelstore "github.com/kayushkin/model-store"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 // Registry manages multiple agents with isolated sessions and contexts
@@ -32,8 +33,9 @@ type Registry struct {
 
 // New creates a registry using agent-store as the source of truth, read from
 // agentStorePath (empty means agent-store's default). Each agent's session log
-// is also sent to logstackURL, unless it is empty.
-func New(client *anthropic.Client, logsDir, agentStorePath, logstackURL string) (*Registry, error) {
+// is also sent to logstackURL, unless it is empty. The browser and web search
+// tools reach their services through toolConnections.
+func New(client *anthropic.Client, logsDir, agentStorePath, logstackURL string, toolConnections toolstoretools.OutsideServiceConnections) (*Registry, error) {
 	cfg, err := LoadFromAgentStore(agentStorePath)
 	if err != nil {
 		return nil, fmt.Errorf("load from agent-store: %w", err)
@@ -47,7 +49,7 @@ func New(client *anthropic.Client, logsDir, agentStorePath, logstackURL string) 
 		configs:      cfg.Agents,
 		agents:       make(map[string]*agent.Agent),
 		sessions:     make(map[string]*session.Session),
-		tools:        NewToolRegistry(),
+		tools:        NewToolRegistry(toolConnections),
 	}
 
 	// Apply OpenClaw configuration if present

@@ -10,6 +10,7 @@ import (
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/memory"
 	"github.com/kayushkin/inber/session"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 // mockMemoryStore is a simple in-memory mock for testing
@@ -127,7 +128,7 @@ func createMockRegistry(t *testing.T) *Registry {
 		},
 		agents:   make(map[string]*agent.Agent),
 		sessions: make(map[string]*session.Session),
-		tools:    NewToolRegistry(),
+		tools:    NewToolRegistry(toolstoretools.OutsideServiceConnections{}),
 	}
 	
 	return r

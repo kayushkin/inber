@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kayushkin/inber/engine"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 // Config defines the server's runtime configuration.
@@ -59,6 +60,12 @@ type Config struct {
 	// LogstackURL is where every session's log is also sent. Empty sends it
 	// nowhere else. The command sets it from LOGSTACK_URL.
 	LogstackURL string `json:"-"`
+
+	// ToolConnections is where every session's browser, web search and
+	// scheduler tools reach PinchTab, Brave and the scheduler. The command sets
+	// it from PINCHTAB_URL, PINCHTAB_TOKEN, BRAVE_API_KEY, SCHEDULER_URL and
+	// SCHEDULER_TOKEN.
+	ToolConnections toolstoretools.OutsideServiceConnections `json:"-"`
 
 	// Blueprint turns on prompt blueprint diffs for every session. The command
 	// sets it from INBER_BLUEPRINT.

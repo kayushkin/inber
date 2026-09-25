@@ -6,10 +6,11 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/kayushkin/inber/agent"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 func TestToolRegistry(t *testing.T) {
-	tr := NewToolRegistry()
+	tr := NewToolRegistry(toolstoretools.OutsideServiceConnections{})
 
 	// Test List
 	names := tr.List()
@@ -39,7 +40,7 @@ func TestToolRegistry(t *testing.T) {
 // tool-store renamed read_file -> read_files and friends: the agent configs and
 // the tests kept asking for names no tool answered to, and nothing caught it.
 func TestRegistryKeyIsTheToolsOwnName(t *testing.T) {
-	tr := NewToolRegistry()
+	tr := NewToolRegistry(toolstoretools.OutsideServiceConnections{})
 
 	for _, name := range tr.List() {
 		tool, err := tr.Get(name)
@@ -54,7 +55,7 @@ func TestRegistryKeyIsTheToolsOwnName(t *testing.T) {
 }
 
 func TestToolRegistry_Register(t *testing.T) {
-	tr := NewToolRegistry()
+	tr := NewToolRegistry(toolstoretools.OutsideServiceConnections{})
 	
 	// Create a simple test tool (just using empty schema for simplicity)
 	testTool := agent.Tool{
@@ -93,7 +94,7 @@ func TestToolRegistry_Register(t *testing.T) {
 }
 
 func TestToolRegistry_RegisterMemoryTools(t *testing.T) {
-	tr := NewToolRegistry()
+	tr := NewToolRegistry(toolstoretools.OutsideServiceConnections{})
 	mockStore := newMockMemoryStore()
 
 	// Register memory tools
@@ -110,7 +111,7 @@ func TestToolRegistry_RegisterMemoryTools(t *testing.T) {
 }
 
 func TestToolRegistry_RegisterSpawnTool(t *testing.T) {
-	tr := NewToolRegistry()
+	tr := NewToolRegistry(toolstoretools.OutsideServiceConnections{})
 	
 	// Create a mock spawn tool (simplified schema)
 	spawnTool := agent.Tool{

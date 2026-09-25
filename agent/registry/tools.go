@@ -6,6 +6,7 @@ import (
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/memory"
 	"github.com/kayushkin/inber/tools"
+	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
 // ToolRegistry maps tool names to tool constructors
@@ -13,10 +14,11 @@ type ToolRegistry struct {
 	tools map[string]agent.Tool
 }
 
-// NewToolRegistry creates a registry with all built-in tools
+// NewToolRegistry creates a registry with all built-in tools. The browser and
+// web search tools reach PinchTab and Brave through connections.
 // Note: Memory tools require a memory.Store instance which is not available at
 // registry creation time. They must be registered separately when the store is available.
-func NewToolRegistry() *ToolRegistry {
+func NewToolRegistry(connections toolstoretools.OutsideServiceConnections) *ToolRegistry {
 	r := &ToolRegistry{
 		tools: make(map[string]agent.Tool),
 	}
@@ -27,8 +29,8 @@ func NewToolRegistry() *ToolRegistry {
 	r.Register(tools.WriteFiles())
 	r.Register(tools.EditFiles())
 	r.Register(tools.ListFiles())
-	r.Register(tools.Browser())
-	r.Register(tools.WebSearch())
+	r.Register(tools.Browser(connections.Pinchtab))
+	r.Register(tools.WebSearch(connections.BraveAPIKey))
 	r.Register(tools.WebFetch())
 
 	return r
