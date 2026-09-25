@@ -119,6 +119,7 @@ func (g *Server) engineConfigFor(key, agentName, repoRoot string, workspaceRoots
 		AgentStorePath:   g.config.AgentStorePath,
 		LogstackURL:      g.config.LogstackURL,
 		ToolConnections:  g.config.ToolConnections,
+		ProviderAPIKeys:  g.config.ProviderAPIKeys,
 		Blueprint:        g.config.Blueprint,
 	}
 }

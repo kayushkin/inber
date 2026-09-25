@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/server"
 	"github.com/kayushkin/llm-bridge/msg"
 	"github.com/kayushkin/llm-bridge/servicesettings"
@@ -37,17 +38,22 @@ const commandDirectory = "cmd/inber-server"
 // listed read that is gone fails the scan, so a conversion must delete its
 // entry, and a new read in a library package fails it too.
 var libraryReadsAwaitingConversion = map[string][]string{
-	// Provider API keys: todo 5e-1.
-	"agent/clients.go":   {"reads an environment variable whose name is computed, which no declaration can be held to"},
-	"server/selftest.go": {"reads ANTHROPIC_API_KEY, which its declaration list does not declare"},
-	// The egress redactor's snapshot of every value: todo 5e-1.
-	"agent/redaction.go": {"reads the environment through os.Environ, which no declaration can be held to"},
 	// The deploy tool, which posts to retired forge: todo 5e-3 left it for the
 	// user to decide whether to delete the tool rather than configure it.
 	"tools/deploy.go": {
 		"reads BUS_AGENT_URL, which its declaration list does not declare",
 		"reads INBER_AGENT, which its declaration list does not declare",
 	},
+}
+
+// environmentReadsThatStay are reads no declaration can hold, and that are
+// meant to stay. main hands the whole environment to the egress redactor,
+// whose job is every secret the process holds, including undeclared ones.
+// Todo 2083f07b-4f35-46c4-bf6e-e29191864c6e chose this over building the
+// redactor from the declared secrets, which would miss a secret set for
+// something other than inber-server.
+var environmentReadsThatStay = map[string][]string{
+	"cmd/inber-server/main.go": {"reads the environment through os.Environ, which no declaration can be held to"},
 }
 
 // The registry gives the server what its os.Getenv reads gave it before
@@ -159,6 +165,25 @@ func TestTheSettingsGiveTheServerTheSameValuesItAlwaysRead(t *testing.T) {
 	if fromToolConnections.ToolConnections != wantToolConnections {
 		t.Errorf("set: tool connections %+v, want %+v", fromToolConnections.ToolConnections, wantToolConnections)
 	}
+
+	// The provider keys agent.NewModelClient and the self-test used to read
+	// themselves. Unset, they are empty, which leaves sessions to aiauth.
+	if keys := providerAPIKeysFromSettings(nothing); keys != (agent.ProviderAPIKeys{}) {
+		t.Errorf("nothing set: provider keys %+v", keys)
+	}
+	withProviderKeys, err := newSettingsRegistry(servicesettings.MapEnvironment(map[string]string{
+		"ANTHROPIC_API_KEY":  "anthropic-key",
+		"OPENAI_API_KEY":     "openai-key",
+		"GOOGLE_API_KEY":     "google-key",
+		"OPENROUTER_API_KEY": "openrouter-key",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProviderKeys := agent.ProviderAPIKeys{Anthropic: "anthropic-key", OpenAI: "openai-key", Google: "google-key", OpenRouter: "openrouter-key"}
+	if keys := providerAPIKeysFromSettings(withProviderKeys); keys != wantProviderKeys {
+		t.Errorf("set: provider keys %+v, want %+v", keys, wantProviderKeys)
+	}
 }
 
 // INBER_BLUEPRINT used to be on for exactly "1" and "true" and silently off for
@@ -203,10 +228,11 @@ func TestVariablesMeantForOtherProgramsDoNotStopTheServer(t *testing.T) {
 func TestGetSettingsDescribesTheServerHidesSecretsAndNothingCanBeWritten(t *testing.T) {
 	const secret = "a-token-that-must-not-be-served"
 	registry, err := newSettingsRegistry(servicesettings.MapEnvironment(map[string]string{
-		"NATS_URL":         "nats://example:4222",
-		"AUTH_STORE_TOKEN": secret,
-		"BUS_TOKEN":        secret,
-		"OPENCLAW_TOKEN":   secret,
+		"NATS_URL":          "nats://example:4222",
+		"AUTH_STORE_TOKEN":  secret,
+		"BUS_TOKEN":         secret,
+		"OPENCLAW_TOKEN":    secret,
+		"ANTHROPIC_API_KEY": secret,
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +331,13 @@ func TestEveryEnvironmentVariableTheServiceReadsIsDeclared(t *testing.T) {
 	for file := range faultsByFile {
 		files[file] = true
 	}
-	for file := range libraryReadsAwaitingConversion {
+	expected := map[string][]string{}
+	for _, reads := range []map[string][]string{libraryReadsAwaitingConversion, environmentReadsThatStay} {
+		for file, faults := range reads {
+			expected[file] = append(expected[file], faults...)
+		}
+	}
+	for file := range expected {
 		files[file] = true
 	}
 	var sorted []string
@@ -315,14 +347,14 @@ func TestEveryEnvironmentVariableTheServiceReadsIsDeclared(t *testing.T) {
 	sort.Strings(sorted)
 	for _, file := range sorted {
 		found := append([]string(nil), faultsByFile[file]...)
-		listed := append([]string(nil), libraryReadsAwaitingConversion[file]...)
+		listed := append([]string(nil), expected[file]...)
 		sort.Strings(found)
 		sort.Strings(listed)
 		for _, fault := range difference(found, listed) {
 			t.Errorf("%s %s", file, fault)
 		}
 		for _, fault := range difference(listed, found) {
-			t.Errorf("%s is listed in libraryReadsAwaitingConversion as %q, and the scan no longer finds it: delete the entry", file, fault)
+			t.Errorf("%s is listed as reading %q, and the scan no longer finds it: delete the entry", file, fault)
 		}
 	}
 }

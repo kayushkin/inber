@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
 	"github.com/kayushkin/inber/logger"
 	"github.com/kayushkin/inber/server"
@@ -44,13 +45,20 @@ func run(addr, configFile, requireChecks, apiKeyApp string) error {
 		return fmt.Errorf("settings: %w", err)
 	}
 
+	providerAPIKeys := providerAPIKeysFromSettings(settings)
 	if apiKeyApp != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := resolveAnthropicFromAuthStore(ctx, apiKeyApp, settings.String(settingAuthStoreURL), settings.String(settingAuthStoreToken)); err != nil {
+		resolved, err := resolveAnthropicFromAuthStore(ctx, apiKeyApp, settings.String(settingAuthStoreURL), settings.String(settingAuthStoreToken))
+		if err != nil {
 			return fmt.Errorf("resolve anthropic credential: %w", err)
 		}
+		providerAPIKeys.Anthropic = resolved
 	}
+
+	// The one read of the whole environment: the egress redactor removes every
+	// secret the process holds from provider requests, declared or not.
+	agent.ArmEgressRedactor(os.Environ(), providerAPIKeys)
 
 	var cfg server.Config
 
@@ -78,6 +86,7 @@ func run(addr, configFile, requireChecks, apiKeyApp string) error {
 	}
 
 	applySettings(&cfg, settings)
+	cfg.ProviderAPIKeys = providerAPIKeys
 
 	g, err := server.New(cfg)
 	if err != nil {
@@ -147,6 +156,18 @@ func applySettings(cfg *server.Config, settings *servicesettings.Registry) {
 		Scheduler:   toolstoretools.SchedulerConnection{BaseURL: settings.String(settingSchedulerURL), Token: settings.String(settingSchedulerToken)},
 	}
 	cfg.SettingsHandler = settingsHandler(settings)
+}
+
+// providerAPIKeysFromSettings is the four provider keys as the environment set
+// them. main replaces the Anthropic one with auth-store's when
+// --api-key-from-auth-store is given.
+func providerAPIKeysFromSettings(settings *servicesettings.Registry) agent.ProviderAPIKeys {
+	return agent.ProviderAPIKeys{
+		Anthropic:  settings.String(settingAnthropicKey),
+		OpenAI:     settings.String(settingOpenAIKey),
+		Google:     settings.String(settingGoogleKey),
+		OpenRouter: settings.String(settingOpenRouterKey),
+	}
 }
 
 // buildConfigFromRegistry builds server config from the agent-store database

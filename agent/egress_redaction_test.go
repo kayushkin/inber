@@ -273,3 +273,34 @@ func TestTheStreamingPathRedactsAndStillStreams(t *testing.T) {
 		t.Fatalf("the key reached the provider on the streaming path: %s", received)
 	}
 }
+
+// A configured provider key is redacted even when it is nowhere in the
+// environment, which is where inber-server's auth-store credential lives: it
+// is resolved over HTTP and handed down, never set in the environment.
+func TestAConfiguredProviderKeyIsRedactedWithoutBeingInTheEnvironment(t *testing.T) {
+	const configuredKey = "Q7wE9rT2yU4iO6pA8sD0fG1h"
+	const environmentSecret = "Zx8Cv7Bn6Mm5Ll4Kk3Jj2Hh1"
+	redactor := newEgressRedactor([]string{"UNRELATED_SERVICE_TOKEN=" + environmentSecret}, ProviderAPIKeys{Anthropic: configuredKey})
+
+	redacted, findings := redactor.RedactString("key " + configuredKey + " and token " + environmentSecret)
+	if strings.Contains(redacted, configuredKey) {
+		t.Errorf("the configured Anthropic key survived: %s", redacted)
+	}
+	if strings.Contains(redacted, environmentSecret) {
+		t.Errorf("an undeclared secret from the environment survived: %s", redacted)
+	}
+	if !strings.Contains(redacted, "anthropic-credential") || len(findings) != 2 {
+		t.Errorf("redacted to %q with %d findings", redacted, len(findings))
+	}
+}
+
+// Arming twice would swap the secrets every client already sends through for
+// a second set, so it panics.
+func TestArmingTheEgressRedactorTwicePanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a second ArmEgressRedactor was accepted")
+		}
+	}()
+	ArmEgressRedactor(nil, ProviderAPIKeys{})
+}

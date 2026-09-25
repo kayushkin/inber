@@ -48,6 +48,7 @@ type EngineConfig struct {
 	AgentStorePath   string               // agent-store database to load agents from ("" = agent-store's default)
 	LogstackURL      string               // where session logs are also sent ("" = nowhere else)
 	ToolConnections  toolstoretools.OutsideServiceConnections // where the browser, web search and scheduler tools reach their services
+	ProviderAPIKeys  agent.ProviderAPIKeys // configured provider credentials, tried before aiauth's
 
 	// Display
 	Display *DisplayHooks

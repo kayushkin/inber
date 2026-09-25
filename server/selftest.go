@@ -75,7 +75,7 @@ func (g *Server) SelfTest() error {
 	}
 
 	// 4. Anthropic API key.
-	report(checkAnthropicKey, "ANTHROPIC_API_KEY set", os.Getenv("ANTHROPIC_API_KEY") != "", nil)
+	report(checkAnthropicKey, "Anthropic API key configured", g.config.ProviderAPIKeys.Anthropic != "", nil)
 
 	if failed > 0 {
 		return fmt.Errorf("selftest: %d critical check(s) failed", failed)

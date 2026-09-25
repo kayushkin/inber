@@ -33,6 +33,10 @@ const (
 	settingBraveAPIKey    = "brave_api_key"
 	settingSchedulerURL   = "scheduler_url"
 	settingSchedulerToken = "scheduler_token"
+	settingAnthropicKey   = "anthropic_api_key"
+	settingOpenAIKey      = "openai_api_key"
+	settingGoogleKey      = "google_api_key"
+	settingOpenRouterKey  = "openrouter_api_key"
 )
 
 // defaultAuthStoreURL is where auth-store is asked for the Anthropic
@@ -79,6 +83,14 @@ func settingDefinitions() []servicesettings.Definition {
 			Description: "The scheduler's base URL, which the scheduler tool calls. Empty means tool-store's default, " + toolstoretools.DefaultSchedulerURL + "."},
 		{Key: settingSchedulerToken, EnvironmentVariable: "SCHEDULER_TOKEN", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
 			Description: "The bearer the scheduler tool sends to the scheduler. Empty sends none."},
+		{Key: settingAnthropicKey, EnvironmentVariable: "ANTHROPIC_API_KEY", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
+			Description: "The Anthropic credential sessions and POST /api/oneshot send with. Ignored when --api-key-from-auth-store is given: auth-store's credential is used instead. Empty leaves sessions to aiauth's profiles and makes /api/oneshot answer 503."},
+		{Key: settingOpenAIKey, EnvironmentVariable: "OPENAI_API_KEY", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
+			Description: "The OpenAI credential sessions send with. Empty leaves them to aiauth's profiles."},
+		{Key: settingGoogleKey, EnvironmentVariable: "GOOGLE_API_KEY", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
+			Description: "The Google credential sessions send with. Empty leaves them to aiauth's profiles."},
+		{Key: settingOpenRouterKey, EnvironmentVariable: "OPENROUTER_API_KEY", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
+			Description: "The OpenRouter credential sessions send with. Empty leaves them to aiauth's profiles."},
 	}
 }
 

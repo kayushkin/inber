@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -14,27 +13,26 @@ import (
 )
 
 // resolveAnthropicFromAuthStore fetches the Anthropic credential routed to
-// the given app from the auth-store at baseURL and sets ANTHROPIC_API_KEY in
-// the process environment. It must be called before any code reads the env
-// var. baseURL and token are the auth_store_url and auth_store_token settings;
-// the token is required.
+// the given app from the auth-store at baseURL and returns it. baseURL and
+// token are the auth_store_url and auth_store_token settings; the token is
+// required.
 //
 // Fails loud on any error — never falls back to ambient ANTHROPIC_API_KEY
 // (CLAUDE.md "single source of truth").
-func resolveAnthropicFromAuthStore(ctx context.Context, app, baseURL, token string) error {
+func resolveAnthropicFromAuthStore(ctx context.Context, app, baseURL, token string) (string, error) {
 	if app == "" {
-		return fmt.Errorf("auth-store app name is empty")
+		return "", fmt.Errorf("auth-store app name is empty")
 	}
 
 	base := strings.TrimRight(baseURL, "/")
 	if token == "" {
-		return fmt.Errorf("AUTH_STORE_TOKEN env var is required when --api-key-from-auth-store is set")
+		return "", fmt.Errorf("AUTH_STORE_TOKEN env var is required when --api-key-from-auth-store is set")
 	}
 
 	u := base + "/api/resolve/anthropic"
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
-		return fmt.Errorf("build resolve request: %w", err)
+		return "", fmt.Errorf("build resolve request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Auth-App", app)
@@ -43,13 +41,13 @@ func resolveAnthropicFromAuthStore(ctx context.Context, app, baseURL, token stri
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("auth-store resolve: %w", err)
+		return "", fmt.Errorf("auth-store resolve: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("auth-store resolve: %s — %s", resp.Status, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf("auth-store resolve: %s — %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
 	var r struct {
@@ -58,7 +56,7 @@ func resolveAnthropicFromAuthStore(ctx context.Context, app, baseURL, token stri
 		AccessToken string `json:"access_token"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
-		return fmt.Errorf("decode resolve response: %w", err)
+		return "", fmt.Errorf("decode resolve response: %w", err)
 	}
 
 	var secret string
@@ -68,15 +66,12 @@ func resolveAnthropicFromAuthStore(ctx context.Context, app, baseURL, token stri
 	case r.AccessToken != "":
 		secret = r.AccessToken
 	default:
-		return fmt.Errorf("auth-store: anthropic credential has no api_key or access_token (auth_type=%q)", r.AuthType)
+		return "", fmt.Errorf("auth-store: anthropic credential has no api_key or access_token (auth_type=%q)", r.AuthType)
 	}
 
-	if err := os.Setenv("ANTHROPIC_API_KEY", secret); err != nil {
-		return fmt.Errorf("set ANTHROPIC_API_KEY: %w", err)
-	}
 	logger.WithComponent("auth-store").Info("resolved anthropic credential", map[string]interface{}{
 		"app":       app,
 		"auth_type": r.AuthType,
 	})
-	return nil
+	return secret, nil
 }

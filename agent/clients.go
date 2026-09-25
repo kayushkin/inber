@@ -3,7 +3,6 @@ package agent
 import (
 	"fmt"
 	"log"
-	"os"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -21,9 +20,44 @@ type ModelClient struct {
 	IsOAuth         bool // true when using Claude Max OAuth token (needs Claude Code system prompt)
 }
 
-// NewModelClient creates a client for any provider using model-store for metadata
-// and aiauth for credentials. Either store can be nil for fallback behavior.
-func NewModelClient(modelIDOrAlias string, ms *modelstore.Store, auth *aiauth.Store) (*ModelClient, error) {
+// ProviderAPIKeys are the provider credentials the caller was configured with.
+// inber-server sets them from ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY
+// and OPENROUTER_API_KEY, and sets Anthropic from auth-store instead when it is
+// started with --api-key-from-auth-store. An empty field means none.
+type ProviderAPIKeys struct {
+	Anthropic  string
+	OpenAI     string
+	Google     string
+	OpenRouter string
+}
+
+// ForProvider returns the configured key for provider, or "" for a provider
+// with no field here.
+func (keys ProviderAPIKeys) ForProvider(provider string) string {
+	switch provider {
+	case "anthropic":
+		return keys.Anthropic
+	case "openai":
+		return keys.OpenAI
+	case "google":
+		return keys.Google
+	case "openrouter":
+		return keys.OpenRouter
+	default:
+		return ""
+	}
+}
+
+// NewModelClient creates a client for any provider using model-store for
+// metadata. The credential is the configured key in keys when there is one,
+// and otherwise what aiauth resolves. Either store can be nil.
+//
+// The configured key comes first because it is what aiauth used to find first:
+// aiauth reads ANTHROPIC_API_KEY, OPENAI_API_KEY and GOOGLE_API_KEY before its
+// profiles on disk, and inber-server used to put the auth-store credential in
+// ANTHROPIC_API_KEY for it to find. Asking aiauth first would hand the server
+// whichever old profile is on disk instead.
+func NewModelClient(modelIDOrAlias string, ms *modelstore.Store, auth *aiauth.Store, keys ProviderAPIKeys) (*ModelClient, error) {
 	// Resolve model metadata
 	var model *modelstore.Model
 	if ms != nil {
@@ -42,18 +76,12 @@ func NewModelClient(modelIDOrAlias string, ms *modelstore.Store, auth *aiauth.St
 		}
 	}
 
-	// Resolve credentials via aiauth
-	var apiKey string
-	if auth != nil {
+	apiKey := keys.ForProvider(model.Provider)
+	if apiKey == "" && auth != nil {
 		key, err := auth.ResolveKey(model.Provider)
 		if err == nil {
 			apiKey = key
 		}
-	}
-
-	// Fallback to env var if aiauth didn't resolve
-	if apiKey == "" {
-		apiKey = envKeyForProvider(model.Provider)
 	}
 
 	if apiKey == "" {
@@ -145,20 +173,6 @@ func guessProvider(modelID string) string {
 	default:
 		return "anthropic"
 	}
-}
-
-// envKeyForProvider returns the API key from the canonical env var for a provider.
-func envKeyForProvider(provider string) string {
-	envVars := map[string]string{
-		"anthropic":  "ANTHROPIC_API_KEY",
-		"openai":     "OPENAI_API_KEY",
-		"google":     "GOOGLE_API_KEY",
-		"openrouter": "OPENROUTER_API_KEY",
-	}
-	if name, ok := envVars[provider]; ok {
-		return os.Getenv(name)
-	}
-	return ""
 }
 
 // defaultBaseURL returns the default API base URL for known providers.

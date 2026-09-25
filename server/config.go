@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/engine"
 	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
@@ -66,6 +67,12 @@ type Config struct {
 	// it from PINCHTAB_URL, PINCHTAB_TOKEN, BRAVE_API_KEY, SCHEDULER_URL and
 	// SCHEDULER_TOKEN.
 	ToolConnections toolstoretools.OutsideServiceConnections `json:"-"`
+
+	// ProviderAPIKeys are the provider credentials every session tries before
+	// aiauth's, and the Anthropic one is what POST /api/oneshot sends with. The
+	// command sets them from ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY
+	// and OPENROUTER_API_KEY, or the Anthropic one from auth-store.
+	ProviderAPIKeys agent.ProviderAPIKeys `json:"-"`
 
 	// Blueprint turns on prompt blueprint diffs for every session. The command
 	// sets it from INBER_BLUEPRINT.

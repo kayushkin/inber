@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/logger"
 )
@@ -57,7 +58,8 @@ type OneShotUsage struct {
 // POST /api/oneshot
 //
 // Stateless single-turn LLM call. Bypasses sessions, queue, memory, and the
-// inber agent loop entirely. Uses ANTHROPIC_API_KEY from the process env.
+// inber agent loop entirely. Sends with the configured Anthropic key, and
+// answers 503 when there is none.
 func (g *Server) handleOneShot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -80,11 +82,17 @@ func (g *Server) handleOneShot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	apiKey := g.config.ProviderAPIKeys.Anthropic
+	if apiKey == "" {
+		jsonError(w, "inber-server has no Anthropic API key configured", http.StatusServiceUnavailable)
+		return
+	}
+
 	// This handler builds its own client instead of taking one from the
 	// engine, so it has to install the egress gate itself. It is the one
 	// anthropic.NewClient call outside agent.newAnthropicClient, and the one
 	// that would silently post an unredacted prompt if this were dropped.
-	client := anthropic.NewClient(agent.EgressRedactionRequestOption())
+	client := anthropic.NewClient(agent.EgressRedactionRequestOption(), option.WithAPIKey(apiKey))
 
 	start := time.Now()
 	resp, err := client.Messages.New(r.Context(), params)

@@ -57,6 +57,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 		toolInputsCache:    make(map[string]string),
 		contextInjectors:   cfg.ContextInjectors,
 		toolConnections:    cfg.ToolConnections,
+		providerAPIKeys:    cfg.ProviderAPIKeys,
 		noHooks:            cfg.NoHooks,
 		injections:         cfg.Injections,
 	}
@@ -117,7 +118,7 @@ func NewEngineBenchmark(ctx context.Context, cfg EngineConfig) (*Engine, Benchma
 
 	// Phase 6: Create model client
 	phaseStart = time.Now()
-	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore, e.authStore)
+	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore, e.authStore, e.providerAPIKeys)
 	if err != nil {
 		return nil, timing, err
 	}
