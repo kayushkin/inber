@@ -36,3 +36,15 @@ func TestEverySessionsEngineGetsTheServersToolConnections(t *testing.T) {
 		t.Fatalf("engine got tool connections %+v, want %+v", cfg.ToolConnections, connections)
 	}
 }
+
+// The inber server URL reaches every session's engine, which hands it to the
+// spawn tool. Before 2026-09-25 the spawn tool read INBER_SERVER_URL itself.
+func TestEverySessionsEngineGetsTheServersInberServerURL(t *testing.T) {
+	g := &Server{config: Config{InberServerURL: "http://inber:8200"}}
+
+	cfg := g.engineConfigFor("bridge-test", "claxon", t.TempDir(), nil, AgentConfig{Name: "claxon"}, make(chan string))
+
+	if cfg.InberServerURL != "http://inber:8200" {
+		t.Fatalf("engine got inber server URL %q", cfg.InberServerURL)
+	}
+}

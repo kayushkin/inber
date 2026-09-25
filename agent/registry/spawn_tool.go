@@ -25,19 +25,6 @@ type RegistryAgent struct {
 	Enabled      bool   `json:"enabled"`
 }
 
-// registryBaseURL is the inber server this tool reads its agent list from.
-//
-// INBER_SERVER_URL is the name the rest of the fleet already uses for this
-// (kayushkin.com/main.go resolves the same route through the same variable and
-// the same default), so this joins the existing name rather than minting a
-// second one for one endpoint.
-func registryBaseURL() string {
-	if v := os.Getenv("INBER_SERVER_URL"); v != "" {
-		return strings.TrimRight(v, "/")
-	}
-	return "http://127.0.0.1:8200"
-}
-
 // fetchRegistryAgents reads the registered agents from inber's own
 // GET /api/agents and returns nil when it cannot get an answer.
 //
@@ -54,8 +41,16 @@ func registryBaseURL() string {
 // longer SILENT: each way of failing now says so, because a 200 carrying a body
 // this cannot read is a fault and used to be indistinguishable from a refused
 // connection.
-func fetchRegistryAgents() []RegistryAgent {
-	url := registryBaseURL() + "/api/agents"
+//
+// inberServerURL comes from inber-server's INBER_SERVER_URL setting. A trailing
+// slash is dropped so the path is not doubled; an empty URL names no registry.
+func fetchRegistryAgents(inberServerURL string) []RegistryAgent {
+	base := strings.TrimRight(inberServerURL, "/")
+	if base == "" {
+		log.Printf("[spawn_tool] no inber server URL is configured to read the agent registry from — agent-name validation is OFF")
+		return nil
+	}
+	url := base + "/api/agents"
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -86,14 +81,14 @@ func fetchRegistryAgents() []RegistryAgent {
 //
 // It calls inber's own GET /api/agents unless a caller supplied its own lister. That
 // injection point is the only seam the spawn tool has: fetchRegistryAgents is a
-// hardcoded GET, so a test without it reaches the tool's body only because the
+// live GET, so a test without it reaches the tool's body only because the
 // endpoint happens to answer with something that fails to unmarshal today, and
 // would stop reaching it the day the endpoint answers JSON.
 func (r *Registry) registeredAgents() []RegistryAgent {
 	if r.listRegisteredAgents != nil {
 		return r.listRegisteredAgents()
 	}
-	return fetchRegistryAgents()
+	return fetchRegistryAgents(r.inberServerURL)
 }
 
 // enabledAgentNames lists the agents a spawn request may actually name.

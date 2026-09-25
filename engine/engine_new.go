@@ -299,12 +299,12 @@ func createModelClient(model string, store *modelstore.Store, auth *aiauth.Store
 //
 // extraTools is the caller's injected set. It is a gate input and not just a
 // merge input: see needsAgentRegistry.
-func setupAgentRegistry(agentConfig *registry.AgentConfig, extraTools []agent.Tool, client *anthropic.Client, repoRoot string, modelClient *agent.ModelClient, modelStore *modelstore.Store, memStore memory.MemoryStore, agentStorePath, logstackURL string, toolConnections toolstoretools.OutsideServiceConnections) (*registry.Registry, error) {
+func setupAgentRegistry(agentConfig *registry.AgentConfig, extraTools []agent.Tool, client *anthropic.Client, repoRoot string, modelClient *agent.ModelClient, modelStore *modelstore.Store, memStore memory.MemoryStore, agentStorePath, logstackURL, inberServerURL string, toolConnections toolstoretools.OutsideServiceConnections) (*registry.Registry, error) {
 	if !needsAgentRegistry(agentConfig, extraTools) {
 		return nil, nil
 	}
 
-	reg, err := registry.New(client, filepath.Join(repoRoot, "logs"), agentStorePath, logstackURL, toolConnections)
+	reg, err := registry.New(client, filepath.Join(repoRoot, "logs"), agentStorePath, logstackURL, inberServerURL, toolConnections)
 	if err != nil {
 		Log.Warn("failed to create agent registry: %v", err)
 		return nil, err
@@ -617,7 +617,7 @@ func (e *Engine) initWorkflow(cfg EngineConfig) {
 		e.forgeHook = forgeHook
 	}
 
-	agentRegistry, err := setupAgentRegistry(e.AgentConfig, cfg.ExtraTools, e.Client, e.repoRoot, e.modelClient, e.modelStore, e.MemStore, cfg.AgentStorePath, cfg.LogstackURL, cfg.ToolConnections)
+	agentRegistry, err := setupAgentRegistry(e.AgentConfig, cfg.ExtraTools, e.Client, e.repoRoot, e.modelClient, e.modelStore, e.MemStore, cfg.AgentStorePath, cfg.LogstackURL, cfg.InberServerURL, cfg.ToolConnections)
 	if err == nil {
 		e.agentRegistry = agentRegistry
 	}

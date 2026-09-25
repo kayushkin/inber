@@ -179,6 +179,7 @@ func (g *Server) engineConfigFor(key, agentName, repoRoot string, workspaceRoots
 		ContextInjectors: g.contextInjectorsFor(key, agentName),
 		AgentStorePath:   g.config.AgentStorePath,
 		LogstackURL:      g.config.LogstackURL,
+		InberServerURL:   g.config.InberServerURL,
 		ToolConnections:  g.config.ToolConnections,
 		ProviderAPIKeys:  g.config.ProviderAPIKeys,
 		Blueprint:        g.config.Blueprint,

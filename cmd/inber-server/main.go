@@ -149,6 +149,7 @@ func applySettings(cfg *server.Config, settings *servicesettings.Registry) {
 	}
 	cfg.AgentStorePath = settings.String(settingAgentStorePath)
 	cfg.LogstackURL = settings.String(settingLogstackURL)
+	cfg.InberServerURL = settings.String(settingInberServerURL)
 	cfg.Blueprint = settings.Boolean(settingBlueprint)
 	cfg.ToolConnections = toolstoretools.OutsideServiceConnections{
 		Pinchtab:    toolstoretools.PinchtabConnection{BaseURL: settings.String(settingPinchtabURL), Token: settings.String(settingPinchtabToken)},

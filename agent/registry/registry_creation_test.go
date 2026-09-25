@@ -22,7 +22,7 @@ func TestRegistry_Creation(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// This will fail because agent-store is not set up, so we test the error handling
-	_, err = New(client, tmpDir, "", "", toolstoretools.OutsideServiceConnections{})
+	_, err = New(client, tmpDir, "", "", "", toolstoretools.OutsideServiceConnections{})
 	if err != nil {
 		// Expected - agent store isn't available in test environment
 		t.Logf("Expected error when agent-store is not available: %v", err)
@@ -38,7 +38,7 @@ func TestRegistry_NewOpensTheAgentStorePathItIsGiven(t *testing.T) {
 	directory := t.TempDir()
 	agentStorePath := filepath.Join(directory, "agents.db")
 
-	_, err := New(&anthropic.Client{}, directory, agentStorePath, "", toolstoretools.OutsideServiceConnections{})
+	_, err := New(&anthropic.Client{}, directory, agentStorePath, "", "", toolstoretools.OutsideServiceConnections{})
 	if err == nil || !strings.Contains(err.Error(), "no agents registered") {
 		t.Fatalf("New on an empty agent-store = %v, want the no-agents error", err)
 	}

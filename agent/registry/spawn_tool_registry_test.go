@@ -71,10 +71,9 @@ func captureLog(t *testing.T, fn func()) string {
 func TestFetchRegistryAgentsReadsInbersOwnAgentsRoute(t *testing.T) {
 	srv, _ := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
 	defer srv.Close()
-	t.Setenv("INBER_SERVER_URL", srv.URL)
 
 	out := captureLog(t, func() {
-		agents := fetchRegistryAgents()
+		agents := fetchRegistryAgents(srv.URL)
 		if len(agents) != 3 {
 			t.Fatalf("got %d agents, want 3 — the double routes only /api/agents, so a wrong path reads as an empty registry", len(agents))
 		}
@@ -95,19 +94,28 @@ func TestFetchRegistryAgentsReadsInbersOwnAgentsRoute(t *testing.T) {
 }
 
 // A trailing slash on INBER_SERVER_URL does not produce a doubled slash.
-func TestRegistryBaseURLTrimsATrailingSlash(t *testing.T) {
-	t.Setenv("INBER_SERVER_URL", "http://example.invalid:8200/")
-	if got := registryBaseURL(); got != "http://example.invalid:8200" {
-		t.Fatalf("registryBaseURL() = %q, want the base with no trailing slash", got)
+func TestATrailingSlashOnTheServerURLStillAsksTheAgentsRoute(t *testing.T) {
+	srv, asked := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
+	defer srv.Close()
+
+	if got := fetchRegistryAgents(srv.URL + "/"); len(got) != 3 {
+		t.Fatalf("got %d agents, want 3", len(got))
+	}
+	if len(*asked) != 1 || (*asked)[0] != "GET /api/agents" {
+		t.Fatalf("the tool asked %v, want one GET /api/agents", *asked)
 	}
 }
 
-// With nothing in the environment the default is inber's own listen address,
-// which cmd/inber-server and server/config.go both put at :8200.
-func TestRegistryBaseURLDefaultsToTheInberServer(t *testing.T) {
-	t.Setenv("INBER_SERVER_URL", "")
-	if got := registryBaseURL(); got != "http://127.0.0.1:8200" {
-		t.Fatalf("registryBaseURL() = %q, want inber's own default listen address", got)
+// With no URL there is no registry to ask, and the check is off. It says so
+// rather than reading the silence as an empty registry.
+func TestNoServerURLLeavesTheCheckOffAndSaysSo(t *testing.T) {
+	var agents []RegistryAgent
+	out := captureLog(t, func() { agents = fetchRegistryAgents("") })
+	if agents != nil {
+		t.Fatalf("got agents %+v from no URL", agents)
+	}
+	if !strings.Contains(out, "validation is OFF") {
+		t.Errorf("no URL and nothing said; log was:\n%s", out)
 	}
 }
 
@@ -121,10 +129,9 @@ func TestRegistryBaseURLDefaultsToTheInberServer(t *testing.T) {
 func TestAnUnreadableBodyIsReportedRatherThanReadAsAnEmptyRegistry(t *testing.T) {
 	srv, _ := routingRegistry(t, http.StatusOK, "text/html; charset=utf-8", "<!doctype html>\n<html></html>")
 	defer srv.Close()
-	t.Setenv("INBER_SERVER_URL", srv.URL)
 
 	var agents []RegistryAgent
-	out := captureLog(t, func() { agents = fetchRegistryAgents() })
+	out := captureLog(t, func() { agents = fetchRegistryAgents(srv.URL) })
 
 	if agents != nil {
 		t.Fatalf("got %d agents from an HTML body, want nil", len(agents))
@@ -145,10 +152,9 @@ func TestAnUnreadableBodyIsReportedRatherThanReadAsAnEmptyRegistry(t *testing.T)
 func TestANon200StatusReachesTheWarning(t *testing.T) {
 	srv, _ := routingRegistry(t, http.StatusServiceUnavailable, "application/json", `{"error":"down"}`)
 	defer srv.Close()
-	t.Setenv("INBER_SERVER_URL", srv.URL)
 
 	var agents []RegistryAgent
-	out := captureLog(t, func() { agents = fetchRegistryAgents() })
+	out := captureLog(t, func() { agents = fetchRegistryAgents(srv.URL) })
 
 	if agents != nil {
 		t.Fatalf("got %d agents from a 503, want nil", len(agents))
@@ -164,10 +170,9 @@ func TestANon200StatusReachesTheWarning(t *testing.T) {
 func TestAnUnreachableRegistryIsReportedAndLeavesTheCheckOpen(t *testing.T) {
 	srv, _ := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
 	srv.Close() // nothing is listening on that port now
-	t.Setenv("INBER_SERVER_URL", srv.URL)
 
 	var agents []RegistryAgent
-	out := captureLog(t, func() { agents = fetchRegistryAgents() })
+	out := captureLog(t, func() { agents = fetchRegistryAgents(srv.URL) })
 
 	if agents != nil {
 		t.Fatalf("got %d agents from an unreachable registry, want nil", len(agents))
@@ -205,9 +210,8 @@ func TestAgentStoreRowsDecodeIntoBlanksRatherThanFailing(t *testing.T) {
 func TestValidAgentsDescriptionNamesTheAgents(t *testing.T) {
 	srv, _ := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
 	defer srv.Close()
-	t.Setenv("INBER_SERVER_URL", srv.URL)
 
-	got := (&Registry{}).validAgentsDescription()
+	got := (&Registry{inberServerURL: srv.URL}).validAgentsDescription()
 	for _, name := range []string{"dagda", "goibniu", "oisin"} {
 		if !strings.Contains(got, name) {
 			t.Errorf("description %q does not name %q", got, name)
@@ -219,9 +223,8 @@ func TestValidAgentsDescriptionNamesTheAgents(t *testing.T) {
 func TestValidOrchestratorsAreDeduplicated(t *testing.T) {
 	srv, _ := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
 	defer srv.Close()
-	t.Setenv("INBER_SERVER_URL", srv.URL)
 
-	got := (&Registry{}).validOrchestrators()
+	got := (&Registry{inberServerURL: srv.URL}).validOrchestrators()
 	if len(got) != 2 {
 		t.Fatalf("got %v, want the two distinct orchestrators in the fixture", got)
 	}
@@ -233,9 +236,8 @@ func TestValidOrchestratorsAreDeduplicated(t *testing.T) {
 func TestTheRequestTargetIsInbersAgentsRoute(t *testing.T) {
 	srv, asked := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)
 	defer srv.Close()
-	t.Setenv("INBER_SERVER_URL", srv.URL)
 
-	if got := fetchRegistryAgents(); len(got) != 3 {
+	if got := fetchRegistryAgents(srv.URL); len(got) != 3 {
 		t.Fatalf("got %d agents, want 3", len(got))
 	}
 	if len(*asked) != 1 {

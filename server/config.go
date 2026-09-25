@@ -62,6 +62,10 @@ type Config struct {
 	// nowhere else. The command sets it from LOGSTACK_URL.
 	LogstackURL string `json:"-"`
 
+	// InberServerURL is the inber server whose GET /api/agents the spawn tool
+	// reads its agent list from. The command sets it from INBER_SERVER_URL.
+	InberServerURL string `json:"-"`
+
 	// ToolConnections is where every session's browser, web search and
 	// scheduler tools reach PinchTab, Brave and the scheduler. The command sets
 	// it from PINCHTAB_URL, PINCHTAB_TOKEN, BRAVE_API_KEY, SCHEDULER_URL and

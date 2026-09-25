@@ -27,6 +27,7 @@ const (
 	settingOpenClawToken  = "openclaw_token"
 	settingAgentStorePath = "agent_store_path"
 	settingLogstackURL    = "logstack_url"
+	settingInberServerURL = "inber_server_url"
 	settingBlueprint      = "blueprint"
 	settingPinchtabURL    = "pinchtab_url"
 	settingPinchtabToken  = "pinchtab_token"
@@ -42,6 +43,11 @@ const (
 // defaultAuthStoreURL is where auth-store is asked for the Anthropic
 // credential when AUTH_STORE_URL is unset.
 const defaultAuthStoreURL = "http://127.0.0.1:8303"
+
+// defaultInberServerURL is where the spawn tool reads the agent list it checks
+// names against when INBER_SERVER_URL is unset: this server's own
+// GET /api/agents on its default address.
+const defaultInberServerURL = "http://127.0.0.1:8200"
 
 // defaultNatsURL is the bus the server joins when neither NATS_URL nor the
 // config file's nats_url names one.
@@ -71,6 +77,8 @@ func settingDefinitions() []servicesettings.Definition {
 			Description: "The agent-store database agents are loaded from, and the one status queries read. Empty means agent-store's default, ~/.config/agent-store/agents.db."},
 		{Key: settingLogstackURL, EnvironmentVariable: "LOGSTACK_URL", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString,
 			Description: "logstack's base URL. Every session's log entries are also posted there. Empty sends them nowhere else."},
+		{Key: settingInberServerURL, EnvironmentVariable: "INBER_SERVER_URL", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString, Default: defaultInberServerURL,
+			Description: "The inber server whose GET /api/agents the spawn tool reads, to list the agents it may spawn and refuse other names. When that read fails, names are not checked."},
 		{Key: settingBlueprint, EnvironmentVariable: "INBER_BLUEPRINT", Kind: msg.ServiceSettingKindBehaviour, ValueType: msg.ServiceSettingValueTypeBoolean, Default: "false",
 			Description: "Log a prompt blueprint, and its diff from the last one, on every turn of every session. Takes true or false (1, t and their capitals too); any other value stops the server at start."},
 		{Key: settingPinchtabURL, EnvironmentVariable: "PINCHTAB_URL", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString,

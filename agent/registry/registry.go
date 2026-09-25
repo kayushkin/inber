@@ -21,6 +21,7 @@ type Registry struct {
 	modelStore    *modelstore.Store  // model store for creating per-agent clients
 	logsDir       string
 	logstackURL   string // where each agent's session log is also sent; empty sends it nowhere else
+	inberServerURL string // the inber server whose GET /api/agents lists the agents a spawn may name
 	default_      string
 	configs       map[string]*AgentConfig
 	agents        map[string]*agent.Agent
@@ -41,9 +42,10 @@ type Registry struct {
 
 // New creates a registry using agent-store as the source of truth, read from
 // agentStorePath (empty means agent-store's default). Each agent's session log
-// is also sent to logstackURL, unless it is empty. The browser and web search
+// is also sent to logstackURL, unless it is empty. The spawn tool reads the
+// agents it may name from inberServerURL's GET /api/agents. The browser and web search
 // tools reach their services through toolConnections.
-func New(client *anthropic.Client, logsDir, agentStorePath, logstackURL string, toolConnections toolstoretools.OutsideServiceConnections) (*Registry, error) {
+func New(client *anthropic.Client, logsDir, agentStorePath, logstackURL, inberServerURL string, toolConnections toolstoretools.OutsideServiceConnections) (*Registry, error) {
 	cfg, err := LoadFromAgentStore(agentStorePath)
 	if err != nil {
 		return nil, fmt.Errorf("load from agent-store: %w", err)
@@ -53,6 +55,7 @@ func New(client *anthropic.Client, logsDir, agentStorePath, logstackURL string, 
 		client:       client,
 		logsDir:      logsDir,
 		logstackURL:  logstackURL,
+		inberServerURL: inberServerURL,
 		default_:     cfg.Default,
 		configs:      cfg.Agents,
 		agents:       make(map[string]*agent.Agent),
