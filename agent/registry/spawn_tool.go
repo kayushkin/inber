@@ -96,15 +96,37 @@ func (r *Registry) registeredAgents() []RegistryAgent {
 	return fetchRegistryAgents()
 }
 
+// enabledAgentNames lists the agents a spawn request may actually name.
+//
+// Enabled-only, because that is precisely what the validator at the call site accepts.
+// Both the tool's schema description and its rejection message are built from this one
+// function so they cannot disagree — and they did, in opposite directions:
+//
+//   - The schema advertised EVERY agent, disabled ones included, so the model was told
+//     a name was valid and then rejected for using it.
+//   - The rejection message sized its slice to all agents and filled only the enabled
+//     indices, leaving a zero value in every disabled agent's slot, so it rendered as
+//     "Valid options: alpha, , gamma" — the empty slots being disabled agents.
+//
+// Appending only the names that survive the filter is what fixes both.
+func enabledAgentNames(agents []RegistryAgent) []string {
+	var names []string
+	for _, a := range agents {
+		if a.Enabled {
+			names = append(names, a.Name)
+		}
+	}
+	return names
+}
+
 // validAgentsDescription returns a description string with the list of valid agents.
 func (r *Registry) validAgentsDescription() string {
-	agents := r.registeredAgents()
-	if len(agents) == 0 {
+	names := enabledAgentNames(r.registeredAgents())
+	// Reached both when the registry did not answer and when it answered with agents
+	// of which none are enabled. Neither case has a name to offer, so neither may
+	// print an empty list.
+	if len(names) == 0 {
 		return "Agent name to spawn. Must match a registered agent."
-	}
-	names := make([]string, len(agents))
-	for i, a := range agents {
-		names[i] = a.Name
 	}
 	return fmt.Sprintf("Agent name to spawn. Valid options: %s", strings.Join(names, ", "))
 }
@@ -191,13 +213,7 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 					}
 				}
 				if !valid {
-					names := make([]string, len(agents))
-					for i, a := range agents {
-						if a.Enabled {
-							names[i] = a.Name
-						}
-					}
-					return "", fmt.Errorf("unknown agent %q. Valid options: %s", in.Agent, strings.Join(names, ", "))
+					return "", fmt.Errorf("unknown agent %q. Valid options: %s", in.Agent, strings.Join(enabledAgentNames(agents), ", "))
 				}
 			}
 
