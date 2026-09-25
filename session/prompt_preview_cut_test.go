@@ -28,7 +28,7 @@ import (
 // quiet in the flattering direction.
 func TestThePromptTablePreviewIsCutOnARuneBoundary(t *testing.T) {
 	dir := t.TempDir()
-	s, err := New(dir, "claude-sonnet-4-20250514", "test", "", nil)
+	s, err := New(dir, "claude-sonnet-4-20250514", "test", "", nil, "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
