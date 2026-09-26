@@ -49,12 +49,17 @@ func (g *Server) forkSession(ctx context.Context, parent *Session, childKey, age
 		return nil, err
 	}
 
-	// Replace the empty messages with parent's history. Restoring freezes that
-	// history, so the child's BP3 breakpoint lands on the same boundary the
-	// parent already cached instead of re-staging the inherited transcript. The
-	// child inherits the parent's turn count for the same reason it inherits the
-	// frozen boundary: its first turn is not a first turn, it opens on a
-	// conversation that is already however many turns deep.
+	// Replace the empty messages with parent's history. Restoring freezes ALL
+	// of it (conversation.FreezePoint), not the boundary the parent froze: the
+	// parent's FrozenIdx moves only when it flushes, every ManageInterval turns,
+	// so it usually trails the end of the transcript by up to four turns. The
+	// child's BP3 breakpoint therefore lands on the parent's cached boundary
+	// only when the parent flushed on its last turn, and the parent's unflushed
+	// tail is frozen in the child, where ManageStaging can never dedupe or prune
+	// it. Whether a fork should carry the parent's FrozenIdx instead is open in
+	// noteboard todo faf3a202. The child inherits the parent's turn count
+	// because its first turn is not a first turn: it opens on a conversation
+	// that is already however many turns deep.
 	child.Engine.RestoreSession(parentMessages, parentTurnCounter)
 	child.SpawnDepth = parent.SpawnDepth + 1
 	child.ParentKey = parent.Key
