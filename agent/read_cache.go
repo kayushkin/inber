@@ -267,7 +267,9 @@ const (
 // agent package cannot import inber's tools package — tools imports agent — so
 // the completeness test lives over there and reaches back through this, the
 // same shape as server/tool_classification_test.go, which exists because guard
-// cannot import server.
+// cannot import server. The tools the server injects into a session are not in
+// that set, so server/read_cache_classification_test.go holds them to account
+// the same way.
 func ReadCacheEffect(toolName string) string {
 	switch {
 	case invalidatesEverything(toolName):
