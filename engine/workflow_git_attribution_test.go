@@ -38,8 +38,9 @@ func sessionWrote(t *testing.T, h *WorkflowHooks, repo, name, content string) {
 // committedPaths lists the paths a commit touched, which is the only honest way
 // to ask "what did this commit actually take".
 //
-// It is deliberately not given a revision: every caller means "the commit the
-// session just made", and asking for HEAD by name silently answers with the
+// It is given the HEAD from before the session rather than a revision to show:
+// every caller means "the commit the session just made", and asking for HEAD
+// without checking that it moved silently answers with the
 // fixture's seed commit when no commit was made at all — which is how a test
 // asserting `[seed.txt]` passed against a close-time commit that never ran.
 func committedPaths(t *testing.T, repo, headBefore string) []string {

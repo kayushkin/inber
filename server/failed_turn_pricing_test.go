@@ -141,10 +141,11 @@ func aProviderThatIsPaidAndThenFails(t *testing.T) (*anthropic.Client, func() in
 }
 
 // aTurnThatFailedAfterBeingBilled drives Server.run to the error branch and
-// returns the cost written to the request row.
+// returns the request row it wrote, cost included.
 //
 // It mirrors aCompletedTurn deliberately: same server, same pre-stored session,
-// same registry under test. Only the provider differs, so a difference in the
+// same registry under test. Besides the provider, this fixture only blanks
+// ANTHROPIC_API_KEY and counts the provider's requests, so a difference in the
 // two rows' verdicts is a difference between the two CALL SITES and not between
 // two fixtures.
 func aTurnThatFailedAfterBeingBilled(t *testing.T, model string, registry *modelstore.Store) RequestRow {
