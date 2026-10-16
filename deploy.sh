@@ -80,6 +80,11 @@ if [[ -n "$LIVE_PID" && "$LIVE_PID" != "0" ]]; then
     -args -live-environment-file="/proc/$LIVE_PID/environ"
 fi
 
+# Runner machines download inber-server from the bridge too; the shared script
+# in llm-bridge-runner cross-builds and publishes it (todo 3fd57bfe). It runs
+# before the service stops, so a failed publish leaves the live service as it was.
+( cd "$REPO_DIR" && "$REPO_DIR/../llm-bridge-runner/scripts/publish-harness-wrapper.sh" llm-bridge-inber-server ./cmd/inber-server )
+
 echo "==> Stopping service..."
 systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
 sleep 1
