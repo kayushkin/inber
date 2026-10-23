@@ -318,10 +318,16 @@ func FilterMessagesForAnthropic(messages []anthropic.MessageParam) ([]anthropic.
 				newBlocks = append(newBlocks, block)
 			}
 			if len(newBlocks) != len(msg.Content) {
-				filtered = append(filtered, anthropic.MessageParam{
-					Role:    msg.Role,
-					Content: newBlocks,
-				})
+				// Only add if there's content left: a tool-calls-only turn from an
+				// OpenAI-compatible model filters to nothing, and the API rejects an
+				// assistant message with no content. RepairEmptyContent drops such
+				// messages the same way.
+				if len(newBlocks) > 0 {
+					filtered = append(filtered, anthropic.MessageParam{
+						Role:    msg.Role,
+						Content: newBlocks,
+					})
+				}
 			} else {
 				filtered = append(filtered, msg)
 			}

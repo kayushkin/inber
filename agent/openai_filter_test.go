@@ -248,3 +248,40 @@ func TestConvertAnthropicMessagesToOpenAIFilters(t *testing.T) {
 		t.Errorf("unexpected tool result ID: %s", toolResultMsg.ToolCallID)
 	}
 }
+
+func TestFilterMessagesForAnthropicDropsAnAssistantMessageLeftEmpty(t *testing.T) {
+	// The routine shape of a tool-calls-only turn from an OpenAI-compatible model:
+	// every block of the assistant message is an OpenAI-sourced tool_use.
+	messages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("hi")),
+		{
+			Role: anthropic.MessageParamRoleAssistant,
+			Content: []anthropic.ContentBlockParamUnion{
+				{OfToolUse: &anthropic.ToolUseBlockParam{ID: "call_openai456", Name: "shell", Input: struct{}{}}},
+			},
+		},
+		{
+			Role: anthropic.MessageParamRoleUser,
+			Content: []anthropic.ContentBlockParamUnion{
+				{OfToolResult: &anthropic.ToolResultBlockParam{
+					ToolUseID: "call_openai456",
+					Content:   []anthropic.ToolResultBlockParamContentUnion{{OfText: &anthropic.TextBlockParam{Text: "shell output"}}},
+				}},
+			},
+		},
+	}
+
+	filtered, stats := FilterMessagesForAnthropic(messages)
+
+	if stats.ToolUseFiltered != 1 || stats.ToolResultFiltered != 1 {
+		t.Errorf("stats = %+v, want 1 tool_use and 1 tool_result filtered", stats)
+	}
+	for i, msg := range filtered {
+		if len(msg.Content) == 0 {
+			t.Errorf("filtered[%d] (role %s) has no content blocks; the API rejects it", i, msg.Role)
+		}
+	}
+	if len(filtered) != 1 || filtered[0].Role != anthropic.MessageParamRoleUser {
+		t.Errorf("want only the opening user message left, got %d messages", len(filtered))
+	}
+}
