@@ -164,6 +164,15 @@ EOF
 # the turn. No local `claude` CLI involved — the server starts the harness
 # under whatever instance config we point at.
 LLM_BRIDGE="${LLM_BRIDGE_URL:-http://localhost:8160}"
+# Every llm-bridge-server route needs a credential since its principal gate
+# went on in September 2026; without one each call is a 401, which is how this
+# job failed every night from then until 2026-10-26. The scheduler job loads
+# the token from the host's shared tokens file before it runs this script.
+if [[ -z "${LLMBRIDGE_SERVICE_TOKEN:-}" ]]; then
+  echo "harness-watch: LLMBRIDGE_SERVICE_TOKEN is not set; llm-bridge-server refuses every call without it" >&2
+  exit 1
+fi
+BRIDGE_AUTH="X-LLM-Bridge-Service-Token: ${LLMBRIDGE_SERVICE_TOKEN}"
 INSTANCE_ID="${HARNESS_WATCH_INSTANCE_ID:-inst-cc-local}"
 
 CREATE_BODY=$(jq -nc \
@@ -178,6 +187,7 @@ CREATE_BODY=$(jq -nc \
   }')
 
 SESSION_JSON=$(curl -sfS -X POST "$LLM_BRIDGE/sessions" \
+  -H "$BRIDGE_AUTH" \
   -H "Content-Type: application/json" \
   -d "$CREATE_BODY")
 
@@ -190,6 +200,7 @@ echo "harness-watch: bridge session $SESSION_ID"
 
 PROMPT_JSON=$(printf '%s' "$PROMPT" | jq -Rs .)
 curl -sfS -X POST "$LLM_BRIDGE/sessions/$SESSION_ID/send" \
+  -H "$BRIDGE_AUTH" \
   -H "Content-Type: application/json" \
   -d "{\"message\":${PROMPT_JSON}}" >/dev/null
 
@@ -200,6 +211,7 @@ curl -sfS -X POST "$LLM_BRIDGE/sessions/$SESSION_ID/send" \
 FIFO="$(mktemp -u)"
 mkfifo "$FIFO"
 curl -sN "$LLM_BRIDGE/sessions/$SESSION_ID/events" \
+  -H "$BRIDGE_AUTH" \
   -H 'Accept: text/event-stream' >"$FIFO" &
 CURL_PID=$!
 exec 3<"$FIFO"
