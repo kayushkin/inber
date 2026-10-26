@@ -11448,7 +11448,7 @@ memory writes. codex now ships the read-side half of that.
 [cline #14795](https://github.com/cline/cline/pull/14795) relaxes "retry only while zero
 output was emitted" (section above, at the cline #14195 entry) to "zero output except
 thinking". Thinking blocks have no side effects and the user did not read them as an answer.
-inber already holds the evidence: `agent/agent_run.go:213-215` keeps `partial` when
+inber already holds the evidence: `agent/agent_run.go:214-216` keeps `partial` when
 `streamResp.Err()` fires, and `partial.Content` holding only thinking blocks is that proof. The
 only retry, at `:228`, is still gated on `isContextLengthError`. **Not filed:** this belongs to
 the open decision on where retryability lives (client, turn loop or a shared classifier),
