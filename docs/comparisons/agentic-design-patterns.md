@@ -11423,3 +11423,55 @@ tool-store's compiled-in `All()` **and from the constructors by name**, so a ren
 set and `TestClassifiedToolsExist` fails the build; the runtime-drift case the census
 measures needs MCP, and `tools/mcp` still has zero non-test importers. The live gap here
 remains the nine unclassified names already filed as `9eeba694`, not the name-vs-id join.
+
+## Harness-watch — 2026-10-26: untrusted context moved down to tool-output authority, and a stream that dies after only thinking is safe to replay
+
+First sweep since 2026-09-17. No new inber defect was found; the two closest leads were
+already on record.
+
+**1. codex shows untrusted context to the model as tool output, not as developer text.**
+[codex #57279](https://github.com/openai/codex/pull/57279), behind
+`features.untrusted_as_tool_output`, sends "untrusted additional context" as named
+`function_call_output` items before the user's input. Context the application wrote stays in
+developer messages. Outputs are deduplicated by name plus truncated value, so a change hidden
+in the truncated tail does not re-send the item. inber puts every recalled memory's content
+verbatim into a system block, labelled only by id prefix, importance and tags
+(`engine/turn_prompt.go:100-124`), whatever the memory's source. The 2026-06 notes
+(`docs/papers/2026-06-harness-research.md`, memory-poisoning entry) asked for provenance on
+memory writes. codex now ships the read-side half of that.
+- *What inber should consider:* when memory provenance exists, show any memory whose source
+  is external tool output as a tool result or a fenced user-side block, never a system block.
+  This also moves those memories out of the cached system prefix, so it touches BP2. Measure
+  the cache effect before choosing where they go.
+
+**2. cline retries a turn whose stream died after streaming only reasoning.**
+[cline #14795](https://github.com/cline/cline/pull/14795) relaxes "retry only while zero
+output was emitted" (section above, at the cline #14195 entry) to "zero output except
+thinking". Thinking blocks have no side effects and the user did not read them as an answer.
+inber already holds the evidence: `agent/agent_run.go:213-215` keeps `partial` when
+`streamResp.Err()` fires, and `partial.Content` holding only thinking blocks is that proof. The
+only retry, at `:228`, is still gated on `isContextLengthError`. **Not filed:** this belongs to
+the open decision on where retryability lives (client, turn loop or a shared classifier),
+named in the section above. Picking a retry rule here would make that decision by accident.
+
+**3. Prompt-cache lifetime became a per-model setting in opencode.**
+[opencode #59157](https://github.com/sst/opencode/pull/59157) adds `cache.ttl` at provider,
+model or variant level (`5m`, `1h`; OpenAI's `30m`/`12h`/`24h`). Its stated reason: an agent
+waiting on a subagent or slow tool for more than 5 minutes rewrites its whole context.
+[opencode #59325](https://github.com/sst/opencode/pull/59325) stops the cache-warming ping from
+firing while a real request is running, and counts the interval from when a response *ends*.
+inber sends the default 5-minute ephemeral marker everywhere (`engine/turn_prompt.go:227-230`,
+`agent/agent.go:714`, `agent/agent_run.go:36`), and a parent waiting on a spawned child is
+exactly the wait opencode names.
+- *What inber should consider:* measure how often a parent's next API call comes more than
+  300 s after its last one. `~/.inber/sessions.db` cannot say: its newest `turns` row is
+  2026-03-25. If those gaps are common, a 1-hour marker on BP2 alone is a cheap test.
+
+**Screened, nothing new to inber:** codex #57262 (skill catalog sent as deltas against a
+budget shared across turns; inber has no per-turn skill catalog), codex #57272 (code-mode
+truncation contracts), cline #14867 (no automatic compaction when a model's window is
+unknown; inber chose the opposite on purpose and records why at `agent/models.go:18-23`),
+cline #15089, goose #13015 (resume a failed subagent; inber's restart-and-children problems
+are filed as `d39c81b2`), goose #12958 (shell process trees killed on cancel; inber's shell
+tool lives in tool-store). **claude-code** pushed only changelog and mod updates. **aider**
+and **roo-code** pushed nothing; **dexto** pushed one dependency patch.
