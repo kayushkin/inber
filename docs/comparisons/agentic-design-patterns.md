@@ -11475,3 +11475,35 @@ cline #15089, goose #13015 (resume a failed subagent; inber's restart-and-childr
 are filed as `d39c81b2`), goose #12958 (shell process trees killed on cancel; inber's shell
 tool lives in tool-store). **claude-code** pushed only changelog and mod updates. **aider**
 and **roo-code** pushed nothing; **dexto** pushed one dependency patch.
+
+## Harness-watch — 2026-10-27: size the request from the provider's last count, not from characters
+
+**opencode [#59441](https://github.com/sst/opencode/pull/59441)** found its compaction
+measuring the conversation two ways: the trigger used the provider's input count from the last
+reply, and the "does the summary request fit" check used characters / 4 over the whole
+request. On five real compactions characters / 4 ran 23 to 48% low, while the provider's count
+plus an estimate of what was added since landed within 2.4% of the next call's real input.
+The fix uses that one number for both, and falls back to estimating only when the model,
+variant or agent changed, or after an overflow.
+
+- *Why it matters to inber:* the open todo `939d5fdc-c72f-4578-a073-13ccfa44aad6` is blocked
+  because `conversation.EstimateTokens` sees only the message list, so no gate can price the
+  system prompt, memory blocks and tools, and its proposed fix is to widen the estimator.
+  #59441 is a second route that needs no wider estimator: `processResponse`
+  (`agent/agent_run.go:331-336`) already reads the provider's full count every call, and
+  nothing on the prune path (`engine/build.go:119-160`) uses it.
+- *What inber should consider:* when picking a fix for `939d5fdc`, compare the two routes on
+  real sessions. The count to compare is `InputTokens + CacheCreationInputTokens +
+  CacheReadInputTokens`, because Anthropic's `input_tokens` leaves out cached tokens. Note
+  also that the gate thresholds were tuned against the narrow estimate (the todo names this
+  trap), so either route moves them.
+
+**Screened, nothing new to inber:** codex #57287 (a fork keeps the parent's tool list and adds
+a notice that MCP is off, so the cache prefix stays the same; the 2026-09-12 section above
+already covers this rule), opencode #59442 (the loop stops after a step that reported a
+provider error, without running that step's tools; inber's `executeAPICall` already returns
+only the text a failed stream delivered, `agent/agent_run.go:213-241`), opencode #59411 and
+goose #13144 (child process groups killed on exit; inber's only spawner,
+`tools/mcp/client.go:97`, has no non-test caller). No new papers from the last 30 days turned
+up beyond those the 2026-10-26 run filed. No defect filed: the gap above is already todo
+`939d5fdc`.
