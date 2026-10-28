@@ -242,13 +242,18 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 		return nil, fmt.Errorf("create engine for %s: %w", agentName, err)
 	}
 
-	// If we loaded persisted messages, restore them onto the engine. Restoring
-	// (rather than assigning) freezes them, so the first resumed turn does not
-	// re-prune and re-pay for the whole transcript, and carries the turn count
-	// over so a long-running session is not budgeted as a brand new one.
-	if len(msgs) > 0 {
-		eng.RestoreSession(msgs, turnCounter)
-	}
+	// The session's own persisted transcript is its whole history, so restore
+	// it even when it is empty. Restoring (rather than assigning) freezes the
+	// messages, so the first resumed turn does not re-prune and re-pay for the
+	// whole transcript, and carries the turn count over so a long-running
+	// session is not budgeted as a brand new one.
+	//
+	// Restoring an empty one matters as much. NewEngine loads the agent's
+	// workspace transcript — one file per agent, rewritten by whichever of its
+	// sessions ran last — so a session with no transcript of its own used to
+	// open holding another session's conversation: a new chat started where
+	// the last chat with that agent left off, and answered from it.
+	eng.RestoreSession(msgs, turnCounter)
 
 	// The safety limits and the totals already counted against them are restored
 	// even for a fresh session. Deliberately: the limits are recorded against
