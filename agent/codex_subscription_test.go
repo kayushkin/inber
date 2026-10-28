@@ -38,6 +38,7 @@ type fakeResponsesEndpoint struct {
 	server        *httptest.Server
 	bodies        []map[string]any
 	authorization []string
+	sessionIDs    []string
 }
 
 func newFakeResponsesEndpoint(t *testing.T, events ...string) *fakeResponsesEndpoint {
@@ -51,6 +52,7 @@ func newFakeResponsesEndpoint(t *testing.T, events ...string) *fakeResponsesEndp
 		}
 		f.bodies = append(f.bodies, body)
 		f.authorization = append(f.authorization, r.Header.Get("Authorization"))
+		f.sessionIDs = append(f.sessionIDs, r.Header.Get("session-id"))
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, event := range events {
 			fmt.Fprintf(w, "event: x\ndata: %s\n\n", event)
@@ -86,6 +88,9 @@ func TestARequestThroughTheCodexSubscriptionCarriesEveryMessageAsAResponsesItem(
 
 	if f.authorization[0] != "Bearer "+token {
 		t.Errorf("the request was not sent with the token from the auth file")
+	}
+	if f.sessionIDs[0] != "session-1" {
+		t.Errorf("session-id header = %q, want the session the cache key names", f.sessionIDs[0])
 	}
 	got, _ := json.Marshal(f.bodies[0])
 	want := `{"input":[` +
@@ -150,6 +155,16 @@ func TestAnIncompleteResponseFromTheCodexSubscriptionEndsWithFinishReasonLength(
 func TestTheCodexSubscriptionClientFailsLoudWhereItCannotSendOrRead(t *testing.T) {
 	request := OpenAIRequest{Messages: []OpenAIMessage{{Role: "user", Content: "go"}}}
 
+	t.Run("no cache key sends no session-id header", func(t *testing.T) {
+		authFile, _ := writeCodexAuthFile(t, "chatgpt", time.Now().Add(time.Hour))
+		f := newFakeResponsesEndpoint(t, completedEvent)
+		if _, err := NewOpenAIClientThroughCodexSubscription(f.server.URL, authFile, "m").ChatCompletion(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		if f.sessionIDs[0] != "" {
+			t.Errorf("session-id header = %q, want none", f.sessionIDs[0])
+		}
+	})
 	t.Run("expired token sends nothing", func(t *testing.T) {
 		authFile, _ := writeCodexAuthFile(t, "chatgpt", time.Now().Add(-time.Minute))
 		f := newFakeResponsesEndpoint(t, completedEvent)

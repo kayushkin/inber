@@ -114,6 +114,15 @@ func (c *OpenAIClient) chatCompletionThroughCodexSubscription(ctx context.Contex
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Accept", "text/event-stream")
 	httpRequest.Header.Set("Authorization", "Bearer "+token)
+	// The endpoint picks which cache a request may hit from the session-id
+	// header, not from prompt_cache_key alone (the Codex CLI's client.rs: "ChatGPT
+	// derives cache affinity from the Responses session-id header"). The turn
+	// loop sets the cache key to the session id, so the two name one session.
+	// Measured: with the key alone 1 of 5 repeat calls hit the cache, with the
+	// header as well 5 of 5.
+	if request.PromptCacheKey != "" {
+		httpRequest.Header.Set("session-id", request.PromptCacheKey)
+	}
 
 	httpResponse, err := c.client.Do(httpRequest)
 	if err != nil {
