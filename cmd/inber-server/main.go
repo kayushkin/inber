@@ -45,7 +45,7 @@ func run(addr, configFile, requireChecks, apiKeyApp string) error {
 		return fmt.Errorf("settings: %w", err)
 	}
 
-	providerAPIKeys := providerAPIKeysFromSettings(settings)
+	providerCredentials := providerCredentialsFromSettings(settings)
 	if apiKeyApp != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -53,12 +53,12 @@ func run(addr, configFile, requireChecks, apiKeyApp string) error {
 		if err != nil {
 			return fmt.Errorf("resolve anthropic credential: %w", err)
 		}
-		providerAPIKeys.Anthropic = resolved
+		providerCredentials.Anthropic = resolved
 	}
 
 	// The one read of the whole environment: the egress redactor removes every
 	// secret the process holds from provider requests, declared or not.
-	agent.ArmEgressRedactor(os.Environ(), providerAPIKeys)
+	agent.ArmEgressRedactor(os.Environ(), providerCredentials)
 
 	var cfg server.Config
 
@@ -86,7 +86,7 @@ func run(addr, configFile, requireChecks, apiKeyApp string) error {
 	}
 
 	applySettings(&cfg, settings)
-	cfg.ProviderAPIKeys = providerAPIKeys
+	cfg.ProviderCredentials = providerCredentials
 
 	g, err := server.New(cfg)
 	if err != nil {
@@ -159,15 +159,17 @@ func applySettings(cfg *server.Config, settings *servicesettings.Registry) {
 	cfg.SettingsHandler = settingsHandler(settings)
 }
 
-// providerAPIKeysFromSettings is the four provider keys as the environment set
+// providerCredentialsFromSettings is the four provider keys as the environment set
 // them. main replaces the Anthropic one with auth-store's when
 // --api-key-from-auth-store is given.
-func providerAPIKeysFromSettings(settings *servicesettings.Registry) agent.ProviderAPIKeys {
-	return agent.ProviderAPIKeys{
+func providerCredentialsFromSettings(settings *servicesettings.Registry) agent.ProviderCredentials {
+	return agent.ProviderCredentials{
 		Anthropic:  settings.String(settingAnthropicKey),
 		OpenAI:     settings.String(settingOpenAIKey),
 		Google:     settings.String(settingGoogleKey),
 		OpenRouter: settings.String(settingOpenRouterKey),
+
+		OpenAICodexSubscriptionAuthFile: settings.String(settingOpenAICodexSubscriptionAuthFile),
 	}
 }
 

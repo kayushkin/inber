@@ -32,7 +32,7 @@ func TestAConfiguredKeyWinsOverAnAiauthProfile(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "") // aiauth reads it before its profiles
 	store := aiauthStoreWithOpenAIProfile(t, "sk-profile-on-disk")
 
-	client, err := NewModelClient("gpt-4o", nil, store, ProviderAPIKeys{OpenAI: "sk-configured"})
+	client, err := NewModelClient("gpt-4o", nil, store, ProviderCredentials{OpenAI: "sk-configured"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestAConfiguredKeyWinsOverAnAiauthProfile(t *testing.T) {
 		t.Fatalf("sent with %+v, want the configured key", client.OpenAIClient)
 	}
 
-	client, err = NewModelClient("gpt-4o", nil, store, ProviderAPIKeys{})
+	client, err = NewModelClient("gpt-4o", nil, store, ProviderCredentials{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestAConfiguredKeyWinsOverAnAiauthProfile(t *testing.T) {
 }
 
 func TestForProviderNamesEachConfiguredKeyAndNothingElse(t *testing.T) {
-	keys := ProviderAPIKeys{Anthropic: "a", OpenAI: "o", Google: "g", OpenRouter: "r"}
+	keys := ProviderCredentials{Anthropic: "a", OpenAI: "o", Google: "g", OpenRouter: "r"}
 	for provider, want := range map[string]string{"anthropic": "a", "openai": "o", "google": "g", "openrouter": "r", "ollama": "", "zhipu": ""} {
 		if got := keys.ForProvider(provider); got != want {
 			t.Errorf("ForProvider(%q) = %q, want %q", provider, got, want)

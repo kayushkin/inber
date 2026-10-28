@@ -181,7 +181,7 @@ func (g *Server) engineConfigFor(key, agentName, repoRoot string, workspaceRoots
 		LogstackURL:      g.config.LogstackURL,
 		InberServerURL:   g.config.InberServerURL,
 		ToolConnections:  g.config.ToolConnections,
-		ProviderAPIKeys:  g.config.ProviderAPIKeys,
+		ProviderCredentials:  g.config.ProviderCredentials,
 		Blueprint:        g.config.Blueprint,
 	}
 }

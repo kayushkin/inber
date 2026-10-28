@@ -82,7 +82,7 @@ func (g *Server) handleOneShot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiKey := g.config.ProviderAPIKeys.Anthropic
+	apiKey := g.config.ProviderCredentials.Anthropic
 	if apiKey == "" {
 		jsonError(w, "inber-server has no Anthropic API key configured", http.StatusServiceUnavailable)
 		return

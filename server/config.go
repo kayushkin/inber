@@ -72,11 +72,11 @@ type Config struct {
 	// SCHEDULER_TOKEN.
 	ToolConnections toolstoretools.OutsideServiceConnections `json:"-"`
 
-	// ProviderAPIKeys are the provider credentials every session tries before
+	// ProviderCredentials are the provider credentials every session tries before
 	// aiauth's, and the Anthropic one is what POST /api/oneshot sends with. The
 	// command sets them from ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY
 	// and OPENROUTER_API_KEY, or the Anthropic one from auth-store.
-	ProviderAPIKeys agent.ProviderAPIKeys `json:"-"`
+	ProviderCredentials agent.ProviderCredentials `json:"-"`
 
 	// Blueprint turns on prompt blueprint diffs for every session. The command
 	// sets it from INBER_BLUEPRINT.

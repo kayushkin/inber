@@ -271,7 +271,7 @@ func setupAuthStore() *aiauth.Store {
 
 // createModelClient creates the appropriate model client for the given model,
 // with the configured key for its provider or else aiauth's.
-func createModelClient(model string, store *modelstore.Store, auth *aiauth.Store, keys agent.ProviderAPIKeys) (*agent.ModelClient, string, *anthropic.Client, error) {
+func createModelClient(model string, store *modelstore.Store, auth *aiauth.Store, keys agent.ProviderCredentials) (*agent.ModelClient, string, *anthropic.Client, error) {
 	modelClient, err := agent.NewModelClient(model, store, auth, keys)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("failed to create model client: %w", err)
@@ -584,7 +584,7 @@ func (e *Engine) initModelClient(cfg EngineConfig) error {
 	e.ownsModelStore = (cfg.ModelStore == nil)
 	e.authStore = setupAuthStore()
 
-	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore, e.authStore, e.providerAPIKeys)
+	modelClient, resolvedModel, anthropicClient, err := createModelClient(e.Model, e.modelStore, e.authStore, e.providerCredentials)
 	if err != nil {
 		return err
 	}

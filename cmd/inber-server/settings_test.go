@@ -168,7 +168,7 @@ func TestTheSettingsGiveTheServerTheSameValuesItAlwaysRead(t *testing.T) {
 
 	// The provider keys agent.NewModelClient and the self-test used to read
 	// themselves. Unset, they are empty, which leaves sessions to aiauth.
-	if keys := providerAPIKeysFromSettings(nothing); keys != (agent.ProviderAPIKeys{}) {
+	if keys := providerCredentialsFromSettings(nothing); keys != (agent.ProviderCredentials{}) {
 		t.Errorf("nothing set: provider keys %+v", keys)
 	}
 	withProviderKeys, err := newSettingsRegistry(servicesettings.MapEnvironment(map[string]string{
@@ -180,8 +180,8 @@ func TestTheSettingsGiveTheServerTheSameValuesItAlwaysRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantProviderKeys := agent.ProviderAPIKeys{Anthropic: "anthropic-key", OpenAI: "openai-key", Google: "google-key", OpenRouter: "openrouter-key"}
-	if keys := providerAPIKeysFromSettings(withProviderKeys); keys != wantProviderKeys {
+	wantProviderKeys := agent.ProviderCredentials{Anthropic: "anthropic-key", OpenAI: "openai-key", Google: "google-key", OpenRouter: "openrouter-key"}
+	if keys := providerCredentialsFromSettings(withProviderKeys); keys != wantProviderKeys {
 		t.Errorf("set: provider keys %+v, want %+v", keys, wantProviderKeys)
 	}
 }

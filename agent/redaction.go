@@ -27,7 +27,7 @@ var (
 //
 // It panics if called twice: a second environment would silently replace the
 // set of secrets every client already sends through.
-func ArmEgressRedactor(environment []string, keys ProviderAPIKeys) {
+func ArmEgressRedactor(environment []string, keys ProviderCredentials) {
 	egressRedactorMutex.Lock()
 	defer egressRedactorMutex.Unlock()
 	if egressRedactor != nil {
@@ -40,7 +40,7 @@ func ArmEgressRedactor(environment []string, keys ProviderAPIKeys) {
 
 // newEgressRedactor is the redactor ArmEgressRedactor installs: the secrets in
 // environment, and each configured provider key labelled by its provider.
-func newEgressRedactor(environment []string, keys ProviderAPIKeys) *redact.Redactor {
+func newEgressRedactor(environment []string, keys ProviderCredentials) *redact.Redactor {
 	redactor := redact.NewFromEnvironment(environment)
 	for provider, key := range map[string]string{
 		"anthropic":  keys.Anthropic,

@@ -38,6 +38,8 @@ const (
 	settingOpenAIKey      = "openai_api_key"
 	settingGoogleKey      = "google_api_key"
 	settingOpenRouterKey  = "openrouter_api_key"
+
+	settingOpenAICodexSubscriptionAuthFile = "openai_codex_subscription_auth_file"
 )
 
 // defaultAuthStoreURL is where auth-store is asked for the Anthropic
@@ -95,6 +97,8 @@ func settingDefinitions() []servicesettings.Definition {
 			Description: "The Anthropic credential sessions and POST /api/oneshot send with. Ignored when --api-key-from-auth-store is given: auth-store's credential is used instead. Empty leaves sessions to aiauth's profiles and makes /api/oneshot answer 503."},
 		{Key: settingOpenAIKey, EnvironmentVariable: "OPENAI_API_KEY", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
 			Description: "The OpenAI credential sessions send with. Empty leaves them to aiauth's profiles."},
+		{Key: settingOpenAICodexSubscriptionAuthFile, EnvironmentVariable: "OPENAI_CODEX_SUBSCRIPTION_AUTH_FILE", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString,
+			Description: "The Codex CLI's auth file. When set, every OpenAI model is served through the ChatGPT subscription it signs in with, on the endpoint the Codex CLI uses, and openai_api_key is not used. Empty sends OpenAI requests with the API key."},
 		{Key: settingGoogleKey, EnvironmentVariable: "GOOGLE_API_KEY", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
 			Description: "The Google credential sessions send with. Empty leaves them to aiauth's profiles."},
 		{Key: settingOpenRouterKey, EnvironmentVariable: "OPENROUTER_API_KEY", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,

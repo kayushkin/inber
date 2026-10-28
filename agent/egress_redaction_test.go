@@ -280,7 +280,7 @@ func TestTheStreamingPathRedactsAndStillStreams(t *testing.T) {
 func TestAConfiguredProviderKeyIsRedactedWithoutBeingInTheEnvironment(t *testing.T) {
 	const configuredKey = "Q7wE9rT2yU4iO6pA8sD0fG1h"
 	const environmentSecret = "Zx8Cv7Bn6Mm5Ll4Kk3Jj2Hh1"
-	redactor := newEgressRedactor([]string{"UNRELATED_SERVICE_TOKEN=" + environmentSecret}, ProviderAPIKeys{Anthropic: configuredKey})
+	redactor := newEgressRedactor([]string{"UNRELATED_SERVICE_TOKEN=" + environmentSecret}, ProviderCredentials{Anthropic: configuredKey})
 
 	redacted, findings := redactor.RedactString("key " + configuredKey + " and token " + environmentSecret)
 	if strings.Contains(redacted, configuredKey) {
@@ -302,5 +302,5 @@ func TestArmingTheEgressRedactorTwicePanics(t *testing.T) {
 			t.Fatal("a second ArmEgressRedactor was accepted")
 		}
 	}()
-	ArmEgressRedactor(nil, ProviderAPIKeys{})
+	ArmEgressRedactor(nil, ProviderCredentials{})
 }

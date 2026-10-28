@@ -36,7 +36,7 @@ func (e *Engine) resolveModelClient(selected string) string {
 		return selected
 	}
 
-	mc, err := agent.NewModelClient(selected, e.modelStore, e.authStore, e.providerAPIKeys)
+	mc, err := agent.NewModelClient(selected, e.modelStore, e.authStore, e.providerCredentials)
 	if err == nil {
 		e.modelClient = mc
 		return selected

@@ -49,7 +49,7 @@ type EngineConfig struct {
 	LogstackURL      string               // where session logs are also sent ("" = nowhere else)
 	InberServerURL   string               // inber server whose /api/agents the spawn tool reads ("" = names are not checked)
 	ToolConnections  toolstoretools.OutsideServiceConnections // where the browser, web search and scheduler tools reach their services
-	ProviderAPIKeys  agent.ProviderAPIKeys // configured provider credentials, tried before aiauth's
+	ProviderCredentials  agent.ProviderCredentials // configured provider credentials, tried before aiauth's
 
 	// Display
 	Display *DisplayHooks

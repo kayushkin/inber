@@ -24,7 +24,7 @@ func TestOneShotSendsWithTheConfiguredAnthropicKey(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", provider.URL)
 	t.Setenv("ANTHROPIC_API_KEY", "ambient-key-from-the-environment")
 
-	g := &Server{config: Config{ProviderAPIKeys: agent.ProviderAPIKeys{Anthropic: "configured-key"}}}
+	g := &Server{config: Config{ProviderCredentials: agent.ProviderCredentials{Anthropic: "configured-key"}}}
 	recorder := httptest.NewRecorder()
 	g.handleOneShot(recorder, httptest.NewRequest(http.MethodPost, "/api/oneshot", strings.NewReader(`{"prompt":"hi"}`)))
 

@@ -15,7 +15,12 @@ type OpenAIClient struct {
 	BaseURL string
 	APIKey  string
 	Model   string
-	client  *http.Client
+	// CodexSubscriptionAuthFilePath, when set, sends every request through the
+	// ChatGPT subscription the Codex CLI signs in with, using the token in this
+	// file, and BaseURL is the subscription's Responses endpoint. APIKey is
+	// then unused. See codex_subscription.go.
+	CodexSubscriptionAuthFilePath string
+	client                        *http.Client
 }
 
 // NewOpenAIClient creates an OpenAI-compatible client.
@@ -37,11 +42,26 @@ func NewOpenAIClient(baseURL, apiKey, model string) *OpenAIClient {
 	}
 }
 
-// ChatCompletion sends a chat completion request to the OpenAI-compatible API.
+// NewOpenAIClientThroughCodexSubscription creates a client that sends OpenAI
+// requests through the ChatGPT subscription whose token the Codex CLI keeps in
+// authFilePath.
+func NewOpenAIClientThroughCodexSubscription(endpoint, authFilePath, model string) *OpenAIClient {
+	client := NewOpenAIClient(endpoint, "", model)
+	client.CodexSubscriptionAuthFilePath = authFilePath
+	return client
+}
+
+// ChatCompletion sends a chat completion request to the OpenAI-compatible API,
+// or, on a client made with NewOpenAIClientThroughCodexSubscription, sends the
+// same request to the subscription's Responses endpoint and returns the reply
+// in chat-completion form.
 func (c *OpenAIClient) ChatCompletion(ctx context.Context, req OpenAIRequest) (*OpenAIResponse, error) {
 	// Default model if not specified
 	if req.Model == "" {
 		req.Model = c.Model
+	}
+	if c.CodexSubscriptionAuthFilePath != "" {
+		return c.chatCompletionThroughCodexSubscription(ctx, req)
 	}
 
 	reqBytes, err := json.Marshal(req)

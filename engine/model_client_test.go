@@ -10,7 +10,7 @@ import (
 // clientFor builds a ModelClient the way the engine does, from configured keys
 // alone (modelStore and authStore nil), so these tests need no network, no
 // fixtures and no mocking.
-func clientFor(t *testing.T, modelID string, keys agent.ProviderAPIKeys) *agent.ModelClient {
+func clientFor(t *testing.T, modelID string, keys agent.ProviderCredentials) *agent.ModelClient {
 	t.Helper()
 	mc, err := agent.NewModelClient(modelID, nil, nil, keys)
 	if err != nil {
@@ -25,9 +25,9 @@ func clientFor(t *testing.T, modelID string, keys agent.ProviderAPIKeys) *agent.
 // went to the old provider naming a model it does not serve and the *fallback*
 // was recorded unhealthy for it.
 func TestResolveModelClient_KeepsTheModelItCanActuallyRun(t *testing.T) {
-	keys := agent.ProviderAPIKeys{Anthropic: "sk-ant-test-key"}
+	keys := agent.ProviderCredentials{Anthropic: "sk-ant-test-key"}
 
-	e := &Engine{modelClient: clientFor(t, "claude-sonnet-4-5", keys), providerAPIKeys: keys}
+	e := &Engine{modelClient: clientFor(t, "claude-sonnet-4-5", keys), providerCredentials: keys}
 
 	// Failover picks an OpenAI model; this host has no OpenAI credentials.
 	inForce := e.resolveModelClient("gpt-4o")
@@ -49,9 +49,9 @@ func TestResolveModelClient_KeepsTheModelItCanActuallyRun(t *testing.T) {
 // credentials *are* there, failover must actually take effect. Without this a
 // resolver that always returned the incumbent would pass the test above.
 func TestResolveModelClient_InstallsClientForANewModel(t *testing.T) {
-	keys := agent.ProviderAPIKeys{Anthropic: "sk-ant-test-key", OpenAI: "sk-openai-test-key"}
+	keys := agent.ProviderCredentials{Anthropic: "sk-ant-test-key", OpenAI: "sk-openai-test-key"}
 
-	e := &Engine{modelClient: clientFor(t, "claude-sonnet-4-5", keys), providerAPIKeys: keys}
+	e := &Engine{modelClient: clientFor(t, "claude-sonnet-4-5", keys), providerCredentials: keys}
 
 	inForce := e.resolveModelClient("gpt-4o")
 
@@ -70,10 +70,10 @@ func TestResolveModelClient_InstallsClientForANewModel(t *testing.T) {
 // does not rebuild — a rebuild re-resolves credentials and stands up another
 // HTTP client on every turn.
 func TestResolveModelClient_ReusesTheInstalledClient(t *testing.T) {
-	keys := agent.ProviderAPIKeys{Anthropic: "sk-ant-test-key"}
+	keys := agent.ProviderCredentials{Anthropic: "sk-ant-test-key"}
 
 	before := clientFor(t, "claude-sonnet-4-5", keys)
-	e := &Engine{modelClient: before, providerAPIKeys: keys}
+	e := &Engine{modelClient: before, providerCredentials: keys}
 
 	inForce := e.resolveModelClient("claude-sonnet-4-5")
 
@@ -90,9 +90,9 @@ func TestResolveModelClient_ReusesTheInstalledClient(t *testing.T) {
 // back to the engine's own Anthropic client, which really does send `selected`,
 // so `selected` is the honest label even though the build failed.
 func TestResolveModelClient_NoIncumbentKeepsTheDefaultClientPath(t *testing.T) {
-	keys := agent.ProviderAPIKeys{}
+	keys := agent.ProviderCredentials{}
 
-	e := &Engine{providerAPIKeys: keys}
+	e := &Engine{providerCredentials: keys}
 
 	inForce := e.resolveModelClient("gpt-4o")
 
@@ -111,9 +111,9 @@ func TestResolveModelClient_NoIncumbentKeepsTheDefaultClientPath(t *testing.T) {
 // reachable today; the test states the intent so a second constructor cannot
 // reintroduce it silently.
 func TestResolveModelClient_RebuildsWhenTheIncumbentHasNoModel(t *testing.T) {
-	keys := agent.ProviderAPIKeys{Anthropic: "sk-ant-test-key"}
+	keys := agent.ProviderCredentials{Anthropic: "sk-ant-test-key"}
 
-	e := &Engine{modelClient: &agent.ModelClient{Provider: "anthropic"}, providerAPIKeys: keys}
+	e := &Engine{modelClient: &agent.ModelClient{Provider: "anthropic"}, providerCredentials: keys}
 
 	inForce := e.resolveModelClient("claude-sonnet-4-5")
 
@@ -129,7 +129,7 @@ func TestResolveModelClient_RebuildsWhenTheIncumbentHasNoModel(t *testing.T) {
 // rests on: the build failure this guards against is a *credential* failure, and
 // it is the one a cross-provider failover chain walks into.
 func TestNewModelClient_FailsOnAMissingProviderKey(t *testing.T) {
-	keys := agent.ProviderAPIKeys{}
+	keys := agent.ProviderCredentials{}
 
 	if _, err := agent.NewModelClient("gpt-4o", nil, nil, keys); err == nil {
 		t.Fatal("expected a credential error for a provider with no key configured")
@@ -141,9 +141,9 @@ func TestNewModelClient_FailsOnAMissingProviderKey(t *testing.T) {
 // corrupted: whatever executeAgent passes to recordModelHealth must name the
 // model the request was actually sent as.
 func TestResolveModelClient_KeepsHealthAttributionHonest(t *testing.T) {
-	keys := agent.ProviderAPIKeys{Anthropic: "sk-ant-test-key"}
+	keys := agent.ProviderCredentials{Anthropic: "sk-ant-test-key"}
 
-	e := &Engine{modelClient: clientFor(t, "claude-sonnet-4-5", keys), providerAPIKeys: keys}
+	e := &Engine{modelClient: clientFor(t, "claude-sonnet-4-5", keys), providerCredentials: keys}
 
 	// executeAgent's sequence, minus the API call.
 	selected := "gpt-4o"

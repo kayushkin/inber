@@ -115,7 +115,7 @@ type Engine struct {
 	toolInputsCache     map[string]string
 	contextInjectors    []ContextInjector
 	toolConnections     toolstoretools.OutsideServiceConnections // where the browser, web search and scheduler tools reach their services
-	providerAPIKeys     agent.ProviderAPIKeys                    // configured provider credentials, tried before aiauth's
+	providerCredentials     agent.ProviderCredentials                    // configured provider credentials, tried before aiauth's
 	workflowHooks       *WorkflowHooks
 	forgeHook           *forge.Hook
 	forgeDB             *forge.Forge
@@ -163,7 +163,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 		toolInputsCache:    make(map[string]string),
 		contextInjectors:   cfg.ContextInjectors,
 		toolConnections:    cfg.ToolConnections,
-		providerAPIKeys:    cfg.ProviderAPIKeys,
+		providerCredentials:    cfg.ProviderCredentials,
 		noHooks:            cfg.NoHooks,
 		injections:         cfg.Injections,
 	}

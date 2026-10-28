@@ -7,6 +7,7 @@ Type=simple
 ExecStart=__HOME__/bin/inber-server --addr :8200 --require=nats,workspace --api-key-from-auth-store=inber-server
 Environment=AUTH_STORE_URL=http://127.0.0.1:8303
 Environment=AUTH_STORE_TOKEN=__AUTH_STORE_TOKEN__
+Environment=OPENAI_CODEX_SUBSCRIPTION_AUTH_FILE=__HOME__/.codex/auth.json
 Environment=NATS_URL=nats://localhost:4222
 Environment=LOGSTACK_URL=http://localhost:8088
 Environment=HOME=__HOME__

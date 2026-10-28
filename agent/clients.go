@@ -20,20 +20,26 @@ type ModelClient struct {
 	IsOAuth         bool // true when using Claude Max OAuth token (needs Claude Code system prompt)
 }
 
-// ProviderAPIKeys are the provider credentials the caller was configured with.
+// ProviderCredentials are the provider credentials the caller was configured with.
 // inber-server sets them from ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY
-// and OPENROUTER_API_KEY, and sets Anthropic from auth-store instead when it is
-// started with --api-key-from-auth-store. An empty field means none.
-type ProviderAPIKeys struct {
+// and OPENROUTER_API_KEY, sets Anthropic from auth-store instead when it is
+// started with --api-key-from-auth-store, and sets the Codex subscription's
+// auth file from OPENAI_CODEX_SUBSCRIPTION_AUTH_FILE. An empty field means none.
+type ProviderCredentials struct {
 	Anthropic  string
 	OpenAI     string
 	Google     string
 	OpenRouter string
+	// OpenAICodexSubscriptionAuthFile, when set, is the Codex CLI's auth file,
+	// and every openai-provider model is served through the ChatGPT
+	// subscription it signs in with instead of an API key. OpenAI and aiauth's
+	// openai profile are then not consulted.
+	OpenAICodexSubscriptionAuthFile string
 }
 
 // ForProvider returns the configured key for provider, or "" for a provider
 // with no field here.
-func (keys ProviderAPIKeys) ForProvider(provider string) string {
+func (keys ProviderCredentials) ForProvider(provider string) string {
 	switch provider {
 	case "anthropic":
 		return keys.Anthropic
@@ -57,7 +63,7 @@ func (keys ProviderAPIKeys) ForProvider(provider string) string {
 // profiles on disk, and inber-server used to put the auth-store credential in
 // ANTHROPIC_API_KEY for it to find. Asking aiauth first would hand the server
 // whichever old profile is on disk instead.
-func NewModelClient(modelIDOrAlias string, ms *modelstore.Store, auth *aiauth.Store, keys ProviderAPIKeys) (*ModelClient, error) {
+func NewModelClient(modelIDOrAlias string, ms *modelstore.Store, auth *aiauth.Store, keys ProviderCredentials) (*ModelClient, error) {
 	// Resolve model metadata
 	var model *modelstore.Model
 	if ms != nil {
@@ -74,6 +80,14 @@ func NewModelClient(modelIDOrAlias string, ms *modelstore.Store, auth *aiauth.St
 			Provider: guessProvider(modelIDOrAlias),
 			Name:     modelIDOrAlias,
 		}
+	}
+
+	if model.Provider == "openai" && keys.OpenAICodexSubscriptionAuthFile != "" {
+		return &ModelClient{
+			Provider:     model.Provider,
+			Model:        model,
+			OpenAIClient: NewOpenAIClientThroughCodexSubscription(CodexSubscriptionResponsesEndpoint, keys.OpenAICodexSubscriptionAuthFile, model.ID),
+		}, nil
 	}
 
 	apiKey := keys.ForProvider(model.Provider)

@@ -9,6 +9,6 @@ import (
 // tests that build provider clients get a gate instead of a panic. It arms it
 // with no environment: no test here may depend on a secret in the environment.
 func TestMain(m *testing.M) {
-	ArmEgressRedactor(nil, ProviderAPIKeys{})
+	ArmEgressRedactor(nil, ProviderCredentials{})
 	os.Exit(m.Run())
 }
