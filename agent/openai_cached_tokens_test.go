@@ -82,7 +82,10 @@ func TestConvertingAResponseDoesNotClaimTheCachedSpanIsAnthropicCacheRead(t *tes
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	converted := ConvertOpenAIResponseToAnthropic(&resp)
+	converted, err := ConvertOpenAIResponseToAnthropic(&resp)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponseToAnthropic: %v", err)
+	}
 
 	if converted.Usage.CacheReadInputTokens != 0 || converted.Usage.CacheCreationInputTokens != 0 {
 		t.Fatalf("the conversion set Anthropic cache counters (read=%d write=%d) — that decides how the "+

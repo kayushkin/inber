@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -187,58 +188,84 @@ func ConvertAnthropicMessagesToOpenAI(messages []anthropic.MessageParam) []OpenA
 }
 
 // ConvertOpenAIResponseToAnthropic converts an OpenAI response to Anthropic format.
-func ConvertOpenAIResponseToAnthropic(resp *OpenAIResponse) *anthropic.Message {
-	if len(resp.Choices) == 0 {
-		return &anthropic.Message{
-			ID:    resp.ID,
-			Model: anthropic.Model(resp.Model),
-			Role:  "assistant",
-			Usage: anthropic.Usage{
-				InputTokens:  int64(resp.Usage.PromptTokens),
-				OutputTokens: int64(resp.Usage.CompletionTokens),
-			},
-			StopReason: anthropic.StopReasonEndTurn,
-		}
+//
+// The message is decoded from JSON rather than assembled as Go structs, because
+// the SDK's ToParam (and every As* accessor on a content block) rebuilds each
+// block from the raw JSON it was decoded from. A block assembled in Go has none,
+// so ToParam turned every text block into "" and every tool_use into one with
+// no id, name or input. The turn loop stores ToParam's result as history, so an
+// OpenAI-served session forgot everything it had said, and any turn with a tool
+// call was refused on its next request for an empty function name.
+//
+// A tool call whose arguments are not valid JSON is an error, not a block with
+// a blank input.
+func ConvertOpenAIResponseToAnthropic(resp *OpenAIResponse) (*anthropic.Message, error) {
+	type wireBlock struct {
+		Type  string          `json:"type"`
+		Text  string          `json:"text,omitempty"`
+		ID    string          `json:"id,omitempty"`
+		Name  string          `json:"name,omitempty"`
+		Input json.RawMessage `json:"input,omitempty"`
 	}
-	
-	choice := resp.Choices[0]
-	msg := choice.Message
-	
-	// Build content blocks
-	var content []anthropic.ContentBlockUnion
-	
-	// Add text content
-	if msgText, ok := msg.Content.(string); ok && msgText != "" {
-		content = append(content, anthropic.ContentBlockUnion{
-			Type: "text",
-			Text: msgText,
-		})
+	type wireUsage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
 	}
-	
-	// Add tool calls
-	for _, tc := range msg.ToolCalls {
-		content = append(content, anthropic.ContentBlockUnion{
-			Type:  "tool_use",
-			ID:    toolid.Sanitize(tc.ID),
-			Name:  tc.Function.Name,
-			Input: json.RawMessage(tc.Function.Arguments),
-		})
+	type wireMessage struct {
+		ID         string      `json:"id"`
+		Type       string      `json:"type"`
+		Model      string      `json:"model"`
+		Role       string      `json:"role"`
+		Content    []wireBlock `json:"content"`
+		StopReason string      `json:"stop_reason"`
+		Usage      wireUsage   `json:"usage"`
 	}
-	
-	// Map finish reason to Anthropic stop reason
-	stopReason := mapOpenAIFinishReason(choice.FinishReason)
-	
-	return &anthropic.Message{
-		ID:      resp.ID,
-		Model:   anthropic.Model(resp.Model),
-		Role:    "assistant",
-		Content: content,
-		Usage: anthropic.Usage{
-			InputTokens:  int64(resp.Usage.PromptTokens),
-			OutputTokens: int64(resp.Usage.CompletionTokens),
+
+	wire := wireMessage{
+		ID:         resp.ID,
+		Type:       "message",
+		Model:      resp.Model,
+		Role:       "assistant",
+		Content:    []wireBlock{},
+		StopReason: string(anthropic.StopReasonEndTurn),
+		Usage: wireUsage{
+			InputTokens:  resp.Usage.PromptTokens,
+			OutputTokens: resp.Usage.CompletionTokens,
 		},
-		StopReason: stopReason,
 	}
+
+	if len(resp.Choices) > 0 {
+		choice := resp.Choices[0]
+		msg := choice.Message
+
+		if msgText, ok := msg.Content.(string); ok && msgText != "" {
+			wire.Content = append(wire.Content, wireBlock{Type: "text", Text: msgText})
+		}
+
+		for _, tc := range msg.ToolCalls {
+			if !json.Valid([]byte(tc.Function.Arguments)) {
+				return nil, fmt.Errorf("tool call %s (%s) has arguments that are not valid JSON: %q", tc.ID, tc.Function.Name, tc.Function.Arguments)
+			}
+			wire.Content = append(wire.Content, wireBlock{
+				Type:  "tool_use",
+				ID:    toolid.Sanitize(tc.ID),
+				Name:  tc.Function.Name,
+				Input: json.RawMessage(tc.Function.Arguments),
+			})
+		}
+
+		wire.StopReason = string(mapOpenAIFinishReason(choice.FinishReason))
+	}
+
+	encoded, err := json.Marshal(wire)
+	if err != nil {
+		return nil, fmt.Errorf("encode converted OpenAI response: %w", err)
+	}
+	var message anthropic.Message
+	if err := json.Unmarshal(encoded, &message); err != nil {
+		return nil, fmt.Errorf("decode converted OpenAI response: %w", err)
+	}
+	return &message, nil
 }
 
 func mapOpenAIFinishReason(reason string) anthropic.StopReason {

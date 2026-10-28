@@ -109,7 +109,10 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 			return result, fmt.Errorf("OpenAI API call failed: %w", err)
 		}
 		
-		anthropicResp := agent.ConvertOpenAIResponseToAnthropic(resp)
+		anthropicResp, err := agent.ConvertOpenAIResponseToAnthropic(resp)
+		if err != nil {
+			return result, fmt.Errorf("convert OpenAI response: %w", err)
+		}
 
 		// One record per API call, in call order, the way the Anthropic path
 		// keeps them (agent/agent_run.go, processResponse). This loop kept only
