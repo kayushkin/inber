@@ -1020,3 +1020,26 @@ delta is style policing. Three instructions are not:
 and `gpt-5-codex` already exists, which is why the inner check is there at all. In the same window,
 #48269 deletes a model-id substring gate for silently mishandling every model released after it was
 written, and #48057 adds a new one.
+
+## 2026-10-28 — a 429 that says "too many tokens" is a throttle, not an overflow
+
+[opencode #59649](https://github.com/sst/opencode/pull/59649) stops running its overflow text
+patterns on a 429. Cerebras answers a per-minute token throttle with 429 and *"Tokens per minute
+limit exceeded - too many tokens processed"*, which matched `/too many tokens/`, so opencode
+compacted the session when it should have waited for `retry-after`. Real overflows, probed on
+Cerebras, Z.ai and Azure, came back as 400s. Bedrock's stream-time *"Too many tokens, please wait"*
+is the same throttle in different clothes.
+
+inber has the same predicate. `isContextLengthError` (`agent/agent.go:86-95`) matches
+`"too many tokens"` on the error string and never looks at the status code, and a match arms
+`callAPI`'s prune to half the window and one retry (`agent/agent_run.go:227-238`). So a throttle
+worded that way would cost the session half its history and then fail again on the retry. Today
+the predicate runs only on the Anthropic path, and Anthropic's own 429 says *"would exceed the rate
+limit … input tokens per minute"*, which none of the four phrases match. The bug needs a 429 from
+an Anthropic-compatible gateway (the SDK reads `ANTHROPIC_BASE_URL`), so it is latent, not live.
+
+- **What inber should consider:** read the status from `*anthropic.Error` and skip the text phrases
+  on a 429, as opencode did, before the OpenAI path gets a guard of its own (todo
+  df1de352-d94c-4756-9d78-aedcb140e1af) and starts meeting providers that do send this wording.
+  Whether a 429 should ever arm the pruner (Azure sends one for a request larger than the
+  per-minute limit, which can never succeed) is a choice the fix has to make.

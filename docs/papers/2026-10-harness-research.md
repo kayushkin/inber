@@ -42,3 +42,30 @@ stashed id compared with how many stashes it wrote. If the ratio is near the pap
 with no write would cost less and lose nothing measurable. The local
 `~/.inber/memory.db` was last written 2026-03-25 and cannot answer this; the count has
 to come from memory-store and the session event log.
+
+# 2026-10-28 sweep
+
+Two web searches. One in-scope id was new to these docs.
+
+## 2. LLM summaries keep at most 16% of the details a task keeps needing
+
+[arXiv:2610.31710](https://arxiv.org/abs/2610.31710) — **Compact-Bench: Measuring What Context
+Compaction Costs Long-Horizon Coding Agents** (2026-10-22). Each case resumes the same repository
+state twice, once with full history and once from a summary, over 35 SWE-bench repairs, 146 agent
+sessions and 106 production chains.
+
+- Across 14 summarizer models, compaction broke 5% to 64% of the 22 repairs that full history solved.
+- LLM summaries kept at most 16.0% of *recurring details* (things the later turns use again);
+  mechanical extraction kept 79.1%. Production summaries kept 15.7% at the first compaction.
+- The prompt matters as much as the model: with one summarizer, the five prompts tested ranged
+  widely, and one repair was broken by 13 of 14 models.
+- Keeping the relevant facts did not by itself let the agent finish; the summary has to carry
+  progress and the next step.
+
+**What inber should consider:** `SummarizeConversation` exchanges the older turns for one LLM
+summary written by the session's own model under a generic prompt (topics, decisions, status, next
+steps; `conversation/summary_generation.go:40-55`), capped at 800–1024 tokens
+(`conversation/summarize_config.go:31-55`). Nothing mechanical rides alongside it. A cheap
+experiment: before summarizing, pull the file paths, ids, commands and error strings that occur in
+two or more of the dropped turns, and append them verbatim under the summary. Score it by the
+paper's own test — does the resumed session finish — not by how the summary reads.
