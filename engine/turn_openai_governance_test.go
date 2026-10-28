@@ -240,56 +240,6 @@ func TestTheOpenAILoopNeverDrainsTheInjectionChannel(t *testing.T) {
 	}
 }
 
-// TestTheOpenAILoopSendsMaxTokensToEveryReasoningModelItDoesNotNameByPrefix.
-// `turn_openai.go:69-73` picks `max_completion_tokens` on
-// `HasPrefix(model, "o1") || HasPrefix(model, "o3")`. OpenAI rejects `max_tokens`
-// for reasoning-era models with a hard 400 on the first request, and
-// `errorIsEvidenceAboutTheModel` does not exclude a provider 400 — so the model
-// is recorded unhealthy in a host-shared model-store for a parameter name inber
-// chose itself.
-//
-// `openrouter` is routed through this same client and every OpenRouter id is
-// namespaced, so the prefix match cannot fire for any reasoning model reached
-// that way.
-func TestTheOpenAILoopSendsMaxTokensToEveryReasoningModelItDoesNotNameByPrefix(t *testing.T) {
-	missed := []string{"gpt-5", "gpt-5.6-terra", "o4-mini", "openai/o3-mini", "azure/o3"}
-	for _, model := range missed {
-		t.Run(model, func(t *testing.T) {
-			f := newFakeOpenAI(t, textResponse("done"))
-			e := openAIEngineWithModel(t, f, model)
-
-			if _, err := e.runOpenAITurn(context.Background(), nil); err != nil {
-				t.Fatalf("runOpenAITurn: %v", err)
-			}
-
-			req := f.request(0)
-			if req.MaxCompletionTokens != 0 {
-				t.Errorf("%s was sent max_completion_tokens — the prefix match grew a case and the table above is stale", model)
-			}
-			if req.MaxTokens == 0 {
-				t.Errorf("%s was sent neither bound", model)
-			}
-		})
-	}
-
-	// The control. Without it a matcher that sent max_tokens to everything
-	// would turn the whole test green for the wrong reason.
-	for _, model := range []string{"o1-preview", "o3-mini"} {
-		t.Run(model+"/control", func(t *testing.T) {
-			f := newFakeOpenAI(t, textResponse("done"))
-			e := openAIEngineWithModel(t, f, model)
-
-			if _, err := e.runOpenAITurn(context.Background(), nil); err != nil {
-				t.Fatalf("runOpenAITurn: %v", err)
-			}
-
-			if f.request(0).MaxCompletionTokens == 0 {
-				t.Errorf("%s was not sent max_completion_tokens, so the branch this test contrasts with is gone", model)
-			}
-		})
-	}
-}
-
 // TestTheOpenAILoopPricesEveryCachedTokenAsFreshInput. The row this test owns
 // is now half closed, and the two halves want opposite assertions.
 //

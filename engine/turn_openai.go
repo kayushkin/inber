@@ -90,8 +90,12 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 			Model:    client.Model,
 			Messages: oaiMessages,
 		}
-		// o-series models (o1, o3, etc.) require max_completion_tokens instead of max_tokens.
-		if strings.HasPrefix(client.Model, "o1") || strings.HasPrefix(client.Model, "o3") {
+		// OpenAI deprecated max_tokens and refuses it outright on its
+		// reasoning models (the o-series and every gpt-5), while it accepts
+		// max_completion_tokens on all of its chat models. The other
+		// providers this loop serves speak the older field, so the split is
+		// by provider, not by guessing from the model's name.
+		if e.modelClient.Provider == "openai" {
 			req.MaxCompletionTokens = 16384
 		} else {
 			req.MaxTokens = 16384
