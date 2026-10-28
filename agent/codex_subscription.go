@@ -193,6 +193,9 @@ func responsesRequestFromChatCompletion(request OpenAIRequest) (map[string]any, 
 	} else if request.MaxTokens > 0 {
 		body["max_output_tokens"] = request.MaxTokens
 	}
+	if request.PromptCacheKey != "" {
+		body["prompt_cache_key"] = request.PromptCacheKey
+	}
 	if request.Temperature != 0 {
 		body["temperature"] = request.Temperature
 	}

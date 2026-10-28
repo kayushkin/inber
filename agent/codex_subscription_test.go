@@ -78,6 +78,7 @@ func TestARequestThroughTheCodexSubscriptionCarriesEveryMessageAsAResponsesItem(
 		},
 		Tools:               []OpenAITool{{Type: "function", Function: OpenAIFunctionSchema{Name: "read_it", Description: "reads", Parameters: map[string]interface{}{"type": "object"}}}},
 		MaxCompletionTokens: 16384,
+		PromptCacheKey:      "session-1",
 	})
 	if err != nil {
 		t.Fatalf("ChatCompletion: %v", err)
@@ -92,7 +93,7 @@ func TestARequestThroughTheCodexSubscriptionCarriesEveryMessageAsAResponsesItem(
 		`{"content":[{"text":"Reading it.","type":"output_text"}],"role":"assistant","type":"message"},` +
 		`{"arguments":"{\"path\":\"a.txt\"}","call_id":"call_1","name":"read_it","type":"function_call"},` +
 		`{"call_id":"call_1","output":"contents","type":"function_call_output"}],` +
-		`"instructions":"be brief","max_output_tokens":16384,"model":"gpt-test","store":false,"stream":true,` +
+		`"instructions":"be brief","max_output_tokens":16384,"model":"gpt-test","prompt_cache_key":"session-1","store":false,"stream":true,` +
 		`"tools":[{"description":"reads","name":"read_it","parameters":{"type":"object"},"type":"function"}]}`
 	if string(got) != want {
 		t.Errorf("request body\n got %s\nwant %s", got, want)

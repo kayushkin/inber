@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"testing"
+
+	"github.com/kayushkin/inber/session"
 )
 
 // TestTheOutputTokenLimitTravelsInTheFieldEachProviderAccepts. OpenAI answers
@@ -43,5 +45,32 @@ func TestTheOutputTokenLimitTravelsInTheFieldEachProviderAccepts(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestEveryCallOfASessionCarriesTheSessionIDAsItsPromptCacheKey. Without a
+// key OpenAI spread an inber session's calls across caches, and on the Codex
+// subscription served 0-48% of their input from cache against Codex's ~87%.
+func TestEveryCallOfASessionCarriesTheSessionIDAsItsPromptCacheKey(t *testing.T) {
+	var seen []string
+	f := newFakeOpenAI(t, toolCallResponse("call_1", "read_it", `{"path":"a.txt"}`), textResponse("done"))
+	e := openAIEngine(t, f, recordingTool("read_it", "contents", &seen))
+	sess, err := session.New(t.TempDir(), "test-model", "tester", "", nil, "")
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	t.Cleanup(sess.Close)
+	e.Session = sess
+
+	if _, err := e.runOpenAITurn(context.Background(), nil); err != nil {
+		t.Fatalf("runOpenAITurn: %v", err)
+	}
+	if len(f.requests) != 2 {
+		t.Fatalf("the loop made %d requests, want 2", len(f.requests))
+	}
+	for i, request := range f.requests {
+		if request.PromptCacheKey == "" || request.PromptCacheKey != sess.SessionID() {
+			t.Errorf("request %d prompt_cache_key = %q, want the session id %q", i, request.PromptCacheKey, sess.SessionID())
+		}
 	}
 }

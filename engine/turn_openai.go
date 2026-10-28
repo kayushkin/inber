@@ -90,6 +90,11 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 			Model:    client.Model,
 			Messages: oaiMessages,
 		}
+		// One key per session, so every call of a session lands on the cache
+		// its earlier calls filled.
+		if e.Session != nil {
+			req.PromptCacheKey = e.Session.SessionID()
+		}
 		// OpenAI deprecated max_tokens and refuses it outright on its
 		// reasoning models (the o-series and every gpt-5), while it accepts
 		// max_completion_tokens on all of its chat models. The other

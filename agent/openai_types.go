@@ -44,6 +44,11 @@ type OpenAIRequest struct {
 	MaxTokens            int             `json:"max_tokens,omitempty"`
 	MaxCompletionTokens  int             `json:"max_completion_tokens,omitempty"`
 	Stream               bool            `json:"stream,omitempty"`
+	// PromptCacheKey routes requests that share it to the same cache. OpenAI
+	// served almost none of an inber session's repeated prompt from cache
+	// without one: measured on the Codex subscription endpoint, no key hit 0
+	// of 4 repeat calls and a key hit 2 of 4.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }
 
 type OpenAIResponse struct {
