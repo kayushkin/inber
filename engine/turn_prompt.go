@@ -81,6 +81,29 @@ type cachedPrefix struct {
 // in that lookup, so a turn built without them is not a degraded turn — it is a
 // different agent answering. buildTurnContext decides what to do about it.
 func (e *Engine) BuildSystemPrompt(userMessage string) ([]sessionMod.NamedBlock, error) {
+	blocks, err := e.buildAgentSystemBlocks(userMessage)
+	if err != nil {
+		return nil, err
+	}
+	// The caller's text goes first. It is the longest part and the same for
+	// every session the caller starts, so leading with it lets a provider
+	// serve it from cache whatever the agent's own blocks are.
+	if e.injectedSystemPrompt != "" {
+		blocks = append([]sessionMod.NamedBlock{{ID: "injected-system-prompt", Text: e.injectedSystemPrompt}}, blocks...)
+	}
+	// With a memory store the blocks are written even when there are none,
+	// which clears the last turn's; without one, only when there is an identity.
+	if e.workspace != nil && (e.MemStore != nil || len(blocks) > 0) {
+		if err := e.workspace.WriteSystem(blocks); err != nil {
+			Log.Warn("failed to write workspace system blocks: %v", err)
+		}
+	}
+	return blocks, nil
+}
+
+// buildAgentSystemBlocks is the agent's own part of the system prompt: its
+// memories, or its identity text when it runs without a memory store.
+func (e *Engine) buildAgentSystemBlocks(userMessage string) ([]sessionMod.NamedBlock, error) {
 	if e.MemStore != nil {
 		messageTags := memory.AutoTag(userMessage, "user")
 		minImportance, tokenBudget := e.contextBudget(userMessage)
@@ -155,11 +178,6 @@ func (e *Engine) BuildSystemPrompt(userMessage string) ([]sessionMod.NamedBlock,
 			e.Turn.VolatileContext = ""
 		}
 
-		if e.workspace != nil {
-			if err := e.workspace.WriteSystem(blocks); err != nil {
-				Log.Warn("failed to write workspace system blocks: %v", err)
-			}
-		}
 		return blocks, nil
 	}
 
@@ -171,11 +189,6 @@ func (e *Engine) BuildSystemPrompt(userMessage string) ([]sessionMod.NamedBlock,
 		{ID: "identity", Text: e.IdentityOverride},
 	}
 
-	if e.workspace != nil {
-		if err := e.workspace.WriteSystem(blocks); err != nil {
-			Log.Warn("failed to write workspace system blocks: %v", err)
-		}
-	}
 	return blocks, nil
 }
 

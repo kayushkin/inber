@@ -57,6 +57,7 @@ func migrateGatewayDB(db *sql.DB) error {
 			parent_key TEXT NOT NULL DEFAULT '',
 			spawn_depth INTEGER NOT NULL DEFAULT 0,
 			workspace_roots TEXT NOT NULL DEFAULT '',
+			injected_system_prompt TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			message_count INTEGER DEFAULT 0
@@ -115,6 +116,7 @@ func addSessionColumns(db *sql.DB) error {
 		{"parent_key", `ALTER TABLE sessions ADD COLUMN parent_key TEXT NOT NULL DEFAULT ''`},
 		{"spawn_depth", `ALTER TABLE sessions ADD COLUMN spawn_depth INTEGER NOT NULL DEFAULT 0`},
 		{"workspace_roots", `ALTER TABLE sessions ADD COLUMN workspace_roots TEXT NOT NULL DEFAULT ''`},
+		{"injected_system_prompt", `ALTER TABLE sessions ADD COLUMN injected_system_prompt TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, addition := range additions {
 		if existing[addition.name] {
@@ -268,6 +270,41 @@ func encodeWorkspaceRoots(roots []engine.WorkspaceRoot) (string, error) {
 		return "", err
 	}
 	return string(encoded), nil
+}
+
+// SetSessionInjectedSystemPrompt records the text a session's caller supplied to
+// lead its system prompt (engine.EngineConfig.InjectedSystemPrompt). It is kept
+// with the session, not only in its engine, because the engine is built later
+// and rebuilt after a restart: llm-bridge sends the text once, when it starts
+// or resumes the session, and a session rebuilt without it would run without
+// the host prompt and nothing would say so.
+func (s *Store) SetSessionInjectedSystemPrompt(key, text string) error {
+	result, err := s.db.Exec(`UPDATE sessions SET injected_system_prompt = ? WHERE key = ?`, text, key)
+	if err != nil {
+		return fmt.Errorf("record injected system prompt of session %s: %w", key, err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record injected system prompt of session %s: %w", key, err)
+	}
+	if updated != 1 {
+		return fmt.Errorf("record injected system prompt of session %s: no such session", key)
+	}
+	return nil
+}
+
+// SessionInjectedSystemPrompt is the text recorded by
+// SetSessionInjectedSystemPrompt, or "" for a session that has none or no row.
+func (s *Store) SessionInjectedSystemPrompt(key string) (string, error) {
+	var text string
+	err := s.db.QueryRow(`SELECT injected_system_prompt FROM sessions WHERE key = ?`, key).Scan(&text)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read injected system prompt of session %s: %w", key, err)
+	}
+	return text, nil
 }
 
 // SessionWorkspaceRoots returns the forge worktrees recorded against a session
@@ -461,21 +498,21 @@ func (s *Store) ListSessions(kind string) ([]SessionRow, error) {
 
 // RequestRow is a request record.
 type RequestRow struct {
-	ID              int        `json:"id"`
-	SessionKey      string     `json:"session_key"`
-	Status          string     `json:"status"`
-	InputText       *string    `json:"input_text"`
-	OutputText      *string    `json:"output_text"`
-	Turns           int        `json:"turns"`
-	InputTokens     int        `json:"input_tokens"`
-	OutputTokens    int        `json:"output_tokens"`
-	CacheReadTokens int        `json:"cache_read_tokens"`
-	CacheWriteTokens int       `json:"cache_write_tokens"`
-	Cost            float64    `json:"cost"`
-	StartedAt       *time.Time `json:"started_at"`
-	CompletedAt     *time.Time `json:"completed_at"`
-	ErrorText       *string    `json:"error_text"`
-	ParentRequestID *int       `json:"parent_request_id"`
+	ID               int        `json:"id"`
+	SessionKey       string     `json:"session_key"`
+	Status           string     `json:"status"`
+	InputText        *string    `json:"input_text"`
+	OutputText       *string    `json:"output_text"`
+	Turns            int        `json:"turns"`
+	InputTokens      int        `json:"input_tokens"`
+	OutputTokens     int        `json:"output_tokens"`
+	CacheReadTokens  int        `json:"cache_read_tokens"`
+	CacheWriteTokens int        `json:"cache_write_tokens"`
+	Cost             float64    `json:"cost"`
+	StartedAt        *time.Time `json:"started_at"`
+	CompletedAt      *time.Time `json:"completed_at"`
+	ErrorText        *string    `json:"error_text"`
+	ParentRequestID  *int       `json:"parent_request_id"`
 }
 
 // CreateRequest inserts a new request and returns its ID.

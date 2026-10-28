@@ -28,6 +28,10 @@ type EngineConfig struct {
 	NoTools        bool   // disable all tools
 	NoHooks        bool   // skip post-request verification (git/deploy checks)
 	SystemOverride string // override system prompt entirely
+	// InjectedSystemPrompt is text the session's caller supplies to lead the
+	// system prompt, ahead of the agent's own blocks: llm-bridge's host and
+	// project prompt. Empty adds nothing.
+	InjectedSystemPrompt string
 
 	// Session
 	RepoRoot string

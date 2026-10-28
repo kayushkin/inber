@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -131,6 +132,10 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 			DisplayName string `json:"display_name,omitempty"`
 			AgentID     string `json:"agent_id,omitempty"`
 			AutoStart   bool   `json:"auto_start,omitempty"`
+			// SystemPrompt is llm-bridge's host and project prompt. It leads
+			// the agent's own system prompt; see
+			// engine.EngineConfig.InjectedSystemPrompt.
+			SystemPrompt string `json:"system_prompt,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -147,7 +152,16 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		sessionKey := fmt.Sprintf("agent:%s:bridge-%d", agentName, time.Now().UnixNano())
-		g.store.UpsertSession(sessionKey, agentName, "main", SessionLineage{}, nil)
+		if err := g.store.UpsertSession(sessionKey, agentName, "main", SessionLineage{}, nil); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if req.SystemPrompt != "" {
+			if err := g.store.SetSessionInjectedSystemPrompt(sessionKey, req.SystemPrompt); err != nil {
+				jsonError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 
 		now := time.Now()
 		sess := bridgeSession{
@@ -477,8 +491,8 @@ func (g *Server) handleBridgeStop(w http.ResponseWriter, r *http.Request, id str
 
 	jsonResponse(w, bridgeSession{
 		SessionID: id,
-		Harness:  "inber",
-		State:    string(msg.SessionAborted),
+		Harness:   "inber",
+		State:     string(msg.SessionAborted),
 	})
 }
 
@@ -496,8 +510,8 @@ func (g *Server) handleBridgeInterrupt(w http.ResponseWriter, r *http.Request, i
 
 	jsonResponse(w, bridgeSession{
 		SessionID: id,
-		Harness:  "inber",
-		State:    string(msg.SessionIdle),
+		Harness:   "inber",
+		State:     string(msg.SessionIdle),
 	})
 }
 
@@ -511,10 +525,32 @@ func (g *Server) handleBridgeResume(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 
+	// llm-bridge resolves the prompt afresh at every spawn, so a resume carries
+	// the current text. Absent leaves what was recorded; present, even empty,
+	// replaces it, because the bridge sent what it now resolves.
+	var req struct {
+		SystemPrompt *string `json:"system_prompt,omitempty"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			jsonError(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
+	if req.SystemPrompt != nil {
+		if err := g.store.SetSessionInjectedSystemPrompt(id, *req.SystemPrompt); err != nil {
+			jsonError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+	}
+
 	// If the session is already loaded, just return it.
 	if val, ok := g.sessions.Load(id); ok {
 		s := val.(*Session)
 		s.mu.Lock()
+		if req.SystemPrompt != nil {
+			s.Engine.SetInjectedSystemPrompt(*req.SystemPrompt)
+		}
 		info := sessionInfoToBridge(&SessionInfo{
 			Key:        s.Key,
 			Agent:      s.AgentName,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -48,6 +49,9 @@ func (g *Server) forkSession(ctx context.Context, parent *Session, childKey, age
 	if err != nil {
 		return nil, err
 	}
+	// The child has no row of its own yet, so it takes the text that leads
+	// its parent's system prompt from its parent.
+	child.Engine.SetInjectedSystemPrompt(parent.Engine.InjectedSystemPrompt())
 
 	// Replace the empty messages with parent's history. Restoring freezes ALL
 	// of it (conversation.FreezePoint), not the boundary the parent froze: the
@@ -65,9 +69,9 @@ func (g *Server) forkSession(ctx context.Context, parent *Session, childKey, age
 	child.ParentKey = parent.Key
 
 	// Inject sub-agent context.
-	taskContext := fmt.Sprintf("[System] You are a forked sub-agent. "+
-		"You inherited your parent's conversation context. "+
-		"Complete your assigned task and respond with your results. "+
+	taskContext := fmt.Sprintf("[System] You are a forked sub-agent. " +
+		"You inherited your parent's conversation context. " +
+		"Complete your assigned task and respond with your results. " +
 		"Do not repeat context you already have.")
 	child.Engine.Messages = append(child.Engine.Messages,
 		anthropic.NewUserMessage(anthropic.NewTextBlock(taskContext)))
@@ -87,6 +91,16 @@ func (g *Server) recordChildSession(child *Session, agentName, kind string) {
 	g.store.UpsertSession(child.Key, agentName, kind,
 		SessionLineage{ParentKey: child.ParentKey, SpawnDepth: child.SpawnDepth},
 		child.WorkspaceRoots)
+	// A child is rebuilt from this row after a restart, so the prompt it
+	// inherited has to be on it too.
+	if child.Engine == nil {
+		return
+	}
+	if text := child.Engine.InjectedSystemPrompt(); text != "" {
+		if err := g.store.SetSessionInjectedSystemPrompt(child.Key, text); err != nil {
+			log.Printf("[server] ERROR child session %s will lose its injected system prompt on restart: %v", child.Key, err)
+		}
+	}
 }
 
 // childKeySeparator joins a parent's session key to the suffix that makes a

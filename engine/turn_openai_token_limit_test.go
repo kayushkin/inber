@@ -74,3 +74,28 @@ func TestEveryCallOfASessionCarriesTheSessionIDAsItsPromptCacheKey(t *testing.T)
 		}
 	}
 }
+
+// TestTheInjectedSystemPromptLeadsTheAgentsOwn. It goes first because it is the
+// longest part and the same for every session the caller starts, which is what
+// lets a provider serve it from cache.
+func TestTheInjectedSystemPromptLeadsTheAgentsOwn(t *testing.T) {
+	e := &Engine{IdentityOverride: "You are the tester."}
+	e.SetInjectedSystemPrompt("# Host prompt")
+	blocks, err := e.BuildSystemPrompt("hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != 2 || blocks[0].Text != "# Host prompt" || blocks[1].Text != "You are the tester." {
+		t.Fatalf("blocks = %+v, want the injected prompt then the identity", blocks)
+	}
+
+	bare := &Engine{}
+	bare.SetInjectedSystemPrompt("# Host prompt")
+	blocks, err = bare.BuildSystemPrompt("hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != 1 || blocks[0].Text != "# Host prompt" {
+		t.Fatalf("blocks = %+v, want only the injected prompt", blocks)
+	}
+}

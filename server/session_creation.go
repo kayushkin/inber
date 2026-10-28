@@ -168,21 +168,21 @@ func applyRequestOverrides(cfg *engine.EngineConfig, req RunRequest) {
 // and context, and the settings the command read from the environment.
 func (g *Server) engineConfigFor(key, agentName, repoRoot string, workspaceRoots []engine.WorkspaceRoot, ac AgentConfig, injections chan string) engine.EngineConfig {
 	return engine.EngineConfig{
-		AgentName:        agentName,
-		RepoRoot:         repoRoot,
-		WorkspaceRoots:   workspaceRoots,
-		Model:            ac.Model,
-		Thinking:         ac.Thinking,
-		CommandName:      "serve",
-		Injections:       injections,
-		ExtraTools:       g.toolsForAgent(key, agentName),
-		ContextInjectors: g.contextInjectorsFor(key, agentName),
-		AgentStorePath:   g.config.AgentStorePath,
-		LogstackURL:      g.config.LogstackURL,
-		InberServerURL:   g.config.InberServerURL,
-		ToolConnections:  g.config.ToolConnections,
-		ProviderCredentials:  g.config.ProviderCredentials,
-		Blueprint:        g.config.Blueprint,
+		AgentName:           agentName,
+		RepoRoot:            repoRoot,
+		WorkspaceRoots:      workspaceRoots,
+		Model:               ac.Model,
+		Thinking:            ac.Thinking,
+		CommandName:         "serve",
+		Injections:          injections,
+		ExtraTools:          g.toolsForAgent(key, agentName),
+		ContextInjectors:    g.contextInjectorsFor(key, agentName),
+		AgentStorePath:      g.config.AgentStorePath,
+		LogstackURL:         g.config.LogstackURL,
+		InberServerURL:      g.config.InberServerURL,
+		ToolConnections:     g.config.ToolConnections,
+		ProviderCredentials: g.config.ProviderCredentials,
+		Blueprint:           g.config.Blueprint,
 	}
 }
 
@@ -200,6 +200,10 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 	}
 
 	cfg := g.engineConfigFor(key, agentName, repoRoot, workspaceRoots, ac, injections)
+	cfg.InjectedSystemPrompt, err = g.store.SessionInjectedSystemPrompt(key)
+	if err != nil {
+		return nil, err
+	}
 
 	applyRequestOverrides(&cfg, req)
 

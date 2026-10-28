@@ -80,6 +80,9 @@ type Engine struct {
 	Trace            *trace.Recorder     // structured execution logging
 	CodeIndex        *codeindex.Index    // AST-based codebase symbol index
 	IdentityOverride string              // system prompt for raw/override modes
+	// injectedSystemPrompt leads every system prompt this engine builds; see
+	// EngineConfig.InjectedSystemPrompt.
+	injectedSystemPrompt string
 
 	// --- Internal state ---
 	repoRoot string
@@ -166,6 +169,8 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 		providerCredentials:    cfg.ProviderCredentials,
 		noHooks:            cfg.NoHooks,
 		injections:         cfg.Injections,
+
+		injectedSystemPrompt: cfg.InjectedSystemPrompt,
 	}
 
 	// 1. Agent identity — load from registry, resolve model
@@ -534,4 +539,16 @@ func (e *Engine) Close() {
 	if e.memoryProfiler != nil {
 		e.memoryProfiler.Close()
 	}
+}
+
+// SetInjectedSystemPrompt replaces the text that leads the system prompt from
+// the next turn on. A caller that re-resolves its prompt when it resumes a
+// live session uses it, so an edit reaches a session that is already running.
+func (e *Engine) SetInjectedSystemPrompt(text string) {
+	e.injectedSystemPrompt = text
+}
+
+// InjectedSystemPrompt is the text that leads this engine's system prompt.
+func (e *Engine) InjectedSystemPrompt() string {
+	return e.injectedSystemPrompt
 }
