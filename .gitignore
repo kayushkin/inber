@@ -7,3 +7,7 @@ logs/
 
 # the sabotage scorer is a python script; its byte-code must not dirty the tree (227th)
 __pycache__/
+
+# SQLite writes these beside a database whenever anything opens it
+*.db-shm
+*.db-wal
