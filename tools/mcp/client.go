@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"sort"
 	"sync"
@@ -105,7 +104,9 @@ func NewClientWithEnvironment(command []string, extraEnvironment []string) (*Cli
 
 	cmd := exec.Command(command[0], command[1:]...)
 	if len(extraEnvironment) > 0 {
-		cmd.Env = append(os.Environ(), extraEnvironment...)
+		// cmd.Environ is what the child would inherit with no Env set; the
+		// extra entries come after, so they win.
+		cmd.Env = append(cmd.Environ(), extraEnvironment...)
 	}
 	
 	stdin, err := cmd.StdinPipe()
