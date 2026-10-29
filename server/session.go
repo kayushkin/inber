@@ -43,9 +43,12 @@ func (s SessionStatus) MarshalJSON() ([]byte, error) {
 
 // Session represents one ongoing conversation with an agent.
 type Session struct {
-	Key        string
-	AgentName  string
-	Engine     *engine.Engine
+	Key       string
+	AgentName string
+	Engine    *engine.Engine
+	// mcp is the session's running MCP servers, nil when it has none. Guarded
+	// by mu; closed with the session.
+	mcp        *sessionMCPClients
 	Status     SessionStatus
 	SpawnDepth int
 	ParentKey  string
@@ -340,5 +343,12 @@ func (s *Session) close() {
 	s.stop()
 	if s.Engine != nil {
 		s.Engine.Close()
+	}
+	s.mu.Lock()
+	running := s.mcp
+	s.mcp = nil
+	s.mu.Unlock()
+	if running != nil {
+		running.close()
 	}
 }

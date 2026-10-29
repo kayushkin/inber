@@ -45,6 +45,13 @@ func (g *Server) forkSession(ctx context.Context, parent *Session, childKey, age
 		ac.Workspace = engine.PrimaryWorkspaceRoot(parent.WorkspaceRoots)
 	}
 
+	// A fork of the same agent starts with its parent's MCP servers; a resume
+	// that follows replaces their environment with the child's own.
+	if agentName == parent.AgentName {
+		if parentMCP := g.sessionMCPConfigFor(parent.Key); parentMCP != nil {
+			g.mcpConfigs.Store(childKey, parentMCP)
+		}
+	}
 	child, err := g.createSession(ctx, childKey, agentName, ac, RunRequest{}, onEvent)
 	if err != nil {
 		return nil, err

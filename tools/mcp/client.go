@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sort"
 	"sync"
@@ -90,11 +91,22 @@ type Client struct {
 
 // NewClient creates a new MCP client that spawns the given command
 func NewClient(command []string) (*Client, error) {
+	return NewClientWithEnvironment(command, nil)
+}
+
+// NewClientWithEnvironment spawns the command with this process's environment
+// plus the given NAME=value entries, which win over this process's own. A
+// session's MCP servers need values that only that session has, such as the
+// token llm-bridge gives each session to post into its own chat.
+func NewClientWithEnvironment(command []string, extraEnvironment []string) (*Client, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("command cannot be empty")
 	}
 
 	cmd := exec.Command(command[0], command[1:]...)
+	if len(extraEnvironment) > 0 {
+		cmd.Env = append(os.Environ(), extraEnvironment...)
+	}
 	
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

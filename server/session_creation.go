@@ -217,6 +217,23 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 
 	applyRequestOverrides(&cfg, req)
 
+	// The session's MCP servers start with its engine, and their tools join
+	// the server's own. A server that will not start fails the session: it was
+	// asked for, and a session without it is not the session asked for.
+	var mcpClients *sessionMCPClients
+	if mcpConfig := g.sessionMCPConfigFor(key); mcpConfig != nil && len(mcpConfig.Servers) > 0 {
+		mcpClients, err = newSessionMCPClients(mcpConfig)
+		if err != nil {
+			return nil, fmt.Errorf("session %s: %w", key, err)
+		}
+		cfg.ExtraTools = append(cfg.ExtraTools, mcpClients.tools()...)
+	}
+	closeMCPOnFailure := func() {
+		if mcpClients != nil {
+			mcpClients.close()
+		}
+	}
+
 	// Pass shared model store.
 	if g.modelStore != nil {
 		// Engine will use this instead of opening its own.
@@ -229,6 +246,7 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 	// Try to load existing messages and their turn count from persistence.
 	msgs, turnCounter, err := g.transcriptToStartSessionFrom(key, req)
 	if err != nil {
+		closeMCPOnFailure()
 		return nil, err
 	}
 	if len(msgs) > 0 {
@@ -249,6 +267,7 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 
 	eng, err := engine.NewEngine(setupCtx, cfg)
 	if err != nil {
+		closeMCPOnFailure()
 		return nil, fmt.Errorf("create engine for %s: %w", agentName, err)
 	}
 
@@ -287,6 +306,7 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 		Key:            key,
 		AgentName:      agentName,
 		Engine:         eng,
+		mcp:            mcpClients,
 		Status:         Idle,
 		SpawnDepth:     lineage.SpawnDepth,
 		ParentKey:      lineage.ParentKey,

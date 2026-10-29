@@ -16,33 +16,37 @@ import (
 	agentstore "github.com/kayushkin/agent-store"
 	"github.com/kayushkin/forge"
 	"github.com/kayushkin/inber/bus"
-	"github.com/kayushkin/inber/logger"
 	"github.com/kayushkin/inber/internal/textutil"
-	modelstore "github.com/kayushkin/model-store"
+	"github.com/kayushkin/inber/logger"
 	sessionMod "github.com/kayushkin/inber/session"
+	modelstore "github.com/kayushkin/model-store"
 )
 
 // Config and AgentConfig types moved to config.go
 
 // Server manages agent sessions, routing, and sub-agent orchestration.
 type Server struct {
-	config     Config
-	sessions   sync.Map          // sessionKey → *Session
+	config   Config
+	sessions sync.Map // sessionKey → *Session
+	// mcpConfigs holds each session's MCP servers and the environment values
+	// its caller sent for them (sessionKey → *sessionMCPConfig). Memory only:
+	// see session_mcp.go.
+	mcpConfigs sync.Map
 	// pendingSessionKeys holds the keys the mints have handed out and whose
 	// sessions are not in sessions yet, so that two concurrent callers cannot
 	// both be told the same key is free. Entries live for the length of one
 	// spawn, fork or detached run; see releaseSessionKeyReservation.
 	pendingSessionKeys sync.Map // sessionKey → struct{}
-	queue      *Queue
-	store      *Store            // session/request persistence
-	events     *EventPublisher   // bus event publisher (nil = disabled)
-	bus        *bus.Client       // bus subscription client (nil = API-only mode)
-	busManager *BusManager       // bus message handling
-	modelStore  *modelstore.Store
-	agentStore  *agentstore.Store
-	forgeDB     WorkspaceManager             // workspace management
-	workspaces map[string]*forge.Workspace // active workspaces by ID
-	mu         sync.RWMutex
+	queue              *Queue
+	store              *Store          // session/request persistence
+	events             *EventPublisher // bus event publisher (nil = disabled)
+	bus                *bus.Client     // bus subscription client (nil = API-only mode)
+	busManager         *BusManager     // bus message handling
+	modelStore         *modelstore.Store
+	agentStore         *agentstore.Store
+	forgeDB            WorkspaceManager            // workspace management
+	workspaces         map[string]*forge.Workspace // active workspaces by ID
+	mu                 sync.RWMutex
 
 	// spawnChildSession creates the child session that spawn_agent reports on.
 	// Nil means Server.Spawn. It is a field because Spawn mints a session key,
@@ -223,14 +227,14 @@ type RunRequest struct {
 	Author     string `json:"author"`
 
 	// Per-request overrides (thin CLI passes these through from flags).
-	Model          string `json:"model,omitempty"`           // override agent's default model
-	Thinking       int64  `json:"thinking,omitempty"`        // extended thinking token budget
-	Raw            bool   `json:"raw,omitempty"`             // skip context/memory loading
-	NoTools        bool   `json:"no_tools,omitempty"`        // disable all tools
-	NoHooks        bool   `json:"no_hooks,omitempty"`        // skip post-request hooks
-	System         string `json:"system,omitempty"`          // override system prompt
-	NewSession     bool   `json:"new_session,omitempty"`     // start fresh session
-	Detach         bool   `json:"detach,omitempty"`          // one-off session, don't persist
+	Model          string  `json:"model,omitempty"`            // override agent's default model
+	Thinking       int64   `json:"thinking,omitempty"`         // extended thinking token budget
+	Raw            bool    `json:"raw,omitempty"`              // skip context/memory loading
+	NoTools        bool    `json:"no_tools,omitempty"`         // disable all tools
+	NoHooks        bool    `json:"no_hooks,omitempty"`         // skip post-request hooks
+	System         string  `json:"system,omitempty"`           // override system prompt
+	NewSession     bool    `json:"new_session,omitempty"`      // start fresh session
+	Detach         bool    `json:"detach,omitempty"`           // one-off session, don't persist
 	MaxTurns       int     `json:"max_turns,omitempty"`        // safety limit: max API round-trips
 	MaxInputTokens int     `json:"max_input_tokens,omitempty"` // safety limit: max cumulative input tokens
 	MaxCost        float64 `json:"max_cost,omitempty"`         // safety limit: max dollar cost
@@ -295,7 +299,7 @@ type StreamEvent struct {
 	// mispairs precisely when a turn calls one tool more than once. Empty on
 	// every kind that is not a tool event.
 	ToolID string `json:"tool_id,omitempty"`
-	Turn int    `json:"turn,omitempty"` // API round-trip number from session
+	Turn   int    `json:"turn,omitempty"` // API round-trip number from session
 	// MessageID is the model provider's own identifier for the assistant
 	// message this event belongs to. It is what a consumer joins a stream of
 	// deltas back onto the finished message with. Empty on events that belong
@@ -473,12 +477,12 @@ func (g *Server) logError(agent, session, input string, err error) {
 	g.writeErrorLog(logEntry)
 }
 
-// logWarning writes structured warning logs to logs/server-errors.jsonl  
+// logWarning writes structured warning logs to logs/server-errors.jsonl
 func (g *Server) logWarning(agent, session, input, message string) {
 	logEntry := map[string]interface{}{
 		"ts":      time.Now().Format("2006-01-02T15:04:05-07:00"),
 		"level":   "warning",
-		"agent":   agent, 
+		"agent":   agent,
 		"session": session,
 		"input":   truncateInput(input, 200),
 		"error":   message,
@@ -496,7 +500,7 @@ func (g *Server) writeErrorLog(logEntry map[string]interface{}) {
 		return
 	}
 
-	// Open/create the error log file  
+	// Open/create the error log file
 	logFile := filepath.Join(logsDir, "server-errors.jsonl")
 	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {

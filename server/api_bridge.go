@@ -139,6 +139,11 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 			// Model is the model llm-bridge chose for the session. It
 			// outranks the agent's own; see SetSessionSelectedModel.
 			Model string `json:"model,omitempty"`
+			// MCPServers and MCPEnvironment are the session's MCP servers, in
+			// Claude Code's mcpServers shape, and the environment values that
+			// belong to the session; see session_mcp.go.
+			MCPServers     json.RawMessage   `json:"mcp_servers,omitempty"`
+			MCPEnvironment map[string]string `json:"mcp_environment,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -155,6 +160,17 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		sessionKey := fmt.Sprintf("agent:%s:bridge-%d", agentName, time.Now().UnixNano())
+		// Checked before the session is recorded, so a server inber cannot
+		// start refuses the create rather than the first message.
+		var mcpConfig *sessionMCPConfig
+		if len(req.MCPServers) > 0 {
+			parsed, err := parseSessionMCPConfig(req.MCPServers, req.MCPEnvironment)
+			if err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mcpConfig = parsed
+		}
 		if err := g.store.UpsertSession(sessionKey, agentName, "main", SessionLineage{}, nil); err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -167,6 +183,12 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Model != "" {
 			if err := g.store.SetSessionSelectedModel(sessionKey, req.Model); err != nil {
+				jsonError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		if mcpConfig != nil {
+			if err := g.recordSessionMCPConfig(sessionKey, mcpConfig); err != nil {
 				jsonError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -538,8 +560,10 @@ func (g *Server) handleBridgeResume(w http.ResponseWriter, r *http.Request, id s
 	// the current text. Absent leaves what was recorded; present, even empty,
 	// replaces it, because the bridge sent what it now resolves.
 	var req struct {
-		SystemPrompt *string `json:"system_prompt,omitempty"`
-		Model        string  `json:"model,omitempty"`
+		SystemPrompt   *string           `json:"system_prompt,omitempty"`
+		Model          string            `json:"model,omitempty"`
+		MCPServers     json.RawMessage   `json:"mcp_servers,omitempty"`
+		MCPEnvironment map[string]string `json:"mcp_environment,omitempty"`
 	}
 	if r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -550,6 +574,20 @@ func (g *Server) handleBridgeResume(w http.ResponseWriter, r *http.Request, id s
 	if req.SystemPrompt != nil {
 		if err := g.store.SetSessionInjectedSystemPrompt(id, *req.SystemPrompt); err != nil {
 			jsonError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+	}
+	// MCP servers on a resume come with a fresh session token: llm-bridge
+	// mints one at every spawn and refuses the last. A live session's servers
+	// restart with it; a session not loaded starts them when it is rebuilt.
+	if len(req.MCPServers) > 0 {
+		mcpConfig, err := parseSessionMCPConfig(req.MCPServers, req.MCPEnvironment)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := g.recordSessionMCPConfig(id, mcpConfig); err != nil {
+			jsonError(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 	}
