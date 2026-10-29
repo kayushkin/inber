@@ -69,3 +69,24 @@ steps; `conversation/summary_generation.go:40-55`), capped at 800–1024 tokens
 experiment: before summarizing, pull the file paths, ids, commands and error strings that occur in
 two or more of the dropped turns, and append them verbatim under the summary. Score it by the
 paper's own test — does the resumed session finish — not by how the summary reads.
+
+## 3. Rolling drop of old tool responses beats threshold summarization, on a serving stack that can drop without re-prefill
+
+[arXiv:2610.28577](https://arxiv.org/abs/2610.28577) — **Cache Engineering for Agents**
+(2026-10-20; code at github.com/thu-nics/AKV). Trimming or summarizing history changes the prefix,
+so every later cached state is lost and the kept context has to be prefilled again. The paper lets
+the agent `drop` chosen KV entries from future attention and `repos` the kept keys' positions,
+without rewriting the token sequence. Its AKV serving engine keeps a stateless API and tracks the
+cache state, because the same tokens can now map to different caches. A policy that drops tool
+responses as they age scored 1.7 points higher on average across three models and four benchmarks
+than threshold-triggered summarization, and cost 27.7% less. Old tokens and tool responses drew less
+attention than recent turns and assistant text.
+
+**What inber should consider:** inber calls hosted APIs, so it cannot drop KV entries; its age-based
+pass (`conversation/manage_tool_pruning.go:30-56`: keep 3 turns, summarize, drop after 8 in the
+default config at `conversation/manage_config.go:48-50`) rewrites the prefix and pays the re-prefill
+the paper avoids. The transferable part is the ordering: the paper's accuracy result supports aging
+tool results out before summarizing anything. The open question for inber is cost, not accuracy:
+each age step moves the rewrite point and breaks the cache from there. Moving the age boundary
+in steps (drop eight turns' results at once, not one per turn) would trade a little context for
+fewer cache breaks; measure cache-read share per session before and after.

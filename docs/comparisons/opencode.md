@@ -1043,3 +1043,36 @@ an Anthropic-compatible gateway (the SDK reads `ANTHROPIC_BASE_URL`), so it is l
   df1de352-d94c-4756-9d78-aedcb140e1af) and starts meeting providers that do send this wording.
   Whether a 429 should ever arm the pruner (Azure sends one for a request larger than the
   per-minute limit, which can never succeed) is a choice the fix has to make.
+
+## 2026-10-28 (second pass) — the spawn result should name the steering tool
+
+[opencode #60045](https://github.com/sst/opencode/pull/60045) adds one line to a background
+subagent's result: to change a running child's instructions, call the subagent tool again with
+its `sessionID`. Without it, agents asked to redirect a running child picked the wrong path: Opus
+5.5 failed 13 of 20 replayed runs, Haiku 5.5 12 of 20, and Sonnet 4.5 and DeepSeek all 20. After
+the change nearly every model failed 0 of 20; Haiku 4.5 still failed 13 of 40. Unrelated requests
+still started a fresh child, so the hint did not cause over-reuse.
+
+inber gives every server session both `spawn_agent` and `steer_agent` (`server/agent_tools.go:10-13`),
+but nothing joins them. `spawn_agent`'s description (`server/spawn_tools.go:76-78`) never names
+`steer_agent`, and its result (`server/spawn_tools.go:144-145`) prints the child key in parentheses
+without saying that this is the `session_key` that `steer_agent` takes. That is the gap opencode
+measured, though inber's wrong path differs: a second `spawn_agent` runs a duplicate child, where
+opencode's model sent the text and lost the answer.
+
+- **What inber should consider:** add one line to the spawn result, e.g. "To change its
+  instructions while it runs, call steer_agent with session_key=<key>." Before calling it a
+  defect, replay a redirect request against the agents in `~/inber-workspace/agents/` and count
+  duplicate spawns, as #60045 did. Not filed as a todo: no inber failure has been measured yet.
+
+**Screened, nothing new to inber:** opencode #59934 (leave 1% of the window when `max_tokens` is
+fitted to the room left; inber never fits it: it sends a fixed 16384 (`agent/agent_run.go:58`,
+`engine/turn_openai.go:104-106`) and prunes at half the window (`engine/build.go:121`), so the
+edge it guards is one inber does not reach unless todo `939d5fdc`'s low estimate runs far low),
+#59437 `/goal`, #59457/#59401 scheduled prompts (scheduler owns this here), #59963 freeform tools
+(covered in agentic-design-patterns.md at codex #21687). codex #57839 (save whether a usage count
+already includes reasoning, so resume does not compact early; inber's gate estimates from the
+messages and does not read saved usage), #57834/#57790 and the rest of the Guardian moves (inber
+has no reviewer model), #57870/#57848/#57850 (code-mode output bounds), #57978 (per-chat MCP
+leases; inber's MCP client has no non-test caller), #57866. cline: cloud-session and desktop UX
+only this pass. goose #12880 (one state machine per process) is an internal refactor.
