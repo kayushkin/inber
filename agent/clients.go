@@ -151,7 +151,14 @@ func newClientFromKey(apiKey string, model *modelstore.Model) (*ModelClient, err
 // client they were given, and a gate installed per call site would have to be
 // remembered at every one of them.
 func newAnthropicClient(key string) (*anthropic.Client, error) {
-	log.Printf("[auth] creating Anthropic client: key_prefix=%s", key[:min(20, len(key))])
+	// Name the kind of credential, never any of its characters: the first 20
+	// of a key were logged here, enough to tell keys apart in any log reader
+	// and more of the secret than a log line has any use for.
+	kind := "API key"
+	if strings.HasPrefix(key, "sk-ant-oat01-") {
+		kind = "OAuth token"
+	}
+	log.Printf("[auth] creating Anthropic client with an %s", kind)
 
 	if strings.HasPrefix(key, "sk-ant-oat01-") {
 		c := anthropic.NewClient(
