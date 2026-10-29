@@ -58,6 +58,7 @@ func migrateGatewayDB(db *sql.DB) error {
 			spawn_depth INTEGER NOT NULL DEFAULT 0,
 			workspace_roots TEXT NOT NULL DEFAULT '',
 			injected_system_prompt TEXT NOT NULL DEFAULT '',
+			selected_model TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			message_count INTEGER DEFAULT 0
@@ -117,6 +118,7 @@ func addSessionColumns(db *sql.DB) error {
 		{"spawn_depth", `ALTER TABLE sessions ADD COLUMN spawn_depth INTEGER NOT NULL DEFAULT 0`},
 		{"workspace_roots", `ALTER TABLE sessions ADD COLUMN workspace_roots TEXT NOT NULL DEFAULT ''`},
 		{"injected_system_prompt", `ALTER TABLE sessions ADD COLUMN injected_system_prompt TEXT NOT NULL DEFAULT ''`},
+		{"selected_model", `ALTER TABLE sessions ADD COLUMN selected_model TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, addition := range additions {
 		if existing[addition.name] {
@@ -291,6 +293,40 @@ func (s *Store) SetSessionInjectedSystemPrompt(key, text string) error {
 		return fmt.Errorf("record injected system prompt of session %s: no such session", key)
 	}
 	return nil
+}
+
+// SetSessionSelectedModel records the model the session's caller chose for it
+// (llm-bridge decides one for every session it starts). It is kept with the
+// session for the same reason as the injected system prompt: the engine is
+// built later and rebuilt after a restart, and one rebuilt without it would
+// run on the agent's own model and nothing would say so.
+func (s *Store) SetSessionSelectedModel(key, model string) error {
+	result, err := s.db.Exec(`UPDATE sessions SET selected_model = ? WHERE key = ?`, model, key)
+	if err != nil {
+		return fmt.Errorf("record selected model of session %s: %w", key, err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record selected model of session %s: %w", key, err)
+	}
+	if updated != 1 {
+		return fmt.Errorf("record selected model of session %s: no such session", key)
+	}
+	return nil
+}
+
+// SessionSelectedModel is the model recorded by SetSessionSelectedModel, or ""
+// for a session that has none or no row.
+func (s *Store) SessionSelectedModel(key string) (string, error) {
+	var model string
+	err := s.db.QueryRow(`SELECT selected_model FROM sessions WHERE key = ?`, key).Scan(&model)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read selected model of session %s: %w", key, err)
+	}
+	return model, nil
 }
 
 // SessionInjectedSystemPrompt is the text recorded by

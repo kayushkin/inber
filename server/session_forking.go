@@ -50,8 +50,19 @@ func (g *Server) forkSession(ctx context.Context, parent *Session, childKey, age
 		return nil, err
 	}
 	// The child has no row of its own yet, so it takes the text that leads
-	// its parent's system prompt from its parent.
+	// its parent's system prompt, and the model its parent's caller chose,
+	// from its parent.
 	child.Engine.SetInjectedSystemPrompt(parent.Engine.InjectedSystemPrompt())
+	parentModel, err := g.store.SessionSelectedModel(parent.Key)
+	if err != nil {
+		child.close()
+		return nil, err
+	}
+	// Only a child of the same agent: a spawned child of another agent runs
+	// on that agent's model.
+	if parentModel != "" && agentName == parent.AgentName {
+		child.Engine.SetModel(parentModel)
+	}
 
 	// Replace the empty messages with parent's history. Restoring freezes ALL
 	// of it (conversation.FreezePoint), not the boundary the parent froze: the
@@ -99,6 +110,16 @@ func (g *Server) recordChildSession(child *Session, agentName, kind string) {
 	if text := child.Engine.InjectedSystemPrompt(); text != "" {
 		if err := g.store.SetSessionInjectedSystemPrompt(child.Key, text); err != nil {
 			log.Printf("[server] ERROR child session %s will lose its injected system prompt on restart: %v", child.Key, err)
+		}
+	}
+	if kind != "fork" {
+		return
+	}
+	if model, err := g.store.SessionSelectedModel(child.ParentKey); err != nil {
+		log.Printf("[server] ERROR child session %s will lose its parent's selected model on restart: %v", child.Key, err)
+	} else if model != "" {
+		if err := g.store.SetSessionSelectedModel(child.Key, model); err != nil {
+			log.Printf("[server] ERROR child session %s will lose its selected model on restart: %v", child.Key, err)
 		}
 	}
 }

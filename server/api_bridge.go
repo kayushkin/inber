@@ -136,6 +136,9 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 			// the agent's own system prompt; see
 			// engine.EngineConfig.InjectedSystemPrompt.
 			SystemPrompt string `json:"system_prompt,omitempty"`
+			// Model is the model llm-bridge chose for the session. It
+			// outranks the agent's own; see SetSessionSelectedModel.
+			Model string `json:"model,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -158,6 +161,12 @@ func (g *Server) handleBridgeSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.SystemPrompt != "" {
 			if err := g.store.SetSessionInjectedSystemPrompt(sessionKey, req.SystemPrompt); err != nil {
+				jsonError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		if req.Model != "" {
+			if err := g.store.SetSessionSelectedModel(sessionKey, req.Model); err != nil {
 				jsonError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -530,6 +539,7 @@ func (g *Server) handleBridgeResume(w http.ResponseWriter, r *http.Request, id s
 	// replaces it, because the bridge sent what it now resolves.
 	var req struct {
 		SystemPrompt *string `json:"system_prompt,omitempty"`
+		Model        string  `json:"model,omitempty"`
 	}
 	if r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -543,6 +553,14 @@ func (g *Server) handleBridgeResume(w http.ResponseWriter, r *http.Request, id s
 			return
 		}
 	}
+	// A model on a resume is the one llm-bridge chose at this spawn. Absent
+	// leaves the recorded one; there is no "no model" to set.
+	if req.Model != "" {
+		if err := g.store.SetSessionSelectedModel(id, req.Model); err != nil {
+			jsonError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+	}
 
 	// If the session is already loaded, just return it.
 	if val, ok := g.sessions.Load(id); ok {
@@ -550,6 +568,9 @@ func (g *Server) handleBridgeResume(w http.ResponseWriter, r *http.Request, id s
 		s.mu.Lock()
 		if req.SystemPrompt != nil {
 			s.Engine.SetInjectedSystemPrompt(*req.SystemPrompt)
+		}
+		if req.Model != "" {
+			s.Engine.SetModel(req.Model)
 		}
 		info := sessionInfoToBridge(&SessionInfo{
 			Key:        s.Key,

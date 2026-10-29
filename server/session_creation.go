@@ -204,6 +204,16 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 	if err != nil {
 		return nil, err
 	}
+	// A model the caller chose for the session outranks the agent's own; a
+	// model on the request itself, applied below, outranks both.
+	selectedModel, err := g.store.SessionSelectedModel(key)
+	if err != nil {
+		return nil, err
+	}
+	if selectedModel != "" {
+		cfg.Model = selectedModel
+		cfg.ModelExplicitlySet = true
+	}
 
 	applyRequestOverrides(&cfg, req)
 
