@@ -1,87 +1,96 @@
 # Cline Comparison
 
+**Last reviewed**: 2026-10-29 against cline/cline@1facdca6e (2026-10-29).
+
 **Project**: [Cline](https://github.com/cline/cline)
-**Language**: TypeScript (VS Code extension)
-**Focus**: Autonomous coding agent in-editor with strict human-in-the-loop approval for every action
-**Key Strengths**: AST-based context management, checkpoint/restore, browser automation, MCP extensibility, ~60k stars
+**Language**: TypeScript (Bun workspace: an SDK plus several host apps)
+**Status**: Active; VS Code extension at 4.1.26 at review time.
+**Focus**: A coding agent that runs in VS Code, JetBrains, a terminal CLI, a desktop app, or embedded through `@cline/sdk`, with human approval on by default and an auto-approve switch.
+**Key Strengths**: One agent core shared by every host, workspace checkpoints with restore, Plan/Act modes, MCP and SDK plugins, multi-agent teams, scheduled agents, chat connectors.
 
 ## Architecture Overview
 
-Cline is a VS Code extension where the agent interacts with the codebase through the editor's APIs — file system, terminal, diagnostics, diff views. Every action (file write, terminal command, browser action) surfaces in the VS Code GUI for explicit user approval.
+In 2026 Cline moved from a single VS Code extension to a layered SDK that every host calls (`sdk/ARCHITECTURE.md`):
 
 ```
-VS Code Sidebar (React webview)
-    → Task execution loop
-    → Tool calls (file ops, terminal, browser, MCP)
-    → Human approval gate (VS Code diff view / dialog)
-    → LLM (Anthropic, OpenAI, Google, Bedrock, Vertex, OpenRouter, etc.)
+@cline/shared  — types, hook contracts, prompt helpers, storage paths
+@cline/llms    — provider settings, model catalogs, AI SDK-backed provider calls
+@cline/agents  — the stateless agent loop
+@cline/core    — sessions, tools, MCP, checkpoints, compaction, plugins, hub
+host apps      — VS Code extension (apps/vscode), CLI (apps/cli), desktop app
+                 (Tauri shell, Bun sidecar, Next.js UI), JetBrains plugin (closed source)
 ```
 
-The checkpoint system takes workspace snapshots at each step, enabling diff-and-restore to any prior state. MCP support enables dynamic tool extension — the agent can even create new MCP servers on the fly.
+A "hub" daemon can own sessions so that several hosts, scheduled jobs and chat connectors (Slack, Telegram, Discord, WhatsApp, Google Chat, Linear) reach the same agent. Cline Cloud runs tasks in a hosted sandbox on a chosen GitHub repo and branch.
+
+The model-facing tool set is small: `run_commands`, `read_files`, `editor`, `search_codebase`, `skills`, `ask_question`, `submit_and_exit`, plus MCP tools. Old tool names such as `execute_command`, `replace_in_file` and `list_code_definition_names` survive only as aliases in `sdk/packages/core/src/runtime/orchestration/runtime-builder.ts`.
 
 ## What Cline Does Well
 
-### 1. AST-Based Context Management ⭐️
+### 1. Checkpoints with Diff and Restore ⭐️
 
-Cline uses tree-sitter to parse source code structure and builds a semantic codebase index with embeddings. Instead of naively stuffing files into context, it extracts symbol definitions and uses targeted searches. This enables working on large projects without exhausting the context window.
+Git-backed snapshots at each step, kept apart from the user's own history. A user can compare any checkpoint with the current tree and restore the whole workspace, untracked files included. Since 2026 a restore refuses to run when commits were made after the checkpoint, instead of dropping them off the branch.
 
-**Inber connection**: Inber's context system builds prompts from memory entries with token budgets (`turn_context.go`), but doesn't analyze code structure. AST-based context would significantly improve coding task efficiency.
+**Inber connection**: inber has no workspace checkpoint. `checkpoint/checkpoint.go` is a design sketch whose methods all return `ErrNotImplemented`; only the conversation half is written (`session/checkpoint.go`). inber does auto-commit each file write by default (`engine/workflow_hooks.go`, `DefaultAutoWorkflowConfig`), which gives a coarser undo through git.
 
-### 2. Checkpoint System with Diff/Restore
+### 2. One Core, Many Hosts
 
-Git worktree-based snapshots at each step. Users can compare any checkpoint against the current state and restore to any prior point. Finer-grained than git commits — captures intermediate states within a single task.
+The same agent loop runs in the editor, the terminal, a desktop app, CI (`cline --json`), a cron schedule (`cline schedule create`) and chat apps. Hosts differ only in how they show events and ask for approval.
 
-**Inber connection**: Inber saves messages to workspace JSON and logs to JSONL, but doesn't capture workspace state snapshots. For agents with file write access, checkpointing would provide safety and undo capability.
+**Inber connection**: inber is a server only. Clients reach it over HTTP (`server/api.go`), the llm-bridge routes (`server/api_bridge.go`) and a NATS bus (`bus/`). The terminal client is a separate repo (inber-cli).
 
-### 3. Browser Automation
+### 3. Plan and Act, with Approval
 
-Launches a headless browser (Puppeteer/Playwright), interacts with web pages (click, type, scroll), captures screenshots and console logs. Enables visual debugging and end-to-end testing workflows.
+Plan mode explores and proposes; Act mode edits and runs commands. Every edit and command asks for approval unless the user turns on auto-approve.
 
-### 4. MCP as Extensibility Primitive
+**Inber connection**: inber's `guard` package has `observe`, `assist` and `autonomous` modes (`guard/guard.go`). `assist` refuses calls that need approval because no approver is wired (`engine/build_hooks.go`).
 
-Rather than a custom plugin system, Cline uses MCP for tool extension. It can connect to MCP servers and even create new ones on-the-fly ("add a tool that fetches Jira tickets"). This bets on ecosystem effects and interoperability.
+### 4. MCP and SDK Plugins
 
-### 5. Mention System for Context Injection
+Cline connects to MCP servers (`cline mcp` manages them) and can write a new MCP server on request. The SDK adds code plugins that register tools and lifecycle hooks in-process.
 
-`@file`, `@folder`, `@url` (fetches and converts to markdown), `@problems` (workspace diagnostics) give users fine-grained control over what the agent sees. Simple but effective context management UX.
+**Inber connection**: inber's tools come from the tool-store library (`engine/engine_new.go`). `tools/mcp/` holds an MCP stdio client, but nothing outside that package calls it, so inber does not load MCP tools today.
+
+### 5. Browser Automation
+
+The VS Code host still drives a headless Chromium through `puppeteer-core` (`apps/vscode/src/services/browser/`) to click, type, scroll and capture screenshots and console logs.
+
+### 6. Rules and Skills
+
+`.clinerules` files carry project rules into every host; skills let the model load a rule set only when it needs it.
 
 ## What Inber Should Adopt
 
-### 1. Codebase Indexing for Context (MEDIUM PRIORITY)
+### 1. Workspace Checkpointing (MEDIUM PRIORITY)
 
-Tree-sitter parsing + embedding-based semantic search for code context. When an agent is working on code, retrieve relevant symbols and definitions rather than relying on the agent to manually read files.
+Take git snapshots at turn boundaries for agents with write access, and expose the list through the session routes. `checkpoint/checkpoint.go` already records the three open questions: does a checkpoint rewind the conversation, the files, or both; one per turn or per user turn; are untracked files captured. Cline's answers are "both, separately", "per message" and "yes".
 
-This would enhance `turn_prompt.go`'s context building for coding tasks without changing the overall architecture.
+### 2. Linter/Compiler Feedback (LOW PRIORITY)
 
-### 2. Workspace Checkpointing (MEDIUM PRIORITY)
+Cline reads diagnostics after each edit and fixes them before the user sees them. inber's workflow hooks can format after a write (`engine/workflow_format.go`) and run build checks (`engine/workflow_build.go`), but do not feed compiler output back to the model as context.
 
-For agents with file write access, take git snapshots at turn boundaries:
-- Before RunTurn: snapshot workspace state
-- After RunTurn: if files changed, create a checkpoint commit
-- Expose checkpoint list via session history endpoints
+### Withdrawn: AST-based codebase indexing
 
-This provides undo capability without requiring the agent to manage git itself.
-
-### 3. Linter/Compiler Monitoring (LOW PRIORITY)
-
-Cline watches for diagnostic errors after file changes and proactively fixes issues. Inber's workflow hooks already run build/test after tool calls (`workflow_build.go`), but feeding compiler output back as context for the next turn would close the loop.
+Earlier versions of this file said Cline builds a tree-sitter and embedding index and recommended inber copy it. Cline never shipped an embedding index (that was its fork Roo Code), and the 2026 SDK carries no tree-sitter dependency at all: a code search on the repo for `web-tree-sitter` finds nothing, and `list_code_definition_names` now maps to plain `search_codebase`. inber's `codeindex/` package, written from that recommendation, is still a stub.
 
 ## What's Different
 
 | Aspect | Cline | Inber |
 |--------|-------|-------|
-| **Runtime** | VS Code extension | Standalone Go server |
-| **Approval model** | Every action needs GUI approval | Tool allowlists per agent |
-| **Context** | AST + embeddings + mentions | Memory store + token budget |
-| **Multi-agent** | Single agent per task | 10 named agents, bus-based |
-| **Persistence** | VS Code workspace state | SQLite agent-store |
-| **Extensibility** | MCP-first | agentkit + MCP |
-| **Deployment** | Desktop only (VS Code) | Server, headless, CLI |
-| **Target** | Individual developer | Multi-agent infrastructure |
+| **Runtime** | SDK core under VS Code, JetBrains, CLI, desktop, cloud | Go server (`cmd/inber-server`) |
+| **Approval model** | Ask on every edit and command, or auto-approve | Mode per session (`guard/`); `assist` refuses rather than asks |
+| **Context** | Rules, skills, mentions, compaction | Memory store + token budget + injected system prompt |
+| **Multi-agent** | Agent teams with a coordinator; subagents | Named agents from agent-store; spawn depth 2, 5 children each (`server/config.go`) |
+| **Persistence** | Local task history; hub-owned sessions | SQLite (sessions, agent-store, memory-store) |
+| **Extensibility** | MCP + SDK plugins + hooks | tool-store tools; MCP client present but not wired |
+| **Providers** | Dozens through AI SDK and OpenAI-compatible endpoints | Anthropic, OpenAI-compatible, ChatGPT subscription (`agent/codex_subscription.go`) |
+| **Deployment** | Desktop, editor, terminal, CI, cloud | Server, headless |
 
 ## Key Takeaway
 
-Cline's most transferable innovation is **AST-based context management** — using code structure analysis to build efficient, relevant context within token budgets. This would directly improve inber's coding task performance. The checkpoint system is also valuable for any agent with file write access. Cline's strict human-in-the-loop model is the opposite of inber's autonomous approach, but the underlying tools (code indexing, checkpointing, compiler monitoring) are universally useful.
+Cline's most useful idea for inber is now the split itself: one agent core, many thin hosts, approval as a host concern. Of the original list, workspace checkpoints are still worth taking; AST indexing is withdrawn because Cline dropped it.
+
+---
 
 ## Harness-watch — 2026-06-07: skills travel *bundled inside plugins*, discovered as extra search roots (no plugin-specific skill format)
 

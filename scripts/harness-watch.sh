@@ -29,15 +29,19 @@ MAX_FINDING_TODOS="${MAX_FINDING_TODOS:-3}"
 # Curated upstream harnesses we track. Each entry maps a comparison doc
 # under docs/comparisons/ to its canonical GitHub repo. Update both sides
 # when adding a new harness.
+# Checked 2026-10-29: goose moved to aaif-goose/goose and opencode to
+# anomalyco/opencode, and RooCodeInc/Roo-Code was archived on 2026-05-15, so
+# it is no longer followed (its comparison doc stays as history). gemini-cli
+# had a comparison doc and was not followed; it is now.
 HARNESSES=(
   "claude-code|anthropics/claude-code"
   "codex|openai/codex"
   "cline|cline/cline"
   "aider|Aider-AI/aider"
-  "goose|block/goose"
-  "roo-code|RooCodeInc/Roo-Code"
-  "opencode|sst/opencode"
+  "goose|aaif-goose/goose"
+  "opencode|anomalyco/opencode"
   "dexto|truffle-ai/dexto"
+  "gemini-cli|google-gemini/gemini-cli"
 )
 
 cd "$REPO_DIR"

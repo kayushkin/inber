@@ -7687,7 +7687,7 @@ something explicitly un-stops it.
 `deploy` is reachable only via `buildConfiguredTools` (`engine/build_tools.go:23-35`),
 it is not in `tools.All()` (`tools/tools.go:83-91`) and not in
 `buildDefaultTools`, `agent_tools` in agent-store has zero rows on this host, and
-none of the ten agents in `/home/kayushkincom/inber-workspace/agents.json` lists
+none of the ten agents in `~/inber-workspace/agents.json` lists
 it. One JSON line makes it live, and the rest of the tree already treats it as a
 mutating tool (`guard/guard.go:330`, `agent/read_cache.go:230`).
 
@@ -7696,7 +7696,7 @@ mutating tool (`guard/guard.go:330`, `agent/read_cache.go:230`).
 `~/repos/.pools/<project>/slot-N`. `inber-server` is a daemon serving many
 sessions with many workspaces, and the working directory is a property of the
 process. Measured on the live server: `/proc/1765544/cwd ->
-/home/kayushkincom/repos/inber`, which is not inside a slot — so the tool would
+~/repos/inber`, which is not inside a slot — so the tool would
 fail for every session, always, naming a directory no agent asked about. Start the
 server from inside a slot instead and it deploys *that* slot for every caller,
 which is a live preview publish of another session's checkout.
@@ -8463,7 +8463,7 @@ It came from `select slug, workspace from agents`, and `agents.workspace` is **n
 inber reads**. `registry.LoadFromAgentStore` → `GetAllAgentConfigs` → `GetFullAgentConfig`, and the
 only assignment of that field in the whole store is `Workspace: ao.WorkspacePath`
 (`~/repos/agent-store/store.go:570`) — i.e. **`agent_harness.workspace_path`**. On that column
-fionn's workspace is `/home/kayushkincom/repos/inber`, which explains the directories exactly, and
+fionn's workspace is `~/repos/inber`, which explains the directories exactly, and
 17 of 18 rows are populated. `agents.workspace` is empty for every row but claxon and is read by
 nothing on this path.
 

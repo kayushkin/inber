@@ -1,5 +1,7 @@
 # Jig Comparison
 
+**Last reviewed**: 2026-10-29 against jdforsythe/jig@17d4ee8 (2026-04-02). Quiet since April 2026 (the last commits add tests); not archived. The features below are unchanged.
+
 **Project**: [Jig](https://github.com/jdforsythe/jig)
 **Language**: Go
 **Focus**: Profile manager and launcher for Claude Code sessions — assembles configuration and invokes `claude` with the right flags
@@ -39,7 +41,7 @@ skills: [code-review, testing]
 allowed_tools: [shell, file_write]
 ```
 
-**Inber connection**: Inber's agents in agent-store have flat configs (no inheritance). Profile inheritance would be useful for agent variants — a base agent with common settings and specialized versions that override specific tools or prompts.
+**Inber connection**: Inber loads agents from agent-store (`agent/registry/config.go`, `LoadFromAgentStore`) as flat configs; neither side has an `extends` field. Profile inheritance would be useful for agent variants — a base agent with common settings and specialized versions that override specific tools or prompts.
 
 ### 2. TUI Profile Manager
 
@@ -49,7 +51,7 @@ Full terminal UI with vim-style keybindings: profile list with launch/create/edi
 
 `jig init` creates `.jig/profiles/` in the current directory. Project-local profiles take precedence over global ones and can be checked into version control.
 
-**Inber connection**: Agent configs in agent-store are global. Per-project agent overrides (workspace-specific tool allowlists, prompts, or limits) would be useful.
+**Inber connection**: Agent configs in agent-store are global. Inber does keep per-repo state in a `.inber/` directory (the sessions database, `session/db_migration.go`; checkpoints, `checkpoint/checkpoint.go`), but no agent settings live there. Per-project agent overrides (workspace-specific tool allowlists, prompts, or limits) would be useful.
 
 ### 4. Granular Plugin Component Selection
 
@@ -82,7 +84,7 @@ A `GET /api/doctor` endpoint or equivalent that validates:
 - NATS is connected
 - Agent-store is accessible
 
-The healthcheck service partially covers this, but a more comprehensive validation would help debugging.
+Inber has part of this now. At startup `inber-server` runs a self-test of NATS, agent-store, the workspace and the Anthropic key, and fails on whichever checks the `--require` flag names (`server/selftest.go`). It also serves its declared settings, read-only, at `GET /settings` (`cmd/inber-server/settings.go`). What is missing is a check of every agent config and of model-store credentials that a person can run on demand.
 
 ## What's Different
 
@@ -90,7 +92,7 @@ The healthcheck service partially covers this, but a more comprehensive validati
 |--------|-----|-------|
 | **Purpose** | Pre-session config + launch | Full agent lifecycle (run, communicate, remember) |
 | **Execution** | Launches `claude` subprocess, exits | Long-running server with concurrent agents |
-| **Config** | YAML profiles with inheritance | SQLite agent-store |
+| **Config** | YAML profiles with inheritance | SQLite agent-store; server settings declared with llm-bridge's `servicesettings` |
 | **Scope** | Claude Code session configuration | Multi-agent orchestration |
 | **Communication** | None (single process) | NATS JetStream pub/sub |
 | **Persistence** | YAML files in filesystem | SQLite (agent-store, model-store, session DB) |

@@ -1,10 +1,12 @@
 # Herdr Comparison
 
-**Project**: [Herdr](https://herdr.dev/) — [github.com/ogulcancelik/herdr](https://github.com/ogulcancelik/herdr)
+**Last reviewed**: 2026-10-29 against herdrdev/herdr@ee5bfb5 (2026-10-29). The repo moved from `ogulcancelik/herdr` to the `herdrdev` organization (GitHub redirects the old name). Very active: release 0.9.5 on 2026-10-14 and commits daily.
+
+**Project**: [Herdr](https://herdr.dev/) — [github.com/herdrdev/herdr](https://github.com/herdrdev/herdr)
 **Language**: Rust (single binary, no Electron). Vendors `libghostty-vt` (terminal emulation) and `portable-pty`.
 **License**: Apache-2.0
 **Focus**: An **agent multiplexer** — "tmux for coding agents." It runs foreign agent CLIs in PTY panes, *infers each agent's lifecycle state from the outside*, and exposes the whole session over a Unix-socket API so agents can script each other.
-**Key Strengths**: Two-channel agent-state inference (passive terminal scraping + injected lifecycle hooks), a JSON-RPC socket API with a server-owned `agent.wait`, live server handoff that hot-upgrades the daemon without killing agents, native session-identity capture for resume, detach/reattach over SSH.
+**Key Strengths**: Two-channel agent-state inference (passive terminal scraping + injected lifecycle hooks), a JSON-RPC socket API with a server-owned `agent.wait`, live server handoff that hot-upgrades the daemon without killing agents (still marked experimental and opt-in), native session-identity capture for resume, detach/reattach over SSH, and since mid-2026 several remote machines in one window.
 
 > **Namesake warning (inverted from the first draft of this doc).** `herdr.org` is a
 > closed, hosted "agent orchestration" marketing page with no public source or architecture —
@@ -22,16 +24,20 @@ Herdr wraps *foreign* agent CLIs it did not write:
 2. **Upgrading the long-lived server process without killing the sessions under it.**
 3. **Capturing a foreign agent's resumable session id so you can restart its actual conversation.**
 
-Inber solves (1) and (3) for harnesses it drives via stream-json (llm-bridge-claudecode reads
-structured events), but has no answer for a harness running in raw PTY mode, and (2) is an open
-landmine (see the "never restart the gateway unattended" directive).
+Strictly these are problems of the llm-bridge layer that drives inber and other harnesses, not of
+inber's own Go code: inber calls model APIs itself and has no PTY path (a whole-word grep for
+`pty` in its Go source finds nothing). The llm-bridge harness wrappers solve (1) and (3) for harnesses
+they drive via stream-json (llm-bridge-claudecode reads structured events), but have no answer for a
+harness running in raw PTY mode, and (2) is still open: deploying llm-bridge-server ends every live
+session. *(2026-10-29: the deploy now sends its outcome to the calling session as a new message once
+it finishes, so an agent may start it; the sessions still do not survive it.)*
 
 ## Architecture Overview
 
 ```
 herdr (client, any terminal)  ──socket──▶  herdr daemon (server)
                                               ├── PTY panes (vendored portable-pty + libghostty-vt)
-                                              │     └── foreign agent CLI runs here (claude, codex, pi, …)
+                                              │     └── foreign agent CLI runs here (claude, codex, hermes, pi, … 22 manifests)
                                               ├── detect/  — per-agent TOML manifests + rule engine
                                               │     classify pane → idle | working | blocked | done | unknown
                                               ├── integration/ — injected hook scripts (self-report channel)
@@ -40,8 +46,9 @@ herdr (client, any terminal)  ──socket──▶  herdr daemon (server)
                                               └── handoff_runtime — hand PTY fds to a replacement server binary
 ```
 
-Client and server are separate: `ctrl+b q` detaches, `herdr` reattaches, sessions survive restarts,
-and you can reattach over SSH. Keyboard (tmux-style prefix) and mouse are both first-class.
+Client and server are separate: `ctrl+b q` detaches, `herdr` reattaches, and you can reattach over
+SSH. After a full server or machine restart herdr restores the saved layout and resumes supported agent
+sessions, but the original processes do not survive (README); only live handoff keeps them running. Keyboard (tmux-style prefix) and mouse are both first-class.
 
 ## What Herdr Does Well
 
@@ -72,11 +79,11 @@ doesn't fall back to idle (Grok); a prompt wait reports `agent_prompt_stalled` a
 hanging. State inference from a TUI is a swamp, and Herdr has already mapped it.
 
 > **Design write-up**: the reliability work below is specified for implementation in
-> `~/repos/llm-bridge-server/docs/SESSION-STATE-RELIABILITY.md` — hardening the shared `derivation.go`
+> llm-bridge-server's `docs/SESSION-STATE-RELIABILITY.md` — hardening the shared `derivation.go`
 > state machine (which inber sessions also flow through) plus a passive PTY-mode classifier.
 
-**Inber connection**: inber's harness bridges (llm-bridge-claudecode et al.) get structured lifecycle
-from stream-json, so they don't need this — *for agents they drive that way*. But inber has a **PTY
+**Inber connection**: the llm-bridge harness wrappers (llm-bridge-claudecode et al.) get structured lifecycle
+from stream-json, so they don't need this — *for agents they drive that way*. But llm-bridge has a **PTY
 mode** path (the `user_message` dual-emit note records that PTY mode has only the OTel copy; the TUI
 PTY-attach work exists) where no structured stream is available, and the bridge-server exposes an
 `awaiting_user` "?" status + the herald `ask` channel that fundamentally need to answer "is this agent
@@ -87,8 +94,8 @@ from the rendered screen when the harness won't say. This is the single most reu
 
 The daemon exposes JSON-RPC over a Unix socket (named pipe on Windows). Methods:
 `agent.start / prompt / read / send_keys / wait / get / list / rename / focus / explain`,
-`pane.wait_for_output`, `pane.report_agent_session`, `events.subscribe`, `events.wait`, `layout.*`,
-`notification.show`, `integration.install/uninstall`. A pane exists with or without an agent;
+`pane.wait_for_output`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`,
+`events.subscribe`, `events.wait`, plus pane layout, scrollback and input methods (`src/api/`). A pane exists with or without an agent;
 `agent.start` targets an *existing* shell pane and never changes layout.
 
 The coordination primitive is **`agent.wait`** — a *server-owned* wait until a named agent reaches a
@@ -110,9 +117,8 @@ the new process, which imports them (`ImportedHandoffRuntime`) and keeps the age
 deliberately does *not* carry transient coordination (in-flight requests, waits, subscriptions, client
 sockets) — clients reconnect and retry. Plugin `[[startup]]` hooks restore plugin state after handoff.
 
-**Inber connection**: this maps **directly** onto the "never restart the live llm-bridge gateway
-unattended" landmine — a gateway restart kills every session, so the directive stops automation at the
-restart step. Herdr's design is the missing mechanism: to ship a new gateway binary, pass the live
+**Inber connection**: this maps **directly** onto the cost of deploying llm-bridge-server — a gateway
+restart kills every session, inber's included. Herdr's design is the missing mechanism: to ship a new gateway binary, pass the live
 session fds/state to the replacement instead of tearing sessions down. It's harder for inber (sessions
 are subprocess harnesses + SSE streams, not just PTYs), but the shape — "serialize durable
 server-owned state, hand it to the successor, let clients reconnect transient state" — is exactly what
@@ -141,13 +147,14 @@ screen regions. This is what fills the gap behind `awaiting_user` / the herald `
 PTY-mode or uncooperative harnesses. Steal Herdr's *reliability* rules too: serialize reports, wait for
 settled events, add a stall timeout, let overlays suppress rather than force transitions.
 
-### 2. Live gateway handoff via fd/state passing (HIGH — retires a standing landmine)
+### 2. Live gateway handoff via fd/state passing (HIGH)
 
 Design an llm-bridge-server upgrade path that serializes durable per-session state and hands it to a
-replacement process so sessions survive a binary swap, instead of the current "manual restart only"
-rule. Herdr's `HandoffRuntimeState` (what to carry) vs "clients reconnect transient state" (what to
-drop) is the template. Even a partial version — drain-and-resume harness subprocesses across an exec —
-would remove the reason the restart is forbidden unattended.
+replacement process so sessions survive a binary swap, instead of ending them all. Herdr's
+`HandoffRuntimeState` (what to carry) vs "clients reconnect transient state" (what to drop) is the
+template. Even a partial version — drain-and-resume harness subprocesses across an exec — would make a
+deploy something no running session notices. (Herdr itself still marks its handoff experimental and
+opt-in; expect the same.)
 
 ### 3. A server-owned `wait_for_agent_state` coordination verb on the bus (MEDIUM)
 
@@ -160,22 +167,22 @@ name today.
 | Dimension | Herdr (herdr.dev) | Inber |
 |-----------|-------------------|-------|
 | **Kind** | Local terminal multiplexer (per-user, terminal-bound) | Distributed multi-agent orchestration server |
-| **Agent relationship** | Wraps foreign agent CLIs it didn't write, in PTY panes | Owns agents + drives foreign harnesses via llm-bridge-* |
+| **Agent relationship** | Wraps foreign agent CLIs it didn't write, in PTY panes | Owns its agents' loop; is itself one harness that llm-bridge drives (`server/api_bridge.go`) |
 | **State source** | *Inferred* — terminal scrape + injected hook | *Known* natively / parsed from stream-json events |
 | **Coordination** | Unix-socket JSON-RPC, server-owned `agent.wait` | NATS JetStream bus (persistent, distributed) |
-| **Session survival** | Detach/reattach, SSH, **live server handoff** (fd passing) | SSE + subprocess; gateway restart kills sessions (manual-only) |
-| **Isolation** | git worktree per workspace | forge worktree slots per session |
+| **Session survival** | Detach/reattach, SSH, **live server handoff** (fd passing, experimental) | SSE + subprocess; an llm-bridge-server deploy ends every session |
+| **Isolation** | git worktree per workspace | git worktree per spawned session via the forge library (`server/workspace_roots.go`) |
 | **Extensibility** | Plugins (marketplace) + injected integrations | tool-store / skill-store / MCP |
 | **Footprint** | One Rust binary, no runtime deps | Ecosystem of Go services |
-| **Transparency** | Full source, Apache-2.0 | Internal, full source |
+| **Transparency** | Full source, Apache-2.0 | Full source |
 
 ## Key Takeaway
 
 Herdr is the wrong *shape* to copy — inber is a server, Herdr is a terminal tool — but it's the right
 place to steal three mechanisms, all born from the fact that **Herdr manages agents it doesn't
 control**, which is exactly inber's harness-bridge situation. In priority order: (1) **live server
-handoff** (fd/state passing to a successor process) directly attacks the "can't restart the gateway
-unattended" landmine; (2) a **manifest-style state classifier** gives the bridge a way to know
+handoff** (fd/state passing to a successor process) directly attacks the "a gateway deploy ends every
+session" problem; (2) a **manifest-style state classifier** gives the bridge a way to know
 `blocked/idle/working` for PTY-mode harnesses that don't emit structured events; (3) a server-owned
 **`agent.wait`** is the missing coordination verb for multi-agent handoff. The reliability engineering
 around state inference (serialize, settle, stall-timeout, overlay-suppress) is as valuable as the idea.

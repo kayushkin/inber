@@ -1,161 +1,83 @@
 # Claude Code Comparison
 
-**Claude Code** — Anthropic's official CLI coding assistant. A terminal-based agent that can read, modify, and execute code across multiple files with sophisticated permission controls and session management.
+**Last reviewed**: 2026-10-29 against anthropics/claude-code@58d6da1e3 (2026-10-27).
+
+**Project**: [Claude Code](https://github.com/anthropics/claude-code) — Anthropic's coding agent for the terminal, IDEs, desktop and cloud sessions.
+**Language**: TypeScript (closed source; the GitHub repo holds the changelog, plugins, `mods` hooks modules and examples, not the agent's code).
+**Status**: Active. Version 2.1.312 at review time; npm install is deprecated in favour of a native installer.
+**Focus**: One agent in the user's working tree, with layered permission rules, resumable sessions, subagents, hooks, skills, plugins and MCP.
+
+Everything this file says about Claude Code comes from its README and CHANGELOG, since the agent's source is not public.
 
 ## Architecture Overview
 
-Claude Code follows a **tool-centric architecture** where individual tools (file operations, shell commands, etc.) are mediated through a comprehensive permission system. The agent operates through interactive sessions that can be resumed and continued, with project context maintained through CLAUDE.md files.
+Claude Code is tool-centric: each tool call (Read, Edit, Write, Bash, Grep, WebFetch, MCP tools, the LSP tool, Agent) passes through a permission engine before it runs. Project knowledge lives in `CLAUDE.md` files, an automatic memory directory with a `MEMORY.md` index, and skills. Sessions persist on disk and can be resumed, branched and compacted. Subagents run with their own context and can nest up to depth 3; "agent teams" run several teammates beside a leader.
 
 ## Key Features for Inber
 
-### 🔐 Tool Permission Model
+### Tool Permission Model
 
 **What it does well:**
-- **Hierarchical permission system**: User → Project → Local settings with clear precedence
-- **Three permission modes**: Allow (no prompt), Ask (confirm first), Deny (blocked)
-- **Tool-specific controls**: Can allow/deny specific commands or entire tool categories
-- **Session modes**: `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`
-- **Granular rule syntax**: `Tool(specifier)` allows fine-grained control (e.g., `Bash(npm install)`)
-
-**What inber should adopt:**
-```go
-type PermissionPolicy struct {
-    Rules []PermissionRule
-    Mode  SessionMode
-}
-
-type PermissionRule struct {
-    Tool      string    // "bash", "file_write", etc.
-    Specifier string    // optional: specific command/path pattern
-    Action    Action    // Allow, Ask, Deny
-}
-```
+- **Layered settings**: managed (organization) → user → project → local, with deny → ask → allow precedence.
+- **Rule syntax** `Tool(specifier)`, for example `Bash(npm install)` or a path pattern for `Read`/`Edit`.
+- **Session modes**: `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`, and `auto`, where a safety classifier (client-side or server-side) decides each call instead of asking the user.
+- **Sandbox**: shell commands can run in an OS sandbox with filesystem and network allowlists.
+- **Hooks**: `PreToolUse` and other hooks can allow, deny or rewrite a call, and a denial names the rule or hook that made it.
 
 **Current inber state:**
-Inber currently prompts for all potentially dangerous operations but lacks fine-grained policy control. Users can't pre-approve specific commands or establish project-level policies.
+inber has three execution modes in `guard/guard.go` and `guard/mode.go`: `observe` (read-only tools), `assist` (reads and writes, with dangerous calls held for approval) and `autonomous` (everything). A request that names no mode gets full access. The engine asks the guard about every tool call (`engine/build_hooks.go`, `buildToolRefusal`), but `assist` has no approver to ask, so a call that needs approval is refused, not queued. Each agent also has a tool allowlist in agent-store, and a session can switch tools off (`session/disabled_tools.go`). There are no per-command or per-path rules and no layered settings files.
 
-### 🔄 Session Resume & Continuity
+### Session Resume & Continuity
 
 **What it does well:**
-- **Session IDs**: Every conversation gets a persistent ID
-- **Multiple resume modes**: `--resume` (interactive picker), `--resume <id>` (specific), `--continue` (most recent)
-- **Resume in different modes**: Can resume interactively or in one-shot mode (`-p`)
-- **Session metadata**: Shows timestamps, project dirs, conversation summaries
-
-**What inber should adopt:**
-```go
-type SessionManager interface {
-    SaveSession(id string, state SessionState) error
-    ListSessions(limit int) ([]SessionMetadata, error)
-    ResumeSession(id string) (*SessionState, error)
-    GetMostRecent() (*SessionState, error)
-}
-```
+- Every conversation has a persistent id; `--resume`, `--resume <id>`, `--continue` and `/resume` pick one up, and `/branch` forks it.
+- Resume works in interactive and one-shot (`-p`) runs.
+- Automatic compaction when the context fills, with `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and a per-subagent `autoCompactWindow`.
 
 **Current inber state:**
-Inber's memory system provides some continuity but lacks explicit session IDs and resume capabilities. When an inber session ends, there's no direct way to pick up exactly where you left off.
+inber is a server, and sessions are server objects persisted in SQLite (`server/store.go`). The llm-bridge routes in `server/api_bridge.go` offer `send`, `events`, `history`, `stop`, `interrupt`, `resume`, `fork`, `config` and `compact` per session. `Engine.RestoreSession` (`engine/lifecycle.go`) reloads a transcript, and the server restores the guard state and disabled tools with it (`server/session_creation.go`). The command-line client is a separate repo (inber-cli).
 
-### 📁 Multi-file Edit Strategy
+### Project Context
 
 **What it does well:**
-- **Project-aware context**: Uses CLAUDE.md files for persistent project knowledge
-- **Auto-discovery**: `/init` command analyzes codebase and generates starter configuration
-- **Hierarchical context**: Project root → parent dirs → home folder for monorepos
-- **Integrated tooling**: Understands build systems, test runners, and project structure
-
-**CLAUDE.md example:**
-```markdown
-# Project Context
-FastAPI REST API for user authentication and profiles.
-
-## Key Directories
-- `app/models/` - database models  
-- `app/api/` - route handlers
-
-## Standards
-- Type hints required on all functions
-- pytest for testing (fixtures in `tests/conftest.py`)
-
-## Common Commands
-uvicorn app.main:app --reload # dev server
-pytest tests/ -v # run tests
-```
-
-**What inber should adopt:**
-- **Project configuration files** (`INBER.md`?) that provide context automatically
-- **Smart project detection** that recognizes common patterns (Go modules, package.json, etc.)
-- **Context inheritance** for monorepo setups
+- `CLAUDE.md` files load from the working directory, its parents, the user's home and managed policy; `@` includes and `paths:`-scoped rules files narrow what loads.
+- An automatic memory directory, with `MEMORY.md` as its index, that Claude writes and reads across sessions.
+- `/init` writes a starter `CLAUDE.md` from the codebase.
 
 **Current inber state:**
-Inber reads some project files but lacks a systematic way for users to provide project context. Each session starts "cold" regarding project conventions and structure.
+inber reads no project file such as `AGENTS.md` or `CLAUDE.md` on its own. An agent's identity and instructions come from agent-store and from memory-store entries tagged as always-load (`engine/turn_prompt.go`, `BuildSystemPrompt`). A caller that wants project text in the prompt passes it as an injected system prompt, which inber puts first so a provider can cache it (`engine/turn_prompt.go`, `injectedSystemPrompt`); llm-bridge does this.
 
 ## Architectural Insights
 
 ### Permission System Design
-Claude Code's permission model is **layered** (user/project/local) with **precedence rules** (deny → ask → allow). This allows both organizational policies and individual developer customization while maintaining security.
+Claude Code layers rules (managed, user, project, local) and applies deny before ask before allow. An organization can fix policy while each developer still tunes their own.
 
 ### Session vs Context Separation
-Claude Code separates **conversation state** (session IDs, history) from **project context** (CLAUDE.md files). This allows resuming conversations while keeping project knowledge persistent across all sessions in that directory.
+Claude Code keeps conversation state (session ids, transcripts) apart from project context (`CLAUDE.md`, memory directory). Resuming a conversation and sharing project knowledge are separate concerns.
 
 ### Tool Abstraction
-Their tool system appears to be **capability-based** — each tool declares what it can do, and the permission system mediates access. Tools seem to be self-contained with their own schemas and execution logic.
+Each tool declares its schema, and the permission engine, hooks and sandbox decide whether it runs. MCP tools, plugin tools and built-in tools go through the same path.
 
-## What Inber Does Better
+## Where inber differs
 
-### Memory System
-Inber's memory system (conversation + repo-map + stash) is more sophisticated than Claude Code's simple CLAUDE.md approach. Inber automatically captures and summarizes context rather than requiring manual configuration.
+These were once listed as "what inber does better". Two of the three claims did not hold, so they are restated as plain differences.
 
-### Go Ecosystem Integration
-Inber understands Go-specific patterns (modules, build tags, etc.) more deeply than Claude Code's generic approach.
+### Memory
+inber keeps memory in memory-store (SQLite), extracts memories from each finished exchange in the background (`conversation/extract.go`), and moves large messages out of the conversation behind a `memory_expand` pointer (`conversation/stash.go`, `memory/auto_context.go`). Claude Code now has its own automatic memory directory, so "inber remembers, Claude Code needs manual `CLAUDE.md`" is no longer true. inber has no repo map: `codeindex/codeindex.go` is a stub whose methods all return empty results.
 
-### Context Management
-Inber's smart truncation and context loading is more automatic — users don't need to configure what files are important.
+### Context assembly
+inber picks memories for the system prompt by tag match and importance within a token budget that grows with the turn's needs (`engine/turn_context.go`), and keeps everything that changes between turns out of the cached system prefix (`engine/volatile_context.go`). Claude Code loads fixed files and relies on compaction.
 
-## What Inber Should Steal
+### Providers
+inber calls Anthropic natively and OpenAI-compatible endpoints through a second turn loop (`engine/turn_openai.go`, `agent/openai.go`), including OpenAI models served through a ChatGPT subscription (`agent/codex_subscription.go`). It also strips known secrets from every request body before it leaves the process (`redact/`). Claude Code talks only to Claude models (Anthropic API, Bedrock, Vertex, Foundry).
 
-### 1. Permission Policy System
-```go
-// In engine/permissions.go
-type PermissionEngine struct {
-    policies []PermissionPolicy
-    mode     SessionMode
-}
+## What Inber Could Still Take
 
-func (pe *PermissionEngine) CheckTool(tool string, specifier string) Permission {
-    // Implement deny → ask → allow precedence
-}
-```
+1. **Per-command and per-path permission rules.** The guard decides by tool name and mode only. A rule list such as `shell_commands(go test *)` with deny → ask → allow precedence would let `assist` mode run safe commands without an approver.
+2. **An approver for `assist` mode.** Until inber emits an approval event that llm-bridge can answer, `assist` is "refuse what is dangerous", not "ask".
+3. **Project files.** Reading `AGENTS.md` from the repo root on session start would let a session started without llm-bridge get project rules too.
 
-### 2. Session Resume
-```go
-// In engine/session.go
-func (e *Engine) SaveSession(id string) error {
-    // Serialize conversation + context state
-}
-
-func (e *Engine) ResumeSession(id string) error {
-    // Restore exact conversation state
-}
-```
-
-### 3. Project Configuration
-```go
-// Load INBER.md files from current dir → parent → home
-func LoadProjectContext() (*ProjectConfig, error) {
-    // Similar to CLAUDE.md but Go-aware
-}
-```
-
-## Implementation Priority
-
-**High Priority:**
-1. **Permission policies** — Solves real user pain points with repeated approvals
-2. **Session IDs and resume** — Makes inber more professional/tool-like
-3. **Project configuration files** — Reduces repetitive context explanations
-
-**Medium Priority:**
-1. **Tool interface standardization** — Enables permission system
-2. **Enhanced session metadata** — Better session management UI
+---
 
 ## Harness-watch — 2026-06-02: asyncRewake hook, tiered security review, path-sensitive permission escalation
 
@@ -232,7 +154,7 @@ The permission system would have the highest impact on daily usability while bei
 > memory-store.** `ss -tlnp` shows `:8160` is the `llm-bridge` gateway binary; memory-store is a
 > library, not a service with a port (see repos CLAUDE.md). The accreting MEMORY.md the entry is
 > actually describing is **Claude Code's own auto-memory on this host**
-> (`~/.claude/projects/-home-kayushkincom-repos/memory/MEMORY.md`) — measured at **1,489 bytes**,
+> (`~/.claude/projects/<project>/memory/MEMORY.md`) — measured at **1,489 bytes**,
 > 13 one-line index entries, and **zero** `FIXED`/`RESOLVED` markers. So the bloat the proposed
 > pruning job would attack does not exist here, in either repo. The *idea* (memory is the
 > non-derivable complement of the codebase) is still worth keeping; the inber-specific
@@ -274,6 +196,8 @@ already part of the conversation** — a later failure can annotate the turn, ne
 accounting rides along, which independently fixes billing a real call as $0.
 
 ### 2. "Subagents can now spawn nested subagents up to depth 3 (was 1)" — inber permits depth 2 and drops every event from it
+
+*Later fixed in inber@13d87d1 (2026-07-31): `newSubagentEventForwarder` in `server/spawn.go` now passes a grandchild's envelopes through unchanged.*
 
 CC pairs the depth raise with an escape hatch (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`) and, in
 stream-json, forwards depth-2+ subagent text **keyed by its spawning Agent `tool_use` id** — the id

@@ -1,6 +1,12 @@
 # ROCm Comparison
 
+**Last reviewed**: 2026-10-29 against ROCm/rocm-systems@e363954 (2026-10-29).
+
 **Project**: [ROCm](https://github.com/ROCm) (ROCR-Runtime, HIP, ROCK-Kernel-Driver, RCCL)
+
+> **Repos moved (checked 2026-10-29).** ROCR-Runtime and RCCL are now marked deprecated in their own repos and live under `projects/rocr-runtime` and `projects/rccl` in the [ROCm/rocm-systems](https://github.com/ROCm/rocm-systems) monorepo, beside `projects/hip` and `projects/clr`. `ROCm/ROCK-Kernel-Driver` redirects to [ROCm/amdgpu](https://github.com/ROCm/amdgpu). The APIs this doc uses are still there: `hipIpcGetMemHandle`, `hipIpcOpenEventHandle` and `hipDeviceMallocFinegrained` in HIP's `hip_runtime_api.h`, and `hsa_signal_wait_*` and the barrier-AND/OR packet types in ROCr's `hsa.h`.
+>
+> On the inber side, `SpawnResult` is still in `server/spawn.go`, but `deliverResult` moved to `server/spawn_delivery.go` and `forkSession` to `server/session_forking.go`. The llm-bridge-server design docs cited here moved to `docs/plans/` in that repo (`TEAM-ORCHESTRATION.md`, `IMPLEMENTATION-ROADMAP.md`); `CACHE-RULES.md` is in its `docs/`. The "coordination engine" said below to live in llm-bridge-server's `internal/orchestrator/` is not there; a separate `orchestrator` repo now does that job. kanban-store still emits no events on card changes.
 **Language**: C / C++ (kernel driver, HSA runtime, HIP), open source
 **Focus**: Not an agent framework — AMD's open GPU compute stack. Mined here for one thing: how it lets many independent execution agents (CPU + GPUs, across process boundaries) share large data *without copying it* and coordinate *without polling*.
 **Key Strengths**: Zero-copy handle-passing (IPC memory handles, dma-buf), an explicit coherence-mode knob (coarse vs fine grained), signal/doorbell readiness primitives, and topology-aware fan-in/fan-out collectives (RCCL).
@@ -51,13 +57,13 @@ The load-bearing idea, repeated at every layer: **an agent never receives a buff
 
 The discipline this enforces: the producer owns the blob, everyone else holds a revocable reference, and the thing that crosses the process boundary is tiny.
 
-**Inber connection**: This is the missing primitive. Today a child returns a `SpawnResult{Summary, ...}` that `deliverResult()` *injects into the parent's conversation as text* (`server/spawn.go`) — a copy, into the most expensive place a copy can land (the context window). memory-store (`:8160`) is retrieval-by-similarity, not a handle you hand to a specific peer. There is no "here is a reference to the 40KB file-map I built; open it if you need it" primitive. TEAM-ORCHESTRATION §3.3's distillation rule ("return a pointer-rich index, not prose") is *reaching for exactly this* but leaves the pointed-to artifact's home undefined (§10). IPC handles are the answer: a subagent registers an artifact, gets back an opaque ref, and returns the ref — the consumer opens it on demand.
+**Inber connection**: This is the missing primitive. Today a child returns a `SpawnResult{Summary, ...}` that `deliverResult()` *injects into the parent's conversation as text* (`server/spawn_delivery.go`) — a copy, into the most expensive place a copy can land (the context window). memory-store is retrieval by similarity, not a handle you hand to a specific peer. There is no "here is a reference to the 40KB file-map I built; open it if you need it" primitive. TEAM-ORCHESTRATION §3.3's distillation rule ("return a pointer-rich index, not prose") is *reaching for exactly this* but leaves the pointed-to artifact's home undefined (§10). IPC handles are the answer: a subagent registers an artifact, gets back an opaque ref, and returns the ref — the consumer opens it on demand.
 
 ### 2. IPC event handles — cross-process readiness without polling ⭐️
 
 `hipIpcGetEventHandle` / `hipIpcOpenEventHandle` share a synchronization event across processes (requires the `hipEventInterprocess` + `hipEventDisableTiming` flags). Either side can `record`, `wait`, or `query`. One process signals "ready"; the other blocks until then. No busy loop, no fixed-interval tick.
 
-**Inber connection**: The blackboard's fast path is inert. TEAM-ORCHESTRATION admits kanban-store (`:8305`) has *no event emit*, so hand-offs move at the 5-minute cron tick (scoper→dispatcher→curator loop). A subagent that finishes in 20 seconds waits up to 5 minutes for anyone to notice. An event/readiness primitive — a card-ready signal that wakes the consumer session via `harness.Manager` message injection — is the exact analogue, and it's the unbuilt "coordination engine" in `internal/orchestrator/`.
+**Inber connection**: The blackboard's fast path is inert. TEAM-ORCHESTRATION admits kanban-store has *no event emit*, so hand-offs move at the 5-minute cron tick (scoper→dispatcher→curator loop). A subagent that finishes in 20 seconds waits up to 5 minutes for anyone to notice. An event/readiness primitive — a card-ready signal that wakes the consumer session via `harness.Manager` message injection — is the exact analogue, and it's the unbuilt "coordination engine" (planned in `internal/orchestrator/`; see the note at the top).
 
 ### 3. Explicit coherence mode — coarse vs fine grained ⭐️
 
@@ -109,11 +115,11 @@ type SpawnResult struct {
 }
 ```
 
-Insertion: `server/spawn.go` (`SpawnResult`, `deliverResult` — deliver handles, not prose) + a thin store. Reuse what exists for `Ref`: noteboard notes are already the durable, reversible substrate; memory-store already has `RefType`/`RefTarget` lazy pointers. The new part is the *handle contract*, not new storage.
+Insertion: `server/spawn.go` (`SpawnResult`) and `server/spawn_delivery.go` (`deliverResult` — deliver handles, not prose) + a thin store. Reuse what exists for `Ref`: noteboard notes are already the durable, reversible substrate; memory-store already has `RefType`/`RefTarget` lazy pointers. The new part is the *handle contract*, not new storage.
 
 ### 2. A readiness/event channel on kanban-store (HIGH PRIORITY)
 
-Add event emit to kanban-store (`:8305`) and a card-ready → session-wake path, so hand-offs move at seconds, not the 5-minute cron tick. This is the "doorbell + IPC event handle" analogue and unblocks the already-designed `internal/orchestrator/` coordination engine.
+Add event emit to kanban-store and a card-ready → session-wake path, so hand-offs move at seconds, not the 5-minute cron tick. This is the "doorbell + IPC event handle" analogue and unblocks the already-designed `internal/orchestrator/` coordination engine.
 
 ```go
 // kanban-store emits on card state change; orchestrator injects into the claiming session.
@@ -124,7 +130,7 @@ func (o *Orchestrator) onCardReady(card Card) {
 }
 ```
 
-Insertion: kanban-store event bus (it has none today) + `internal/orchestrator/` in llm-bridge-server. Depends on the `bridge` CLI (P5b) and spawn message-injection per IMPLEMENTATION-ROADMAP.
+Insertion: kanban-store event bus (it still has none on 2026-10-29) + the coordinator (now the separate `orchestrator` repo, not llm-bridge-server's `internal/orchestrator/`). Depends on the `bridge` CLI (P5b) and spawn message-injection per IMPLEMENTATION-ROADMAP.
 
 ### 3. Name the coherence mode explicitly (MEDIUM PRIORITY)
 
@@ -156,4 +162,4 @@ Insertion: `server/spawn.go` spawn API surface, layered on #1's handles.
 
 ---
 
-*Source research (2026-07-24): ROCm HIP IPC memory/event handles, ROCR-Runtime HSA signals + AQL queues + doorbell, SVM/HMM coarse-vs-fine coherence, dma-buf export/import, RCCL collectives. Compared against inber `server/spawn.go`, memory-store `:8160`, kanban-store `:8305`, noteboard `workspace` type, and llm-bridge-server `TEAM-ORCHESTRATION.md`. Starting point for discussion, not a committed roadmap.*
+*Source research (2026-07-24): ROCm HIP IPC memory/event handles, ROCR-Runtime HSA signals + AQL queues + doorbell, SVM/HMM coarse-vs-fine coherence, dma-buf export/import, RCCL collectives. Compared against inber `server/spawn.go`, memory-store, kanban-store, noteboard `workspace` type, and llm-bridge-server `TEAM-ORCHESTRATION.md`. Starting point for discussion, not a committed roadmap.*

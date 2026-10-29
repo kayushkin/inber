@@ -1,189 +1,107 @@
 # Goose Comparison
 
-**GitHub:** github.com/block/goose
-**Language:** Rust
-**Focus:** AI agent framework with CLI and desktop interfaces, extensible via MCP (Model Context Protocol)
+**Last reviewed**: 2026-10-29 against aaif-goose/goose@361003ea3 (2026-10-29).
+
+**GitHub:** github.com/aaif-goose/goose (moved from `block/goose`; the old name redirects). goose is now part of the Agentic AI Foundation at the Linux Foundation.
+**Status:** Active, many commits a day.
+**Language:** Rust core and CLI; the desktop app is Electron (TypeScript).
+**Focus:** General-purpose agent (not only code) with a desktop app, a CLI and an embeddable API, extended through MCP.
 
 ## Architecture Overview
 
-Goose is a comprehensive AI agent framework built in Rust with a multi-tier architecture:
+```
+┌─ UI Layer ───────────────────────────────────────────┐
+│  Desktop (Electron, ui/desktop) | CLI (goose-cli)     │
+│  ACP clients (ui/goose-acp-client) | SDK (goose-sdk)  │
+└─────────────────┼─────────────────────────────────────┘
+                  │  Agent Client Protocol (goose-acp)
+┌─ Core ──────────┼─────────────────────────────────────┐
+│  goose-agent | goose (agents, sessions, recipes,      │
+│  permission, security, scheduler, skills, hooks)      │
+│  goose-providers + goose-provider-types               │
+│  goose-mcp | goose-context-management                 │
+│  goose-local-inference                                │
+└───────────────────────────────────────────────────────┘
+```
 
-```
-┌─ UI Layer ──────────────────────────────────────┐
-│  CLI (goose-cli) | Desktop (Electron) | Custom  │
-└─────────────────┼─────────────────────────────────┘
-                  │
-┌─ Server Layer ──┼──────────────────────────────────┐
-│  goose-server (REST API) + Agent Client Protocol  │
-└─────────────────┼─────────────────────────────────┘
-                  │
-┌─ Core Layer ────┼──────────────────────────────────┐
-│  Provider System | Extension Manager | Config      │
-└─────────────────────────────────────────────────────┘
-```
+The REST server crate `goose-server` was removed on 2026-07-07 (commit 6d699361a). The desktop app and other clients now talk to the agent over the Agent Client Protocol, served by the `goose-acp` binary in `crates/goose/src/bin/`.
 
 ## Extension/Plugin Architecture
 
-**MCP-Centric Design:**
-- Uses Model Context Protocol (MCP) as the primary extension mechanism
-- Extensions can be: builtin (Rust), stdio processes, HTTP servers, or inline Python
-- Clean separation: extensions provide tools, resources, and instructions to the core
-
-**Extension Types:**
-```rust
-enum ExtensionConfig {
-    Builtin { name, timeout },
-    Platform { name },  // In-process Rust extensions
-    Stdio { cmd, args, envs },
-    StreamableHttp { uri, headers },
-    InlinePython { code, dependencies },
-}
-```
-
-**Tool Management:**
-- Tools are automatically prefixed (`extension__tool_name`) unless marked as "unprefixed"
-- Extensions declare which tools they provide via MCP
-- Runtime discovery and registration of tools
-- Built-in tool validation and parameter checking
+**MCP-centred design:**
+- MCP is the main extension mechanism; extensions provide tools, resources and instructions.
+- `ExtensionConfig` in `crates/goose/src/agents/extension.rs` now has four kinds: `stdio`, `builtin`, `platform` (in-process Rust) and `streamable_http`. The inline-Python kind this file once listed is gone.
+- Tools are prefixed `extension__tool_name` unless marked unprefixed, and are discovered at run time.
 
 ## Provider System
 
-**Clean Abstraction:**
-```rust
-#[async_trait]
-pub trait Provider {
-    async fn stream(&self, model_config, session_id, system, messages, tools) -> MessageStream;
-    async fn complete(&self, ...) -> (Message, ProviderUsage);
-    fn get_model_config(&self) -> ModelConfig;
-    // ... other methods
-}
-```
-
-**Dual Provider Support:**
-- **Declarative Providers:** JSON configuration files for OpenAI-compatible APIs
-- **Code Providers:** Full Rust implementations for complex providers (Anthropic, etc.)
-- Provider metadata includes model capabilities, context limits, cost information
+- The `Provider` trait now lives in its own crate, `goose-provider-types` (`src/base.rs`), with implementations in `goose-providers` and `crates/goose/src/providers/`.
+- **Declarative providers**: JSON definitions for OpenAI-compatible APIs (`goose-providers/src/declarative/`).
+- **Code providers**: Anthropic, OpenAI, Google, Bedrock, Azure, Vertex, Databricks, Snowflake, Ollama, OpenRouter, xAI and others.
+- **Subscriptions and other agents as providers**: goose can use a ChatGPT subscription (`chatgpt_codex.rs`) or drive another agent over ACP as its model (`claude_acp.rs`, `codex_acp.rs`, `copilot_acp.rs`, `gemini_cli.rs`, `pi_acp.rs`). The README sells this as "your existing Claude, ChatGPT, or Gemini subscriptions".
+- **Local inference**: `goose-local-inference` runs models in-process.
 
 ## Key Architectural Strengths
 
-### 1. **Separation of Concerns**
-- Core logic, providers, extensions, and UIs are cleanly separated
-- Each crate has a single responsibility
-- Clear interfaces between layers
+### 1. Separation of Concerns
+Core logic, providers, extensions, context management and UIs sit in separate crates with clear interfaces.
 
-### 2. **Extension Modularity**
-- MCP standard enables language-agnostic extensions
-- Extensions are self-contained (declare their own tools, resources, instructions)
-- Dynamic loading and unloading of extensions
-- Built-in security model for extension execution
+### 2. Extension Modularity
+MCP lets extensions be written in any language; each declares its own tools, resources and instructions, and can be loaded and unloaded at run time.
 
-### 3. **Multi-Interface Support**
-- CLI, desktop app, and custom UIs all use the same core
-- Server mode enables web/mobile/IDE integrations
-- Agent Client Protocol (ACP) for rich programmatic access
+### 3. One Protocol for Every Client
+Desktop, CLI and third-party clients share the core through ACP, so a feature built once reaches all of them.
 
-### 4. **Recipe System**
-- YAML-based workflow definitions
-- Parameter substitution and templating
-- Sub-recipes and subagent composition for complex workflows
-- Shareable and distributable workflow packages
+### 4. Recipe System
+YAML workflow definitions with parameters, sub-recipes and subagents; shareable and schedulable.
 
 ## What Inber Should Adopt
 
-### 1. **Provider Interface Design**
-Goose's `Provider` trait is excellent:
-- Clean async interface with streaming support
-- Metadata-driven provider discovery
-- Support for both declarative (JSON) and code-based providers
-- Usage tracking and model capability detection
+### 1. Provider Interface — mostly done differently
+This file once asked inber to extract a `Provider` interface from its Anthropic coupling. inber has `agent.Provider` (`agent/provider.go`), but it is still shaped in Anthropic SDK types. Multi-provider support came another way: a second turn loop for OpenAI-compatible endpoints (`engine/turn_openai.go`, `agent/openai_conversion.go`) and a ChatGPT-subscription transport (`agent/codex_subscription.go`), with keys set through `cmd/inber-server/settings.go`. There are no declarative provider files.
 
-**Inber Action:** Extract a similar `Provider` interface in `agent/provider.go` that wraps the current Anthropic SDK coupling.
+### 2. Extension Architecture
+inber's tools come from the tool-store library (`engine/engine_new.go`). An MCP stdio client exists in `tools/mcp/`, but nothing outside that package calls it, so inber loads no MCP tools. Wiring it is the remaining step.
 
-### 2. **Extension Architecture**
-The MCP-based extension system is superior to inber's current approach:
-- **Self-describing:** Extensions declare their tools, not the core
-- **Multi-transport:** stdio, HTTP, in-process
-- **Standard protocol:** MCP is becoming an industry standard
-- **Security model:** Clear boundaries and permission system
+### 3. Configuration Structure
+goose separates provider configs, extension configs, recipes and global settings. inber now declares its server settings in one place with llm-bridge's `servicesettings` (`cmd/inber-server/settings.go`, served at `GET /settings`); agent definitions live in agent-store.
 
-**Inber Action:** 
-- Evaluate MCP adoption for inber's tool system
-- Move towards self-describing tools vs. hardcoded tool registration
-- Consider stdio and HTTP tool execution models
-
-### 3. **Configuration Structure**
-Goose's config hierarchy is clean:
-```
-- Provider configs (declarative JSON + secrets)
-- Extension configs (with environment substitution) 
-- Recipe configs (workflow definitions)
-- Global settings
-```
-
-**Inber Action:** Simplify inber's config system with similar separation.
-
-### 4. **Crate Organization**
-```
-goose/              # Core logic
-goose-cli/          # CLI interface
-goose-server/       # HTTP API server  
-goose-acp/          # Agent Client Protocol
-goose-mcp/          # MCP client implementations
-```
-
-**Inber Action:** Consider breaking inber into similar focused modules.
+### 4. Crate Organization
+inber is split into Go packages by job (`engine/`, `agent/`, `server/`, `conversation/`, `session/`, `guard/`, `redact/`, `tools/`), which covers what this item asked for.
 
 ## What Goose Does Differently
 
-### 1. **Recipe-First Workflows**
-- Complex multi-step workflows are first-class citizens
-- YAML configuration for reproducible agent behaviors
-- Sub-recipe composition and parallel execution
+### 1. Recipe-First Workflows
+Multi-step workflows are first-class YAML, with sub-recipes and parallel runs.
 
-*Inber equivalent:* Could add recipe/workflow system to inber.
+*Inber equivalent:* none; recurring work runs from an outside scheduler.
 
-### 2. **Multi-Model Orchestration**
-- Lead/worker model patterns built-in
-- Fast model fallbacks
-- Model capability-aware tool routing
+### 2. Multi-Model Orchestration
+Lead/worker model patterns, fast-model fallbacks, model capability-aware tool routing.
 
-*Inber potential:* Inber could benefit from multi-model support.
+*Inber equivalent:* failover picks a healthy model from recent error and latency data (`engine/failover.go`); there is no lead/worker split.
 
-### 3. **Rich Session Management**  
-- Session persistence and resumption
-- Session-specific extensions and configurations
-- Cross-session subagent spawning
+### 3. Rich Session Management
+Session persistence and resumption, per-session extensions, subagents.
 
-*Inber gap:* Inber has simpler session model.
+*Inber equivalent:* server sessions in SQLite with resume, fork, interrupt and compact routes (`server/api_bridge.go`), per-session disabled tools (`session/disabled_tools.go`), and spawned sub-agents up to depth 2 (`server/config.go`).
 
-## What Inber Does Better
+## Where inber differs
 
-### 1. **Memory Architecture**
-Inber's memory system (conversation summarization, pruning, stashing) is more sophisticated than Goose's basic session persistence.
+### Memory
+inber keeps memory in memory-store, extracts memories from each exchange in the background (`conversation/extract.go`), and moves large blocks out of the conversation behind `memory_expand` pointers (`conversation/stash.go`). goose has its own context-management crate and compaction; it is no longer fair to call its approach "basic session persistence".
 
-### 2. **Context Management**
-Inber's smart truncation and context loading is more advanced than Goose's approach.
+### Prompt assembly
+inber builds the system prompt from tag-matched memories within a token budget (`engine/turn_context.go`) and keeps per-turn content out of the cached prefix (`engine/volatile_context.go`).
 
-### 3. **Simplicity**
-Inber's current model is simpler and more focused, while Goose tries to be everything to everyone.
+### Egress redaction
+inber removes known secrets from every request body before it leaves the process (`redact/`).
 
 ## Recommended Adoptions for Inber
 
-**High Priority:**
-1. **Provider interface extraction** - Decouple from Anthropic SDK
-2. **Self-describing tools** - Move towards MCP-style tool registration
-3. **Declarative provider configs** - Support JSON-based provider definitions
-
-**Medium Priority:**
-4. **Extension stdio/HTTP support** - Beyond just in-process tools
-5. **Recipe system** - For workflow standardization
-6. **Module reorganization** - Break into focused packages
-
-**Low Priority:**
-7. **Multi-model support** - Lead/worker patterns
-8. **Desktop interface** - Beyond CLI
-
-The key insight: **Goose's architecture is more modular and extensible**, while **inber's core agent logic is more sophisticated**. Inber should adopt Goose's modularity patterns while preserving its advanced memory and context management.
+1. **Wire the MCP client** in `tools/mcp/` into the tool registry.
+2. **Recipes or an equivalent** for repeatable multi-step work.
+3. **Declarative provider definitions** for OpenAI-compatible endpoints.
 
 ---
 

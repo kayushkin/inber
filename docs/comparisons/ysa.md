@@ -1,6 +1,10 @@
 # YSA Comparison
 
-**Project**: [ysa](https://github.com/ysa-ai/ysa)
+**Last reviewed**: 2026-10-29 against ysa-ai/ysa@e1166f1 (2026-09-30).
+
+> **ysa is archived.** Its last commit (2026-09-30) marks it "no longer maintained"; the README says local sandboxing for coding agents is now well covered by tools such as Docker Sandboxes and Anthropic's `sandbox-runtime`, and the code stays available under Apache-2.0 for forks. The design notes below still describe the code as it was left. For new work, look at those two successors rather than at ysa.
+
+**Project**: [ysa](https://github.com/ysa-ai/ysa) (archived)
 **Language**: TypeScript (Bun) + shell + a Containerfile
 **Focus**: Secure container runtime for AI coding agents — every agent task runs inside a hardened, rootless Podman sandbox with its own git worktree
 **Key Strengths**: Defense-in-depth sandboxing (seccomp, cap-drop, read-only fs, rootless), shadow `git` wrapper that strips dangerous config, pre-push branch guard, MITM network proxy with firewall enforcement, auditable security test suite (155 attack tests + 60 proxy tests), local-first / no-cloud stance
@@ -32,7 +36,7 @@ The SDK shape: `import { runTask } from "@ysa-ai/ysa/runtime"`. Providers regist
 
 Every agent runs inside a rootless Podman container with multiple independent kernel-level constraints: all capabilities dropped, read-only root filesystem, `no-new-privileges`, a 190-syscall seccomp whitelist (blocks `clone3`, memfd tricks, namespace escalation paths), tmpfs scratch, hard memory/CPU/PID limits, and the daemon itself runs as an unprivileged user. This is "trust the kernel, not the agent" — the agent's runtime privileges are mathematically smaller than the user's.
 
-**Inber connection**: Inber currently runs agents as host processes with full user privileges. Agents can read `~/.ssh`, push to remotes, exfiltrate env vars, fork bombs, etc. — the only safety net is tool gating in tool-store + the harness's tool list. ysa's model is the strongest available answer to "what if an agent is buggy or compromised?".
+**Inber connection**: Inber still runs agents as host processes with full user privileges (checked 2026-10-29). Agents can read `~/.ssh`, push to remotes, fork-bomb, and send secrets anywhere a shell command can reach. The safety nets are the tool list, per-session execution modes and limits (`guard/`), and, since 2026, egress redaction that strips live secrets from requests to model providers (`redact/`, `agent/redaction.go`). Redaction covers only the model-provider path; a `curl` from the shell tool is not covered. ysa's model is the strongest available answer to "what if an agent is buggy or compromised?".
 
 ### 2. Shadow `git` Wrapper That Strips Dangerous Config ⭐️
 
@@ -50,7 +54,7 @@ Every agent runs inside a rootless Podman container with multiple independent ke
 
 Optional `--network strict` mode routes all outbound traffic through a local MITM proxy (`container/network-proxy.ts`): GET-only, no request body, rate-limited, byte-budgeted per task. The container's network namespace also has firewall rules so traffic that bypasses the proxy is dropped at the kernel level. Two independent enforcement points instead of one.
 
-**Inber connection**: llm-bridge-server already proxies model API traffic, but tool-initiated egress (curl, npm install, git fetch) is unconstrained. A per-task network budget would catch exfiltration patterns and runaway downloads.
+**Inber connection**: inber's own provider clients are the one path model traffic leaves by, and the egress redactor already sits on it (`redact/http.go`). Tool-initiated egress (curl, npm install, git fetch) is unconstrained. A per-task network budget would catch exfiltration patterns and runaway downloads.
 
 ### 5. Auditable Security Test Suite
 
@@ -58,7 +62,7 @@ Optional `--network strict` mode routes all outbound traffic through a local MIT
 
 This is rare. Most "secure agent" frameworks publish a threat-model paragraph; ysa publishes the exploit attempts and the proof they fail.
 
-**Inber connection**: Inber has no negative security tests — only happy-path tests for tool gating. Even without containerization, attack-pattern tests would surface gaps in tool-store's guard logic (e.g. "can the agent talk this CLI tool into reading `/etc/shadow`?").
+**Inber connection**: Inber's negative tests are narrow: `guard/classification_test.go` and `guard/mode_test.go` check that modes refuse what they should, and `redact/redact_test.go` / `redact/http_test.go` check that secrets do not leave in requests. Nothing runs attack patterns against a live agent. Even without containerization, attack-pattern tests would surface gaps in tool-store's guard logic (e.g. "can the agent talk this CLI tool into reading `/etc/shadow`?").
 
 ### 6. mise-Backed Universal Toolchain
 
@@ -105,17 +109,17 @@ Inber is already local-first; the README and ARCHITECTURE.md don't say so promin
 | Aspect | YSA | Inber |
 |--------|-----|-------|
 | **Primary value prop** | Security boundary for agent execution | Multi-agent orchestration with persistent identity |
-| **Isolation model** | Rootless Podman container per task | Host process, no isolation; trust via tool gating |
+| **Isolation model** | Rootless Podman container per task | Host process, no isolation; trust via tool gating, execution modes and limits |
 | **Git workflow** | Worktree + shadow git wrapper + push guard | Worktree (forge) + direct git invocation |
-| **Network policy** | MITM proxy + firewall, GET-only strict mode | None; tools call out unconstrained |
+| **Network policy** | MITM proxy + firewall, GET-only strict mode | None for tools; secrets stripped from model-provider requests only |
 | **Toolchain** | mise + apt inside one container image | Inherits host toolchain |
-| **Multi-agent** | Single-task primitive, "build orchestration on top" | Engine + bus + 10 named agents, NATS JetStream |
-| **Surface** | CLI + SDK (`runTask()`) + dashboard via tRPC | CLI + server + bus adapters + bridge-ui dash |
-| **Provider model** | `ProviderAdapter` interface, registry | llm-bridge-* per provider/harness, more layers |
+| **Multi-agent** | Single-task primitive, "build orchestration on top" | Engine + server + named agents defined in agent-store, NATS JetStream |
+| **Surface** | CLI + SDK (`runTask()`) + dashboard via tRPC | HTTP server (including llm-bridge routes, `server/api_bridge.go`) + bus; the CLI is the separate `inber-cli` repo |
+| **Provider model** | `ProviderAdapter` interface, registry | Anthropic SDK loop plus a separate OpenAI loop (`engine/turn_openai.go`), which can use a ChatGPT subscription (`agent/codex_subscription.go`) |
 | **State** | SQLite (Drizzle) at `~/.ysa/core.db` | SQLite across agent-store, model-store, harness-store, memory-store, log-store |
-| **License** | Apache 2.0 | Internal |
+| **License** | Apache 2.0 | None (public repo, no LICENSE file) |
 | **Threat model** | Explicit + tested (attack-test.sh) | Implicit; relies on tool gating |
-| **Distribution** | `npm install -g @ysa-ai/ysa` | `inber` Go binary + ecosystem of services |
+| **Distribution** | `npm install -g @ysa-ai/ysa` | `inber-server` Go binary + sibling services |
 | **Platform** | macOS / Linux (Podman 5.x+) | Linux (systemd user units) |
 
 ## Key Takeaway

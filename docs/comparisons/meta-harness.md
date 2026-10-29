@@ -1,10 +1,17 @@
 # Meta-Harness Comparison
 
+**Last reviewed**: 2026-10-29 against stanford-iris-lab/meta-harness@8123cca (2026-10-01).
+
 **Paper**: "Meta-Harness: End-to-End Optimization of Model Harnesses" (arXiv:2603.28052, Mar 2026)
 **Authors**: Yoonho Lee, Roshen Nair, Qizheng Zhang, Kangwook Lee, Omar Khattab, Chelsea Finn (Stanford/MIT/KRAFTON)
 **Language**: Python (harnesses), Claude Code Opus 4.6 (proposer agent)
 **Focus**: Automated search over LLM harness code — the prompt construction, retrieval, memory, and orchestration logic that wraps a frozen model
+**Code**: [stanford-iris-lab/meta-harness](https://github.com/stanford-iris-lab/meta-harness) (MIT, published 2026-04-15), with the optimized Terminal-Bench 2 harness in [stanford-iris-lab/meta-harness-tbench2-artifact](https://github.com/stanford-iris-lab/meta-harness-tbench2-artifact)
 **Key Insight**: The code surrounding a model matters as much as the model itself, and a coding agent with full filesystem access to prior attempts can optimize that code automatically
+
+## Update, 2026-10-29
+
+When this doc was written only the paper was out. The authors have since released the code: a reusable framework with an onboarding flow for new domains, and two of the paper's experiments under `reference_examples/` (text classification memory search, and Terminal-Bench 2 scaffold evolution). The repo is active and widely used (about 1,700 stars). Its README lists follow-on work: a Codex-driven Python library (`SuperagenticAI/metaharness`), a Claude Code skill version, and papers that extend the search, such as RRSI (limits which edits a candidate may make) and WHALE (alternates fine-tuning with harness search). Nothing below about the method needed correcting.
 
 ## Architecture Overview
 
@@ -78,6 +85,8 @@ Meta-Harness's key advantage is that the proposer can read full execution traces
 - Add structured outcome tagging: did the turn succeed? Was the tool output used? Did the agent backtrack?
 - Make these logs queryable, not just appendable
 
+As of 2026-10-29, inber still writes JSONL (`session/jsonl.go`, with the full request payload in `session.Entry.Request`), and it now also keeps a SQLite table of sessions and turns with tokens, cost, tool-call count, stop reason and error per turn (`session/db_turns.go`, `session/db_migration.go`). That covers part of "queryable". Outcome tagging (did the turn succeed, was a tool's output used) does not exist yet.
+
 This would enable an outer loop that reviews past session performance and suggests prompt/tool/context changes — a manual version of Meta-Harness's automated search.
 
 ### 2. Harness-Level Configuration as Code (MEDIUM PRIORITY)
@@ -87,7 +96,7 @@ Meta-Harness treats the harness as a single-file program. Inber's equivalent —
 - Saving and comparing "harness snapshots" with their outcomes
 - Eventually, automated search over configurations
 
-**Concrete step**: Extract the key knobs (context budget curve, stash thresholds, pruning intervals, tool allowlist, system prompt structure) into a serializable `HarnessConfig` that can be saved alongside session outcomes.
+**Concrete step** (not done as of 2026-10-29; there is no `HarnessConfig` type): Extract the key knobs (context budget curve, stash thresholds, pruning intervals, tool allowlist, system prompt structure) into a serializable `HarnessConfig` that can be saved alongside session outcomes.
 
 ### 3. Pareto Frontier for Agent Configuration (LOW PRIORITY)
 

@@ -1,11 +1,15 @@
 # Marionette Comparison
 
+**Last reviewed**: 2026-10-29 against professorpalmer/marionette@89aafab (2026-10-27).
+
 **Project**: [Marionette](https://github.com/professorpalmer/marionette) (formerly `pm-harness`)
 **Language**: Python (stdlib backend) + React/Electron frontend
 **Focus**: A desktop coding harness that treats the LLM as a component inside a durable-state kernel, not as the platform that owns the conversation
 **Key Strengths**: Command-level safety classification, a budget governor written before the autonomy it guards, per-provider prompt-cache knowledge held as data, preflight before indexing, distilled briefs instead of transcripts on delegation
 
 **Studied**: 2026-08-16. All facts below read from the repository at HEAD `39437d5`, the GitHub API, PyPI, and the two external evidence repos. Nothing was executed; every runtime claim is the author's, not a measurement of ours.
+
+**Recheck, 2026-10-29**: the project is alive and moving fast: about 3,000 commits (from 1,218), release v0.9.651 (from v0.9.232; about 690 releases), 26 stars, 5 forks. It still has **no license**. The files this doc leans on still exist at the same paths (`harness/command_policy.py`, `harness/autobudget.py`, `pmharness/drivers/prompt_cache.py`, `harness/codegraph_preflight.py`, `bench/cache_wars.py`). The line counts, test counts and quoted defaults below are from the August study and were not re-measured. On the inber side, the `guard` and `codeindex` claims were rechecked against inber's code on this date and still hold; changed rows in the table are marked.
 
 ## What It Is
 
@@ -112,7 +116,7 @@ The named-failure design is the transferable part: a gap in an event stream that
 
 Split the single `isDangerous("shell_commands")` bit into a classifier over the actual command string. Adopt Marionette's two rules verbatim: **label, never rewrite**, and **flag conservatively**, accepting false positives because the guard only bites where nobody is watching.
 
-Inber does not need to write the parser. **permission-store** (`:8304`) already has the AST-based Bash command splitter done — its README calls that step 1 of 7, and the splitter is the finished step. Wiring `guard.CheckTool` to send the command text to permission-store, and keeping the tool-name switch only as the fallback for tools with no command string, turns two half-built things into one working one.
+Inber does not need to write the parser. **permission-store**, a sibling service, already has the AST-based Bash command splitter done — its README calls that step 1 of 7, and the splitter is the finished step. Wiring `guard.CheckTool` to send the command text to permission-store, and keeping the tool-name switch only as the fallback for tools with no command string, turns two half-built things into one working one.
 
 First step: change `CheckTool(tool, input string)` so the `input` it already receives is actually consulted for `shell_commands` instead of being passed through to `ApprovalFunc` unexamined.
 
@@ -161,21 +165,21 @@ Marionette's README leads with two figures. Both are real studies. **Neither one
 | Aspect | Marionette | Inber |
 |--------|-----------|-------|
 | **Language** | Python (stdlib) + React/Electron | Go |
-| **Surface** | Desktop app, three panes | CLI + HTTP server + bus |
+| **Surface** | Desktop app, three panes | HTTP server + message bus (the CLI moved to the separate `inber-cli` repo) |
 | **Orchestration** | Separate kernel (Puppetmaster), called in-process | In-engine `spawn_agent` |
 | **State ownership** | Kernel owns job state; harness reads only | Engine owns everything |
 | **Safety granularity** | Per-command pattern classification | Per-tool-name switch |
 | **Budget governor** | Tokens, seconds, swarms, idle steps, killswitch file | Turns, input tokens, cost, duration |
 | **No-progress detection** | `max_idle_steps=3`, enforced | Written, never wired — `RecordToolCall` has no caller |
 | **Code retrieval** | CodeGraph (third-party) + 458-line preflight | `codeindex` — 88 lines, every body `// TODO` |
-| **Cross-session memory** | LLM Wiki, distilled by the *cheap* pilot, human-approved | `memory` — 37-line re-export of memory-store |
-| **Cache control** | Per-provider table, sole owner, strip-and-retry | Universal sentinel, deleted 2026-08-07 as dead |
+| **Cross-session memory** | LLM Wiki, distilled by the *cheap* pilot, human-approved | `memory` — 39-line re-export of memory-store (`memory/memory.go`) |
+| **Cache control** | Per-provider table, sole owner, strip-and-retry | Universal sentinel deleted 2026-08-07 as dead; now Anthropic `cache_control` breakpoints set during prompt assembly (`engine/prompt_blueprint.go`, `agent/agent_run.go`) and, on the OpenAI path, `prompt_cache_key` set to the session id (`engine/turn_openai.go`). No per-provider table and no strip-and-retry |
 | **Cache cost source** | Flat `0.1` multiplier | model-store per-model lookup |
 | **Delegation context** | Distilled goal brief; transcript never enters a worker | Task text; fork inheritance audited separately |
-| **Providers** | 14, seven API modes, hot-swap by task | Anthropic SDK plus a provider interface |
+| **Providers** | 14, seven API modes, hot-swap by task | Anthropic SDK, plus OpenAI-compatible models through a separate loop (`engine/turn_openai.go`), which can use a ChatGPT subscription (`agent/codex_subscription.go`). `agent/provider.go` has an interface, but it is typed on Anthropic's SDK |
 | **Default driver** | `qwen3-coder-30b` via OpenRouter | Claude models via model-store |
 | **Tests** | 4,204 test functions, 102,838 lines | Per-package, coverage audited |
-| **Authorship** | 99.3% one person, 7.5 weeks, 282 releases | Personal infrastructure, multi-agent maintained |
+| **Authorship** | 99.3% one person, 7.5 weeks, 282 releases (August; about 3,000 commits and 690 releases by 2026-10-29) | Personal infrastructure, multi-agent maintained |
 | **License** | **None — no LICENSE file anywhere** | — |
 
 ## Risks and Caveats

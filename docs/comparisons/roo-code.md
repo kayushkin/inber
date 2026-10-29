@@ -1,13 +1,16 @@
 # Roo Code Comparison
 
+**Last reviewed**: 2026-10-29 against RooCodeInc/Roo-Code@b867ec914 (2026-05-15).
+
 **Project**: [Roo Code](https://github.com/RooCodeInc/Roo-Code)
-**Language**: TypeScript (VS Code extension, Cline fork)
-**Focus**: Multi-mode AI coding assistant — different agent behaviors via mode switching rather than separate agents
-**Key Strengths**: Mode system (Code/Architect/Ask/Debug/custom), codebase semantic indexing, skills as slash commands, auto-approval policies
+**Status**: **Shut down.** The README says the extension was shut down on 2026-05-15, the repo is archived on GitHub, and the last release is v3.54.0. The README points users to [Zoo Code](https://github.com/Zoo-Code-Org/Zoo-Code), a community continuation that is active, and back to Cline. This file now records the ideas, not a live project; there is nothing upstream to watch.
+**Language**: TypeScript (VS Code extension, a fork of Cline)
+**Focus**: One coding agent whose behaviour changes by mode rather than by switching agents.
+**Key Strengths**: Mode system (Code/Architect/Ask/Debug/custom), codebase semantic indexing, skills as slash commands, auto-approval policies, tool repetition detection.
 
 ## Architecture Overview
 
-Roo Code is a VS Code extension (forked from Cline) with a single agent that can switch between modes. Each mode configures which tools are available and what system prompt components to use. The agent can switch modes mid-conversation via `SwitchModeTool`.
+Roo Code was a VS Code extension with a single agent that switched between modes. Each mode set which tool groups were available and which system prompt parts were used. The agent could change mode mid-conversation through `SwitchModeTool`.
 
 ```
 VS Code Sidebar → Task loop → Mode-configured tools + prompts
@@ -18,69 +21,58 @@ VS Code Sidebar → Task loop → Mode-configured tools + prompts
     → Custom modes:    user-defined tool groups + prompts
 ```
 
-Inherits Cline's core: 25+ tools, MCP client, tree-sitter AST parsing, embedding-based codebase search, git-based checkpoints, multi-provider LLM support.
+At shutdown `src/core/tools/` held about 25 tools, among them `CodebaseSearchTool` (embedding search), `NewTaskTool` (subtasks), `SkillTool`, `RunSlashCommandTool`, `UseMcpToolTool`, `SwitchModeTool` and `ToolRepetitionDetector`.
 
-## What Roo Code Does Well
+## What Roo Code Did Well
 
 ### 1. Mode System for Agent Specialization ⭐️
 
-Instead of separate agents, Roo Code uses modes — configurations of tool groups and system prompt components. Five built-in modes plus custom user-defined modes. Each mode is a `ModeConfig` with `slug`, `groups` (tool group sets), and prompts.
+Instead of separate agents, Roo Code used modes: a `ModeConfig` with a `slug`, tool `groups` and prompts. Five built-in modes plus user-defined ones. One agent, several behaviours, switchable mid-conversation.
 
-This is a lightweight alternative to multi-agent: one agent, multiple personalities, switchable mid-conversation.
-
-**Inber connection**: Inber uses separate named agents with distinct identities. Roo Code's mode pattern could complement this — an agent could have modes (e.g., "research mode" with read-only tools, "build mode" with full access) without needing separate agent definitions.
+**Inber connection**: inber uses separate named agents from agent-store, each with its own tool allowlist. It also has per-session execution modes in `guard/guard.go` (`observe`, `assist`, `autonomous`), set per request, which restrict tools without changing the agent. Those modes control trust, not prompt or role, so they cover half of Roo's idea.
 
 ### 2. Auto-Approval Policies
 
-Configurable per-tool auto-approve policies. Read operations can be auto-approved while write/execute operations require confirmation. More granular than a binary "approve all" or "approve nothing."
+Per-tool auto-approve settings: reads could run unasked while writes and commands asked first.
 
-**Inber connection**: Inber's agents have tool allowlists but no per-tool approval levels. A tiered system (auto/ask/deny per tool) would be useful for the execution mode system discussed in the Commander comparison.
+**Inber connection**: inber's `assist` mode sends dangerous calls to approval, but no approver exists, so they are refused (`engine/build_hooks.go`, `buildToolRefusal`). There are no per-tool approval levels.
 
 ### 3. Skills as Slash Commands
 
-Reusable prompt-based workflows saved as files and exposed as `/command` slash commands. The agent can invoke them via `RunSlashCommandTool`. Simple extensibility without code changes.
+Reusable prompt workflows saved as files and exposed as `/command`s, which the agent could call through `RunSlashCommandTool`.
 
 ### 4. Tool Repetition Detection
 
-A `ToolRepetitionDetector` prevents infinite loops where the agent repeatedly calls the same tool with the same arguments. Practical guard against a common failure mode.
+`ToolRepetitionDetector` stopped loops where the agent called the same tool with the same arguments again and again.
 
-**Inber connection**: Inber doesn't explicitly detect tool repetition. Adding this would be a simple improvement to the agent loop.
+**Inber connection**: `guard` has a repetition counter (`RecordToolCall`, `IsRepeating`), but nothing outside the package's tests calls `RecordToolCall`, so it never fires. The package doc in `guard/guard.go` says so.
 
 ## What Inber Should Adopt
 
-### 1. Agent Modes (MEDIUM PRIORITY)
+### 1. Wire the Repetition Check (HIGH PRIORITY)
 
-Add a per-session mode that controls tool availability without changing the agent identity:
+The code exists; call `Guard.RecordToolCall` from the tool-execution hook and act on `IsRepeating` (warn the model, then stop the turn). Roo's detector is the model for what "same call" means.
 
-```
-Modes:
-  observe  → read-only tools (file reads, search, memory)
-  assist   → reads + writes with confirmation
-  autonome → full tool access (current default)
-```
+### 2. Approval Tiers (LOW PRIORITY)
 
-Modes could be set per-request via the server API, allowing the same agent to operate at different trust levels depending on context.
+Per-tool levels in agent config: run, ask (through the bus or llm-bridge), deny. This needs the approver that `assist` mode lacks.
 
-### 2. Tool Repetition Detection (HIGH PRIORITY)
+### Done: Agent Modes
 
-Simple guard: if the agent calls the same tool with identical input N times in a row, inject a warning or force a different action. Prevents stuck loops.
-
-### 3. Auto-Approval Tiers (LOW PRIORITY)
-
-Per-tool approval levels in agent config: auto (always execute), ask (require confirmation via bus/UI), deny (blocked). This complements the mode system — modes select which tools are available, approval tiers control how they're gated.
+This file once proposed `observe` / `assist` / `autonome` modes set per request. inber now has them as `observe`, `assist` and `autonomous` (`guard/mode.go`, `ParseMode`), checked on every tool call (`engine/build_hooks.go`).
 
 ## What's Different
 
 | Aspect | Roo Code | Inber |
 |--------|----------|-------|
-| **Agent model** | Single agent with mode switching | Multiple named agents |
-| **Runtime** | VS Code extension | Go server |
-| **Specialization** | Modes (tool groups + prompts) | Separate agent identities |
-| **Context** | AST + embeddings (from Cline) | Memory store + token budget |
-| **Multi-agent** | No (one agent, multiple modes) | Yes (NATS bus, concurrent agents) |
-| **Tools** | 25+ hardcoded + MCP | agentkit library + MCP |
-| **Loop guard** | ToolRepetitionDetector | None currently |
+| **Agent model** | Single agent with mode switching | Several named agents from agent-store |
+| **Runtime** | VS Code extension (shut down) | Go server |
+| **Specialization** | Modes (tool groups + prompts) | Separate agent identities; trust modes per session |
+| **Context** | Embedding codebase search + Cline's context tools | Memory store + token budget |
+| **Multi-agent** | Subtasks through `NewTaskTool` | Spawned sub-agents (depth 2) over a NATS bus |
+| **Tools** | About 25 built in + MCP | tool-store tools; MCP client present but not wired (`tools/mcp/`) |
+| **Loop guard** | `ToolRepetitionDetector` | Counter exists, never called |
 
 ## Key Takeaway
 
-Roo Code's mode system is the most relevant pattern for inber. **Modes are a lightweight complement to multi-agent** — instead of spawning a separate research agent, you could put the current agent into "research mode" with read-only tools. Combined with the tool repetition detection, these are practical improvements that address real failure modes. The mode pattern maps cleanly to the execution tiers discussed across several comparisons (Commander, Cline, Autohand).
+Roo Code's mode system remains the most useful idea here, and inber has built the trust half of it. The cheapest remaining win is wiring the repetition check that already sits unused in `guard/`.

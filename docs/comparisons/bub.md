@@ -1,5 +1,7 @@
 # Bub Comparison
 
+**Last reviewed**: 2026-10-29 against bubbuild/bub@ad05783 (2026-10-28). Active; rewritten since the first version of this doc (see "Why We Rewrote Bub" on bub.build).
+
 **Project**: [Bub](https://github.com/bubbuild/bub)
 **Language**: Python
 **Focus**: Hook-first runtime for agents that live alongside humans in shared environments (group chats, multi-actor channels)
@@ -24,6 +26,12 @@ Each stage is a `pluggy` hookspec. Builtins register first; external plugins loa
 
 Channels (CLI, Telegram, etc.) are adapters that feed the same inbound pipeline. The runtime model is identical regardless of surface.
 
+Since the rewrite the code splits in two (`AGENTS.md` in the repo):
+- **`bub.core`, a small agent kernel** with no settings or plugin dependencies: the agent loop over a tape store (`src/bub/core/agent.py`), a model adapter over the Republic library (`core/model.py`), an event bus, and a "code mode" that runs model-written code in a subprocess. `pip install bub` installs only this, so you can embed an agent in your own program.
+- **The app** (`bub[app]`): `framework.py`, the hooks, channels, skills and builtins.
+
+The hook list has grown (`src/bub/hooks/specs.py`). Beside the turn stages it now has `before_llm_call` / `after_llm_call`, `before_tool_call` / `after_tool_call` (which can veto or rewrite a call), `admit_message` (whether a message joins a running turn), a steering inbox for messages that arrive mid-turn, tape sidecars, and `provide_environment`. The builtins add a subagent tool, deferred tools the model loads by name, and `tape.handoff`, which writes an anchor so later context starts from it. When a provider reports that the context is too long, the agent makes one automatic handoff and retries (`core/agent.py`, `MAX_AUTO_HANDOFF_RETRIES`). `bub login codex` signs in through the Codex CLI's credentials (`builtin/auth.py`). A plugin hub lives at hub.bub.build.
+
 ## What Bub Does Well
 
 ### 1. Hook-First, Not Framework-First ⭐️
@@ -32,7 +40,7 @@ Every turn stage is a hook. There is no "core" that calls into "extensions" — 
 
 This inverts the typical framework relationship: instead of subclassing or implementing a sprawling interface, you write a small class with `@hookimpl` decorators on the specific stages you care about.
 
-**Inber connection**: Inber's engine is a tightly-coupled turn loop where customization usually means modifying engine code or adding tools. A hook-based pipeline would let agent variants override specific stages (e.g. a custom `build_prompt` per agent) without forking the engine.
+**Inber connection**: Inber's engine is a tightly coupled turn loop where customization usually means changing engine code or adding tools. `agent.Hooks` (`agent/agent.go`) lets callers observe a turn (`OnRequest`, `OnToolCall`, `OnToolResult`) and make a few changes (`ModifyToolResult`, `BeforeRequest` for pruning), but no hook replaces a whole stage. A hook-based pipeline would let agent variants override specific stages (e.g. a custom `build_prompt` per agent) without forking the engine.
 
 ### 2. Tape Context (Append-Only Records) ⭐️
 
@@ -40,7 +48,7 @@ Context is rebuilt from append-only records on every turn rather than carried as
 
 This is the same pattern as event sourcing: the source of truth is the event log, and any view (current prompt, full history, summary) is a projection over it.
 
-**Inber connection**: Inber's conversation package mutates a `Conversation` struct that holds the current message list. Pruning, summarization, and stashing all mutate this struct. An append-only event tape would make these operations into projections instead of destructive mutations — easier to audit, easier to debug a "why did the model see this" question.
+**Inber connection**: Inber holds the current message list as a slice of `anthropic.MessageParam` in the agent; the conversation package's pruning, summarizing and stashing return a changed list that replaces it (`conversation/manage.go`). One step toward a tape already exists: summarizing saves the turns it replaces, verbatim, as a tagged memory (`conversation/archive_tags.go`), and stashing leaves a pointer to the content it lifts out. *(Updated 2026-10-29: this said "a `Conversation` struct"; there is no such type.)* An append-only event tape would make these operations into projections instead of destructive mutations — easier to audit, easier to debug a "why did the model see this" question.
 
 ### 3. One Runtime Across Surfaces
 
@@ -62,7 +70,7 @@ Every builtin (CLI channel, Telegram channel, model runner, tool dispatcher, ski
 
 Refactor the turn loop — `RunTurn` at `engine/engine.go:245` *(corrected 2026-08-07: this
 said `engine/turn.go`, which does not exist; the split proposed in `ENGINE_REFACTOR_PLAN.md`
-was never carried out)* — so each stage of a turn (resolve session, load state, build prompt, call model, save state, render output) is dispatched through a hook list. Builtins register the default behavior; agents or plugins can override individual stages.
+was never carried out)* *(2026-10-29: now `engine/engine.go:256`; the turn is spread over `engine/turn_prepare.go`, `turn_execute.go`, `turn_postprocess.go` and, for OpenAI models, `turn_openai.go`)* — so each stage of a turn (resolve session, load state, build prompt, call model, save state, render output) is dispatched through a hook list. Builtins register the default behavior; agents or plugins can override individual stages.
 
 This unblocks:
 - Per-agent prompt customization without touching engine code
@@ -73,7 +81,7 @@ Concrete first step: define a `TurnHook` interface with optional methods for eac
 
 ### 2. Append-Only Event Tape for Conversations (MEDIUM PRIORITY)
 
-Replace the mutable `Conversation` with an append-only event log + projections. Each user message, assistant response, tool call, prune decision, and summary becomes an event. The current "what does the model see" view is a projection, not the canonical state.
+Replace the mutable message list with an append-only event log + projections. Each user message, assistant response, tool call, prune decision, and summary becomes an event. The current "what does the model see" view is a projection, not the canonical state.
 
 Benefits:
 - Pruning becomes a projection filter, not a destructive operation
@@ -94,13 +102,13 @@ Currently engine vs. server code paths diverge for in-process vs. networked invo
 | **Language** | Python | Go |
 | **Plugin system** | pluggy (entry points) | Hardcoded in engine, no plugin loader |
 | **Customization model** | Hooks override stages | Edit engine code or add tools |
-| **State model** | Append-only tape, rebuilt per turn | Mutable `Conversation` struct |
-| **Channels** | CLI, Telegram, custom (all same pipeline) | si service with matterbridge adapters |
+| **State model** | Append-only tape, rebuilt per turn | Message slice replaced by pruning/summarizing; replaced turns archived to memory |
+| **Channels** | CLI, Telegram, custom (all same pipeline) | None in inber; HTTP, NATS bus and llm-bridge-compatible routes (`server/api_bridge.go`), with chat apps reached through other services |
 | **Standards** | agents.md, Agent Skills | Custom agent-store schema |
 | **Origin** | Group chats with multi-actor context | CLI + server for personal multi-agent infra |
 | **Operator model** | Humans and agents go through same pipeline | Humans interact via UI/bus, agents run in engine |
 | **Codebase shape** | Small core, replaceable builtins | Multi-package monorepo, engine-centric |
-| **Distribution** | `pip install bub`, fork-friendly | `inber` binary, deploy-as-service |
+| **Distribution** | `pip install bub` (kernel only) or the app installer | `inber` binary, deploy-as-service |
 
 ## Key Takeaway
 

@@ -1,170 +1,133 @@
 # OpenCode Comparison
 
-**GitHub:** github.com/anomalyco/opencode
-**Language:** TypeScript (Bun runtime)
-**Focus:** Open-source, provider-agnostic AI coding agent with TUI-first design
+**Last reviewed**: 2026-10-29 against anomalyco/opencode@b653a6260 (2026-10-29, branch `dev`).
+
+**GitHub:** github.com/anomalyco/opencode (moved from `sst/opencode`; the old name redirects). The default branch is `dev`.
+**Status:** Very active; v2.2.2 released 2026-10-29. OpenCode 2 replaced the original code base: the old `packages/opencode` was deleted on 2026-07-21.
+**Language:** TypeScript on Bun, built with Turbo, written on Effect 4.
+**Focus:** Open-source, provider-agnostic coding agent with a client/server split: terminal UI first, plus a desktop app and web.
 
 ## Architecture Overview
 
-OpenCode is a large TypeScript monorepo (~19 packages) using Turbo for build orchestration and SST for deployment. It follows a client/server architecture with clean separation between the core engine and UI frontends.
+OpenCode 2 is a monorepo of about 37 packages. The engine is `packages/core`; `packages/server` serves it over HTTP; `packages/cli` ships the `opencode` binary; the terminal UI, desktop app and web are clients.
 
 ```
-┌─ UI Layer ──────────────────────────────────────────┐
-│  TUI (primary) | Desktop (Electron) | Web | Slack   │
+┌─ Clients ───────────────────────────────────────────┐
+│  TUI (tui, session-ui) | Desktop (Electron) | Web   │
+│  SDK (sdk, client) | plugins (plugin, gui-plugins)  │
 └─────────────────┼───────────────────────────────────┘
-                  │
-┌─ Core Engine ───┼───────────────────────────────────┐
-│  Agent System | Session | Provider | Tool | MCP     │
-│  Control Plane | Permission | Config | Bus          │
-└─────────────────┼───────────────────────────────────┘
-                  │
-┌─ Dev Integration┼───────────────────────────────────┐
-│  LSP | Git | Worktree | Shell/PTY | IDE | Snapshot  │
+                  │  HTTP API (server, protocol)
+┌─ Core ──────────┼───────────────────────────────────┐
+│  agent | session (compaction, subagents, revert)    │
+│  provider | tool | mcp | permission | plugin | skill│
+│  snapshot | worktree | pty | schedule | bus         │
 └─────────────────────────────────────────────────────┘
 ```
 
-### Monorepo Packages
+### Main packages
 
 | Package | Purpose |
 |---------|---------|
-| `opencode` | Core engine — agents, tools, providers, sessions |
-| `app` | Application shell |
-| `sdk` | Public SDK for programmatic access |
-| `plugin` | Plugin system |
-| `desktop-electron` | Electron desktop client |
-| `web` | Web interface |
-| `ui` | Shared UI components |
-| `slack` | Slack integration |
-| `identity` | Auth/identity management |
-| `enterprise` | Enterprise features |
-| `console` | Console/admin interface |
+| `core` | Engine: agents, sessions, providers, tools, MCP, permissions, snapshots |
+| `server` | HTTP server around the core |
+| `cli` | `opencode` binary (`@opencode/cli`) |
+| `tui`, `session-ui` | Terminal interface |
+| `desktop` | Electron desktop app (beta) |
+| `web`, `app`, `ui` | Web interface and shared components |
+| `sdk`, `client`, `protocol` | Programmatic access |
+| `plugin`, `plugins`, `gui-plugins`, `plugin-browser` | Plugin system and bundled plugins |
+| `console`, `identity` | Hosted console and accounts |
+
+The Slack, enterprise and `desktop-electron` packages this file once listed no longer exist under those names.
 
 ## Agent System
 
-**Dual Built-in Agents:**
-- **build** — Full-access development agent with unrestricted file and command permissions
-- **plan** — Read-only agent for exploration, requests permission before modifications
+**Built-in agents** (README, `packages/core/src/agent.ts`):
+- **build** — default, full-access development agent.
+- **plan** — read-only: denies file edits and asks before running shell commands.
+- **general** — subagent for searches and multi-step tasks, called with `@general`.
 
-**Subagent Model:**
-- A **general** subagent handles complex searches and multi-step reasoning
-- Invoked via `@general` mentions within conversation
-- Tab key switches between primary agents
-
-This is simpler than inber's 10-agent system but follows a similar principle of role-based agent specialization.
+Tab switches between primary agents. Subagents run as background jobs that report back when done (`session/subagent-job.ts`, `session/subagent-completion.ts`, `tool/plugin/subagent.ts`).
 
 ## Provider System
 
-**Provider Agnostic:**
-- Supports Claude, OpenAI, Google, and local models
-- Not locked to any single provider
-- Commercial "OpenCode Zen" option provides hosted model access
+- Provider-agnostic through the AI SDK and the models.dev catalogue (`core/src/models-dev.ts`); Anthropic, OpenAI, Google, GitHub Copilot, local models and more.
+- OAuth sign-in for providers that support it (`core/src/oauth`).
+- "OpenCode Zen" offers hosted model access for pay.
 
-**Comparison to inber:** Inber is currently Anthropic-coupled. OpenCode's multi-provider approach validates the direction of extracting a provider interface (similar to what Goose does).
+**Comparison to inber:** inber is no longer Anthropic-only. It has a second turn loop for OpenAI-compatible endpoints (`engine/turn_openai.go`) and can send OpenAI requests through a ChatGPT subscription (`agent/codex_subscription.go`). It has no model catalogue of its own; models and prices come from model-store.
 
-## Tool & Extension Architecture
+## Tools and Extensions
 
-**MCP Integration:**
-- Full Model Context Protocol support for tool extensibility
-- `mcp/` module for MCP client implementations
+- **Built-in tools** are plugins in `core/src/tool/plugin/`: read, write, edit, patch, grep, glob, shell, webfetch, websearch, todo, question, skill, subagent, schedule, image-generate, mcp-resource.
+- **MCP** client in `core/src/mcp`, including MCP resources.
+- **Plugins** register tools through the same path as built-ins (`core/src/tool/AGENTS.md`).
+- **Skills** (`core/src/skill.ts`) load instructions on demand.
 
-**Plugin System:**
-- Dedicated `plugin/` package for extending functionality
-- `.opencode` project directories for agent specs and behavioral policies
-
-**Skills:**
-- `skill/` module — likely pre-built capability bundles (similar to Claude Code's slash commands)
-
-**Comparison to inber:** OpenCode's plugin + MCP approach is more modular than inber's current hardcoded tool registration. The skill system is worth examining for inber's tool abstraction.
+**Comparison to inber:** inber's tools come from the tool-store library (`engine/engine_new.go`). It has an MCP stdio client in `tools/mcp/` that nothing outside the package calls, so it loads no MCP tools today.
 
 ## Development Integration
 
-OpenCode has deeper IDE/editor integration than most competitors:
+- **Worktrees** for parallel work (`core/src/worktree`).
+- **Snapshots and revert** (`core/src/snapshot.ts`, `session/revert.ts`).
+- **Persistent PTY** for shell sessions.
+- **LSP: dropped in OpenCode 2.** The v1 code base had a built-in LSP client; the v2 core has none, and `tool/plugin/edit.ts` carries `TODO: Add LSP notification and diagnostics after LSP runtime exists`.
 
-- **LSP support** — Out-of-the-box Language Server Protocol for code intelligence
-- **Worktree management** — Git worktree isolation for parallel work
-- **Snapshot system** — State snapshots and recovery
-- **PTY support** — Full pseudo-terminal for shell interaction
-- **IDE module** — Direct editor integration
-- **Zed extension** — First-party editor plugin
-
-**Comparison to inber:** Inber has worktree support via forge but lacks LSP integration and snapshot recovery. The LSP integration is notable — it gives the agent richer code understanding without relying solely on the LLM.
+**Comparison to inber:** inber creates worktree workspaces for spawned agents through the forge library (`server/forge_iface.go`). It has no workspace snapshots (`checkpoint/checkpoint.go` returns `ErrNotImplemented`) and no LSP client.
 
 ## Session & State
 
-- Session persistence and management
-- Storage abstraction layer
-- Sync mechanisms for state coordination
-- Share functionality for collaboration
+- Sessions persist in SQLite (Drizzle) with history, compaction (`session/compaction.ts`), revert, move and transfer.
+- Session sharing was a v1 feature; a search of the v2 core finds no share code, so it may now live only in the hosted console. Not confirmed.
 
-**Comparison to inber:** More developed session model with sharing capabilities. Inber's memory system is likely more sophisticated for long-term context, but OpenCode's session sharing is a feature inber lacks.
+**Comparison to inber:** inber's sessions persist in SQLite too (`server/store.go`) and can be resumed, forked, interrupted and compacted through `server/api_bridge.go`.
 
 ## Permission Model
 
-- Dedicated `permission/` module
-- Agent-level permission scoping (build = full access, plan = read-only)
-- Command approval workflows
+- `core/src/permission`: structured rules per action and resource, with remembered grants (see the 2026-06-02 entry below on PermissionV2).
+- Agent-level defaults (build: full access; plan: read-only).
 
-Similar in spirit to Claude Code's permission system.
+**Comparison to inber:** inber's `guard` has three modes, `observe`, `assist` and `autonomous` (`guard/mode.go`), checked on every call (`engine/build_hooks.go`). `assist` refuses calls that need approval because no approver exists. There are no per-resource rules.
 
-## Infrastructure & Scale
+## Infrastructure
 
-- **Effect system** — Uses functional effect patterns (likely Effect-TS) for structured concurrency and error handling
-- **Event bus** — Internal message bus for component communication
-- **Control plane** — Central coordination layer
-
-The Effect-TS usage is notable — it's a sophisticated choice for managing async complexity in TypeScript, similar to how Go uses goroutines/channels.
+- **Effect 4** for structured concurrency and typed errors throughout the core.
+- **Event bus** inside the process (`core/src/bus.ts`).
+- **SST** for the hosted parts.
 
 ## What Inber Should Note
 
-### 1. **LSP Integration**
-OpenCode's LSP support gives agents real-time code intelligence (go-to-definition, references, diagnostics) without consuming LLM tokens. This is a meaningful architectural advantage.
+### 1. Snapshot and Revert
+OpenCode can roll back an agent's file changes per message. inber has only git auto-commits after each write (`engine/workflow_hooks.go`).
 
-**Inber action:** Evaluate LSP client integration for Go-aware code navigation within agent sessions.
+### 2. Multi-Frontend Architecture
+TUI, desktop, web and SDK all go through one HTTP server. inber has the same shape (HTTP API, llm-bridge routes, NATS bus) without its own UI.
 
-### 2. **Snapshot & Recovery**
-The snapshot system allows rolling back agent changes — a safety net that inber currently lacks beyond git-level undo.
+### 3. Plugin and MCP Side by Side
+Plugins for in-process tools, MCP for outside ones, both through one registry.
 
-**Inber action:** Consider checkpoint/snapshot support in forge worktree slots.
+### 4. LSP, reconsidered
+This file once rated LSP as OpenCode's main advantage. OpenCode dropped it in the v2 rewrite, which lowers the case for inber building one first.
 
-### 3. **Multi-Frontend Architecture**
-OpenCode ships TUI, desktop, web, and Slack frontends from the same core. This validates inber's direction with si (communications layer) and the bus architecture, but OpenCode's execution is more polished.
+## Where inber differs
 
-### 4. **Provider Independence**
-Multi-provider support from the start. Inber should continue pursuing provider abstraction via model-store.
+### Memory
+inber keeps memory across sessions in memory-store, extracts it from each exchange in the background (`conversation/extract.go`), and moves large blocks out of the conversation behind `memory_expand` pointers (`conversation/stash.go`). OpenCode keeps instructions and session history but has no long-term memory store.
 
-### 5. **Plugin vs MCP Dual Extension**
-Having both a plugin system and MCP support gives two levels of extensibility — lightweight plugins for common cases, MCP for standard tool integration.
+### Agents
+inber runs several named agents defined in agent-store, each with its own prompt, tools and limits, and they spawn each other (`server/spawn.go`). OpenCode has build, plan and general plus user-defined agents.
 
-## What Inber Does Better
+### Runtime
+One Go binary (`cmd/inber-server`) with no runtime to install; OpenCode needs Bun or its packaged binary.
 
-### 1. **Memory Architecture**
-Inber's memory system (conversation summarization, pruning, stashing) is more sophisticated than OpenCode's session-based approach. Long-term context retention across sessions is a genuine differentiator.
-
-### 2. **Agent Depth**
-Inber's 10-agent system with distinct personalities and specializations is richer than OpenCode's build/plan/general trio.
-
-### 3. **Go Ecosystem**
-Single binary, no runtime dependencies, lower resource footprint. OpenCode requires Bun and a Node.js ecosystem.
-
-### 4. **Message Bus Architecture**
-Inber's NATS-backed bus with si adapter layer is more robust for distributed agent communication than OpenCode's internal bus.
-
-### 5. **Context Management**
-Inber's smart truncation and context loading is more automatic and fine-tuned.
+### Egress redaction
+inber strips known secrets from every request body before it leaves the process (`redact/`).
 
 ## Recommended Adoptions for Inber
 
-**High Priority:**
-1. **LSP integration** — Real code intelligence without LLM token cost
-2. **Snapshot/checkpoint system** — Safety net for agent modifications
-
-**Medium Priority:**
-3. **Session sharing** — Collaborative features
-4. **Skill/recipe abstraction** — Pre-built capability bundles
-
-**Low Priority:**
-5. **Desktop client** — Electron or similar GUI (inber's TUI is sufficient for now)
-6. **Effect-style structured concurrency** — Go already handles this well with goroutines
+1. **Snapshot/revert** for agent file changes — highest value.
+2. **Wire the MCP client** already in `tools/mcp/`.
+3. **Per-resource permission rules** with remembered grants.
 
 ---
 

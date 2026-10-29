@@ -1,13 +1,16 @@
 # Dexto Comparison
 
+**Last reviewed**: 2026-10-29 against truffle-ai/dexto@dbb401dab (2026-10-23).
+
 **Project**: [Dexto](https://github.com/truffle-ai/dexto)
+**Status**: Active (several releases in October 2026).
 **Language**: TypeScript (Node.js monorepo)
-**Focus**: Agent harness / orchestration layer — config-driven agents via YAML with multi-interface runtime
-**Key Strengths**: YAML-driven agent definitions, multi-interface (CLI/Web/REST/MCP/bots), pluggable storage (SQLite/PostgreSQL/Redis), sub-agent orchestration with signal bus, OpenTelemetry built-in
+**Focus**: Agent harness: agents defined in YAML, run through one runtime behind several interfaces. Ships a coding agent as its default.
+**Key Strengths**: YAML agent definitions, interfaces (Web UI by default, CLI, REST+SSE server, MCP server, Discord and Telegram examples, SDK), pluggable storage (SQLite/PostgreSQL/Redis), sub-agent spawning with approvals forwarded to the parent, OpenTelemetry.
 
 ## Architecture Overview
 
-Dexto is a monorepo (~20 packages) with a layered architecture. YAML defines the agent, `core` provides the runtime, tool packages provide capabilities, storage backends provide persistence, and interface packages provide access.
+Dexto is a monorepo (24 packages under `packages/`, among them `core`, `llm`, `orchestration`, `storage`, `server`, `cli`, `tui`, `webui`, `client-sdk` and seven `tools-*` packages) with a layered architecture. YAML defines the agent, `core` provides the runtime, tool packages provide capabilities, storage backends provide persistence, and interface packages provide access.
 
 ```
 YAML Agent Config
@@ -21,7 +24,7 @@ YAML Agent Config
     → storage: PostgreSQL | SQLite | Redis | in-memory (pluggable)
 ```
 
-Same agent runs as CLI, web UI, REST API server, MCP server, or embedded via SDK. The `--mode` flag switches between interfaces.
+Same agent runs as web UI (the default), CLI (`--mode cli`), REST and SSE server (`--mode server`, which also serves MCP at `/mcp`), stdio MCP server (`--mode mcp`), or embedded through the SDK. Discord and Telegram bots are examples, not modes.
 
 ## What Dexto Does Well
 
@@ -33,21 +36,21 @@ Each agent is a single YAML file defining: LLM provider/model, MCP servers, syst
 
 ### 2. Multi-Interface Runtime
 
-Same agent definition runs across 6 different interfaces without code changes. This is the "write once, run everywhere" promise for agents.
+Same agent definition runs across four run modes plus the SDK and bot examples without code changes. This is the "write once, run everywhere" promise for agents.
 
-**Inber connection**: Inber achieves something similar via the server (HTTP API + SSE + NATS bus), with `si` adapting to Discord/Telegram/Slack. But Dexto's single-binary approach is simpler to deploy.
+**Inber connection**: inber reaches several surfaces through one server: its own HTTP API (`server/api.go`), llm-bridge-compatible routes (`server/api_bridge.go`) and a NATS bus (`bus/`), with chat apps handled by separate adapter services on the bus. Dexto's single process is simpler to deploy.
 
 ### 3. Pluggable Storage Tiers
 
 Three independent storage tiers: cache (Redis/in-memory), database (PostgreSQL/SQLite/in-memory), blob (local filesystem). Production uses Redis + PostgreSQL; dev uses in-memory + SQLite. Configured per-agent in YAML.
 
-**Inber connection**: Inber uses SQLite everywhere (agent-store, model-store, session DB). Pluggable storage isn't needed today but would matter if scaling beyond a single server.
+**Inber connection**: inber uses SQLite everywhere (agent-store, model-store, memory-store, the server's session store in `server/store.go`). Pluggable storage isn't needed today but would matter if scaling beyond a single server.
 
 ### 4. Signal Bus for Sub-Agent Communication
 
-The orchestration package provides a `signal-bus` for inter-agent communication and a `task-registry` for managing spawned agents. Sub-agents run ephemerally with auto-cleanup. Tool approvals propagate from sub-agent to parent.
+The orchestration package provides a `signal-bus` for inter-agent communication, a `task-registry` for spawned agents and a `condition-engine`. An `agent-spawner` tool in the agent's YAML names which agents it may start (`allowedAgents`), how many at once and the timeout. Sub-agents run ephemerally with auto-cleanup, and their tool approvals surface through the parent.
 
-**Inber connection**: Inber uses NATS JetStream for agent communication, which is more robust (persistent, distributed) but heavier than an in-process signal bus.
+**Inber connection**: inber spawns sub-agents as server sessions (`server/spawn.go`), bounded by `MaxSpawnDepth` (default 2) and `MaxChildrenPerAgent` (default 5) in `server/config.go`, and forwards their status events to the parent's stream. Outside traffic arrives over NATS. inber has no approval to forward: its `assist` mode refuses calls that need approval (`engine/build_hooks.go`).
 
 ### 5. Bidirectional MCP
 
@@ -57,7 +60,7 @@ Dexto is both an MCP client (connects to MCP servers for tools) and can expose i
 
 Distributed tracing with OTLP export. Enables observability dashboards without custom logging.
 
-**Inber connection**: Inber uses logstack for centralized logging. OpenTelemetry would provide richer observability (traces, spans, metrics) with industry-standard tooling.
+**Inber connection**: inber sends session logs to logstack (`session/logstack.go`) and writes per-session JSONL timelines (`session/timeline_jsonl.go`). OpenTelemetry would provide richer observability (traces, spans, metrics) with industry-standard tooling.
 
 ## What Inber Should Adopt
 
@@ -71,20 +74,20 @@ Replace or complement logstack with OpenTelemetry for richer observability. Trac
 
 ### 3. Approval Propagation for Sub-Agents (MEDIUM PRIORITY)
 
-When a sub-agent needs approval (tool confirmation), propagate the request up to the parent agent or user. Dexto's pattern: sub-agent approval surfaces through the parent's interface. Inber could route approval requests through the bus to the original requestor.
+When a sub-agent needs approval (tool confirmation), propagate the request up to the parent agent or user. Dexto's pattern: sub-agent approval surfaces through the parent's interface. inber first needs approval at all: today `assist` mode refuses instead of asking, because no session has an approver (`engine/build_hooks.go`). Once one exists, a child's request could travel up the same stream its status events already use.
 
 ## What's Different
 
 | Aspect | Dexto | Inber |
 |--------|-------|-------|
 | **Agent definition** | YAML files | SQLite agent-store |
-| **Agent identity** | Generic (coding-agent, explore-agent) | Named with Irish mythology identities |
-| **Multi-agent** | In-process signal bus, sub-agent spawning | NATS JetStream across processes |
-| **Interfaces** | CLI, Web, REST, MCP, Discord, Telegram, SDK | Server (HTTP+SSE), NATS, si adapters |
+| **Agent identity** | Generic (coding-agent, explore-agent) | Named agents in agent-store |
+| **Multi-agent** | In-process signal bus, sub-agent spawning | Sub-agent sessions in one server; NATS bus for outside traffic |
+| **Interfaces** | Web, CLI, REST+SSE, MCP, SDK; bot examples | HTTP API, llm-bridge routes, NATS bus; CLI in a separate repo |
 | **Storage** | Pluggable (PG/SQLite/Redis/in-memory) | SQLite everywhere |
-| **Observability** | OpenTelemetry | logstack (custom JSONL) |
-| **Model support** | 50+ via provider adapters | Anthropic-focused via model-store |
-| **License** | Elastic 2.0 (restrictive) | Internal |
+| **Observability** | OpenTelemetry | logstack + JSONL timelines |
+| **Model support** | 50+ via provider adapters | Anthropic native, OpenAI-compatible (`engine/turn_openai.go`), ChatGPT subscription (`agent/codex_subscription.go`); models and keys from model-store |
+| **License** | Elastic 2.0 (restrictive) | No license file in the repo |
 | **Deployment** | Single Node.js process | Ecosystem of Go services |
 
 ## Key Takeaway

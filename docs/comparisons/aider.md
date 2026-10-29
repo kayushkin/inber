@@ -1,25 +1,27 @@
 # Aider Comparison
 
-**Project**: [Aider](https://github.com/Aider-AI/aider)  
-**Language**: Python  
-**Focus**: AI pair programming in terminal, coding assistant  
-**Key Strengths**: Repository mapping, git integration, context efficiency
+**Last reviewed**: 2026-10-29 against Aider-AI/aider@5dc9490bb (2026-05-22).
+
+**Project**: [Aider](https://github.com/Aider-AI/aider)
+**Status**: Not archived, but quiet. The last commit is 2026-05-22 (82 commits in 2026, none since), the last tagged release is v0.86.2, and `main` reports `0.86.3.dev`. Treat it as maintained in spurts, not as a fast-moving upstream.
+**Language**: Python
+**Focus**: Pair programming in the terminal, built around git.
+**Key Strengths**: Repository map, git integration, context efficiency, lint/test loop, editor watch mode, voice input.
 
 ## Architecture Overview
 
-Aider is a Python-based coding agent that emphasizes working within existing codebases. Unlike inber's conversation-focused design, Aider is purely a coding tool with deep git integration and sophisticated context management.
+Aider is a terminal coding assistant that works inside an existing git repo. The user adds files to the chat; Aider sends them with a repository map of the rest, the model answers in one of several edit formats, and Aider applies the edits and commits them. It has no MCP support and no subagents.
 
 ## What They Do Well
 
-### 1. Repository Mapping System ⭐️
-**Most Relevant to Inber**
+### 1. Repository Map ⭐️
 
-- **Tree-sitter based**: Uses tree-sitter parsers to automatically extract symbol definitions from source files
-- **Concise representation**: Shows classes, functions, and their signatures without full implementations
-- **Dynamic optimization**: Uses graph ranking algorithm to select most relevant parts that fit within token budget
-- **Context efficiency**: Provides enough context for understanding without wasting tokens on full file contents
+- **Tree-sitter tags**: `aider/repomap.py` parses each file with tree-sitter queries (`grep_ast`, `tree_sitter`) to find definitions and references. Bash tags were added in May 2026.
+- **Signatures, not bodies**: the map shows classes, functions and their signatures.
+- **Graph ranking**: files and symbols are ranked by how often others reference them, and the top of the ranking fills the budget.
+- **Budget**: `--map-tokens` (default 1024 in `RepoMap`), multiplied by `map_mul_no_files` (8) when no files are in the chat.
 
-**Example from their repo map**:
+Example map:
 ```
 aider/coders/base_coder.py:
 ⋮...
@@ -39,94 +41,51 @@ aider/coders/base_coder.py:
 ```
 
 ### 2. Git Integration
-- **Automatic commits**: Every change committed with descriptive AI-generated commit messages
-- **Dirty file handling**: Carefully preserves uncommitted user changes before making AI edits
-- **Easy undo**: `/undo` command instantly reverts AI changes via git
-- **Conventional commits**: Uses standardized commit message format
-- **Attribution**: Marks commits as AI-authored with "(aider)" suffix
+- **Auto-commits** on by default (`--auto-commits`), with a model-written commit message.
+- **Dirty files** are committed first, so the user's own edits and Aider's stay apart.
+- **`/undo`** reverts Aider's last commit.
+- **Attribution**: by default a `Co-authored-by` trailer (`--attribute-co-authored-by`, default on); the older "(aider)" author-name suffix is now opt-in.
 
 ### 3. Context Management
-- **Token budgeting**: Configurable `--map-tokens` setting (default 1k tokens)
-- **Dynamic sizing**: Expands repo map when no specific files are in chat
-- **Relevance ranking**: Prioritizes most-referenced symbols using graph analysis
-- **Selective inclusion**: Only includes symbols that are frequently referenced by other code
+- Token budget for the map, grown when no files are in the chat.
+- Relevance from the reference graph.
 
-### 4. Multi-file Editing
-- **Coordinated changes**: Can edit multiple related files in a single request
-- **Dependency awareness**: Uses repo map to understand cross-file relationships
-- **Architecture respect**: New code follows existing patterns and uses existing abstractions
+### 4. Multi-file Editing and the Lint/Test Loop
+- Edits several related files in one reply, using the map to find them.
+- Runs the linter and tests after each change and feeds failures back to the model.
 
 ## What Inber Could Adopt
 
-### 1. Repository Context System 🎯
-**High Priority**
+### 1. A Repository Map (HIGH PRIORITY, still open)
 
-Inber currently has basic project awareness but could benefit from Aider's sophisticated repo mapping:
+inber has no repo map. `codeindex/codeindex.go` was written as Aider's map in Go, but every method is a `TODO` that returns nothing, and the engine opens it without reading from it (`engine/engine.go`, `engine/engine_types.go` `EnableCodeIndex`). Building it means: tree-sitter (or `go/ast` for Go first) to extract definitions and references, a reference graph with PageRank-style ranking, and a token budget.
 
-- **Tree-sitter integration**: Extract symbol definitions across languages
-- **Context optimization**: Graph-based relevance ranking for token efficiency
-- **Automatic context**: Reduce manual file selection needed for coding tasks
+### 2. Better Commit Messages
 
-### 2. Smarter Git Integration
-**Medium Priority**
+inber already auto-commits each file write by default (`engine/workflow_hooks.go`, `DefaultAutoWorkflowConfig`), with an explicit pathspec so it never sweeps up another agent's staged files (`engine/workflow_git.go`). Its messages are mechanical ("Create x.go", "Update x.go"). Aider's model-written messages and co-author trailer are the parts worth taking.
 
-Inber has git awareness but could improve:
+### 3. Lint/Test Feedback
 
-- **Auto-commit strategy**: Like Aider, commit each logical change with good messages
-- **Dirty file protection**: Preserve user uncommitted changes before AI edits
-- **Better undo**: Git-based rollback instead of file-level undo
-
-### 3. Token-Efficient Context
-**High Priority**
-
-- **Symbol signatures over full files**: Show interfaces/signatures instead of implementations when possible
-- **Dynamic context sizing**: Adjust context based on available tokens and chat state
-- **Relevance scoring**: Prioritize context that's most likely to be needed
-
-### 4. Cross-File Change Coordination
-**Medium Priority**
-
-- **Multi-file edits**: Support coordinated changes across related files
-- **Dependency analysis**: Understand how changes in one file affect others
+inber's workflow hooks format after a write and can run build checks (`engine/workflow_format.go`, `engine/workflow_build.go`), but compiler and test output does not go back to the model as context.
 
 ## What's Different
 
 ### Scope & Purpose
-- **Aider**: Pure coding tool, terminal-based, git-centric
-- **Inber**: Broader conversation agent with coding capabilities, multi-modal
+- **Aider**: a coding tool for one person in one repo, run from the terminal.
+- **Inber**: a Go server that runs several named agents, each a general tool-using agent, reached over HTTP, llm-bridge and a NATS bus.
 
 ### Session Model
-- **Aider**: File-based sessions, persistent via git history
-- **Inber**: Conversation sessions with memory system
+- **Aider**: chat history in files beside the repo; git history is the durable record.
+- **Inber**: server sessions in SQLite, resumable and forkable (`server/api_bridge.go`), plus memory-store for what outlives a session.
 
 ### Tool Philosophy
-- **Aider**: Specialized tool ecosystem for coding (linting, testing, voice)
-- **Inber**: General-purpose tool system across multiple domains
+- **Aider**: no tool calls; the model writes edits in a fixed format that Aider applies.
+- **Inber**: tool calls (shell, files, memory, spawn and others from tool-store).
 
 ### Context Strategy
-- **Aider**: Repository-centric, optimized for code understanding
-- **Inber**: Conversation + memory centric, optimized for multi-turn dialogue
-
-## Implementation Notes
-
-### For Inber's Context System
-1. **Start with tree-sitter**: Add parsers for Go, Python, JS, etc.
-2. **Symbol extraction**: Build repo map similar to Aider's format
-3. **Graph analysis**: Implement dependency graph and PageRank-style relevance
-4. **Token budgeting**: Configurable context size with dynamic adjustment
-
-### For Git Integration
-1. **Preserve current flexibility**: Keep inber's multi-domain focus
-2. **Add auto-commit option**: Optional Aider-style git workflow
-3. **Improve change tracking**: Better integration between memory and git state
-
-### Architecture Fit
-- Repository mapping could enhance inber's current project awareness
-- Git integration should be optional (inber works in non-code contexts)
-- Context optimization would benefit all inber use cases, not just coding
+- **Aider**: repository-centred, from the map.
+- **Inber**: memory-centred: tag-matched memories within a token budget (`engine/turn_context.go`), large blocks moved out behind `memory_expand` pointers (`conversation/stash.go`).
 
 ## Key Takeaway
 
-Aider's repository mapping system represents a significant advancement in providing LLMs with efficient codebase context. Their approach to showing "just enough" information (signatures, not implementations) while maintaining understanding is exactly what inber needs for better coding capabilities. The graph-based relevance ranking is particularly sophisticated and would improve inber's context management across all domains.
-
-**Priority for inber**: Implement a similar repository mapping system as the foundation for better coding assistance, with the flexibility to extend the concept to non-code contexts.
+Aider's repository map is still the idea inber most lacks for coding work, and the stub in `codeindex/` shows the plan was made and never carried out. Git auto-commit, the other half of Aider's design, inber already has in a cruder form.

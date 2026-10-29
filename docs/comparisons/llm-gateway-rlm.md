@@ -1,9 +1,11 @@
 # LLM Gateway (RLM Harness) Comparison
 
+**Last reviewed**: 2026-10-29 against hvent90/llm-gateway@61feb46 (2026-03-05). **Dormant**: no commit since 2026-03-05 (almost eight months), one open issue or pull request, seven stars; not archived. The RLM code described below is still in `packages/ai/rlm/`. Treat this as a record of ideas, not a project to depend on.
+
 **Project**: [llm-gateway](https://github.com/hvent90/llm-gateway) — RLM harness ([docs](https://mintlify.wiki/hvent90/llm-gateway/api/harnesses/rlm), [source](https://github.com/hvent90/llm-gateway/tree/main/packages/ai/rlm))
 **Language**: TypeScript (Node.js)
 **Focus**: Composable "harness" abstraction where each harness yields a typed event stream and harnesses compose to form a graph; RLM (Recursive Language Model) is one harness designed for arbitrarily long inputs
-**Key Strengths**: Generator-harness as a uniform composition primitive, RLM treats input as a REPL variable instead of context, sandboxed JS REPL with `FINAL()`/`exec()`/`llm_query()` primitives, HITL relays via async queue bridging
+**Key Strengths**: Generator-harness as a uniform composition primitive, RLM treats input as a REPL variable instead of context, a JS REPL with `FINAL()`/`exec()`/`llm_query()` primitives, HITL relays via async queue bridging
 
 ## Architecture Overview
 
@@ -32,7 +34,7 @@ RLM pattern: input is a REPL variable named `context`; the model **never sees it
 3. Loop:
    a. Stream LLM response (yields text/reasoning/usage)
    b. Extract code from fenced block (exactly one per turn)
-   c. Execute in sandboxed REPL → yields repl_input/repl_progress/repl_output
+   c. Execute in the REPL → yields repl_input/repl_progress/repl_output
    d. Append stdout/error to message history
 4. If FINAL() called → yield final text, break
 5. Else if maxIterations → break with reason="max_iterations"
@@ -41,8 +43,10 @@ RLM pattern: input is a REPL variable named `context`; the model **never sees it
 REPL primitives available to the model:
 - `context` — the input data (typically the long document)
 - `FINAL(answer)` — completion signal
-- `llm_query(...)` — sub-LLM calls (e.g. cheap model for simple sub-questions)
-- `exec(cmd)` — shell commands, gated by HITL relay if `permissions` are set
+- `llm_query(...)` — sub-LLM calls (e.g. cheap model for simple sub-questions); below the depth limit (default 2) it starts a full child RLM session, at the limit a single plain call (`rlm/types.ts`)
+- `exec(cmd)` — shell commands, gated by HITL relay if `permissions` are set (default timeout 10 s)
+
+The REPL is scoped, not sandboxed: model code runs in the same Node process through an `AsyncFunction` (`rlm/repl.ts`), so only `exec()` passes a permission gate.
 
 ## What llm-gateway / RLM Does Well
 
@@ -66,7 +70,7 @@ The core insight: most "long context" problems are really "the model needs to fi
 
 This generalizes beyond long inputs — any time the model needs to interact with a large structured artifact (a codebase, a database, a log file), the RLM pattern fits.
 
-**Inber connection**: Inber currently does smart-truncation and conversation pruning to fit context. These are lossy compressions. RLM is a different answer: don't compress, give the model tools to query what it needs. Could be a powerful complement for inber's memory system — instead of summarizing old conversations, expose them as a queryable REPL.
+**Inber connection**: Inber fits context by pruning old tool results, stashing large blocks behind a pointer, and summarizing old turns (`conversation/manage_tool_pruning.go`, `stash.go`, `summarize.go`). These lose detail from the prompt, though summarizing archives the replaced turns to memory (`conversation/archive_tags.go`) and stashed content can be recalled. RLM is a different answer: don't compress, give the model tools to query what it needs. Could be a powerful complement for inber's memory system — instead of summarizing old conversations, expose them as a queryable REPL.
 
 ### 3. Typed Event Stream as the Universal Output
 
@@ -80,7 +84,7 @@ When `permissions` are passed to `invoke()`, `exec()` calls are gated through a 
 
 This is a clean async pattern for "pause execution, ask a human, resume" without blocking the generator or polluting the event stream with custom protocol.
 
-**Inber connection**: Inber's tool execution doesn't have a generic HITL gate. For sensitive operations (especially shell), an inline relay pattern would be valuable — pause the agent, surface the request to a UI/channel, resume on decision.
+**Inber connection**: Inber has the gate but not the relay. In `assist` mode `guard.CheckTool` (`guard/guard.go`) marks risky calls as needing approval, but no session has an approver, so `buildToolRefusal` (`engine/build_hooks.go`) refuses them and tells the model why. An inline relay is the missing half — pause the agent, surface the request to a UI or channel, resume on decision.
 
 ### 5. Sub-Harness for Cheap Calls
 
@@ -119,7 +123,7 @@ For tools like shell, file write, or anything destructive, add a relay primitive
 - Decision (`approve` / `deny` / `always-allow`) resolves the relay
 - Tool execution proceeds or aborts
 
-This complements inber's existing permission system (which is allowlist-based) with a per-call approval path.
+This completes inber's existing permission system (tool allowlists plus the `assist` mode, which today refuses what it would hold) with a per-call approval path.
 
 ### 4. `llm_query()`-Style Sub-Harness (LOW PRIORITY)
 
@@ -131,12 +135,12 @@ Make it easy for an agent to delegate a sub-question to a cheaper model without 
 |--------|-------------------|-------|
 | **Language** | TypeScript | Go |
 | **Composition primitive** | `GeneratorHarnessModule` (yields events) | Bespoke wiring per concern |
-| **Long-input strategy** | RLM: input as REPL variable, model writes code | Smart truncation + conversation pruning |
-| **Tool gating** | HITL relays via AsyncQueue | Allowlist-based permissions |
+| **Long-input strategy** | RLM: input as REPL variable, model writes code | Pruning, stashing and summarizing, with archives in memory |
+| **Tool gating** | HITL relays via AsyncQueue | Allowlists and observe/assist/autonomous modes; no approver yet |
 | **Sub-LLM calls** | First-class `llm_query()` REPL primitive | Spawn full sub-agent |
-| **Event stream** | Typed events at every layer (text, repl_input, relay, etc.) | Internal logging + final response |
-| **Sandboxing** | JS REPL with persistent scope, FINAL() signal | Tool-level execution, no REPL |
-| **Provider model** | Per-provider harness (zen, anthropic, openai, openrouter) | Anthropic SDK + llm-bridge for others |
+| **Event stream** | Typed events at every layer (text, repl_input, relay, etc.) | Streamed events at the server edge (`StreamEvent` in `server/server.go`: delta, thinking, tool_call, tool_result, status, done, error) fed by `agent.Hooks` |
+| **Sandboxing** | JS REPL with persistent scope, FINAL() signal; no process sandbox | Tool-level execution, no REPL, no sandbox |
+| **Provider model** | Per-provider harness (zen, anthropic, openai, openrouter) | Anthropic SDK, plus its own OpenAI-compatible client (`agent/openai.go`) that can use the Codex ChatGPT plan |
 | **Orchestrator** | `AgentOrchestrator` with concurrent spawn + relays | Server package + bus |
 | **Use case** | Library to build LLM-app infra | Full multi-agent runtime |
 

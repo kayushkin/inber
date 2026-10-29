@@ -1,9 +1,21 @@
 # Gemini CLI Comparison
 
+**Last reviewed**: 2026-10-29 against google-gemini/gemini-cli@2245ebd24 (2026-10-29).
+
 **Project**: [Gemini CLI](https://github.com/google-gemini/gemini-cli)
-**Language**: TypeScript (Node, packaged as Single Executable Application)
-**Focus**: Google's first-party agentic coding CLI for Gemini models
-**Window observed**: v0.38 → v0.40 (April 2026)
+**Status**: Active; stable v0.66.0 (2026-10-27), with preview and nightly channels.
+**Language**: TypeScript (Node; installed with npm, Homebrew, MacPorts or npx)
+**Focus**: Google's first-party coding agent CLI for Gemini models
+**Window observed**: v0.38 → v0.40 (April 2026). The sections below cover that window only.
+
+## Where Gemini CLI is now (2026-10-29)
+
+- **Chapters survive as a tool the model calls.** There is no boundary heuristic or classifier: the model calls `update_topic` with a title and a 5-10 sentence summary when it starts a new "Chapter (logical phase)" (`packages/core/src/tools/topicTool.ts`, declaration in `packages/core/src/tools/definitions/dynamic-declaration-helpers.ts`). That answers this doc's closing question: chapter intent is agent-emitted.
+- **Subagents, local and remote.** `packages/core/src/agents/` has a subagent registry and scheduler, built-in agents (`generalist-agent`, `codebase-investigator`, `cli-help-agent`, `skill-extraction-agent`) and remote agents over A2A (`a2a-client-manager.ts`, `remote-invocation.ts`).
+- **Auth**: Google sign-in (OAuth, including Code Assist licences), Gemini API key, or Vertex AI.
+- **Unchanged basics**: `GEMINI.md` context files, checkpointing, token caching, MCP servers, extensions, custom commands, sandboxing, trusted folders, headless mode.
+
+inber has no Gemini path. It calls Anthropic natively and OpenAI-compatible endpoints (`engine/turn_openai.go`), so a Gemini model would need an OpenAI-compatible endpoint.
 
 ## Why this doc exists
 
@@ -16,10 +28,10 @@ stream. The other two releases (v0.39 skill curation, v0.40 offline runtime)
 are documented for completeness but the inber-impact analysis goes deepest on
 Chapters.
 
-inber's bridge to this harness is `~/repos/llm-bridge-gemini` (currently a
-24-line scaffold — see `BRIDGE_PARITY.md`). Patterns documented here are
-candidates for inber's *engine* / *bridge-ui* / *memory-store* layers, not
-just for the bridge wrapper.
+There is no working bridge to this harness: the `llm-bridge-gemini` wrapper
+only prints "not yet implemented" and has been retired. Patterns documented
+here are candidates for inber's *engine* / *bridge-ui* / *memory-store*
+layers.
 
 > ⛔ **WALKED 2026-08-07 (nightly worker). This doc is now SPENT — it was the last untouched
 > comparison doc on the `a88bca06` shelf.** It is also the oldest (May 8), and it behaved
@@ -199,6 +211,8 @@ Lower priority but on-theme: `inber-party`'s RPG view already renders
 agent activity as quests. Chapters map almost literally onto quests —
 named, bounded, intent-scoped narrative units. This is the kind of feature
 that's nearly free once the metadata exists upstream.
+
+*Note 2026-10-29: `inber-party` was stopped on 2026-10-23 and replaced by `agent-party`; this proposal now applies to that project, if at all.*
 
 ### Order of operations
 
