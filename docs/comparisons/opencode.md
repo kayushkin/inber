@@ -1039,3 +1039,33 @@ messages and does not read saved usage), #57834/#57790 and the rest of the Guard
 has no reviewer model), #57870/#57848/#57850 (code-mode output bounds), #57978 (per-chat MCP
 leases; inber's MCP client has no non-test caller), #57866. cline: cloud-session and desktop UX
 only this pass. goose #12880 (one state machine per process) is an internal refactor.
+
+## 2026-10-29 — a refused call should tell the model why, and a decline is not "no approver"
+
+[opencode #60102](https://github.com/anomalyco/opencode/pull/60102) stopped turning every refused MCP
+call into a bare `Unable to execute <tool>`: a deny rule's reason and the user's typed feedback now
+reach the model as the failure text. The same week [codex #58161](https://github.com/openai/codex/pull/58161)
+and [gemini-cli #29910](https://github.com/google-gemini/gemini-cli/pull/29910) put the tool name and the
+MCP server and annotation hints (`readOnlyHint`, `destructiveHint`) into the approval request itself. Three
+harnesses agree: the question to the approver carries what is being approved, and the answer carries why.
+
+inber cannot carry either. `guard.Config.ApprovalFunc` is `func(tool, input string) bool`
+(`guard/guard.go:90`), so an approver can say no but not why. And `CheckTool` returns `NeedsApproval` both
+when no approver exists and when one exists and declined (`guard/guard.go:177-182`); `buildToolRefusal`
+renders that verdict as *"this session has no approver to ask"* (`engine/build_hooks.go:97-98`), which
+would be false the day an approver is wired. Today it is true: nothing sets `ApprovalFunc`, so this is
+latent, not a live defect, and no todo was filed.
+
+- **What inber should consider:** when an approver is first wired, give the gate a decline verdict apart
+  from `NeedsApproval`, and let the approver return a reason the refusal text passes through. Whether that
+  reason is shown to the model verbatim (opencode) or kept for the log only is a choice for that change.
+
+**Screened, nothing new to inber:** codex #58147 (web search failures returned to the model; inber's
+dispatcher already returns tool errors as results, `agent/agent_run.go:439-450`), #58129 (persist the spawn
+edge before the child exists; inber writes `ParentKey` in the same row insert as the session,
+`server/store.go:258`), #58166, #58045 and the Guardian moves. goose #13099 (failed `/compact` reported as
+success; inber's `handleBridgeCompact` returns 500, `server/api_bridge.go:896`), #13154 (typed overflow
+errors; the text-match concern is already recorded above at 2026-10-28). gemini-cli #30035 (`$`-patterns
+in JS `String.replace`; inber's only `ReplaceAllString` calls take fixed replacements, `redact/redact.go`).
+opencode #60322 and cline: UX and cloud sessions only. No papers from the last 30 days that the October
+sweeps had not already covered.
