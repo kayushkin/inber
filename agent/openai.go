@@ -63,6 +63,7 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req OpenAIRequest) (*
 	if c.CodexSubscriptionAuthFilePath != "" {
 		return c.chatCompletionThroughCodexSubscription(ctx, req)
 	}
+	req.Messages = chatCompletionMessagesWithToolImages(req.Messages)
 
 	reqBytes, err := json.Marshal(req)
 	if err != nil {

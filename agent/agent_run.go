@@ -404,7 +404,8 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 		}
 
 		// Execute tool with optional chain ("then" field).
-		outcome, isError := executeWithChain(ctx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks, cachedPrimaryOutput, a.ToolRefusal)
+		toolCtx, images := withToolResultImages(ctx)
+		outcome, isError := executeWithChain(toolCtx, tools.toolMap, block.Name, string(block.Input), a.hooks, block.ID, a.sidebandCallbacks, cachedPrimaryOutput, a.ToolRefusal)
 
 		// The primary call's cache evictions, now that the gate has answered.
 		//
@@ -502,8 +503,8 @@ func (a *Agent) executeTools(ctx context.Context, resp *anthropic.Message, tools
 			}
 		}
 
-		toolResults = append(toolResults, anthropic.NewToolResultBlock(
-			block.ID, finalOutput, false,
+		toolResults = append(toolResults, NewToolResultBlockWithImages(
+			block.ID, finalOutput, false, images.attached(),
 		))
 
 		// Post-tool-result hook: inject build/test feedback

@@ -155,18 +155,26 @@ func ConvertAnthropicMessagesToOpenAI(messages []anthropic.MessageParam) []OpenA
 					}
 					// OpenAI expects tool results as separate messages with role "tool"
 					content := ""
+					var images []ToolResultImage
 					if block.OfToolResult.Content != nil {
 						for _, c := range block.OfToolResult.Content {
 							if c.OfText != nil {
 								content += c.OfText.Text
 							}
+							if c.OfImage != nil && c.OfImage.Source.OfBase64 != nil {
+								images = append(images, ToolResultImage{
+									MediaType:  string(c.OfImage.Source.OfBase64.MediaType),
+									Base64Data: c.OfImage.Source.OfBase64.Data,
+								})
+							}
 						}
 					}
 
 					toolResults = append(toolResults, OpenAIMessage{
-						Role:       "tool",
-						Content:    content,
-						ToolCallID: block.OfToolResult.ToolUseID,
+						Role:             "tool",
+						Content:          content,
+						ToolCallID:       block.OfToolResult.ToolUseID,
+						ToolResultImages: images,
 					})
 				}
 			}
@@ -396,4 +404,37 @@ func FilterMessagesForAnthropic(messages []anthropic.MessageParam) ([]anthropic.
 type FilterStats struct {
 	ToolUseFiltered    int
 	ToolResultFiltered int
+}
+// toolResultImageDataURL is an image as the data: URL OpenAI's endpoints take.
+func toolResultImageDataURL(image ToolResultImage) string {
+	return "data:" + image.MediaType + ";base64," + image.Base64Data
+}
+
+// chatCompletionMessagesWithToolImages moves the images of tool messages into
+// a user message after each run of tool messages, because chat completions
+// take only text in a tool message. The model sees which call each image came
+// from. Messages with no images pass through unchanged.
+func chatCompletionMessagesWithToolImages(messages []OpenAIMessage) []OpenAIMessage {
+	var result []OpenAIMessage
+	var pending []contentPart
+	flush := func() {
+		if len(pending) > 0 {
+			result = append(result, OpenAIMessage{Role: "user", Content: pending})
+			pending = nil
+		}
+	}
+	for _, message := range messages {
+		if message.Role != "tool" {
+			flush()
+		}
+		result = append(result, message)
+		if message.Role == "tool" && len(message.ToolResultImages) > 0 {
+			pending = append(pending, contentPart{Type: "text", Text: "Images returned by tool call " + message.ToolCallID + ":"})
+			for _, image := range message.ToolResultImages {
+				pending = append(pending, contentPart{Type: "image_url", ImageURL: &contentPartURL{URL: toolResultImageDataURL(image)}})
+			}
+		}
+	}
+	flush()
+	return result
 }

@@ -170,8 +170,19 @@ func responsesRequestFromChatCompletion(request OpenAIRequest) (map[string]any, 
 				})
 			}
 		case "tool":
+			// A call's images go in its output with its text, which the
+			// subscription endpoint accepts (checked 2026-10-31: given a 32px
+			// red square there, gpt-5.6-terra named its colour).
+			var output any = text
+			if len(message.ToolResultImages) > 0 {
+				parts := []any{map[string]any{"type": "input_text", "text": text}}
+				for _, image := range message.ToolResultImages {
+					parts = append(parts, map[string]any{"type": "input_image", "image_url": toolResultImageDataURL(image)})
+				}
+				output = parts
+			}
 			input = append(input, map[string]any{
-				"type": "function_call_output", "call_id": message.ToolCallID, "output": text,
+				"type": "function_call_output", "call_id": message.ToolCallID, "output": output,
 			})
 		default:
 			return nil, fmt.Errorf("message %d has role %q, which the Responses API has no item for", index, message.Role)

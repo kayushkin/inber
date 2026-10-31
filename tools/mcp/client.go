@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/agent"
 )
 
 // MCPRequest represents a JSON-RPC request to an MCP server
@@ -436,8 +437,10 @@ func (c *Client) CallTool(ctx context.Context, name string, input string) (strin
 	// tool failed" from "the tool returned this text".
 	var toolResult struct {
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Data     string `json:"data"`
+			MimeType string `json:"mimeType"`
 		} `json:"content"`
 		IsError bool `json:"isError"`
 	}
@@ -445,11 +448,19 @@ func (c *Client) CallTool(ctx context.Context, name string, input string) (strin
 		return "", fmt.Errorf("failed to parse tool result: %w", err)
 	}
 
-	// Extract text content
+	// Text becomes the call's output. An image goes to the call's tool
+	// result beside it (agent.AttachToolResultImage): this used to keep only
+	// the text, so a model could not see an image a tool made, and the
+	// bridge's generate_image returns a preview so that it can.
 	var output string
 	for _, content := range toolResult.Content {
-		if content.Type == "text" {
+		switch content.Type {
+		case "text":
 			output += content.Text
+		case "image":
+			if !toolResult.IsError && !agent.AttachToolResultImage(ctx, agent.ToolResultImage{MediaType: content.MimeType, Base64Data: content.Data}) {
+				log.Printf("[mcp] tool %q returned an image outside a turn, so no model will see it", name)
+			}
 		}
 	}
 

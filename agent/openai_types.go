@@ -3,15 +3,26 @@ package agent
 // OpenAI API types (exported for use in engine)
 
 type OpenAIMessage struct {
-	Role       string        `json:"role"`
-	Content    interface{}   `json:"content,omitempty"` // string or []contentPart
-	ToolCallID string        `json:"tool_call_id,omitempty"`
+	Role       string           `json:"role"`
+	Content    interface{}      `json:"content,omitempty"` // string or []contentPart
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
+	// ToolResultImages are the images a tool message's call returned. No
+	// endpoint takes them in this form, so they are never sent as they are:
+	// the Responses translation puts them in the function_call_output, and
+	// the chat-completions client sends them in a user message after the
+	// tool messages, since a tool message there may hold only text.
+	ToolResultImages []ToolResultImage `json:"-"`
 }
 
 type contentPart struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL *contentPartURL `json:"image_url,omitempty"`
+}
+
+type contentPartURL struct {
+	URL string `json:"url"`
 }
 
 type OpenAIToolCall struct {

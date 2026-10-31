@@ -190,8 +190,9 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 				// and the done/note/split sideband fields, and it asks the gate
 				// about all three — none of which this loop did while it
 				// dispatched tools itself.
+				toolCtx, attachedImages := agent.ToolResultImagesFor(ctx)
 				output, isError := agent.ExecuteToolCallWithChainAndSideband(
-					ctx, toolMap, block.Name, string(block.Input),
+					toolCtx, toolMap, block.Name, string(block.Input),
 					hooks, block.ID, sidebandCallbacks, refusal,
 				)
 
@@ -210,7 +211,11 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 					}
 				}
 
-				toolResults = append(toolResults, anthropic.NewToolResultBlock(block.ID, finalOutput, isError))
+				var images []agent.ToolResultImage
+				if !isError {
+					images = attachedImages()
+				}
+				toolResults = append(toolResults, agent.NewToolResultBlockWithImages(block.ID, finalOutput, isError, images))
 
 				if hooks.PostToolResult != nil {
 					if injection := hooks.PostToolResult(block.ID, block.Name, output, isError); injection != "" {
