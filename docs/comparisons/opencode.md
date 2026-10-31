@@ -1069,3 +1069,27 @@ errors; the text-match concern is already recorded above at 2026-10-28). gemini-
 in JS `String.replace`; inber's only `ReplaceAllString` calls take fixed replacements, `redact/redact.go`).
 opencode #60322 and cline: UX and cloud sessions only. No papers from the last 30 days that the October
 sweeps had not already covered.
+
+## 2026-10-30 — compaction's own prompt can be too big for the window
+
+[`cb1e58fe`](https://github.com/anomalyco/opencode/commit/cb1e58fe) (#60660) caps the prompt opencode
+sends to its compaction model at that model's context window. Without the cap, a session that needs
+compaction because it is full can hand the summarizer a prompt that overflows too; the summary fails, and
+the session can neither continue nor compact.
+
+inber has no cap: `generateSummary` puts the whole of `messagesToText(oldMessages)` into one user message
+(`conversation/summary_generation.go:55-59`, called from `conversation/summarize.go:52,64`). Today that is
+safe in practice, because no caller sets `SummarizeConfig.Model` (`conversation/summarize_config.go:9-10`),
+so the summarizer is the session's own model and the older turns are a subset of a prompt that just fit.
+Not a live defect, and no todo was filed.
+
+- **What inber should consider:** the moment anything sets `SummarizeConfig.Model` to a smaller-window
+  model, cap `oldText` at that model's window first (from model-store, not a hardcoded table), and say in
+  the summary block how much was cut.
+
+**Screened, nothing new to inber:** opencode #60689 and #60688 (edit and read miss messages; inber's file
+tools come from tool-store, `tools/tools.go:53`), #60490 (wait for starting MCP servers; inber starts a
+session's servers with its engine, `server/server.go`), #60498 and goose #13222 (reasoning kept across tool
+turns; inber appends `resp.ToParam()`, which keeps thinking blocks and their signatures,
+`agent/agent.go:577`). codex: Guardian context budgeting, TUI and host-embedding work. cline: cloud
+sessions and desktop UX. claude-code: changelog and plugin moves only. gemini-cli, dexto: bug fixes.

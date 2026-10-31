@@ -90,3 +90,29 @@ tool results out before summarizing anything. The open question for inber is cos
 each age step moves the rewrite point and breaks the cache from there. Moving the age boundary
 in steps (drop eight turns' results at once, not one per turn) would trade a little context for
 fewer cache breaks; measure cache-read share per session before and after.
+
+# 2026-10-30 sweep
+
+Two web searches. Two in-scope ids were new to these docs. One is below. The other, AutoCompact
+([2610.02163](https://arxiv.org/abs/2610.02163), 2026-10-01), trains the agent with SFT then RL to choose
+when to compact (+9.2 points on SWE-bench Verified over its base model). inber does not train policies, so
+it is left out.
+
+## 4. Compaction that only cuts, and never compacts a compaction
+
+[arXiv:2609.26779](https://arxiv.org/abs/2609.26779) — **CliffCompaction: Cost-Efficient Compaction for
+Long-Horizon Coding Agents** (2026-09-22; 38 days old, included because no sweep caught it). Context grows
+to a threshold, then the method truncates or drops content and never rephrases it. Each pass works from the
+original content and throws the last pass's output away, so no compaction is ever compacted again. The
+abstract reports cost down by up to 50% under a bounded context, Terminal-Bench held or improved, and over
+10 points more under parallel test-time scaling for less than the cost of two full-context runs. Numbers
+read from the abstract only.
+
+**What inber should consider:** inber's tool-result pass already works this way: it cuts mechanically and
+keeps the tool name and size in the marker, and the `tool_use` block with its inputs stays, so the agent
+can call again (`conversation/manage_tool_pruning.go:39-56`, `142-147`). `SummarizeConversation` does not.
+It rephrases, and on the second compaction the earlier summary block sits at index 0 of `oldMessages`
+(`conversation/summarize.go:47`, `112-120`), so the new summary is written from the old one. Together with
+item 2 (LLM summaries keep at most 16% of recurring details), the test worth running is: keep each
+compaction's source turns in the archive and write every new summary from those originals, not from the
+last summary, and compare finish rates on resumed sessions.
