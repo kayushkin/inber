@@ -70,7 +70,7 @@ This file once proposed `observe` / `assist` / `autonome` modes set per request.
 | **Specialization** | Modes (tool groups + prompts) | Separate agent identities; trust modes per session |
 | **Context** | Embedding codebase search + Cline's context tools | Memory store + token budget |
 | **Multi-agent** | Subtasks through `NewTaskTool` | Spawned sub-agents (depth 2) over a NATS bus |
-| **Tools** | About 25 built in + MCP | tool-store tools; MCP client present but not wired (`tools/mcp/`) |
+| **Tools** | About 25 built in + MCP | tool-store tools; MCP stdio servers per llm-bridge session (`tools/mcp/`, `server/session_mcp.go`) |
 | **Loop guard** | `ToolRepetitionDetector` | Counter exists, never called |
 
 ## Key Takeaway

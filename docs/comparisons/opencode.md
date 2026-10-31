@@ -64,7 +64,7 @@ Tab switches between primary agents. Subagents run as background jobs that repor
 - **Plugins** register tools through the same path as built-ins (`core/src/tool/AGENTS.md`).
 - **Skills** (`core/src/skill.ts`) load instructions on demand.
 
-**Comparison to inber:** inber's tools come from the tool-store library (`engine/engine_new.go`). It has an MCP stdio client in `tools/mcp/` that nothing outside the package calls, so it loads no MCP tools today.
+**Comparison to inber:** inber's tools come from the tool-store library (`engine/engine_new.go`). It has an MCP stdio client in `tools/mcp/`, and llm-bridge sessions now run their MCP servers through it (`server/session_mcp.go`, since inber@6a35f29); it starts stdio servers only.
 
 ## Development Integration
 
@@ -126,7 +126,7 @@ inber strips known secrets from every request body before it leaves the process 
 ## Recommended Adoptions for Inber
 
 1. **Snapshot/revert** for agent file changes — highest value.
-2. **Wire the MCP client** already in `tools/mcp/`.
+2. ~~**Wire the MCP client** already in `tools/mcp/`.~~ Done for llm-bridge sessions (inber@6a35f29); stdio servers only.
 3. **Per-resource permission rules** with remembered grants.
 
 ---

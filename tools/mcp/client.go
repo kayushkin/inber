@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"sort"
 	"sync"
@@ -159,7 +160,28 @@ func newClientOverStreams(stdin io.WriteCloser, stdout io.ReadCloser, stderr io.
 		readerDone: make(chan struct{}),
 	}
 	go client.readResponses()
+	if stderr != nil {
+		go client.logServerErrorOutput()
+	}
 	return client
+}
+
+// maximumReplyLineBytes bounds one line of the server's output. bufio's
+// default of 64 KiB is too small for MCP: a tool that returns an image (the
+// bridge's generate_image returns a preview) puts the whole base64 picture on
+// one line. A line over this still fails the reader, which frees every call
+// waiting, rather than growing without limit.
+const maximumReplyLineBytes = 64 << 20
+
+// logServerErrorOutput reads the server's stderr for the life of the client
+// and logs it. Nothing read it before, so a server that wrote more than the
+// pipe holds (about 64 KiB) blocked on the write and stopped answering.
+func (c *Client) logServerErrorOutput() {
+	scanner := bufio.NewScanner(c.stderr)
+	scanner.Buffer(make([]byte, 0, 4096), maximumReplyLineBytes)
+	for scanner.Scan() {
+		log.Printf("[mcp] server stderr: %s", scanner.Text())
+	}
 }
 
 // readResponses reads the server's output for the life of the client and
@@ -167,6 +189,7 @@ func newClientOverStreams(stdin io.WriteCloser, stdout io.ReadCloser, stderr io.
 // output ends, which frees every call still waiting.
 func (c *Client) readResponses() {
 	scanner := bufio.NewScanner(c.stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), maximumReplyLineBytes)
 	for scanner.Scan() {
 		c.deliver(scanner.Bytes())
 	}

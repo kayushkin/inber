@@ -49,7 +49,7 @@ Plan mode explores and proposes; Act mode edits and runs commands. Every edit an
 
 Cline connects to MCP servers (`cline mcp` manages them) and can write a new MCP server on request. The SDK adds code plugins that register tools and lifecycle hooks in-process.
 
-**Inber connection**: inber's tools come from the tool-store library (`engine/engine_new.go`). `tools/mcp/` holds an MCP stdio client, but nothing outside that package calls it, so inber does not load MCP tools today.
+**Inber connection**: inber's tools come from the tool-store library (`engine/engine_new.go`). `tools/mcp/` holds an MCP stdio client, and llm-bridge sessions now run their MCP servers through it (`server/session_mcp.go`, since inber@6a35f29): a session gets the stdio servers its llm-bridge instance opted into, as `mcp__<server>__<tool>`.
 
 ### 5. Browser Automation
 
@@ -82,7 +82,7 @@ Earlier versions of this file said Cline builds a tree-sitter and embedding inde
 | **Context** | Rules, skills, mentions, compaction | Memory store + token budget + injected system prompt |
 | **Multi-agent** | Agent teams with a coordinator; subagents | Named agents from agent-store; spawn depth 2, 5 children each (`server/config.go`) |
 | **Persistence** | Local task history; hub-owned sessions | SQLite (sessions, agent-store, memory-store) |
-| **Extensibility** | MCP + SDK plugins + hooks | tool-store tools; MCP client present but not wired |
+| **Extensibility** | MCP + SDK plugins + hooks | tool-store tools; MCP stdio servers per llm-bridge session (`server/session_mcp.go`) |
 | **Providers** | Dozens through AI SDK and OpenAI-compatible endpoints | Anthropic, OpenAI-compatible, ChatGPT subscription (`agent/codex_subscription.go`) |
 | **Deployment** | Desktop, editor, terminal, CI, cloud | Server, headless |
 

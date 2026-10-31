@@ -628,6 +628,8 @@ line over 64 KiB wedges the client permanently rather than failing one call; and
 `c.stderr` is created, stored and never read, so a server writing over 64 KiB to
 stderr blocks forever.
 
+> (2026-10-31: no longer latent. llm-bridge sessions now run their MCP servers through it (`server/session_mcp.go`, since inber@6a35f29). The 64 KiB line limit and the unread stderr are fixed in the commit that adds this note; other findings here now apply to live sessions.)
+
 **Auto-compact at the model's real window.** *"Changed Sonnet 5's default
 auto-compact window to its full 1M context… about 967K tokens instead of about
 934K."* inber already does this honestly: the window comes from model-store, and

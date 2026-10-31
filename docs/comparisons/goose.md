@@ -61,7 +61,7 @@ YAML workflow definitions with parameters, sub-recipes and subagents; shareable 
 This file once asked inber to extract a `Provider` interface from its Anthropic coupling. inber has `agent.Provider` (`agent/provider.go`), but it is still shaped in Anthropic SDK types. Multi-provider support came another way: a second turn loop for OpenAI-compatible endpoints (`engine/turn_openai.go`, `agent/openai_conversion.go`) and a ChatGPT-subscription transport (`agent/codex_subscription.go`), with keys set through `cmd/inber-server/settings.go`. There are no declarative provider files.
 
 ### 2. Extension Architecture
-inber's tools come from the tool-store library (`engine/engine_new.go`). An MCP stdio client exists in `tools/mcp/`, but nothing outside that package calls it, so inber loads no MCP tools. Wiring it is the remaining step.
+inber's tools come from the tool-store library (`engine/engine_new.go`). An MCP stdio client exists in `tools/mcp/`, and llm-bridge sessions now run their MCP servers through it (`server/session_mcp.go`, since inber@6a35f29). What remains is non-stdio servers.
 
 ### 3. Configuration Structure
 goose separates provider configs, extension configs, recipes and global settings. inber now declares its server settings in one place with llm-bridge's `servicesettings` (`cmd/inber-server/settings.go`, served at `GET /settings`); agent definitions live in agent-store.
@@ -99,7 +99,7 @@ inber removes known secrets from every request body before it leaves the process
 
 ## Recommended Adoptions for Inber
 
-1. **Wire the MCP client** in `tools/mcp/` into the tool registry.
+1. ~~**Wire the MCP client** in `tools/mcp/` into the tool registry.~~ Done for llm-bridge sessions (inber@6a35f29).
 2. **Recipes or an equivalent** for repeatable multi-step work.
 3. **Declarative provider definitions** for OpenAI-compatible endpoints.
 
@@ -1409,6 +1409,8 @@ or send nothing and log that the setting cannot be honoured.
   `agent/openai_conversion.go:222` rewrites tool **ids**). A mangled name fails the map lookup. The
   prefixed-MCP-tool evasion cannot happen today for the reason this file already records:
   `MCPToolRegistry` has no caller outside `tools/mcp/`.
+
+> (2026-10-31: no longer latent. llm-bridge sessions now run their MCP servers through it (`server/session_mcp.go`, since inber@6a35f29). The 64 KiB line limit and the unread stderr are fixed in the commit that adds this note; other findings here now apply to live sessions.)
 - **[#11369](https://github.com/block/goose/pull/11369)** (a config migration must not widen a
   user-configured tool allowlist) — inber has no config-migration path that rewrites agent tool lists;
   `agent/registry/registry.go:219-226` registers `cfg.Tools` as written and errors on an unknown name.

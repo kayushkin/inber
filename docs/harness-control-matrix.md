@@ -107,7 +107,7 @@ followed on its own, with `redact/`.)
 | Select | ABSENT | — | all. Model is a static `AgentConfig.Model`; there is no selection step, no capability catalog, no tier default |
 | Session Manager | PARTIAL (strong) | `session/*`, `server/session_creation.go`, `session_forking.go`, `session_reaper.go`; fork/resume/compact/interrupt/stop; `forge` worktrees | idle-**suspend** (the reaper *closes*, never suspends/resumes); snapshot retention (`pruneOldCheckpoints` = `return nil`); state compaction; lifecycle hooks; recovery scripts; resume prefetch. `checkpoint/` is a stub (above) |
 | Sub-agent Dispatch | PARTIAL (strong) | `server/spawn.go`, `spawn_tools.go`, `ForkAndSpawn`, `agent/registry/`, agent-store agent types, `steer_agent` | result-schema enforcement (task and result are free-form strings); planning strategy; pipeline-vs-barrier stages; per-stage worker tier; agent-count ceiling beyond the lane cap |
-| Tool Registry | PARTIAL | `agent/registry/tools.go:ToolRegistry`; per-agent allowlist (`registry.go:220`); tool-store | permission policy; dry-run; **sandboxing** (`bash -c` + unjailed `os.WriteFile`); reversibility/rollback; result cache; parallel exec; tool-call ceilings. **`tools/mcp/` is complete and has zero importers** — the plugin path from `docs/plugin-research.md` was built and never wired |
+| Tool Registry | PARTIAL | `agent/registry/tools.go:ToolRegistry`; per-agent allowlist (`registry.go:220`); tool-store | permission policy; dry-run; **sandboxing** (`bash -c` + unjailed `os.WriteFile`); reversibility/rollback; result cache; parallel exec; tool-call ceilings. **`tools/mcp/` is wired for llm-bridge sessions** (`server/session_mcp.go`, inber@6a35f29): each session runs the stdio servers its instance opted into; non-stdio servers are refused |
 | Tools | PARTIAL | per-agent allowlist; `engine/build_hooks.go:buildLimitCheck` | parallel safe calls (`agent_run.go:224` is a strictly sequential loop); tool-result cache (`read_cache.go` is a *re-read suppressor*, not a result cache); a real tool-call ceiling — `maxAPICalls=50` caps round-trips, not tool calls, so one response carrying 30 `tool_use` blocks runs all 30 |
 | Trace | PARTIAL | `session/timeline*.go`, `db_turns.go`, `jsonl.go`, `logstack.go` — *not* `trace/` | `trace/` is dead (above). Missing: payload hash; evidence; trace schema config; sampling; retention; async write |
 | Trust | ABSENT | — | all. model-store "health" is liveness, not trust |
@@ -193,7 +193,7 @@ followed on its own, with `redact/`.)
    a user's memories is a policy call. Search's remaining 2.0s is the embedding
    decode and the linear cosine pass — that is the recall index this item names,
    and it is a real design task, not wiring. Dedup on write is untouched.
-6. **Tool Registry — wire the MCP client that already exists.** `tools/mcp/{client,adapter}.go`
+6. **Tool Registry — wire the MCP client that already exists.** (Done 2026-10-31 for llm-bridge sessions, inber@6a35f29.) `tools/mcp/{client,adapter}.go`
    is complete, real, and imported by nothing. This one wiring unlocks the plugin
    capability lever across Tool Registry, Knowledge Retrieval, Browser Capture, and
    Evidence.

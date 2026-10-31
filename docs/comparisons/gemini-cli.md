@@ -345,6 +345,8 @@ prototyping.
 > `docs/comparisons/opencode.md:429`; repeated here because this passage frames MCP
 > resources as the next increment when the *tools* increment is built and unwired.
 >
+> (2026-10-31: no longer unwired. llm-bridge sessions now run their MCP servers through it (`server/session_mcp.go`, since inber@6a35f29); stdio servers, tools only.)
+>
 > `tool-store` and `llm-bridge-server` implement **no** MCP primitives at all — tool-store
 > stores launch specs (`schema.sql:16,24-27`; `tool.go:48-49` *"MCPSpec describes how to
 > launch or reach an MCP server"*) and llm-bridge-server passes the config blob through to
