@@ -84,11 +84,11 @@ func callReadEnvironment(t *testing.T, clients *sessionMCPClients, name string) 
 }
 
 func TestASessionsMCPServerRunsWithTheEnvironmentItsCallerSent(t *testing.T) {
-	config, err := parseSessionMCPConfig(fakeMCPServers(t), map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-1"})
+	config, err := parseSessionMCPConfig(fakeMCPServers(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients, err := newSessionMCPClients(config)
+	clients, err := newSessionMCPClients(config, []string{"LLM_BRIDGE_SESSION_POSTING_TOKEN=spawn-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,11 +100,11 @@ func TestASessionsMCPServerRunsWithTheEnvironmentItsCallerSent(t *testing.T) {
 
 	// A resume brings a fresh token, and the same tool reaches it without the
 	// engine's tool list changing.
-	next, err := parseSessionMCPConfig(fakeMCPServers(t), map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-2"})
+	next, err := parseSessionMCPConfig(fakeMCPServers(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := clients.replace(next); err != nil {
+	if err := clients.replace(next, []string{"LLM_BRIDGE_SESSION_POSTING_TOKEN=spawn-2"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := callReadEnvironment(t, clients, "LLM_BRIDGE_SESSION_POSTING_TOKEN"); got != "spawn-2" {
@@ -119,7 +119,7 @@ func TestMCPServersInberCannotStartAreRefusedWhenSent(t *testing.T) {
 		"__ in the name": `{"a__b":{"command":"x"}}`,
 		"not an object":  `["x"]`,
 	} {
-		if _, err := parseSessionMCPConfig(json.RawMessage(servers), nil); err == nil {
+		if _, err := parseSessionMCPConfig(json.RawMessage(servers)); err == nil {
 			t.Errorf("%s: accepted %s", name, servers)
 		}
 	}
@@ -129,7 +129,7 @@ func TestTheBridgeRoutesKeepAndRestartASessionsMCPServers(t *testing.T) {
 	server := &Server{store: tempStore(t), config: Config{DefaultAgent: "claxon", Agents: map[string]AgentConfig{"claxon": {}}}}
 
 	body, _ := json.Marshal(map[string]any{"harness": "inber", "agent_id": "claxon",
-		"mcp_servers": fakeMCPServers(t), "mcp_environment": map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-1"}})
+		"mcp_servers": fakeMCPServers(t), "session_environment": map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-1"}})
 	recorder := httptest.NewRecorder()
 	server.handleBridgeSessions(recorder, httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(string(body))))
 	if recorder.Code != http.StatusCreated {
@@ -137,13 +137,16 @@ func TestTheBridgeRoutesKeepAndRestartASessionsMCPServers(t *testing.T) {
 	}
 	var created bridgeSession
 	json.Unmarshal(recorder.Body.Bytes(), &created)
-	if config := server.sessionMCPConfigFor(created.SessionID); config == nil || config.Environment["LLM_BRIDGE_SESSION_POSTING_TOKEN"] != "spawn-1" {
+	if config := server.sessionMCPConfigFor(created.SessionID); config == nil || len(config.Servers) != 1 {
 		t.Fatalf("recorded config = %+v", config)
+	}
+	if got := server.sessionEnvironmentEntries(created.SessionID); len(got) != 1 || got[0] != "LLM_BRIDGE_SESSION_POSTING_TOKEN=spawn-1" {
+		t.Fatalf("recorded environment = %v", got)
 	}
 
 	// A live session's servers restart with the resume's environment.
-	initial, _ := parseSessionMCPConfig(fakeMCPServers(t), map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-1"})
-	clients, err := newSessionMCPClients(initial)
+	initial, _ := parseSessionMCPConfig(fakeMCPServers(t))
+	clients, err := newSessionMCPClients(initial, server.sessionEnvironmentEntries(created.SessionID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +154,7 @@ func TestTheBridgeRoutesKeepAndRestartASessionsMCPServers(t *testing.T) {
 	server.sessions.Store(created.SessionID, session)
 	defer session.close()
 
-	body, _ = json.Marshal(map[string]any{"mcp_servers": fakeMCPServers(t), "mcp_environment": map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-2"}})
+	body, _ = json.Marshal(map[string]any{"mcp_servers": fakeMCPServers(t), "session_environment": map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-2"}})
 	recorder = httptest.NewRecorder()
 	server.handleBridgeResume(recorder, httptest.NewRequest(http.MethodPost, "/sessions/"+created.SessionID+"/resume", strings.NewReader(string(body))), created.SessionID)
 	if recorder.Code != http.StatusOK {
@@ -179,11 +182,12 @@ func TestASessionIsBuiltWithItsMCPServersTools(t *testing.T) {
 	if err := server.store.UpsertSession(key, "claxon", "main", SessionLineage{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	config, err := parseSessionMCPConfig(fakeMCPServers(t), map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-1"})
+	config, err := parseSessionMCPConfig(fakeMCPServers(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server.mcpConfigs.Store(key, config)
+	server.recordSessionEnvironment(key, map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-1"})
 
 	created, err := server.createSession(context.Background(), key, "claxon", AgentConfig{Workspace: t.TempDir()}, RunRequest{}, nil)
 	if err != nil {
@@ -201,5 +205,41 @@ func TestASessionIsBuiltWithItsMCPServersTools(t *testing.T) {
 	}
 	if created.mcp == nil {
 		t.Fatal("the session does not hold its MCP clients, so closing it would leave the server running")
+	}
+}
+
+// A session's shell commands get its environment too, read at each command,
+// so bridge-share-file and bridge-button can reach the session's own chat. A
+// resume's fresh token reaches the next command of a live session.
+func TestASessionsShellCommandsRunWithItsEnvironment(t *testing.T) {
+	server := &Server{store: tempStore(t), config: Config{DataDir: t.TempDir()}}
+	const key = "agent:claxon:bridge-shell"
+	if err := server.store.UpsertSession(key, "claxon", "main", SessionLineage{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	server.recordSessionEnvironment(key, map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-1"})
+
+	created, err := server.createSession(context.Background(), key, "claxon", AgentConfig{Workspace: t.TempDir()}, RunRequest{}, nil)
+	if err != nil {
+		t.Skipf("no engine can be built here (%v)", err)
+	}
+	defer created.close()
+	shell := created.Engine.ToolByName("shell_commands")
+	if shell == nil {
+		t.Skip("the agent here has no shell_commands")
+	}
+	run := func() string {
+		out, err := shell.Run(context.Background(), `{"command":"printf %s \"$LLM_BRIDGE_SESSION_POSTING_TOKEN\""}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if got := run(); got != "spawn-1" {
+		t.Fatalf("the session's shell saw %q, want spawn-1", got)
+	}
+	server.recordSessionEnvironment(key, map[string]string{"LLM_BRIDGE_SESSION_POSTING_TOKEN": "spawn-2"})
+	if got := run(); got != "spawn-2" {
+		t.Fatalf("after a resume the session's shell saw %q, want spawn-2", got)
 	}
 }

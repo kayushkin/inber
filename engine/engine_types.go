@@ -32,6 +32,10 @@ type EngineConfig struct {
 	// system prompt, ahead of the agent's own blocks: llm-bridge's host and
 	// project prompt. Empty adds nothing.
 	InjectedSystemPrompt string
+	// SessionEnvironment returns NAME=value entries that belong to this
+	// session (llm-bridge's LLM_BRIDGE_ values) for its shell commands to run
+	// with. It is called for every command. Nil adds nothing.
+	SessionEnvironment func() []string
 
 	// Session
 	RepoRoot string

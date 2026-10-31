@@ -200,6 +200,9 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 	}
 
 	cfg := g.engineConfigFor(key, agentName, repoRoot, workspaceRoots, ac, injections)
+	// The shell reads the session's environment at every command, so a
+	// resume's fresh token reaches a live session's next command.
+	cfg.SessionEnvironment = func() []string { return g.sessionEnvironmentEntries(key) }
 	cfg.InjectedSystemPrompt, err = g.store.SessionInjectedSystemPrompt(key)
 	if err != nil {
 		return nil, err
@@ -222,7 +225,7 @@ func (g *Server) createSession(ctx context.Context, key, agentName string, ac Ag
 	// asked for, and a session without it is not the session asked for.
 	var mcpClients *sessionMCPClients
 	if mcpConfig := g.sessionMCPConfigFor(key); mcpConfig != nil && len(mcpConfig.Servers) > 0 {
-		mcpClients, err = newSessionMCPClients(mcpConfig)
+		mcpClients, err = newSessionMCPClients(mcpConfig, g.sessionEnvironmentEntries(key))
 		if err != nil {
 			return nil, fmt.Errorf("session %s: %w", key, err)
 		}

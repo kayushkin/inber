@@ -48,6 +48,13 @@ func init() {
 // File system tools
 func ShellCommands() agent.Tool { return wrap(toolstoretools.Shell()) }
 
+// ShellCommandsWithSessionEnvironment is shell_commands for one session of a
+// process that serves many: each command also gets the NAME=value entries
+// sessionEnvironment returns at that moment.
+func ShellCommandsWithSessionEnvironment(sessionEnvironment func() []string) agent.Tool {
+	return wrap(toolstoretools.ShellWithSessionEnvironment(sessionEnvironment))
+}
+
 func ReadFiles() agent.Tool  { return wrap(toolstoretools.ReadFile()) }
 func WriteFiles() agent.Tool { return wrap(toolstoretools.WriteFile()) }
 func EditFiles() agent.Tool  { return wrap(toolstoretools.EditFile()) }

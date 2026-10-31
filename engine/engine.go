@@ -83,6 +83,8 @@ type Engine struct {
 	// injectedSystemPrompt leads every system prompt this engine builds; see
 	// EngineConfig.InjectedSystemPrompt.
 	injectedSystemPrompt string
+	// sessionEnvironment is EngineConfig.SessionEnvironment.
+	sessionEnvironment func() []string
 
 	// --- Internal state ---
 	repoRoot string
@@ -171,6 +173,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 		injections:         cfg.Injections,
 
 		injectedSystemPrompt: cfg.InjectedSystemPrompt,
+		sessionEnvironment:   cfg.SessionEnvironment,
 	}
 
 	// 1. Agent identity — load from registry, resolve model
@@ -411,6 +414,17 @@ func (e *Engine) EnabledToolNames() []string {
 	return names
 }
 
+// ToolByName returns the enabled tool of that name, as the model would run it
+// (rooted, with the session's environment), or nil.
+func (e *Engine) ToolByName(name string) *agent.Tool {
+	for i := range e.agentTools {
+		if e.agentTools[i].Name == name {
+			return &e.agentTools[i]
+		}
+	}
+	return nil
+}
+
 // DisabledToolNames returns the set SetDisabledTools last installed, sorted.
 //
 // This is the answer EnabledToolNames cannot give. A tool is absent from the
@@ -448,6 +462,19 @@ func (e *Engine) DisabledToolNames() []string {
 // inber-server process's working directory while shell commands in the same
 // session ran inside the agent's forge worktree.
 func (e *Engine) setToolSet(toolSet []agent.Tool) {
+	// A session with values of its own runs its shell commands with them. The
+	// swap happens here, before rooting, so the replacement is rooted like
+	// the tool it replaces, and only where the set has a shell at all.
+	if e.sessionEnvironment != nil {
+		withSessionEnvironment := make([]agent.Tool, len(toolSet))
+		for i, t := range toolSet {
+			if t.Name == "shell_commands" {
+				t = tools.ShellCommandsWithSessionEnvironment(e.sessionEnvironment)
+			}
+			withSessionEnvironment[i] = t
+		}
+		toolSet = withSessionEnvironment
+	}
 	e.allTools = tools.ScopeToRoot(toolSet, e.repoRoot)
 	e.applyDisabledTools()
 }

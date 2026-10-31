@@ -20,14 +20,13 @@ import (
 // environment, which carries values that belong to that one session, such as
 // the token it posts into its own chat with. inber-server is one long-running
 // process serving every session, so it has none of those values: the caller
-// sends them as mcp_environment, and inber starts the session's servers with
-// them.
+// sends them as session_environment (session_environment.go), and inber
+// starts the session's servers with them.
 //
-// Both are kept in memory only, by session key. The environment holds a
-// session's credentials, which do not belong in the session database, and
-// llm-bridge sends both again whenever it starts the session's harness, with
-// a fresh token each time (it refuses the previous one). A session rebuilt
-// after inber-server restarts has no MCP tools until its caller resumes it.
+// The servers are kept in memory only, by session key, as the environment
+// is: llm-bridge sends both again whenever it starts the session's harness.
+// A session rebuilt after inber-server restarts has no MCP tools until its
+// caller resumes it.
 
 // mcpServerConfig is one server in a Claude Code MCP config. Only stdio
 // servers can be started here: inber's MCP client speaks stdio.
@@ -39,17 +38,15 @@ type mcpServerConfig struct {
 	URL     string            `json:"url,omitempty"`
 }
 
-// sessionMCPConfig is what a session's caller sent: its servers and the
-// environment values that belong to the session.
+// sessionMCPConfig is the MCP servers a session's caller sent.
 type sessionMCPConfig struct {
-	Servers     map[string]mcpServerConfig
-	Environment map[string]string
+	Servers map[string]mcpServerConfig
 }
 
 // parseSessionMCPConfig checks a caller's MCP servers. A server inber cannot
 // start is refused here, when the caller sends it, rather than when the
 // session's engine is built.
-func parseSessionMCPConfig(servers json.RawMessage, environment map[string]string) (*sessionMCPConfig, error) {
+func parseSessionMCPConfig(servers json.RawMessage) (*sessionMCPConfig, error) {
 	parsed := map[string]mcpServerConfig{}
 	if err := json.Unmarshal(servers, &parsed); err != nil {
 		return nil, fmt.Errorf("mcp_servers is not an object of MCP servers: %w", err)
@@ -65,7 +62,7 @@ func parseSessionMCPConfig(servers json.RawMessage, environment map[string]strin
 			return nil, fmt.Errorf("MCP server %q has no command", name)
 		}
 	}
-	return &sessionMCPConfig{Servers: parsed, Environment: environment}, nil
+	return &sessionMCPConfig{Servers: parsed}, nil
 }
 
 // sessionMCPToolName is the name a session's model sees for an MCP tool. It is
@@ -83,9 +80,10 @@ type sessionMCPClients struct {
 	clients map[string]*mcp.Client
 }
 
-// startSessionMCPServers starts every server in the config. If any fails, the
-// ones already started are stopped and the error names the server.
-func startSessionMCPServers(config *sessionMCPConfig) (map[string]*mcp.Client, error) {
+// startSessionMCPServers starts every server in the config with the session's
+// environment entries added. If any fails, the ones already started are
+// stopped and the error names the server.
+func startSessionMCPServers(config *sessionMCPConfig, sessionEnvironment []string) (map[string]*mcp.Client, error) {
 	names := make([]string, 0, len(config.Servers))
 	for name := range config.Servers {
 		names = append(names, name)
@@ -95,10 +93,7 @@ func startSessionMCPServers(config *sessionMCPConfig) (map[string]*mcp.Client, e
 	started := map[string]*mcp.Client{}
 	for _, name := range names {
 		server := config.Servers[name]
-		environment := make([]string, 0, len(config.Environment)+len(server.Env))
-		for key, value := range config.Environment {
-			environment = append(environment, key+"="+value)
-		}
+		environment := append(make([]string, 0, len(sessionEnvironment)+len(server.Env)), sessionEnvironment...)
 		// The server's own env comes last, so it wins, as in Claude Code.
 		for key, value := range server.Env {
 			environment = append(environment, key+"="+value)
@@ -115,8 +110,8 @@ func startSessionMCPServers(config *sessionMCPConfig) (map[string]*mcp.Client, e
 	return started, nil
 }
 
-func newSessionMCPClients(config *sessionMCPConfig) (*sessionMCPClients, error) {
-	clients, err := startSessionMCPServers(config)
+func newSessionMCPClients(config *sessionMCPConfig, sessionEnvironment []string) (*sessionMCPClients, error) {
+	clients, err := startSessionMCPServers(config, sessionEnvironment)
 	if err != nil {
 		return nil, err
 	}
@@ -165,8 +160,8 @@ func (c *sessionMCPClients) call(ctx context.Context, server, tool, input string
 // the old ones. A server that fails to start leaves the old ones in place.
 // A tool the engine was built with that the new servers no longer offer will
 // fail when called, and the log says so now.
-func (c *sessionMCPClients) replace(config *sessionMCPConfig) error {
-	started, err := startSessionMCPServers(config)
+func (c *sessionMCPClients) replace(config *sessionMCPConfig, sessionEnvironment []string) error {
+	started, err := startSessionMCPServers(config, sessionEnvironment)
 	if err != nil {
 		return err
 	}
@@ -201,10 +196,14 @@ func (c *sessionMCPClients) close() {
 	c.clients = nil
 }
 
-// recordSessionMCPConfig keeps a session's MCP config, and restarts the
-// servers of a live session with it.
-func (g *Server) recordSessionMCPConfig(key string, config *sessionMCPConfig) error {
-	g.mcpConfigs.Store(key, config)
+// restartLiveSessionMCPServers restarts a live session's MCP servers with its
+// current servers and environment. A resume calls it, since llm-bridge mints
+// a new token at every spawn and refuses the last.
+func (g *Server) restartLiveSessionMCPServers(key string) error {
+	config := g.sessionMCPConfigFor(key)
+	if config == nil {
+		return nil
+	}
 	val, ok := g.sessions.Load(key)
 	if !ok {
 		return nil
@@ -216,10 +215,10 @@ func (g *Server) recordSessionMCPConfig(key string, config *sessionMCPConfig) er
 	if running == nil {
 		// The engine was built without MCP tools, and its tool set is fixed
 		// when it is built.
-		log.Printf("[mcp] session %s is live without MCP servers; the %d it was just given reach it when it is rebuilt", key, len(config.Servers))
+		log.Printf("[mcp] session %s is live without MCP servers; the %d it was given reach it when it is rebuilt", key, len(config.Servers))
 		return nil
 	}
-	return running.replace(config)
+	return running.replace(config, g.sessionEnvironmentEntries(key))
 }
 
 // sessionMCPConfigFor is the config recorded for a session, or nil.

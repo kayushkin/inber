@@ -32,6 +32,10 @@ type Server struct {
 	// its caller sent for them (sessionKey → *sessionMCPConfig). Memory only:
 	// see session_mcp.go.
 	mcpConfigs sync.Map
+	// sessionEnvironments holds each session's environment values from its
+	// caller (sessionKey → map[string]string). Memory only: see
+	// session_environment.go.
+	sessionEnvironments sync.Map
 	// pendingSessionKeys holds the keys the mints have handed out and whose
 	// sessions are not in sessions yet, so that two concurrent callers cannot
 	// both be told the same key is free. Entries live for the length of one
