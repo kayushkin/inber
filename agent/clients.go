@@ -131,7 +131,16 @@ func newClientFromKey(apiKey string, model *modelstore.Model) (*ModelClient, err
 		mc.IsOAuth = strings.HasPrefix(apiKey, "sk-ant-oat01-")
 		return mc, nil
 
-	case "openai", "google", "openrouter", "ollama":
+	case "openai":
+		// OpenAI itself is sent to its Responses endpoint. Its newest models
+		// refuse tool requests on chat completions (measured 2026-10-28:
+		// gpt-5.6-*, gpt-6-sol and the *-codex models answer 400), and every
+		// model chat completions serves is also served here. The providers
+		// below only copy OpenAI's chat-completions surface, so they keep it.
+		mc.OpenAIClient = NewOpenAIResponsesAPIClient(OpenAIResponsesAPIEndpoint, apiKey, model.ID)
+		return mc, nil
+
+	case "google", "openrouter", "ollama":
 		baseURL := defaultBaseURL(model.Provider)
 		mc.OpenAIClient = NewOpenAIClient(baseURL, apiKey, model.ID)
 		return mc, nil
@@ -196,7 +205,9 @@ func guessProvider(modelID string) string {
 	}
 }
 
-// defaultBaseURL returns the default API base URL for known providers.
+// defaultBaseURL returns the chat-completions base URL for the providers that
+// copy OpenAI's chat-completions surface. OpenAI itself is not one of them:
+// it is sent to OpenAIResponsesAPIEndpoint.
 //
 // The google entry has been read as a bug twice and filed as one once, so the
 // measurement is written down here rather than re-derived a fourth time.
@@ -225,8 +236,6 @@ func guessProvider(modelID string) string {
 // whether provider transport lives here at all.
 func defaultBaseURL(provider string) string {
 	switch provider {
-	case "openai":
-		return "https://api.openai.com/v1"
 	case "google":
 		return "https://generativelanguage.googleapis.com/v1beta"
 	case "openrouter":
@@ -235,6 +244,10 @@ func defaultBaseURL(provider string) string {
 		return ""
 	}
 }
+
+// OpenAIResponsesAPIEndpoint is OpenAI's public Responses endpoint, where
+// every provider "openai" client with an API key sends.
+const OpenAIResponsesAPIEndpoint = "https://api.openai.com/v1/responses"
 
 // GetAnthropicClient returns the Anthropic client or error if not Anthropic provider.
 func (mc *ModelClient) GetAnthropicClient() (*anthropic.Client, error) {
