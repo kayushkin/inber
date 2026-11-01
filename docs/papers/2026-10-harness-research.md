@@ -116,3 +116,46 @@ It rephrases, and on the second compaction the earlier summary block sits at ind
 item 2 (LLM summaries keep at most 16% of recurring details), the test worth running is: keep each
 compaction's source turns in the archive and write every new summary from those originals, not from the
 last summary, and compare finish rates on resumed sessions.
+
+# 2026-10-31 sweep
+
+Three web searches. Two in-scope papers were new to these docs. Both are older than 30 days
+(35 and 44 days) and are included because no earlier sweep caught them.
+
+## 5. Compact when the saving beats the cache rewrite, checked at plan-step boundaries
+
+[arXiv:2609.20519](https://arxiv.org/abs/2609.20519) — **SoL-Pi: Recursively Scaling Auto-Research
+Loops for Efficient Agent Harness** (Liu et al., NVIDIA/MIT, 2026-09-17; code at
+github.com/NVlabs/SoL-Pi). One of its four mechanisms, Online Context Compact, decides at each plan-step
+completion whether to compact. It projects how many requests remain (requests seen per finished step
+times steps left, capped by how many requests would fill the window at the observed growth rate), then
+compares the input tokens compaction would save over those requests against the cost of rewriting the
+prompt cache. Each later compaction must also pay back the rewrite costs earlier ones have not yet
+recovered. It compacts if that gate passes, or when the window is nearly full. Alone on EdgeBench
+(Table 4, read from the HTML): Opus 5 cost fell 12% and score rose 10%; GPT-5.6 Sol cost fell 30% and
+score fell 6%. Cost per score point improved on both.
+
+**What inber should consider:** inber fires on a message count (`conversation/summarize.go:14`), which
+earlier entries already cover (07, 08 sweeps; agentic-design-patterns.md). What this paper adds is the
+cost test. inber already records cache-read and cache-write tokens per call and prices them from
+model-store (`engine/turn_postprocess.go:84`, `114`), so it has the inputs for the gate: expected saving
+= (tokens removed) × (requests remaining) × (cache-read price), against one cache write of the new
+prefix. The open choices are where "steps remaining" comes from, since inber has no plan tool the
+harness can count, and whether to keep a hard window cap as the fallback trigger. Measure cost and
+finish rate per session against the count trigger before switching.
+
+## 6. Compression and general subagents can hurt; task-specific subagents help most reliably
+
+[arXiv:2609.32459](https://arxiv.org/abs/2609.32459) — **Beyond the Model: Demystifying Harness Effects
+in Software Engineering Agents** (Hu et al., Nanjing University, 2026-09-26). Ten Qwen and DeepSeek
+models, mini-SWE-agent and OpenCode, three benchmarks (SWE-bench Pro, ProgramBench, GitTaskBench), then
+one component at a time on a small modular harness. Structured tools and task-specific subagents gave
+the steadiest gains on ProgramBench. Context compression and general-purpose subagents could lower
+repository-generation scores. Extra harness helps less on issue repair as the model gets stronger.
+Combined, the components add 7.4 and 6.2 points over mini-SWE-agent. Read from the abstract only; the
+abstract gives no per-component numbers.
+
+**What inber should consider:** when inber's spawn tool is used, prefer a named, narrow agent
+definition over a generic "do this subtask" worker, and log which kind each spawn was, so session
+outcomes can be split by it. Read with item 5: on long generation tasks, an eager compactor is a
+plausible cause of lost scores, which is one more reason to gate compaction on cost rather than count.
