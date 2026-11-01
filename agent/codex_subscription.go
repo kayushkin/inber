@@ -98,6 +98,21 @@ func (c *OpenAIClient) chatCompletionThroughCodexSubscription(ctx context.Contex
 	}
 	registerProviderCredentialWithEgressRedactor("openai-codex-subscription", token)
 
+	return c.chatCompletionThroughResponsesEndpoint(ctx, request, token, true)
+}
+
+// chatCompletionThroughResponsesAPI sends an API-key request to OpenAI's
+// documented Responses endpoint. The request and streaming reply use the same
+// translation as the subscription transport; authentication is the only
+// transport-specific part.
+func (c *OpenAIClient) chatCompletionThroughResponsesAPI(ctx context.Context, request OpenAIRequest) (*OpenAIResponse, error) {
+	if c.APIKey == "" {
+		return nil, errors.New("OpenAI Responses API client has no API key")
+	}
+	return c.chatCompletionThroughResponsesEndpoint(ctx, request, c.APIKey, false)
+}
+
+func (c *OpenAIClient) chatCompletionThroughResponsesEndpoint(ctx context.Context, request OpenAIRequest, token string, sendsSessionID bool) (*OpenAIResponse, error) {
 	body, err := responsesRequestFromChatCompletion(request)
 	if err != nil {
 		return nil, err
@@ -114,13 +129,10 @@ func (c *OpenAIClient) chatCompletionThroughCodexSubscription(ctx context.Contex
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Accept", "text/event-stream")
 	httpRequest.Header.Set("Authorization", "Bearer "+token)
-	// The endpoint picks which cache a request may hit from the session-id
-	// header, not from prompt_cache_key alone (the Codex CLI's client.rs: "ChatGPT
-	// derives cache affinity from the Responses session-id header"). The turn
-	// loop sets the cache key to the session id, so the two name one session.
-	// Measured: with the key alone 1 of 5 repeat calls hit the cache, with the
-	// header as well 5 of 5.
-	if request.PromptCacheKey != "" {
+	// The subscription endpoint picks its cache from session-id as well as
+	// prompt_cache_key. The public Responses API does not use that private
+	// subscription header.
+	if sendsSessionID && request.PromptCacheKey != "" {
 		httpRequest.Header.Set("session-id", request.PromptCacheKey)
 	}
 

@@ -39,6 +39,7 @@ type fakeResponsesEndpoint struct {
 	bodies        []map[string]any
 	authorization []string
 	sessionIDs    []string
+	paths         []string
 }
 
 func newFakeResponsesEndpoint(t *testing.T, events ...string) *fakeResponsesEndpoint {
@@ -53,6 +54,7 @@ func newFakeResponsesEndpoint(t *testing.T, events ...string) *fakeResponsesEndp
 		f.bodies = append(f.bodies, body)
 		f.authorization = append(f.authorization, r.Header.Get("Authorization"))
 		f.sessionIDs = append(f.sessionIDs, r.Header.Get("session-id"))
+		f.paths = append(f.paths, r.URL.Path)
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, event := range events {
 			fmt.Fprintf(w, "event: x\ndata: %s\n\n", event)
@@ -60,6 +62,45 @@ func newFakeResponsesEndpoint(t *testing.T, events ...string) *fakeResponsesEndp
 	}))
 	t.Cleanup(f.server.Close)
 	return f
+}
+
+func TestAnAPIKeyResponsesClientSendsTheTranslatedRequestWithBearerAuth(t *testing.T) {
+	f := newFakeResponsesEndpoint(t,
+		`{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_9","name":"read_it","arguments":"{}"}}`,
+		completedEvent)
+	client := NewOpenAIResponsesAPIClient(f.server.URL+"/v1/responses", "sk-api-key", "gpt-test")
+
+	reply, err := client.ChatCompletion(context.Background(), OpenAIRequest{
+		Messages:       []OpenAIMessage{{Role: "user", Content: "read it"}},
+		Tools:          []OpenAITool{{Type: "function", Function: OpenAIFunctionSchema{Name: "read_it", Parameters: map[string]interface{}{"type": "object"}}}},
+		PromptCacheKey: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion: %v", err)
+	}
+	if f.authorization[0] != "Bearer sk-api-key" || f.paths[0] != "/v1/responses" {
+		t.Errorf("authorization/path = %q %q, want API-key bearer auth at /v1/responses", f.authorization[0], f.paths[0])
+	}
+	if f.sessionIDs[0] != "" {
+		t.Errorf("session-id header = %q, want none on the public API", f.sessionIDs[0])
+	}
+	if len(reply.Choices) != 1 || reply.Choices[0].FinishReason != "tool_calls" || reply.Choices[0].Message.ToolCalls[0].ID != "call_9" {
+		t.Errorf("reply = %+v, want translated tool call", reply)
+	}
+	if reply.Usage.PromptTokensDetails.CachedTokens != 100 {
+		t.Errorf("cached tokens = %d, want 100", reply.Usage.PromptTokensDetails.CachedTokens)
+	}
+}
+
+func TestAnAPIKeyResponsesClientRefusesToSendWithoutAKey(t *testing.T) {
+	f := newFakeResponsesEndpoint(t, completedEvent)
+	_, err := NewOpenAIResponsesAPIClient(f.server.URL, "", "gpt-test").ChatCompletion(context.Background(), OpenAIRequest{Messages: []OpenAIMessage{{Role: "user", Content: "go"}}})
+	if err == nil || !strings.Contains(err.Error(), "no API key") {
+		t.Errorf("err = %v, want missing API-key error", err)
+	}
+	if len(f.bodies) != 0 {
+		t.Errorf("requests sent = %d, want none", len(f.bodies))
+	}
 }
 
 const completedEvent = `{"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","usage":{"input_tokens":120,"input_tokens_details":{"cached_tokens":100},"output_tokens":7,"total_tokens":127}}}`

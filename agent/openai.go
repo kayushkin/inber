@@ -15,6 +15,11 @@ type OpenAIClient struct {
 	BaseURL string
 	APIKey  string
 	Model   string
+	// UsesResponsesAPI sends this client's requests to BaseURL, which must be
+	// an OpenAI Responses endpoint, instead of appending /chat/completions.
+	// It is for API-key OpenAI clients; OpenAI-compatible providers keep the
+	// chat-completions transport.
+	UsesResponsesAPI bool
 	// CodexSubscriptionAuthFilePath, when set, sends every request through the
 	// ChatGPT subscription the Codex CLI signs in with, using the token in this
 	// file, and BaseURL is the subscription's Responses endpoint. APIKey is
@@ -42,6 +47,15 @@ func NewOpenAIClient(baseURL, apiKey, model string) *OpenAIClient {
 	}
 }
 
+// NewOpenAIResponsesAPIClient creates an API-key client for an OpenAI
+// Responses endpoint. endpoint is the complete endpoint URL, including
+// /responses.
+func NewOpenAIResponsesAPIClient(endpoint, apiKey, model string) *OpenAIClient {
+	client := NewOpenAIClient(endpoint, apiKey, model)
+	client.UsesResponsesAPI = true
+	return client
+}
+
 // NewOpenAIClientThroughCodexSubscription creates a client that sends OpenAI
 // requests through the ChatGPT subscription whose token the Codex CLI keeps in
 // authFilePath.
@@ -62,6 +76,9 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req OpenAIRequest) (*
 	}
 	if c.CodexSubscriptionAuthFilePath != "" {
 		return c.chatCompletionThroughCodexSubscription(ctx, req)
+	}
+	if c.UsesResponsesAPI {
+		return c.chatCompletionThroughResponsesAPI(ctx, req)
 	}
 	req.Messages = chatCompletionMessagesWithToolImages(req.Messages)
 
