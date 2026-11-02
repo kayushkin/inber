@@ -487,3 +487,32 @@ display only) arrived at independently — and the direct counterpoint to `cline
 "skills travel bundled inside plugins". Also note dexto's explicit **no-compat-shim** migration
 stance: it removed the exported APIs outright, reasoning that it controls every consumer.
 skill-store cannot assume that about its HTTP clients.
+
+## Harness-watch — 2026-11-01: a bound on stream silence, sized from production gaps ([PR 1029](https://github.com/truffle-ai/dexto/pull/1029))
+
+Dexto now races each read of a model stream against a 15-minute idle timer that resets on every event.
+When it fires it aborts that attempt's request and throws a retryable `llm_stream_stalled`. With no
+output stored yet, the step retries; with text already shown, the turn fails instead, because a retry
+would duplicate the partial reply. The 15 minutes come from production data: the longest wait for a
+first token in 14 days was 715 s, and no stream in 30 days ran 15 minutes. Spans record the largest gap
+so the limit can be tuned.
+
+inber's Anthropic stream has no such bound, re-verified this run: `newAnthropicClient` sets no timeout
+or custom HTTP client (`agent/clients.go:172-188`), `CompleteStreaming` passes only the caller's `ctx`
+(`agent/provider.go:54-55`), and the read loop blocks in `streamResp.Next()` with nothing racing it
+(`agent/agent_run.go:195`). A provider that opens a stream and goes quiet holds a CLI or server turn
+until someone cancels it. `agentic-design-patterns.md` (goose #10620 entry) said this in September; no
+open todo carried it, so one was filed this run.
+
+- **What inber should consider:** a per-call child context cancelled by a timer reset on every event;
+  cancelling it aborts the HTTP read in Go, so this does not wait on todo `1c951f8d` (no `Close`). Reuse
+  the partial path at `agent/agent_run.go:213-216` for the "text already shown" case, as dexto does.
+
+**Screened:** opencode #61015 (after an overflow rejection, compaction resent the rejected conversation
+because its fit check used a character estimate below the provider's count). inber's retry after an
+overflow only fires if the pruner changed something (`agent/agent_run.go:228-238`), so it never resends
+unchanged; the estimate-versus-provider-count gap behind it is todo `939d5fdc`. dexto #1009 (a tool
+hidden from the model but callable by the host), opencode #60502/#60505 (web permissions checked on the
+requested URL and each redirect; inber's web tools come from tool-store), goose #13154 and opencode
+#60808 (typed overflow and retry metadata on errors; inber's overflow class is covered by `70ae784b`
+and `df1de352`). codex, cline, gemini-cli, claude-code: TUI, cloud, release and bug-fix work only.

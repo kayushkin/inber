@@ -159,3 +159,24 @@ abstract gives no per-component numbers.
 definition over a generic "do this subtask" worker, and log which kind each spawn was, so session
 outcomes can be split by it. Read with item 5: on long generation tasks, an eager compactor is a
 plausible cause of lost scores, which is one more reason to gate compaction on cost rather than count.
+
+## 7. Compaction drops "how to work" and "do not" rules about six times as often as "what to build"
+
+[arXiv:2610.31778](https://arxiv.org/abs/2610.31778) — **Benchmarks Are Surprisingly Compaction-Friendly**
+(Salle, Bhatnagar, Bethge, Abdelnabi, Andriushchenko, 2026-10-22). OpenCode with five compaction
+strategies, three frontier models, PaperBench, ProgramBench and PostTrainBench. No strategy beat plain
+self-summarization; ones that discard more cost some models up to 20 points. The benchmarks forgive
+compaction because progress sits on disk. What they do not forgive is a rule that lives only in the
+conversation: on ProgramBench the first summary dropped about a third of the anti-cheating rules, and
+the loss grew with every compaction. In real SWE-chat sessions, instructions on how to work and what not
+to do were dropped about 6 times as often as specifications of what to build. Read from the abstract
+page only.
+
+**What inber should consider:** inber's summary prompt asks for topics, decisions, information, project
+status and next steps (`conversation/summary_generation.go:40-53`) and never for the user's standing
+instructions or prohibitions, and the oldest turns, which hold the first request, are always the ones
+summarized (`conversation/summarize.go:39-46`). So it is built to lose exactly the class this paper
+measures losing. Two cheap options: add "constraints and prohibitions the user stated, verbatim" to the
+prompt, or carry the session's first user message through compaction unchanged, as the paper's ProgramBench
+rules would have needed. Either should be checked by seeding a "never do X" rule early in a long session
+and grepping the summary after one and two compactions. A design gap, not a code defect; no todo filed.
