@@ -2,8 +2,6 @@ package server
 
 import (
 	"net/http"
-	"os"
-	"path/filepath"
 )
 
 // registryAgent is the API response type for agent listings.
@@ -29,7 +27,7 @@ func (g *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/agents — list all agents across all orchestrators.
-// Returns inber agents from config + openclaw agents from filesystem scan.
+// Returns inber agents from config.
 func (g *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	if r.Method != http.MethodGet {
@@ -49,28 +47,6 @@ func (g *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			Orchestrator: "inber",
 			Enabled:      true,
 		})
-	}
-
-	// OpenClaw agents — proxied through inber server.
-	if g.config.OpenClawURL != "" {
-		home, _ := os.UserHomeDir()
-		agentsDir := filepath.Join(home, ".openclaw", "agents")
-		if entries, err := os.ReadDir(agentsDir); err == nil {
-			for _, entry := range entries {
-				if !entry.IsDir() {
-					continue
-				}
-				agentSubdir := filepath.Join(agentsDir, entry.Name(), "agent")
-				if _, err := os.Stat(agentSubdir); err != nil {
-					continue
-				}
-				agents = append(agents, registryAgent{
-					Name:         entry.Name(),
-					Orchestrator: "openclaw",
-					Enabled:      true,
-				})
-			}
-		}
 	}
 
 	jsonResponse(w, agents)

@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	github.com/anthropics/anthropic-sdk-go v1.35.0
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
 	github.com/kayushkin/agent-store v0.0.0-20260405014345-d199a8b99810
 	github.com/kayushkin/aiauth v0.0.0-20260316222336-6d4241da6194
 	github.com/kayushkin/bus v0.0.0-20260402051322-d9429109f21a

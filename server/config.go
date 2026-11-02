@@ -38,10 +38,6 @@ type Config struct {
 	NatsURL  string `json:"nats_url,omitempty"`  // default nats://localhost:4222
 	BusToken string `json:"bus_token,omitempty"` // kept for event publisher compat
 
-	// OpenClaw proxy — forward bus messages where orchestrator=openclaw.
-	OpenClawURL   string `json:"openclaw_url,omitempty"`   // e.g. "http://localhost:18789"
-	OpenClawToken string `json:"openclaw_token,omitempty"` // bearer token
-
 	// BridgeSessionTTL is how long a bridge- session can be idle before the
 	// reaper removes it. Defaults to 1 hour. Set to 0 to disable.
 	BridgeSessionTTL time.Duration `json:"bridge_session_ttl,omitempty"`

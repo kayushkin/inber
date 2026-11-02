@@ -141,12 +141,6 @@ func applySettings(cfg *server.Config, settings *servicesettings.Registry) {
 	if busToken := settings.String(settingBusToken); busToken != "" {
 		cfg.BusToken = busToken
 	}
-	if openClawURL := settings.String(settingOpenClawURL); openClawURL != "" {
-		cfg.OpenClawURL = openClawURL
-	}
-	if openClawToken := settings.String(settingOpenClawToken); openClawToken != "" {
-		cfg.OpenClawToken = openClawToken
-	}
 	cfg.AgentStorePath = settings.String(settingAgentStorePath)
 	cfg.LogstackURL = settings.String(settingLogstackURL)
 	cfg.InberServerURL = settings.String(settingInberServerURL)

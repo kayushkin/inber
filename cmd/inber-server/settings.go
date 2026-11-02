@@ -12,7 +12,7 @@ import (
 const serviceName = "inber-server"
 
 // ownedEnvironmentVariablePrefixes is empty. Every variable inber-server reads
-// is a name other programs read too (AUTH_STORE_URL, NATS_URL, OPENCLAW_URL…),
+// is a name other programs read too (AUTH_STORE_URL, NATS_URL, LOGSTACK_URL…),
 // so owning any of them would stop the server over a variable set for someone
 // else.
 var ownedEnvironmentVariablePrefixes = []string{}
@@ -23,8 +23,6 @@ const (
 	settingAuthStoreToken = "auth_store_token"
 	settingNatsURL        = "nats_url"
 	settingBusToken       = "bus_token"
-	settingOpenClawURL    = "openclaw_url"
-	settingOpenClawToken  = "openclaw_token"
 	settingAgentStorePath = "agent_store_path"
 	settingLogstackURL    = "logstack_url"
 	settingInberServerURL = "inber_server_url"
@@ -71,10 +69,6 @@ func settingDefinitions() []servicesettings.Definition {
 			Description: "The NATS server the bus listener joins. Empty means the config file's nats_url, and with no config file " + defaultNatsURL + "."},
 		{Key: settingBusToken, EnvironmentVariable: "BUS_TOKEN", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
 			Description: "Token for the bus event publisher. Empty means the config file's bus_token, if any."},
-		{Key: settingOpenClawURL, EnvironmentVariable: "OPENCLAW_URL", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString,
-			Description: "OpenClaw's base URL. Bus messages whose orchestrator is openclaw are forwarded there. Empty means the config file's openclaw_url, and with neither nothing is forwarded."},
-		{Key: settingOpenClawToken, EnvironmentVariable: "OPENCLAW_TOKEN", Kind: msg.ServiceSettingKindSecret, ValueType: msg.ServiceSettingValueTypeString,
-			Description: "The bearer sent with requests forwarded to OpenClaw. Empty means the config file's openclaw_token, if any."},
 		{Key: settingAgentStorePath, EnvironmentVariable: "AGENT_STORE_PATH", Kind: msg.ServiceSettingKindPath, ValueType: msg.ServiceSettingValueTypeString,
 			Description: "The agent-store database agents are loaded from, and the one status queries read. Empty means agent-store's default, ~/.config/agent-store/agents.db."},
 		{Key: settingLogstackURL, EnvironmentVariable: "LOGSTACK_URL", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString,

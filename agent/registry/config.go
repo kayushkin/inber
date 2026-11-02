@@ -11,9 +11,9 @@ import (
 type AgentConfig struct {
 	Name      string        `json:"name"`
 	Role      string        `json:"role"`
-	Project   string        `json:"project,omitempty"`   // primary project name
-	Projects  []string      `json:"projects,omitempty"`  // all assigned projects
-	System    string        `json:"-"`                   // system prompt (soul + shared identity)
+	Project   string        `json:"project,omitempty"`  // primary project name
+	Projects  []string      `json:"projects,omitempty"` // all assigned projects
+	System    string        `json:"-"`                  // system prompt (soul + shared identity)
 	Model     string        `json:"model"`
 	Thinking  int64         `json:"thinking"`
 	Tools     []string      `json:"tools"`
@@ -37,13 +37,6 @@ type ContextConfig struct {
 	InheritParent bool     `json:"inherit_parent"` // inherit parent's context
 }
 
-// OpenClawConfig defines OpenClaw gateway configuration
-type OpenClawConfig struct {
-	URL    string   `json:"url"`    // WebSocket URL (e.g., ws://localhost:18789/ws)
-	Token  string   `json:"token"`  // Auth token
-	Agents []string `json:"agents"` // Agent names that route to OpenClaw
-}
-
 // TiersConfig defines default model tiers for racing/fallback.
 type TiersConfig struct {
 	High  []string `json:"high"`            // expensive models for planning (e.g. opus46, opus45, sonnet45)
@@ -54,10 +47,9 @@ type TiersConfig struct {
 
 // RegistryConfig holds the loaded configuration including default agent
 type RegistryConfig struct {
-	Default  string
-	Agents   map[string]*AgentConfig
-	Tiers    *TiersConfig
-	OpenClaw *OpenClawConfig
+	Default string
+	Agents  map[string]*AgentConfig
+	Tiers   *TiersConfig
 }
 
 // LoadFromAgentStore loads agent configs from the agent-store database at

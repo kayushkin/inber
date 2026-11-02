@@ -164,10 +164,9 @@ func callCarriesRedaction(fileSet *token.FileSet, call *ast.CallExpr) bool {
 	return false
 }
 
-// The SDK is not the only way out. Two of inber's provider paths are
-// hand-rolled http.Clients — the OpenAI-compatible client here and the
-// OpenClaw proxy in package server — and neither is caught by the check above,
-// because neither calls anthropic.NewClient. Any file that names a chat
+// The SDK is not the only way out. The OpenAI-compatible client here is a
+// hand-rolled http.Client, which the check above does not catch, because it
+// does not call anthropic.NewClient. Any file that names a chat
 // endpoint is sending a conversation somewhere and has to install the gate.
 func TestEveryHandRolledChatEndpointInstallsTheGate(t *testing.T) {
 	endpointMarkers := []string{"chat/completions", "/v1/messages"}

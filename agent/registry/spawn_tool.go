@@ -153,7 +153,7 @@ func (r *Registry) SpawnAgentTool() agent.Tool {
 	// Fetch valid agents/orchestrators at tool creation time
 	agentDesc := r.validAgentsDescription()
 	orchs := r.validOrchestrators()
-	orchDesc := "Backend/orchestrator to use (e.g., 'inber', 'openclaw'). Optional — resolved from registry if omitted."
+	orchDesc := "Backend/orchestrator to use (e.g., 'inber'). Optional — resolved from registry if omitted."
 	if len(orchs) > 0 {
 		orchDesc = fmt.Sprintf("Backend/orchestrator to use. Valid options: %s. Optional — resolved from registry if omitted.", strings.Join(orchs, ", "))
 	}

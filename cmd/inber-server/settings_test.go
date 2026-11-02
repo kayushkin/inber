@@ -73,13 +73,13 @@ func TestTheSettingsGiveTheServerTheSameValuesItAlwaysRead(t *testing.T) {
 
 	var bare server.Config
 	applySettings(&bare, nothing)
-	if bare.NatsURL != "nats://localhost:4222" || bare.BusToken != "" || bare.OpenClawURL != "" || bare.OpenClawToken != "" {
+	if bare.NatsURL != "nats://localhost:4222" || bare.BusToken != "" {
 		t.Errorf("nothing set, no config file: %+v", bare)
 	}
 
-	fromFile := server.Config{NatsURL: "nats://file:4222", BusToken: "file-bus", OpenClawURL: "http://file:18789", OpenClawToken: "file-openclaw"}
+	fromFile := server.Config{NatsURL: "nats://file:4222", BusToken: "file-bus"}
 	applySettings(&fromFile, nothing)
-	if fromFile.NatsURL != "nats://file:4222" || fromFile.BusToken != "file-bus" || fromFile.OpenClawURL != "http://file:18789" || fromFile.OpenClawToken != "file-openclaw" {
+	if fromFile.NatsURL != "nats://file:4222" || fromFile.BusToken != "file-bus" {
 		t.Errorf("nothing set left the config file's values as %+v", fromFile)
 	}
 
@@ -103,8 +103,6 @@ func TestTheSettingsGiveTheServerTheSameValuesItAlwaysRead(t *testing.T) {
 		"AUTH_STORE_TOKEN": "auth-token",
 		"NATS_URL":         "nats://env:4222",
 		"BUS_TOKEN":        "env-bus",
-		"OPENCLAW_URL":     "http://env:18789",
-		"OPENCLAW_TOKEN":   "env-openclaw",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -112,9 +110,9 @@ func TestTheSettingsGiveTheServerTheSameValuesItAlwaysRead(t *testing.T) {
 	if set.String(settingAuthStoreURL) != "http://auth:1" || set.String(settingAuthStoreToken) != "auth-token" {
 		t.Errorf("auth-store settings not read back: %q", set.String(settingAuthStoreURL))
 	}
-	fromFile = server.Config{NatsURL: "nats://file:4222", BusToken: "file-bus", OpenClawURL: "http://file:18789", OpenClawToken: "file-openclaw"}
+	fromFile = server.Config{NatsURL: "nats://file:4222", BusToken: "file-bus"}
 	applySettings(&fromFile, set)
-	if fromFile.NatsURL != "nats://env:4222" || fromFile.BusToken != "env-bus" || fromFile.OpenClawURL != "http://env:18789" || fromFile.OpenClawToken != "env-openclaw" {
+	if fromFile.NatsURL != "nats://env:4222" || fromFile.BusToken != "env-bus" {
 		t.Errorf("set variables did not win over the config file: %+v", fromFile)
 	}
 	if fromFile.SettingsHandler == nil {
@@ -231,7 +229,6 @@ func TestGetSettingsDescribesTheServerHidesSecretsAndNothingCanBeWritten(t *test
 		"NATS_URL":          "nats://example:4222",
 		"AUTH_STORE_TOKEN":  secret,
 		"BUS_TOKEN":         secret,
-		"OPENCLAW_TOKEN":    secret,
 		"ANTHROPIC_API_KEY": secret,
 	}))
 	if err != nil {

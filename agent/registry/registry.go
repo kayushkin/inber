@@ -15,21 +15,18 @@ import (
 
 // Registry manages multiple agents with isolated sessions and contexts
 type Registry struct {
-	mu            sync.RWMutex
-	client        *anthropic.Client
-	modelClient   *agent.ModelClient // unified client (Anthropic or OpenAI)
-	modelStore    *modelstore.Store  // model store for creating per-agent clients
-	logsDir       string
-	logstackURL   string // where each agent's session log is also sent; empty sends it nowhere else
+	mu             sync.RWMutex
+	client         *anthropic.Client
+	modelClient    *agent.ModelClient // unified client (Anthropic or OpenAI)
+	modelStore     *modelstore.Store  // model store for creating per-agent clients
+	logsDir        string
+	logstackURL    string // where each agent's session log is also sent; empty sends it nowhere else
 	inberServerURL string // the inber server whose GET /api/agents lists the agents a spawn may name
-	default_      string
-	configs       map[string]*AgentConfig
-	agents        map[string]*agent.Agent
-	sessions      map[string]*session.Session
-	tools         *ToolRegistry
-	openclawURL   string   // OpenClaw gateway URL
-	openclawToken string   // OpenClaw auth token
-	openclawAgents []string // Agents that route to OpenClaw
+	default_       string
+	configs        map[string]*AgentConfig
+	agents         map[string]*agent.Agent
+	sessions       map[string]*session.Session
+	tools          *ToolRegistry
 
 	// listRegisteredAgents supplies the bus-agent registry entries that the
 	// spawn tool validates a requested agent against and builds its parameter
@@ -52,22 +49,15 @@ func New(client *anthropic.Client, logsDir, agentStorePath, logstackURL, inberSe
 	}
 
 	r := &Registry{
-		client:       client,
-		logsDir:      logsDir,
-		logstackURL:  logstackURL,
+		client:         client,
+		logsDir:        logsDir,
+		logstackURL:    logstackURL,
 		inberServerURL: inberServerURL,
-		default_:     cfg.Default,
-		configs:      cfg.Agents,
-		agents:       make(map[string]*agent.Agent),
-		sessions:     make(map[string]*session.Session),
-		tools:        NewToolRegistry(toolConnections),
-	}
-
-	// Apply OpenClaw configuration if present
-	if cfg.OpenClaw != nil {
-		r.openclawURL = cfg.OpenClaw.URL
-		r.openclawToken = cfg.OpenClaw.Token
-		r.openclawAgents = cfg.OpenClaw.Agents
+		default_:       cfg.Default,
+		configs:        cfg.Agents,
+		agents:         make(map[string]*agent.Agent),
+		sessions:       make(map[string]*session.Session),
+		tools:          NewToolRegistry(toolConnections),
 	}
 
 	// Register spawn_agent tool (requires registry reference)
@@ -75,7 +65,6 @@ func New(client *anthropic.Client, logsDir, agentStorePath, logstackURL, inberSe
 
 	return r, nil
 }
-
 
 // List returns the names of all configured agents
 func (r *Registry) List() []string {
@@ -115,16 +104,6 @@ func (r *Registry) SetModelStore(store *modelstore.Store) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.modelStore = store
-}
-
-
-// SetOpenClawConfig configures OpenClaw gateway for sub-agent delegation
-func (r *Registry) SetOpenClawConfig(url, token string, agents []string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.openclawURL = url
-	r.openclawToken = token
-	r.openclawAgents = agents
 }
 
 // GetConfig returns the config for the named agent (case-insensitive lookup)
