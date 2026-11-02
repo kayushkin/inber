@@ -75,7 +75,7 @@ func settingDefinitions() []servicesettings.Definition {
 			Description: "logstack's base URL. Every session's log entries are also posted there. Empty sends them nowhere else."},
 		{Key: settingInberServerURL, EnvironmentVariable: "INBER_SERVER_URL", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString, Default: defaultInberServerURL,
 			Description: "The inber server whose GET /api/agents the spawn tool reads, to list the agents it may spawn and refuse other names. When that read fails, names are not checked."},
-		{Key: settingBlueprint, EnvironmentVariable: "INBER_BLUEPRINT", Kind: msg.ServiceSettingKindBehaviour, ValueType: msg.ServiceSettingValueTypeBoolean, Default: "false",
+		{Key: settingBlueprint, EnvironmentVariable: "INBER_BLUEPRINT", Kind: msg.ServiceSettingKindBehavior, ValueType: msg.ServiceSettingValueTypeBoolean, Default: "false",
 			Description: "Log a prompt blueprint, and its diff from the last one, on every turn of every session. Takes true or false (1, t and their capitals too); any other value stops the server at start."},
 		{Key: settingPinchtabURL, EnvironmentVariable: "PINCHTAB_URL", Kind: msg.ServiceSettingKindWiring, ValueType: msg.ServiceSettingValueTypeString,
 			Description: "PinchTab's base URL, which the browser tool drives. Empty means tool-store's default, " + toolstoretools.DefaultPinchtabURL + "."},
