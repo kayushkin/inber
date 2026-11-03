@@ -152,7 +152,7 @@ func TestTheReportNamesTheSpawnRequestWhenTheModelWasOverridden(t *testing.T) {
 	}
 }
 
-// ⭐ The reserved-behaviour pin. This repair is a report and nothing else; the
+// ⭐ The reserved-behavior pin. This repair is a report and nothing else; the
 // precedence question is open on todo 2dcdb9a6. A change that answers it by
 // making the child inherit its parent's live model reddens here, because the
 // child's model would be reported as the parent's rather than the config's.

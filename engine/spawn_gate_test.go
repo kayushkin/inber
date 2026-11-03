@@ -22,7 +22,7 @@ import (
 // repository; no code expands a wildcard in a tool list.
 func TestSpawnGateAdmitsOnlyBuildableNames(t *testing.T) {
 	// A registry instance is enough for buildSpecialTool to take the branch;
-	// only the returned tool's presence is read here, never its behaviour.
+	// only the returned tool's presence is read here, never its behavior.
 	engine := &Engine{agentRegistry: &registry.Registry{}}
 
 	// Every name that has ever been written into the spawn gate.

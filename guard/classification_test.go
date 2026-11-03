@@ -126,7 +126,7 @@ func TestWriteToolsNeedApprovalInAssistMode(t *testing.T) {
 }
 
 // TestObserveModeAllowsTheRealReadTools pins the other side: in Observe mode a
-// read tool whose name the classifier no longer recognises is Denied, which
+// read tool whose name the classifier no longer recognizes is Denied, which
 // would have made Observe mode useless rather than unsafe.
 func TestObserveModeAllowsTheRealReadTools(t *testing.T) {
 	g := New(Config{Mode: Observe})
@@ -223,7 +223,7 @@ func TestEveryKnownToolIsClassifiedOrNamedHere(t *testing.T) {
 	}
 }
 
-// TestAssistRunsAnUnclassifiedToolWithNoApproval pins the behaviour the list
+// TestAssistRunsAnUnclassifiedToolWithNoApproval pins the behavior the list
 // above describes, at the level that matters — the verdict, not the classifier.
 //
 // It asserts the current answer, which is Allowed, so it pins the gap as

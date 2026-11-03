@@ -86,7 +86,7 @@ func buildOneShotParams(req OneShotRequest) (anthropic.MessageNewParams, error) 
 // dropped. Measured against the live API: that is a hard 400,
 // "JSON schema is invalid. It must match JSON Schema draft 2020-12" — so
 // schema-forced one-shot, the only reason the endpoint takes a Schema at all,
-// could not have worked for any caller honouring the contract.
+// could not have worked for any caller honoring the contract.
 //
 // Keywords this function does not name are carried through in ExtraFields
 // rather than discarded, because a translation layer that silently drops

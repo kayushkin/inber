@@ -27,7 +27,7 @@ const defaultOneShotMaxTokens = 4096
 // Schema is a whole JSON Schema object, which is what the canonical wire type
 // says it is (msg.OneShotRequest in ~/repos/llm-bridge). It is not a bare
 // properties map: this handler used to assign it straight to the SDK's
-// Properties field, so a caller honouring the documented contract sent
+// Properties field, so a caller honoring the documented contract sent
 // {"properties":{"type":"object","properties":{...},"required":[...]}} and got
 // a 400 back. See toolInputSchema.
 type OneShotRequest struct {

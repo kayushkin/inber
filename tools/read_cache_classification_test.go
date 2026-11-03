@@ -9,7 +9,7 @@ import (
 	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
-// The read cache invalidates on a tool name. A name it does not recognise is
+// The read cache invalidates on a tool name. A name it does not recognize is
 // treated as writing nothing, so a tool that writes files and is not named here
 // leaves stale entries behind and the model is told not to re-read them. That
 // is a fail-open default, and the only thing that stops it is a test which

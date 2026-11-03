@@ -65,7 +65,7 @@ func TestAnOpenAIServedTurnRecordsUsageForEveryAPICall(t *testing.T) {
 // cache counters stay untouched while it does.
 //
 // Both halves are the assertion. Carrying the count is what makes this path's
-// cache behaviour measurable at all; leaving CacheReadTokens alone is what keeps
+// cache behavior measurable at all; leaving CacheReadTokens alone is what keeps
 // it from being priced under the wrong convention, since CalcCostWithCache
 // treats that field as disjoint from InputTokens and OpenAI's cached_tokens is
 // a subset of it. See todo 0d052752.

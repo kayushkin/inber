@@ -51,7 +51,7 @@ func TestBeforeRequestReceivesTheAPICallsContext(t *testing.T) {
 	}
 	if got := seen.Value(beforeRequestProbeKey{}); got != want {
 		t.Fatalf("BeforeRequest saw a context carrying %v, want the caller's %q — "+
-			"pruning done for a cancelled call cannot be cancelled", got, want)
+			"pruning done for a canceled call cannot be canceled", got, want)
 	}
 }
 

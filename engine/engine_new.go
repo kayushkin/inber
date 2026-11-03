@@ -343,7 +343,7 @@ const spawnToolName = "spawn_agent"
 // This deliberately does not add wildcard support. Deciding that some pattern
 // selects a set of tools is a feature, and it belongs with the reserved-names
 // question in todo 87399239, not in a gate that was quietly admitting a name
-// nothing honoured.
+// nothing honored.
 func needsSpawnTools(tools []string) bool {
 	for _, tool := range tools {
 		if tool == spawnToolName {

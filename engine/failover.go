@@ -105,7 +105,7 @@ func timeoutFromHealth(h *modelstore.ModelHealth, defaultTimeout time.Duration) 
 //
 // An outcome carrying no evidence writes nothing at all rather than a success.
 // There is no honest success available: durationMs is the wall clock from the
-// start of the API work to the moment inber gave up, which for a cancelled or
+// start of the API work to the moment inber gave up, which for a canceled or
 // capped turn is when the user pressed stop or a policy clock expired, not a
 // response time. AvgResponseMs is a timeout estimator (timeoutFromHealth), so
 // handing it a fabricated duration is worse than handing it nothing.

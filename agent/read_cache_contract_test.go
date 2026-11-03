@@ -16,7 +16,7 @@ import (
 // "[complete file — N lines]". That is a contract between two repos, and
 // nothing pinned it, so tool-store could call a truncated read complete and
 // this package would believe it. It did: a read past the byte cap was
-// labelled complete, the cache recorded it, and Check then answered every
+// labeled complete, the cache recorded it, and Check then answered every
 // later read of that path with a stub — including the offset/limit read the
 // truncation notice itself tells the model to make. The rest of the file
 // became unreachable for the remainder of the session.

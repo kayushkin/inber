@@ -104,7 +104,7 @@ func injectChainField(schema anthropic.ToolInputSchemaParam, thenSchema map[stri
 // the done/note/split sideband fields, and the "then" chain naming a follow-up
 // call. The originals are not modified, and each copy keeps its Run.
 //
-// It is exported because advertising these fields and honouring them have to be
+// It is exported because advertising these fields and honoring them have to be
 // the same decision. A caller that builds its own request — the OpenAI-served
 // turn does — otherwise sends the plain schemas while the dispatch side is
 // ready for the fields, or the reverse, and the model finds out by writing one

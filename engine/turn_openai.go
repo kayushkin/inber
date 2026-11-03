@@ -59,14 +59,14 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 	// stops it, and a turn stops after agent.MaxAPICallsPerTurn round-trips
 	// whatever the model keeps asking for. Without them a model that answers
 	// tool_use forever loops until the context window fills, every iteration a
-	// paid request, and a cancelled turn keeps paying until the in-flight call
+	// paid request, and a canceled turn keeps paying until the in-flight call
 	// is the one that notices.
 	apiCalls := 0
 	for {
 		apiCalls++
 
 		if ctx.Err() != nil {
-			return result, agent.StopForCancelledTurn(result, ctx.Err(), apiCalls-1)
+			return result, agent.StopForCanceledTurn(result, ctx.Err(), apiCalls-1)
 		}
 
 		// agent.StopForAPICallCap, not a bare fmt.Errorf: recordModelHealth

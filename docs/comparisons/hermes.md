@@ -60,7 +60,7 @@ Skills are `SKILL.md` folders. `tools/skill_manager_tool.py` lets the agent crea
 
 ### 6. Compression and delegation
 
-`agent/context_compressor.py` has a cheap auxiliary model summarise the middle turns while the head and a token-budgeted tail stay, and it prunes old tool output first. It starts at 50% of the window by default, raised to 75% for windows under 512K (`hermes_cli/config_defaults.py`). `tools/delegate_tool.py` starts child agents with a fresh conversation, the parent's toolsets minus a blocked list (`tools/delegate_tool_toolsets.py`), and returns only a summary. The default is flat: `max_spawn_depth` 1 and up to 10 children at once.
+`agent/context_compressor.py` has a cheap auxiliary model summarize the middle turns while the head and a token-budgeted tail stay, and it prunes old tool output first. It starts at 50% of the window by default, raised to 75% for windows under 512K (`hermes_cli/config_defaults.py`). `tools/delegate_tool.py` starts child agents with a fresh conversation, the parent's toolsets minus a blocked list (`tools/delegate_tool_toolsets.py`), and returns only a summary. The default is flat: `max_spawn_depth` 1 and up to 10 children at once.
 
 **Inber connection**: Inber compacts with `conversation/summarize.go`, `stash.go` and `manage_tool_pruning.go`, and spawns subagents with `MaxSpawnDepth` default 2 (`server/config.go`). The two designs are close; Hermes defaults one level shallower.
 

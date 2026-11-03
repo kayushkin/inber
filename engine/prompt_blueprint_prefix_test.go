@@ -169,7 +169,7 @@ func TestDiffSeesATrailingRemovalMovingEverythingAfterIt(t *testing.T) {
 // The other direction. A memory's importance drifts on every read, and the label
 // carries it at one decimal place, so a block whose text never moved gets a new
 // label and is reported as a brand-new block cascading over everything after it.
-func TestDiffIgnoresARelabelledBlockWhoseTextIsIdentical(t *testing.T) {
+func TestDiffIgnoresARelabeledBlockWhoseTextIsIdentical(t *testing.T) {
 	before := memoryBlockLabel("aaaaaaaa", 0.4, "repo")
 	after := memoryBlockLabel("aaaaaaaa", 0.5, "repo")
 	if before == after {

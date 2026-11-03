@@ -74,7 +74,7 @@ func TestAnErrorThatIsNotAboutBytesIsLeftAlone(t *testing.T) {
 }
 
 // TestTheByteClassDoesNotArmTheTokenPruner is a pin on the omission, not on the
-// behaviour. Todo 70ae784b reserves what the recovery for a byte overflow should
+// behavior. Todo 70ae784b reserves what the recovery for a byte overflow should
 // be, and the reason it is a reserved question is that inber's only recovery —
 // the prune-and-retry in callAPI, gated on isContextLengthError — is denominated
 // in tokens while the overflow is denominated in bytes. So the two predicates

@@ -11,7 +11,7 @@ import "testing"
 //
 // Session.onEvent is documented as "current request's event callback (updated
 // per-turn)", and getOrCreateSession calls setOnEvent on every single run. These
-// tests pin that the forwarder honours that: it must resolve the parent's writer
+// tests pin that the forwarder honors that: it must resolve the parent's writer
 // when it emits, not keep the one that happened to be installed at spawn time.
 
 // TestForwarderFollowsTheParentToItsCurrentWriter is the defect. Snapshotting

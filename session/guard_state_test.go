@@ -60,7 +60,7 @@ func TestNoGuardStateFileIsNotAnError(t *testing.T) {
 // TestAnUnreadableGuardStateIsAnError is the half that must not be quiet. A
 // sidecar that exists and will not parse is a cap that was recorded and then
 // lost, and returning the zero State for it is exactly the "resumed with no cap
-// and no error" behaviour this file was written to end.
+// and no error" behavior this file was written to end.
 func TestAnUnreadableGuardStateIsAnError(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, guardStateFileName), []byte("{not json"), 0o644); err != nil {

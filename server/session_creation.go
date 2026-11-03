@@ -482,7 +482,7 @@ func (g *Server) restoreGuardState(key string, sessionGuard *guard.Guard) {
 // This restores a session's OWN set under its OWN key. It says nothing about
 // whether a fork or a spawn should inherit its parent's — that is a different
 // question, it turns on whether `disabled_tools` is a containment boundary or a
-// behaviour knob, and it is open in noteboard todo 65301d09. A child is built
+// behavior knob, and it is open in noteboard todo 65301d09. A child is built
 // under a key of its own and has no record there, so it comes out of this
 // exactly as it was configured.
 func (g *Server) restoreDisabledTools(key string, eng *engine.Engine) {
@@ -512,7 +512,7 @@ func (g *Server) restoreDisabledTools(key string, eng *engine.Engine) {
 // under key opens with, and the turn count that goes with it.
 //
 // A request that asked for a fresh session opens with neither. `new_session` is
-// documented as "start fresh session" and the engine has always honoured it —
+// documented as "start fresh session" and the engine has always honored it —
 // setupSession clears the workspace transcript rather than loading it, which is
 // what the CLI's --new does. The server, though, reuses the same main key for
 // the replacement session and then read that key's persisted transcript

@@ -103,7 +103,7 @@ func TestDefaultAgentFallbackPicksTheSameAgentEveryTime(t *testing.T) {
 }
 
 // A default the operator did configure must survive untouched — the fallback is
-// a last resort, not a normaliser.
+// a last resort, not a normalizer.
 func TestConfiguredDefaultAgentIsNotOverridden(t *testing.T) {
 	cfg := Config{DefaultAgent: "claxon", Agents: eighteenAgents()}
 	if guessed := resolveDefaultAgent(&cfg); guessed {

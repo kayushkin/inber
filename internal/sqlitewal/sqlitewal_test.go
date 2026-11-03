@@ -13,7 +13,7 @@ import (
 // Holding a write transaction on the fresh file makes the race deterministic
 // rather than roughly-half-the-time. Against a DSN-carried conversion this fails
 // on every run, and it fails instantly — the 0s is the finding, because a
-// connection that had honoured its own 5s busy_timeout would have outlasted a
+// connection that had honored its own 5s busy_timeout would have outlasted a
 // 150ms lock.
 func TestSwitchToWALWaitsOutAConversionItLoses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "waited.db")
@@ -82,7 +82,7 @@ func TestSwitchToWALWaitsOutAConversionItLoses(t *testing.T) {
 func TestConnectionDSNCarriesBusyTimeoutAndNotTheConversion(t *testing.T) {
 	dsn := ConnectionDSN("/tmp/example.db")
 	if !strings.Contains(dsn, "_pragma=busy_timeout(5000)") {
-		t.Errorf("DSN %q does not carry busy_timeout — modernc drops keys it does not recognise and says nothing", dsn)
+		t.Errorf("DSN %q does not carry busy_timeout — modernc drops keys it does not recognize and says nothing", dsn)
 	}
 	if strings.Contains(dsn, "journal_mode") {
 		t.Errorf("DSN %q carries the journal_mode conversion; it belongs in SwitchToWAL, where it can wait", dsn)

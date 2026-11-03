@@ -18,7 +18,7 @@ import (
 // Holding a write transaction on the fresh file makes the race deterministic
 // rather than roughly-half-the-time. Against the DSN version this fails on every
 // run, and it fails instantly: the 0s is the assertion, because a store that had
-// honoured its own 5s busy_timeout would have outlasted a 150ms lock.
+// honored its own 5s busy_timeout would have outlasted a 150ms lock.
 func TestNewStoreWaitsOutAConversionItLoses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.db")
 

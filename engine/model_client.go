@@ -20,7 +20,7 @@ import (
 // a provider this host has no credentials for (agent.NewModelClient returns
 // "no credentials found for provider ..."). That is exactly what a failover
 // hits, because a fallback chain crosses providers. Keeping the previously
-// installed client while relabelling the turn with the model we could not build
+// installed client while relabeling the turn with the model we could not build
 // sends the old provider a request naming a model it has never heard of, and
 // then records the *fallback* as unhealthy for the API's complaint about it — so
 // one missing API key walks the chain and marks every model in it dead, with a

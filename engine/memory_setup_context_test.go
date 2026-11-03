@@ -23,11 +23,11 @@ func newWorkspaceForSetup(t *testing.T) string {
 // Preparing a session scans the workspace, and that scan is the longest thing
 // engine construction does. A caller that has withdrawn must be told so rather
 // than handed an engine it never waited for.
-func TestSetupMemoryStoreFailsForACancelledCaller(t *testing.T) {
-	cancelled, cancel := context.WithCancel(context.Background())
+func TestSetupMemoryStoreFailsForACanceledCaller(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	store, err := setupMemoryStore(cancelled, newWorkspaceForSetup(t), "identity", "test-agent")
+	store, err := setupMemoryStore(canceled, newWorkspaceForSetup(t), "identity", "test-agent")
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("setupMemoryStore returned err %v, want context.Canceled", err)
 	}

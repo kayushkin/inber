@@ -64,7 +64,7 @@ func promptSentToTheProvider(t *testing.T, assistantResponse string) string {
 	cfg := DefaultExtractionConfig()
 	cfg.Model = "claude-test"
 	BackgroundExtractMemories(context.Background(), &client,
-		"please summarise everything that happened in this session",
+		"please summarize everything that happened in this session",
 		assistantResponse, nil, "session-under-test", nil, cfg)
 
 	if body == nil {

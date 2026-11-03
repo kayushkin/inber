@@ -13,7 +13,7 @@ import (
 // so the blueprint's token estimate for the message inflates by the same
 // factor.
 func TestMessageContentEstimatesToolCallTokensFromItsText(t *testing.T) {
-	input := json.RawMessage(`{"agent":"brigid","task":"summarise the release notes for v2"}`)
+	input := json.RawMessage(`{"agent":"brigid","task":"summarize the release notes for v2"}`)
 	msg := anthropic.MessageParam{
 		Role: anthropic.MessageParamRoleAssistant,
 		Content: []anthropic.ContentBlockParamUnion{

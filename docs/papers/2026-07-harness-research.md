@@ -1058,7 +1058,7 @@ on the same `conversation/dedup_files.go` weakness from the other direction.
 static-first: canonicalize the command, gather deterministic evidence over syntax, semantics, path
 context and provenance risk patterns, and **escalate only the underdetermined cases** to an LLM
 judge. It reports **85.64% F1 at 0.91% FPR in 2.32 ms**, with a static-only profile at 84.99% F1 and
-**0.34 ms**, and 37.33% realised harm on RedCode-gen. It sits just inside the previously-swept band
+**0.34 ms**, and 37.33% realized harm on RedCode-gen. It sits just inside the previously-swept band
 and was not in the earlier rejected list, so it is logged here rather than skipped.
 
 **What inber should consider:** this is the practical instrument for the open

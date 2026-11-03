@@ -83,8 +83,8 @@ inber's workflow hooks format after a write and can run build checks (`engine/wo
 - **Inber**: tool calls (shell, files, memory, spawn and others from tool-store).
 
 ### Context Strategy
-- **Aider**: repository-centred, from the map.
-- **Inber**: memory-centred: tag-matched memories within a token budget (`engine/turn_context.go`), large blocks moved out behind `memory_expand` pointers (`conversation/stash.go`).
+- **Aider**: repository-centered, from the map.
+- **Inber**: memory-centered: tag-matched memories within a token budget (`engine/turn_context.go`), large blocks moved out behind `memory_expand` pointers (`conversation/stash.go`).
 
 ## Key Takeaway
 

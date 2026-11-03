@@ -15,7 +15,7 @@ import (
 	"github.com/kayushkin/inber/session"
 )
 
-// historyEntry mirrors the anonymous struct handleSessionHistory serialises.
+// historyEntry mirrors the anonymous struct handleSessionHistory serializes.
 type historyEntry struct {
 	ID        string `json:"id"`
 	Agent     string `json:"agent"`

@@ -24,8 +24,8 @@ func TestSanitizeReplacesIllegalRunes(t *testing.T) {
 	}
 }
 
-// The mapping is many-to-one. This is not the behaviour we want, but it is the
-// behaviour that ships, and moving the function must not quietly change it.
+// The mapping is many-to-one. This is not the behavior we want, but it is the
+// behavior that ships, and moving the function must not quietly change it.
 // The fix for the collision itself is noteboard todo c114a30b.
 func TestSanitizeIsLossyAndCollides(t *testing.T) {
 	if Sanitize("call:1") != Sanitize("call.1") {

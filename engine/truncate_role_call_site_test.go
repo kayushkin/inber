@@ -15,7 +15,7 @@ import (
 // and ExampleConfigForRole both walk every role) and that is the trap:
 // it proves the helper answers correctly, never that the engine asks it.
 // Reverting the call site to session.DefaultTruncateConfig(), the role-blind
-// behaviour the helper replaced, left `go test ./...` fully green -- measured
+// behavior the helper replaced, left `go test ./...` fully green -- measured
 // 2026-08-29 on both call sites.
 //
 // So these tests observe the budget the session actually ends up with, through
@@ -43,7 +43,7 @@ var roleBudgets = []struct {
 	{role: "MAIN", threshold: 1000, discriminating: false}, // the switch lowercases
 	{role: "project", threshold: 3000, discriminating: true},
 	{role: "run", threshold: 5000, discriminating: true},
-	{role: "unrecognised-role", threshold: 1000, discriminating: false},
+	{role: "unrecognized-role", threshold: 1000, discriminating: false},
 	{role: "", threshold: 1000, discriminating: false},
 }
 

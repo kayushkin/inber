@@ -62,7 +62,7 @@ func emitToParentStream(parent *Session, ev StreamEvent) {
 // own origin, and re-wrapping it would replace that origin with this child's.
 //
 // Passing envelopes through is what makes the forwarder compose. A grandchild's
-// sink is this same closure, so its events arrive here already labelled
+// sink is this same closure, so its events arrive here already labeled
 // agent_update / agent_spawned / agent_done — and MaxSpawnDepth defaults to 2,
 // so a grandchild is an ordinary case, not a corner one.
 //

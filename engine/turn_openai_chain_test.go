@@ -118,7 +118,7 @@ func openAIEngine(t *testing.T, f *fakeOpenAI, tools ...agent.Tool) *Engine {
 }
 
 // TestAnOpenAIServedTurnAdvertisesTheChainAndSidebandFields. Advertising the
-// fields and honouring them are the same decision: a path that sends the plain
+// fields and honoring them are the same decision: a path that sends the plain
 // schemas leaves the model no way to know the chain exists, and one that sends
 // them without dispatching through the chain drops what the model writes.
 func TestAnOpenAIServedTurnAdvertisesTheChainAndSidebandFields(t *testing.T) {

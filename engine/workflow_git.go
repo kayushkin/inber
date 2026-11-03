@@ -182,7 +182,7 @@ func (h *WorkflowHooks) remoteDefaultBranch() string {
 // "nothing to push".
 func (h *WorkflowHooks) finishSessionGit() []string {
 	// autoCommit is the session's authority to write git history on its own.
-	// The per-write commit in OnToolResult honours it; this one used to run
+	// The per-write commit in OnToolResult honors it; this one used to run
 	// whatever the config said, so switching auto-commit off left the larger,
 	// less selective commit still armed.
 	if !h.autoCommit {

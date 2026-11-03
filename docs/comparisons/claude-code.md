@@ -4,7 +4,7 @@
 
 **Project**: [Claude Code](https://github.com/anthropics/claude-code) — Anthropic's coding agent for the terminal, IDEs, desktop and cloud sessions.
 **Language**: TypeScript (closed source; the GitHub repo holds the changelog, plugins, `mods` hooks modules and examples, not the agent's code).
-**Status**: Active. Version 2.1.312 at review time; npm install is deprecated in favour of a native installer.
+**Status**: Active. Version 2.1.312 at review time; npm install is deprecated in favor of a native installer.
 **Focus**: One agent in the user's working tree, with layered permission rules, resumable sessions, subagents, hooks, skills, plugins and MCP.
 
 Everything this file says about Claude Code comes from its README and CHANGELOG, since the agent's source is not public.

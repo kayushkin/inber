@@ -165,7 +165,7 @@ func TestDeduplicateFileRefsBatchWithStrayOffsetIsStillAFullRead(t *testing.T) {
 	}
 }
 
-// The single-path form of the same read does honour offset, and stays partial.
+// The single-path form of the same read does honor offset, and stays partial.
 func TestDeduplicateFileRefsSinglePathWithOffsetIsStillPartial(t *testing.T) {
 	messages := conversationOf(
 		readCall("toolu_1", "read_files", `{"path":"a.go"}`, "whole file"),
@@ -178,7 +178,7 @@ func TestDeduplicateFileRefsSinglePathWithOffsetIsStillPartial(t *testing.T) {
 }
 
 // CrossZoneDedup reads the same paths through the same extractor, so a batched
-// read in the staging zone has to be recognised as re-reading a frozen file.
+// read in the staging zone has to be recognized as re-reading a frozen file.
 func TestCrossZoneDedupSeesBatchedReads(t *testing.T) {
 	frozen := readCall("toolu_1", "read_files", `{"paths":["a.go","b.go"]}`, "a and b")
 	staging := readCall("toolu_2", "read_files", `{"paths":["b.go"]}`, "b again")
@@ -189,7 +189,7 @@ func TestCrossZoneDedupSeesBatchedReads(t *testing.T) {
 	}
 }
 
-// Complement: the single-path behaviour this function already had must still
+// Complement: the single-path behavior this function already had must still
 // hold, so a fixture that stops exercising the batch shapes cannot turn the
 // assertions above green by accident.
 func TestDeduplicateFileRefsStillSupersedesSinglePathReads(t *testing.T) {

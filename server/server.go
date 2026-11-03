@@ -281,7 +281,7 @@ type TokenUsage struct {
 // (spawn.go, kinds under the eventKindAgent* constants):
 //
 //	agent_spawned  a child started; Text is its task
-//	agent_update   a child's own status or thinking, relabelled
+//	agent_update   a child's own status or thinking, relabeled
 //	agent_done     a child finished; Data adds status
 //
 // done and error terminate a turn, everything else is progress. error is the

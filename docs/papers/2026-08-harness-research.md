@@ -156,7 +156,7 @@ margin; **structured rendering and scoped loading lower pass rate on the compact
 without lowering cost**; structured rendering is indistinguishable from linear text at
 matched content; compiler tier shows no robust effect. **The only contrast surviving
 multiplicity correction is executor capability: +27 percentage points at roughly 5× the
-real cost.** Under real prices, no optimised representation reaches practical break-even.
+real cost.** Under real prices, no optimized representation reaches practical break-even.
 
 **What inber should consider:** a *stop-doing* result aimed at three live threads at once —
 skill-store (:8301) ingests SKILL.md repos, the bundle-store design does **scoped loading**,
@@ -212,7 +212,7 @@ Recorded so the next sweep does not re-triage them.
 
 Three of the four picks are cost or negative results and they converge. 2607.12161 says
 token reduction ≠ cost reduction because caching dominates the bill; 2607.03048 says no
-skill-representation optimisation reaches break-even at real prices; 2607.27083 says the
+skill-representation optimization reaches break-even at real prices; 2607.27083 says the
 rank-then-threshold rule everyone uses is provably wrong once candidates have unequal cost.
 The shared lesson is that the cheapest next step for inber is **not a new mechanism** — it
 is to log the four Anthropic cache usage counters per turn, so the next proposal in this
@@ -467,7 +467,7 @@ cache-write-amplification mechanism punishes, and CoACT does not touch it.
 
 **What inber should consider:**
 
-- **Adopt the criterion, not the model.** Behavioural equivalence of the *next tool call*
+- **Adopt the criterion, not the model.** Behavioral equivalence of the *next tool call*
   is testable offline against recorded trajectories without training anything: replay a
   stored session, apply the truncation, assert the next tool call is byte-identical.
   inber already truncates tool results at `session/truncate.go:58`
@@ -1033,7 +1033,7 @@ A clean negative over 690 skills and 117 realistic non-echoing queries: a hybrid
 ranker puts the correct skill in the top five **73.5% ± 8.0** of the time, while a typed knowledge
 graph encoding prerequisites, data flow and ordering is **significantly worse at matched token
 budget (−11.2 points, p = 0.0007)**. The mechanism is a *pre-filter topology bound* — the graph's
-candidate edges are drawn from the same embedding neighbourhood the ranker already searched, so
+candidate edges are drawn from the same embedding neighborhood the ranker already searched, so
 **98.6% of typed edges connect skills the ranker had already surfaced together**, and 73% of the
 queries the ranker misses are unreachable through the graph at all. It also drops a methodology
 result worth more than the headline: evaluating on **author-written** queries overstates hit@5 by up
@@ -1055,7 +1055,7 @@ Shows the open coding-agent ecosystem has converged on a single training environ
 are collected almost exclusively under OpenHands — and that models fine-tuned on that data
 **degrade substantially under any non-training scaffold, while untrained base models show no such
 divergence**. The gap is therefore fine-tuning-induced and tied to scaffold convention, not to model
-capability. The paper argues the load-bearing scaffold-specific behaviour is *planning structure*
+capability. The paper argues the load-bearing scaffold-specific behavior is *planning structure*
 and splits it into **explicit planning** (a pre-execution plan as a first-class artifact) and
 **implicit planning** (structural conventions shaping the whole agent loop), showing the two are
 empirically separable in training data. DCAS itself is a backend-substitution interception layer
@@ -1083,7 +1083,7 @@ routing API traffic between any CLI scaffold and any backend model without modif
   a global Holm correction retains **1 of 135** route-level effects. Honest, and too thin to act on.
 - **[arXiv:2608.05604](https://arxiv.org/abs/2608.05604) SkillZip** — contract-preserving graph
   compression, 3.46× at 99.2% dependency preservation. Held because it sits in direct tension with
-  [2607.03048](https://arxiv.org/abs/2607.03048)'s finding that no skill-representation optimisation
+  [2607.03048](https://arxiv.org/abs/2607.03048)'s finding that no skill-representation optimization
   breaks even at real prices. Worth resolving deliberately rather than filing.
 - **[arXiv:2608.03169](https://arxiv.org/abs/2608.03169)** — prespecified equivalence study finding
   reasoning effort does not change unauthorized tool use. **Zero violations in 840 trajectories** is
@@ -1111,7 +1111,7 @@ fast, so the gap that kills the prefix is human think-time, not agent work.
 
 **What inber should consider:** inber already records the ground truth and has never compared it to
 its own prediction — `agent/agent_run.go:269-270` captures real `CacheCreationTokens` /
-`CacheReadTokens` per call, and `engine/prompt_blueprint.go` predicts BP1/BP2/BP3 behaviour. Report
+`CacheReadTokens` per call, and `engine/prompt_blueprint.go` predicts BP1/BP2/BP3 behavior. Report
 observed cache-read ratio split by within-turn vs first-call-of-turn and diff it against the
 blueprint. This is the measurement the whole 2026-08-02/06/07 cache-stability thread has been
 arguing about without data. Adjacent and cheap: no breakpoint in `engine/` or `agent/` requests a
@@ -1291,13 +1291,13 @@ inber ever A/Bs MCP against CLI, log which interface the model actually used per
 defection from the assigned interface is the paper's own headline. Scope: one task family, and the
 outcome measured is cost, not success.
 
-### 2. [arXiv:2608.06953](https://arxiv.org/abs/2608.06953) — explicit, not longer: stance survives compression when it is a labelled field (2026-08-07)
+### 2. [arXiv:2608.06953](https://arxiv.org/abs/2608.06953) — explicit, not longer: stance survives compression when it is a labeled field (2026-08-07)
 
 Alex Kwon. cs.CL. Asks what makes a claim's epistemic standing — "unconfirmed", "assumed",
 "reported by X" — survive being written into agent memory, given that compressors are built to drop
 qualifiers. Matched pairs: identical claim, identical stance, differing only in **where the stance
-sits** — a labelled field versus a bracketed aside — compressed by one model under one budget among
-identical filler notes, scored by a blind reader. Writing stance as a **labelled field** raises
+sits** — a labeled field versus a bracketed aside — compressed by one model under one budget among
+identical filler notes, scored by a blind reader. Writing stance as a **labeled field** raises
 retention ~15 points on two models (37→2 and 30→8 claims lost, permutation p=0.00005), with a
 **pre-registered replication** on Haiku giving +15.6 (38→1). The ablation is the load-bearing part:
 **labels help on both models (+9.7, +12.8); length helps on neither.** The paper prints nine
@@ -1309,7 +1309,7 @@ as a result. The same argument applies to memory. ⚠️ **Correcting the scan t
 paper:** it reported `memory_save` as having "`content`, `tags` and `importance`" at
 `memory/tools.go:100-103`. Measured — the schema is `:100-105` and carries a **fourth** key the scan
 stopped one line short of: **`source`** (`:104`, "'user', 'agent', 'system'"). That changes the
-recommendation from "add the first label" to something cheaper and better founded: **the labelled-
+recommendation from "add the first label" to something cheaper and better founded: **the labeled-
 field mechanism already exists in this schema and is already rendered as a label** — `memory_search`
 prints `source: %s` per hit at `:80` — so adding a `stance`/`confidence` key beside it is one more
 entry in an existing `props(...)` map plus one more field in the same `Sprintf`. What `source` does
@@ -1317,7 +1317,7 @@ entry in an existing `props(...)` map plus one more field in the same `Sprintf`.
 were, so "the build passes (unverified)" still reaches the store as prose with the qualifier inside
 the sentence, which is exactly the position the paper shows gets dropped. Two further notes: the
 paper explicitly finds that **padding the text does not work**, which kills the obvious alternative
-of instructing the model to write longer memories; and a labelled field composes with 2607.12161 on
+of instructing the model to write longer memories; and a labeled field composes with 2607.12161 on
 file, being a few appended bytes rather than a prefix rewrite. Scope: 60 claims, single author,
 small-n, and the authors concede the mechanism behind the label effect is model-dependent.
 
@@ -1676,7 +1676,7 @@ low-level interfaces improve run-to-run consistency over a bash-only baseline by
 natural-language search raises access to relevant files by **>11%**; Python CodeAct-style interfaces
 reach similar task success with **41.6% fewer steps and 56.3% lower token usage**. The embedded
 negative result is the one to act on first: lightweight text-based *cognitive scaffolding* tools —
-scratchpads, record-your-reasoning tools — had **limited effect** on behaviour.
+scratchpads, record-your-reasoning tools — had **limited effect** on behavior.
 
 **What inber should consider:** the tool surface is a tuned artifact, not plumbing, and a 56.3%
 token reduction is a direct bill reduction rather than a proxy — which matters given
@@ -2129,7 +2129,7 @@ so that each intervention is identity-preserving and auditable, then evolves har
 a SWE-bench evaluator. Code at `github.com/HKUDS/HELIX`. **Read the two numbers separately.** The
 best single evolved harness gains **+4.0% task coverage** over the Pi baseline — that is the
 deployable figure. The **58.0%** in the abstract is the *union* of a 65-candidate portfolio, an
-oracle over complementary sibling behaviour, and is not a harness anyone can run. The genuinely
+oracle over complementary sibling behavior, and is not a harness anyone can run. The genuinely
 novel claim is the by-product: a 200-slot sibling slice yielded **438 verified SFT/critic/filter/
 preference records**, because running many harness variants over the same task produces matched
 successes, regressions and near-misses that a single configuration never generates.
@@ -2410,7 +2410,7 @@ model, from opposite evidence.
   aggregate search latency**. Also that sessions hold state idle for minutes to hours between
   steps — the demand-side confirmation of the keepalive-economics paper (`2607.19214`, held 08-13).
 - **[arXiv:2608.16801](https://arxiv.org/abs/2608.16801)** (Destefanis, Aste, 08-17, cs.SE) — 1902
-  runs modelling multi-agent coding as a temporal network. **Shared files replace repeated 1-to-1
+  runs modeling multi-agent coding as a temporal network. **Shared files replace repeated 1-to-1
   messaging, cutting output tokens ~42% at eight agents** on message-heavy work while adding
   overhead where files already carry the coordination — and **naming a coordinator creates no
   communication hub and gives no reliable improvement in success**, which is worth holding against
@@ -2798,7 +2798,7 @@ implies inber's defaults are tuned to whichever model was in front of them when 
   competence `c` and answer-space size `k`, a necessary condition **c > 1/k**, and the finding that
   benchmark accuracy overstates the competence that matters. Read before putting any model-judged gate in a
   loop here — including the tempting "does this memory look forged" check `2608.16032` already warned off.
-- **[arXiv:2608.18931](https://arxiv.org/abs/2608.18931)** (08-19) — first compute-normalised comparison of
+- **[arXiv:2608.18931](https://arxiv.org/abs/2608.18931)** (08-19) — first compute-normalized comparison of
   five test-time-scaling families on open-ended tasks. Exploration scales fine; **exploitation breaks**:
   reward models correlate **ρ ≈ 0.12** with true quality, making selection near-random at any budget, and
   tree search amplifies it through diversity collapse. Only synthesis across candidates helps, recovering
@@ -3024,9 +3024,9 @@ rate-limits hard after a few hundred records — verification queries came back
 empty for several minutes after a 400-record category pull — and
 `https://arxiv.org/abs/<id>` is the reliable fallback for spot-checking one id.
 
-### 1. [arXiv:2608.20195](https://arxiv.org/abs/2608.20195) — the documentation agents actually read is the instruction file, and "actionable, verifiable docs" describes no measured behaviour
+### 1. [arXiv:2608.20195](https://arxiv.org/abs/2608.20195) — the documentation agents actually read is the instruction file, and "actionable, verifiable docs" describes no measured behavior
 
-Behaviour-grounded study over two public datasets, both large: **557 agentic
+Behavior-grounded study over two public datasets, both large: **557 agentic
 coding sessions from SWE-chat (94,813 development events, 3,033 documentation
 interactions)** and **33,097 agentic pull requests from AIDev (690,260 classified
 file-level change records)** — figures confirmed against the abstract directly,
@@ -3216,7 +3216,7 @@ the scorer's leniency moved the number, not the model.
 **What inber should consider:** the sharpest paper here for `agent-bench`. inber
 changes model defaults per agent through agent-store runtime configs and the
 decision signal is a suite mean, while `engine/engine_benchmark.go` measures
-*timing* rather than per-item behavioural deltas — so nothing in the tree can
+*timing* rather than per-item behavioral deltas — so nothing in the tree can
 currently see a bidirectional split. Emit **per-task pass/fail at n≥20 repeats
 with FDR control**, and gate a model swap on "no reliably-regressed task in the
 pinned set" rather than on the mean. The strict-vs-loose result is the second
@@ -3366,7 +3366,7 @@ induces one — the measured association runs the other way.
   staleness result is the one for `codeindex/`: a snapshot-based index cannot tell
   you it has gone stale; an AST-bounded fingerprint can.
 - **[2608.17177](https://arxiv.org/abs/2608.17177)** — instructing an agent to
-  document pre-conditions, post-conditions and undefined behaviour before
+  document pre-conditions, post-conditions and undefined behavior before
   generating tests: **+9.8 pp bug detection (p = 0.0352)** on production bugs. A
   prompt-level intervention with a stated test on real bugs, rare in this window —
   but note it is exactly the "documentation as scaffold" claim `2608.20195` finds
@@ -3467,7 +3467,7 @@ cache-reuse path.
   approval is refused, or when `session/checkpoint.go` rewinds or a session
   forks, the cache prefix is part of the state being rolled back — not just the
   `conversation` slice. `engine/prompt_blueprint.go` already computes per-block
-  hashes and predicted cache behaviour; extend it to assert a post-rollback
+  hashes and predicted cache behavior; extend it to assert a post-rollback
   blueprint's cached prefix is not the aborted one, and add their
   same-token/different-cache audit as a test. **Caveat, and it matters:** their
   channel is a local KV store on self-hosted serving. inber's exposure is via
@@ -3544,7 +3544,7 @@ credentials, usage budgets, identities, private knowledge, comms channels — fo
 the attacker's goals *without ever obtaining the resource or its credentials*.
 ResourceHijackBench covers 6 resource categories, 300 scenarios and 900 attack
 prompts, each run in an isolated environment that records **actual resource use**,
-so success is graded from behaviour and not from text. Undefended, OpenClaw
+so success is graded from behavior and not from text. Undefended, OpenClaw
 reaches **84.06% average ASR** (69.98–89.58% across backends); the strongest
 evaluated defense still leaves **55.11%**.
 
@@ -3557,11 +3557,11 @@ evaluated defense still leaves **55.11%**.
   — grade the environment, not the response text — is also the right shape for an
   inber guard test.
 
-### 6. [arXiv:2608.19013](https://arxiv.org/abs/2608.19013) — a harness update can break working behaviour with the model frozen
+### 6. [arXiv:2608.19013](https://arxiv.org/abs/2608.19013) — a harness update can break working behavior with the model frozen
 
 Names the failure mode any harness with a writable memory or skill store has:
 because prompts, memories, tools, skills and routing rules jointly shape later
-execution, a harness update can regress previously reliable behaviour without
+execution, a harness update can regress previously reliable behavior without
 touching weights — **harness-level forgetting**. Proposes *guarded harness
 evolution*, separating update generation from state commitment: a Continual
 Optimizer proposes candidates from post-execution feedback, and a Continual
@@ -3573,7 +3573,7 @@ adjustable stability–plasticity knob.
 - **What inber should consider:** `memory/` writes and `agent/registry` config
   changes are commit-on-write today. The transferable piece is the propose/commit
   split with a **historical-retention check** — replay a small held-out set of
-  previously-working behaviours before a memory write or config change lands.
+  previously-working behaviors before a memory write or config change lands.
   Cheap version: keep a regression set in `agent-bench` and gate `memory/tools.go`
   writes on it. See the cross-paper note below — this arrived three times this
   window.
@@ -3592,7 +3592,7 @@ adjustable stability–plasticity knob.
 - [arXiv:2608.17911](https://arxiv.org/abs/2608.17911) **CABLE** — memory-graph links
   driven by semantic overlap **duplicate what the retriever already finds**. CABLE
   generates antecedent-oriented queries, retrieves priors, **subtracts the direct
-  semantic neighbourhood**, verifies the remainder and keeps only survivors.
+  semantic neighborhood**, verifies the remainder and keeps only survivors.
   `memory/` is a vector store with exactly this blind spot; the subtract step is a
   cheap add to the write path in `memory/memory.go`.
 - [arXiv:2608.15755](https://arxiv.org/abs/2608.15755) **IDSS** — training-free
@@ -3621,7 +3621,7 @@ adjustable stability–plasticity knob.
   verification, and trusted audit points map onto `session/checkpoint.go`.
 - [arXiv:2608.15565](https://arxiv.org/abs/2608.15565) **AdmitOR** — the negative
   result is the value: admitting every executable candidate **poisons roughly one
-  admission in four**. Calibrated cross-family behavioural agreement raises
+  admission in four**. Calibrated cross-family behavioral agreement raises
   admission precision to 0.927 vs 0.871 (majority vote) and 0.726 (execution
   success). Unusually honest: their preregistered false-discovery criterion held on
   calibration data but **not** on the wild stream. Directly about `memory/`'s write
@@ -3694,7 +3694,7 @@ increased activity can mask a broken verification chain) ·
 Wilson interval on clean BBH; the value is a CONFIRMED sentinel early-stopping
 82–88% of items at equal accuracy) ·
 `2608.18744` EvalCEGAR (asking a model for evaluator operators directly gave 183
-candidates realizing only **96 distinct behaviours**) ·
+candidates realizing only **96 distinct behaviors**) ·
 `2608.15579` Kozuchi (open-weight, no fine-tuning, TTS@8 → **374/500 SWE-bench
 Verified**; remaining gap attributed to semantic correctness and *selection*, not
 edit formatting) ·
@@ -4091,7 +4091,7 @@ families**, switching mid-run, varying direction, timing, and the interface —
 full-trajectory transfer, compaction, or trajectory removal with repo state
 preserved. Two findings. **Full-trajectory escalation recovers less than half of
 the LC→HC quality gap while incurring a substantial cost premium** — that gap is
-the handoff tax, and downshifting once the hard reasoning is done is a favourable
+the handoff tax, and downshifting once the hard reasoning is done is a favorable
 cost-quality point. The second is the one that matters here: **the preferred
 interface reverses with direction.** Reducing the inherited trajectory *improves*
 escalation quality; removing the HC model's trajectory *degrades* downshift
@@ -4160,7 +4160,7 @@ self-hosts on one GPU, and has no per-token fee.**
 **What inber should consider:** the extractive-versus-abstractive distinction is
 the transferable part and it does not require the model. inber's compaction is an
 LLM summary (`conversation/summarize.go`) whose output is prose, so a file path or
-a symbol name that survives compaction survives as something the summariser
+a symbol name that survives compaction survives as something the summarizer
 *rewrote* — and the failure mode is a plausible-looking path that does not exist.
 The 96%-verbatim figure names the property a coding harness actually needs from a
 compactor. The economic argument is secondary but real: using a frontier model as
@@ -4407,7 +4407,7 @@ explicitly, or it will be read as a prerequisite.
   implementation gets wrong by default.
 - **IBM Research / Hugging Face, ALTK-Evolve**
   (https://huggingface.co/blog/ibm-research/altk-evolve-hmm, 2026-08-18) —
-  behavioural guidelines extracted from prior trajectories and re-injected at
+  behavioral guidelines extracted from prior trajectories and re-injected at
   inference. On AppWorld across eight models 30B–745B the dose-response is the
   finding: gpt-oss-120b **39.9 → 56.0 TGC (+16.1pp)**, DeepSeek-V3.2 **+9.5pp**,
   Claude Opus **90.5 → 94.6 (+4.1pp)**, GLM-5 **0pp**. Token overhead
@@ -4631,7 +4631,7 @@ run itself, and title, date and headline number matched on all four.
    - **What inber should consider:** the Orient gate — *is execution warranted at
      all?* — is a cheap-tier trick. inber has a failover chain ordered by
      model-store priority and no notion of routing part of a turn to a cheaper
-     row; abstention is a far easier judgement than call synthesis.
+     row; abstention is a far easier judgment than call synthesis.
 
 9. **JIT-Agent: Scaling Harness Intelligence via Just-in-Time Harness Evolution** —
    [2608.25593](https://arxiv.org/abs/2608.25593), v1 2026-08-26, cs.CL.
@@ -5135,7 +5135,7 @@ the shell.
 
 **What inber should consider:** this reverses the framing in `docs/cache-optimization.md` and
 `docs/smart-truncation.md`, which both treat context reduction as a cost lever with an accuracy
-cost to be minimised. The 28% → 2% figure says a staged tool surface is *more* accurate than a
+cost to be minimized. The 28% → 2% figure says a staged tool surface is *more* accurate than a
 flat one, so the trade is not the one those docs assume. Concretely: tool-store's `/provision`
 returning a constant-size resident index plus on-demand expansion, rather than a full schema
 dump, now has an accuracy argument behind it as well as a token one.
@@ -5305,7 +5305,7 @@ against inber's own resume path and find out whether a resumed session repeats a
 - [2608.27924](https://arxiv.org/abs/2608.27924) **What Makes Agent Memory Useful** (08-28) —
   memory gains are selective and fragile under dataset shift; **cross-model reuse is more
   feasible than cross-dataset transfer**, and **procedural/rule-based memories transfer best**.
-  A caution for `memory`: store transferable behavioural guidance, not more experience.
+  A caution for `memory`: store transferable behavioral guidance, not more experience.
 - [2608.28497](https://arxiv.org/abs/2608.28497) **Claude Code Plugin Marketplaces** (08-28) —
   1,926 repos, 8,351 plugins; plugin-touching commit activity grew **8.8× over six months**; in
   `skills/` directories, instruction files and implementation scripts co-evolve above chance with

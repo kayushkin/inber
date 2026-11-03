@@ -22,7 +22,7 @@ import (
 // as a user turn ("[New message from user while you were working]",
 // "[BUDGET LIMIT REACHED]", the summary hand-off). Those do start a turn.
 //
-// The empty and unrecognised cases answer true on purpose. Overcounting turns
+// The empty and unrecognized cases answer true on purpose. Overcounting turns
 // makes the caller retain less than it was configured to, which drops real
 // conversation; undercounting only retains more. When the shape is unclear,
 // err toward keeping.

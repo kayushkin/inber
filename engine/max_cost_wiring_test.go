@@ -106,7 +106,7 @@ func TestTurnCostReachesTheGuard(t *testing.T) {
 	}
 }
 
-// TestASessionIsRefusedOnceItPassesItsCostCap is the behaviour the whole chain
+// TestASessionIsRefusedOnceItPassesItsCostCap is the behavior the whole chain
 // exists to produce, asserted at the point of enforcement: once the spend
 // recorded for a session reaches the cap it was given, the next turn is refused
 // before any work is done, with the reason RunTurn surfaces as

@@ -10,7 +10,7 @@ import (
 // pragma, WAL as a statement sqlitewal.SwitchToWAL runs once — and each route
 // fails quietly in its own way.
 //
-// modernc.org/sqlite silently ignores DSN keys it does not recognise, so the
+// modernc.org/sqlite silently ignores DSN keys it does not recognize, so the
 // mattn-style ?_journal_mode=WAL&_busy_timeout=5000 this store shipped with opened
 // cleanly and applied neither — the live ~/.inber/server/server.db was in
 // journal_mode=delete with no busy timeout, while being written from concurrent

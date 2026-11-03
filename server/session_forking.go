@@ -207,7 +207,7 @@ func (g *Server) mintChildSessionKeyFrom(parentKey string, propose func(parentKe
 // through mintUnusedSessionKey, which is what checks.
 //
 // The first attempt is the bare millisecond, which is the key shape this has
-// always produced and the shape anyone reading a session list recognises. Only
+// always produced and the shape anyone reading a session list recognizes. Only
 // a retry — i.e. only a genuine collision — adds the attempt number, so the
 // disambiguator appears in the rare case that needs it and nowhere else.
 //

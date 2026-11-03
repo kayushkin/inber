@@ -13,7 +13,7 @@ import (
 type ObserveFunc func(findings []Finding)
 
 // RedactRequest rewrites a request's body in place, removing every secret the
-// redactor recognises.
+// redactor recognizes.
 //
 // The body is fully buffered. A provider request is a JSON document that was
 // already assembled in memory, so there is no stream to preserve, and both the

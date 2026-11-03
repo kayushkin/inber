@@ -30,7 +30,7 @@ func NewStore(dbPath string) (*Store, error) {
 	}
 	// busy_timeout alone does not stop modernc surfacing SQLITE_BUSY to concurrent
 	// writers, and this DB is written from concurrent HTTP handlers. A single
-	// connection serialises them. Safe here: this package uses no transactions, so
+	// connection serializes them. Safe here: this package uses no transactions, so
 	// nothing can hold the connection while waiting for another.
 	db.SetMaxOpenConns(1)
 

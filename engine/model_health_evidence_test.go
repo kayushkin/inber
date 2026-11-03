@@ -28,11 +28,11 @@ func engineWithTempModelStore(t *testing.T) (*Engine, *modelstore.Store) {
 	return &Engine{modelStore: store}, store
 }
 
-// cancelledTurnContext is the turn context as recordModelHealth finds it after
+// canceledTurnContext is the turn context as recordModelHealth finds it after
 // the stop button: Session.turn hands RunTurn the context whose cancel func
 // InterruptSession calls, so by the time the error surfaces the context is done.
 // Passing a live context here instead would test a state that cannot occur.
-func cancelledTurnContext() context.Context {
+func canceledTurnContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	return ctx
@@ -68,7 +68,7 @@ func TestPressingStopDoesNotMarkTheModelUnhealthy(t *testing.T) {
 	before := store.GetHealth(model)
 
 	// What Agent.Run returns when Session.cancel fires: the bare ctx.Err().
-	e.recordModelHealth(cancelledTurnContext(), model, 40, context.Canceled)
+	e.recordModelHealth(canceledTurnContext(), model, 40, context.Canceled)
 
 	after := store.GetHealth(model)
 	if !after.IsHealthy(healthWindow) {
@@ -90,7 +90,7 @@ func TestPressingStopDoesNotMarkTheModelUnhealthy(t *testing.T) {
 // TestPolicyDeadlineDoesNotMarkTheModelUnhealthy covers the other context error.
 // The deadlines a turn runs under on its own context are all inber's own — a
 // spawn timeout, a session max_duration, the bus cap — and each leaves that
-// context done, which is how the filter recognises them.
+// context done, which is how the filter recognizes them.
 func TestPolicyDeadlineDoesNotMarkTheModelUnhealthy(t *testing.T) {
 	e, store := engineWithTempModelStore(t)
 	const model = "claude-opus-4-6"
@@ -227,7 +227,7 @@ func TestSuccessStillRecordsAResponseTime(t *testing.T) {
 // TestMaxAPICallsMessageIsUnchanged pins the operator-visible text across the
 // switch to a wrapped sentinel. The string appears in logs and in the live
 // model_health rows on this host; changing it silently would break a grep and
-// make the old rows unrecognisable.
+// make the old rows unrecognizable.
 func TestMaxAPICallsMessageIsUnchanged(t *testing.T) {
 	got := fmt.Errorf("%w (%d)", agent.ErrMaxAPICallsExceeded, 50).Error()
 	if want := "exceeded max API calls (50)"; got != want {

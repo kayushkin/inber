@@ -26,20 +26,20 @@ func isErrorOf(t *testing.T, block anthropic.ContentBlockParamUnion) (value, pre
 // different. is_error is the model's only structured signal that a call failed,
 // and rebuilding the block field by field used to drop it, so a failed call
 // aged into a successful one.
-func TestSummarisedResultStaysAnError(t *testing.T) {
+func TestSummarizedResultStaysAnError(t *testing.T) {
 	block := failedResultBlock("toolu_fail", repeatLines("compile error on line %d", 30))
 	cfg := DefaultManagementConfig()
 
 	pruned, wasPruned := pruneToolResult(block, cfg.ToolResultSummary, cfg, "shell_commands")
 	if !wasPruned {
-		t.Fatal("a middle-aged result was not summarised")
+		t.Fatal("a middle-aged result was not summarized")
 	}
 	value, present := isErrorOf(t, pruned)
 	if !present {
-		t.Fatal("summarising a failed tool result dropped is_error entirely")
+		t.Fatal("summarizing a failed tool result dropped is_error entirely")
 	}
 	if !value {
-		t.Fatal("summarising a failed tool result reported it as a success")
+		t.Fatal("summarizing a failed tool result reported it as a success")
 	}
 }
 
@@ -66,7 +66,7 @@ func TestDroppedResultStaysAnError(t *testing.T) {
 	}
 }
 
-// A succeeding call must not be relabelled either: the flag is copied, not
+// A succeeding call must not be relabeled either: the flag is copied, not
 // asserted.
 func TestPruningKeepsASuccessASuccess(t *testing.T) {
 	block := anthropic.NewToolResultBlock("toolu_ok", repeatLines("line %d", 40), false)

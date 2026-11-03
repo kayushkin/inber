@@ -128,7 +128,7 @@ func TestQueueContextCancellation(t *testing.T) {
 		})
 	}()
 
-	// Try to enqueue with a cancelled context.
+	// Try to enqueue with a canceled context.
 	time.Sleep(10 * time.Millisecond) // let blocker start
 	cancel()
 

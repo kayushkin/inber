@@ -1,4 +1,4 @@
-// Package toolid normalises tool-call identifiers to the shape the Anthropic
+// Package toolid normalizes tool-call identifiers to the shape the Anthropic
 // API accepts.
 package toolid
 

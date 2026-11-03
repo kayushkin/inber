@@ -248,7 +248,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 //  5. Process  — extract memories, stash response, track tokens/cost
 //  6. Record   — update guard counters, write trace, take checkpoint
 //
-// ctx bounds every step of the turn that can leave the process. Cancelling it
+// ctx bounds every step of the turn that can leave the process. Canceling it
 // stops the execute phase's API call and running tool, and Agent.Run refuses to
 // start another round-trip; it also stops the prepare phase, whose summarizer
 // is an API call in its own right and used to run to completion on a turn the
@@ -449,7 +449,7 @@ func (e *Engine) DisabledToolNames() []string {
 // setToolSet installs the tools a session was built with, resolves their
 // filesystem paths against the session's root, and derives the wire set from
 // them. Both engine constructors go through it so neither can install tools
-// without also honouring an already-disabled name.
+// without also honoring an already-disabled name.
 //
 // The rooting belongs here and not in buildTools because buildTools is not the
 // only source of tools: the server injects its own through EngineConfig.

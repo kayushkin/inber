@@ -47,7 +47,7 @@ func StopForAPICallCap(result *TurnResult) error {
 	return fmt.Errorf("%w (%d)", ErrMaxAPICallsExceeded, MaxAPICallsPerTurn)
 }
 
-// StopForCancelledTurn ends a turn whose context was cancelled or timed out —
+// StopForCanceledTurn ends a turn whose context was canceled or timed out —
 // the stop button, a spawn timeout, a session's max_duration.
 //
 // completedAPICalls is how many calls actually finished, so the text reports
@@ -55,7 +55,7 @@ func StopForAPICallCap(result *TurnResult) error {
 // context's own error unwrapped: engine.recordModelHealth distinguishes a cancel
 // from a deadline, and wrapping would not change errors.Is but would change what
 // an operator reads.
-func StopForCancelledTurn(result *TurnResult, err error, completedAPICalls int) error {
+func StopForCanceledTurn(result *TurnResult, err error, completedAPICalls int) error {
 	if result.Text == "" {
 		result.Text = fmt.Sprintf("[Agent stopped: %s after %d API calls]", err, completedAPICalls)
 	}
@@ -235,7 +235,7 @@ type Agent struct {
 	// percent of the conversation from one that did nothing at all.
 	//
 	// It takes the turn's context because pruning is work done on behalf of the
-	// API call it guards, so cancelling that call must stop it too.
+	// API call it guards, so canceling that call must stop it too.
 	BeforeRequest func(ctx context.Context, messages []anthropic.MessageParam, contextWindow int) (pruned []anthropic.MessageParam, tokensFreed int)
 
 	// LimitCheck is called before each API call (after the first) to check
@@ -361,7 +361,7 @@ func (a *Agent) SetOAuth(isOAuth bool) {
 
 // SetBeforeRequest sets a callback invoked before each API call to allow
 // pruning messages if they're approaching the context window limit. The
-// callback receives the context of the API call it is guarding, so cancelling
+// callback receives the context of the API call it is guarding, so canceling
 // that call also stops the pruning done on its behalf, and returns the tokens
 // it freed alongside the messages — see the BeforeRequest field for why the
 // message count alone cannot answer that.
@@ -463,7 +463,7 @@ type APICallUsage struct {
 	// :30-43 and closed as todo 00093e48, with the sign flipped.
 	//
 	// So this field is a measurement and nothing prices it yet. Where the
-	// inclusive/exclusive normalisation belongs — in the response conversion,
+	// inclusive/exclusive normalization belongs — in the response conversion,
 	// or in CalcCostWithCache once it is told which convention it was handed —
 	// is the open half of todo 0d052752 and is the owner's call. What is
 	// settled is that the number has to survive the wire to be decidable at
@@ -498,7 +498,7 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 
 		// Check context cancellation (e.g. spawn timeout).
 		if ctx.Err() != nil {
-			return result, StopForCancelledTurn(result, ctx.Err(), apiCalls-1)
+			return result, StopForCanceledTurn(result, ctx.Err(), apiCalls-1)
 		}
 
 		// Hard cap on API round-trips per turn to prevent runaway agents.

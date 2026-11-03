@@ -967,7 +967,7 @@ token-budget context by `thread_id` so the figure is per-conversation rather tha
 global. The shift is from *passive* budget signalling — a token count injected into the
 system prompt or a silent truncation the model never sees — to an *on-demand* contract:
 the agent decides when it needs to know, and gets an authoritative answer it can act on
-(wrap up, summarise, spawn a fresh sub-thread) before the engine forces a compaction.
+(wrap up, summarize, spawn a fresh sub-thread) before the engine forces a compaction.
 This is the same posture as goose's "trust the live context window" (goose.md, 06-02
 entry) but exposed *through the tool surface* instead of a prompt fragment, so the model
 can branch on it deterministically.
@@ -1058,7 +1058,7 @@ first-class `SleepItem` retained in thread history, not a shelled-out `sleep`. T
 is the *coupling*: a voluntary back-off wait wired into the same steer/mailbox queues, so it
 is cancellable and visible instead of an opaque blocked subprocess.
 - **What inber should consider:** give inber a native `wait`/`sleep` tool whose pause is
-  cancelled at the next steer/mailbox boundary (the same model-call boundary dexto's 06-13
+  canceled at the next steer/mailbox boundary (the same model-call boundary dexto's 06-13
   refinement defines), emitting a history-retained wait item — so an autoworker/scoper
   polling for external work backs off without a dead shell `sleep`, and a user steer or a
   sub-agent message wakes it immediately rather than after the full delay. This is the
@@ -1539,7 +1539,7 @@ The 07-14 "log is truth" entry established that the transcript is append-only an
 
 - **Editing an earlier turn forks a new branch** ([codex #33201](https://github.com/openai/codex/pull/33201), [#33211](https://github.com/openai/codex/pull/33211)): re-submitting an edited earlier prompt branches the conversation rather than truncating history in place, and the pre-edit thread context is preserved on the parent branch.
 - **A retried turn runs on a forked thread** ([codex #33207](https://github.com/openai/codex/pull/33207)): a turn that hit a safety buffer is retried against a *fork*, so the retry cannot corrupt the original turn's record — the same fork-not-mutate rule applied to the automatic path.
-- **Interrupted and in-flight input is itself history** ([codex #33198](https://github.com/openai/codex/pull/33198), [#33203](https://github.com/openai/codex/pull/33203)): an interrupted prompt stays in conversation history, and a restored thread preserves its in-flight input — the half-typed / cancelled prompt is durable state a resume must reproduce, not transient UI chrome that vanishes on the next keystroke.
+- **Interrupted and in-flight input is itself history** ([codex #33198](https://github.com/openai/codex/pull/33198), [#33203](https://github.com/openai/codex/pull/33203)): an interrupted prompt stays in conversation history, and a restored thread preserves its in-flight input — the half-typed / canceled prompt is durable state a resume must reproduce, not transient UI chrome that vanishes on the next keystroke.
 - **Session state is separated from session I/O** ([codex #33209](https://github.com/openai/codex/pull/33209)): the precondition for all of the above — the mutable conversation state (which branch is live, what input is pending) is a distinct object from the durable append-only I/O stream, so a fork mutates the former without ever touching the latter.
 
 **What inber should consider:** inber has *no* branch concept anywhere — `grep` across `session/` and `engine/` finds only tool-result truncation. That means the two hazards this cluster fixes are both live: (1) any "edit an earlier message and re-run" UX inber grows will have to **destroy the tail in place** (the same in-place mutation the compaction entry already flagged for `e.Messages`), losing the pre-edit branch permanently and making "compare the two answers" impossible; and (2) an interrupted or half-typed prompt is dropped on interrupt/resume, because `session/resume.go`'s `LoadMessages` rebuilds only *committed* messages from the JSONL — there is no field for pending input, so a resumed session silently forgets what the user was mid-way through asking. Concretely: **(a)** make **fork the only edit primitive** — editing turn N appends a branch marker + the new turn to the append-only log and flips a *live-branch* pointer, never rewrites or drops records; this composes exactly with the 07-14 ordinal/byte-offset checkpoint (a branch is just an anchor into the parent's log) and with the compaction sidecar's existing "forks re-anchor" rule. **(b)** Treat the **retry path the same way** — the kanban dispatcher's revive/retry (`reference_kanban_task_completion_loop`) should fork a failed session's thread, not resume-and-append onto it, so a retried run can never overwrite the failed run's evidence. **(c)** Persist **pending/interrupted input** as a first-class durable field separated from the committed message stream (codex's state-vs-I/O split), so interrupt + resume reproduces the in-flight prompt instead of eating it — relevant to herald/`ask` sessions that are interrupted by design. The unifying rule: *in an append-only history, "undo" and "edit" are spelled **fork**, and the only state a resume may reconstruct beyond the committed log is input that was explicitly persisted as pending.*
@@ -1720,7 +1720,7 @@ So neither name is declared anywhere today, and follow-on **(a)** below is moot 
 injected in a degraded state to label. The rule to keep: a fallback on a *quality* path must be
 visible in the returned value, not merely in a log — and in inber's case it was not even in a log, which is the
 "0 `[reaper]` lines ever" failure discovered the same way. Two follow-ons: **(a)** consider
-labelling the injected block itself when degraded, so the model is told it is reading a keyword
+labeling the injected block itself when degraded, so the model is told it is reading a keyword
 list and not a summary — that changes prompt content, so it is left as a decision rather than
 done here. **(b)** Audit for cline's *second* shape, which inber has not been checked for: a
 write gated on one condition whose read is gated on another. The generalizable check is cheap —
@@ -1764,7 +1764,7 @@ a directory listing. So a `git log` whose message body contains the word *writte
 did. **The first branch also makes the second unreachable**: the shell branch fires on
 `len(lines) > 5`, the file-read branch requires `lineCount > 20`, and `lineCount > 20` implies
 `len(lines) > 5` — `[read file: %d lines, %d bytes]` is **dead code that can never be
-produced**, and every multi-line file read in a pruned inber transcript is labelled `[shell:
+produced**, and every multi-line file read in a pruned inber transcript is labeled `[shell:
 N lines]` instead. **(a)** Carry the tool `name` in the record, as codex does; it is already
 on the `tool_use` block two fields away, and every guess disappears with it — this deletes the
 dead branch rather than repairing it. **(b)** Keep `original_bytes` unconditionally. inber
@@ -10367,7 +10367,7 @@ the cap is now a property of a turn, not of a provider branch"* and names commit
 `79cb4cc`. That commit is real, and `git merge-base --is-ancestor 79cb4cc HEAD`
 exits 1; `git branch --contains` finds it on
 `fix/openai-turn-loop-runaway-cap` and nowhere else. `MaxAPICallsPerTurn`,
-`StopForAPICallCap` and `StopForCancelledTurn` match nothing repo-wide, and
+`StopForAPICallCap` and `StopForCanceledTurn` match nothing repo-wide, and
 `engine/turn_openai_runaway_test.go` does not exist. The Anthropic loop's
 `const maxAPICalls = 50` (`agent/agent.go:336`) and head check (`:327-333`) are
 still on one loop of two — which is that todo's own title, five weeks after it

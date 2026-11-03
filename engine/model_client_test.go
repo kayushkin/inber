@@ -21,7 +21,7 @@ func clientFor(t *testing.T, modelID string, keys agent.ProviderCredentials) *ag
 
 // TestResolveModelClient_KeepsTheModelItCanActuallyRun is the regression test for
 // the defect: a failover to a model with no credentials used to leave the old
-// client installed while relabelling the turn with the new model, so the request
+// client installed while relabeling the turn with the new model, so the request
 // went to the old provider naming a model it does not serve and the *fallback*
 // was recorded unhealthy for it.
 func TestResolveModelClient_KeepsTheModelItCanActuallyRun(t *testing.T) {
@@ -40,7 +40,7 @@ func TestResolveModelClient_KeepsTheModelItCanActuallyRun(t *testing.T) {
 		t.Fatal("the previously installed client was dropped")
 	}
 	if e.modelClient.Model.ID != inForce {
-		t.Fatalf("installed client is for %q but the turn is labelled %q — the two must agree",
+		t.Fatalf("installed client is for %q but the turn is labeled %q — the two must agree",
 			e.modelClient.Model.ID, inForce)
 	}
 }

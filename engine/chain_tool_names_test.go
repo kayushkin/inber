@@ -83,7 +83,7 @@ func TestChainIsOfferedOnEveryToolTheEngineBuilds(t *testing.T) {
 			t.Fatalf("%s: properties are not a map after preparation", one.Name)
 		}
 		_, present := props["then"]
-		// end_turn is in this set because tool-store's catalogue publishes it,
+		// end_turn is in this set because tool-store's catalog publishes it,
 		// not because inber installs it — TestEndTurnIsNotReachableFromAnyBuildPath
 		// is the assertion that it is unreachable here. So it is the one name
 		// that must be withheld, and every other name must be offered.

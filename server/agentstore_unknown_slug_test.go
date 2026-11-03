@@ -14,12 +14,12 @@ package server
 // suite says what changed instead of staying quiet.
 //
 // ⛔ They do not fix any of the four sites and must not be read as endorsing the
-// current behaviour. Site A hands a raw driver string to the model and site B
+// current behavior. Site A hands a raw driver string to the model and site B
 // cannot tell "no such agent" from "the store is broken"; both are defects the
 // parent card owns. Pinning them is what makes the repair visible, not approval.
 //
 // When one of these reddens, the fix is to update the expectation to the new
-// behaviour and check the site still does something sensible -- not to revert
+// behavior and check the site still does something sensible -- not to revert
 // the change that reddened it.
 
 import (
@@ -134,7 +134,7 @@ func TestUnknownSlugIsSwallowedByTheSpawnBusyCheck(t *testing.T) {
 		t.Errorf("the spawn busy-check stopped swallowing its error: %v\n"+
 			"server/spawn.go:153 uses `err == nil`, so an unknown agent reached the\n"+
 			"config lookup below it. If that is now deliberate, this test should assert\n"+
-			"the new behaviour -- but check that a BROKEN store is still distinguishable\n"+
+			"the new behavior -- but check that a BROKEN store is still distinguishable\n"+
 			"from a missing agent, which the old guard could not do.", err)
 	}
 	const want = "unknown agent: no-such-agent"

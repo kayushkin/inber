@@ -97,7 +97,7 @@ func ManageConversation(
 	rewrittenMessages := 0
 
 	// A tool_result names only the id of the call it answers, so pair the ids
-	// with their tool names before pruning summarises any of them.
+	// with their tool names before pruning summarizes any of them.
 	toolNames := toolNamesByUseID(managedMessages)
 
 	for i, msg := range managedMessages {

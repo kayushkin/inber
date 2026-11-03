@@ -39,17 +39,17 @@ func TestCompleteTasksReceivesTheTurnsContext(t *testing.T) {
 	}
 }
 
-// The turn's context is only worth threading if cancelling it is visible at the
+// The turn's context is only worth threading if canceling it is visible at the
 // callback, so pin that rather than the identity alone.
-func TestCancellingTheTurnIsVisibleToCompleteTasks(t *testing.T) {
+func TestCancelingTheTurnIsVisibleToCompleteTasks(t *testing.T) {
 	turnContext, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	var cancelledAtCallback bool
+	var canceledAtCallback bool
 	agentUnderTest := &Agent{
 		sidebandCallbacks: &SidebandCallbacks{
 			CompleteTasks: func(ctx context.Context, _ []int) error {
-				cancelledAtCallback = ctx.Err() != nil
+				canceledAtCallback = ctx.Err() != nil
 				return nil
 			},
 		},
@@ -58,8 +58,8 @@ func TestCancellingTheTurnIsVisibleToCompleteTasks(t *testing.T) {
 	runBlocksWithContext(t, turnContext, agentUnderTest,
 		toolUseBlock("t1", "noop", `{"done":[0]}`))
 
-	if !cancelledAtCallback {
-		t.Error("the turn was cancelled but the sideband callback could not tell")
+	if !canceledAtCallback {
+		t.Error("the turn was canceled but the sideband callback could not tell")
 	}
 }
 

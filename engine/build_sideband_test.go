@@ -50,8 +50,8 @@ func TestFailedBuildStillLeavesABuildErrorTask(t *testing.T) {
 }
 
 // Completing the last task must not take longer than the interrupt it is
-// supposed to honour.
-func TestCompletingTheLastTaskStopsWhenTheTurnIsCancelled(t *testing.T) {
+// supposed to honor.
+func TestCompletingTheLastTaskStopsWhenTheTurnIsCanceled(t *testing.T) {
 	repoRoot := repoWithOneRemainingTask(t)
 	defer useBuildCommand(t, "sleep 120")()
 
@@ -70,7 +70,7 @@ func TestCompletingTheLastTaskStopsWhenTheTurnIsCancelled(t *testing.T) {
 	select {
 	case <-returned:
 	case <-time.After(15 * time.Second):
-		t.Fatal("completing the last task ignored the cancelled turn and sat on the build")
+		t.Fatal("completing the last task ignored the canceled turn and sat on the build")
 	}
 }
 

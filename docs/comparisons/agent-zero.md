@@ -38,7 +38,7 @@ This means the agent's capabilities are unbounded. Need to query a database? Wri
 
 ### 2. Prompt-Driven Architecture
 
-All behavior is defined in Markdown files under `prompts/`. Change the prompts and you fundamentally change the agent. The system prompt is assembled from modular `.md` files: role, communication style, problem-solving approach, tips, behaviour, environment.
+All behavior is defined in Markdown files under `prompts/`. Change the prompts and you fundamentally change the agent. The system prompt is assembled from modular `.md` files: role, communication style, problem-solving approach, tips, behavior, environment.
 
 Agent profiles (`agents/<profile>/prompts/`) allow per-agent prompt overrides with an `{{include original}}` inheritance syntax. This means you can create specialized agents by only overriding the parts that differ.
 
@@ -54,11 +54,11 @@ Memory has distinct categories:
 - **User-provided** — explicit facts (names, preferences, API keys)
 - **Fragments** — auto-extracted from conversations, updated continuously
 - **Solutions** — successful approaches saved for future reference
-- **Behaviour** — self-modified runtime rules
+- **Behavior** — self-modified runtime rules
 
 The areas are `main`, `fragments` and `solutions` (`plugins/_memory/helpers/memory.py`), stored in a FAISS vector index, with a consolidation pass that merges near-duplicates (`memory_consolidation.py`).
 
-**Inber connection**: Inber's memory (the memory-store module, wrapped by `memory/memory.go`) has tags, importance, access tracking and embeddings for search, but doesn't categorize memories by type (fragment vs solution vs behaviour). The solution-recording pattern could help agents avoid repeating mistakes.
+**Inber connection**: Inber's memory (the memory-store module, wrapped by `memory/memory.go`) has tags, importance, access tracking and embeddings for search, but doesn't categorize memories by type (fragment vs solution vs behavior). The solution-recording pattern could help agents avoid repeating mistakes.
 
 ### 5. Docker as the Computer
 
@@ -77,7 +77,7 @@ Agent Zero explicitly saves "solutions" — successful approaches to problems. W
 
 ### 2. Dynamic Behavior Rules (LOW PRIORITY)
 
-The ability to modify runtime behaviour and persist it is powerful for agents that learn from their mistakes. Inber could allow agents to append to their own context rules via memory:
+The ability to modify runtime behavior and persist it is powerful for agents that learn from their mistakes. Inber could allow agents to append to their own context rules via memory:
 
 - Agent saves a "behaviour" memory: "When modifying Go files, always run `go build` after edits"
 - This memory auto-loads into subsequent system prompts

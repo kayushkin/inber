@@ -227,7 +227,7 @@ func TestCallStopsAtItsDeadlineWhileTheServerIsSilent(t *testing.T) {
 		t.Errorf("expected a deadline error, got %v", err)
 	}
 	if waited := time.Since(started); waited > 2*time.Second {
-		t.Errorf("call took %s to honour a 150ms deadline", waited)
+		t.Errorf("call took %s to honor a 150ms deadline", waited)
 	}
 	if count := waiterCount(server.client); count != 0 {
 		t.Errorf("expected the abandoned call to leave no waiter behind, got %d", count)
@@ -263,7 +263,7 @@ func TestChatterDoesNotPostponeTheDeadline(t *testing.T) {
 		t.Fatalf("expected a deadline error, got %v", err)
 	}
 	if waited := time.Since(started); waited > 2*time.Second {
-		t.Errorf("call took %s to honour a 150ms deadline against a chatty server", waited)
+		t.Errorf("call took %s to honor a 150ms deadline against a chatty server", waited)
 	}
 }
 

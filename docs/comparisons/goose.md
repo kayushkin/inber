@@ -28,7 +28,7 @@ The REST server crate `goose-server` was removed on 2026-07-07 (commit 6d699361a
 
 ## Extension/Plugin Architecture
 
-**MCP-centred design:**
+**MCP-centered design:**
 - MCP is the main extension mechanism; extensions provide tools, resources and instructions.
 - `ExtensionConfig` in `crates/goose/src/agents/extension.rs` now has four kinds: `stdio`, `builtin`, `platform` (in-process Rust) and `streamable_http`. The inline-Python kind this file once listed is gone.
 - Tools are prefixed `extension__tool_name` unless marked unprefixed, and are discovered at run time.

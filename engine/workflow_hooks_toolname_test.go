@@ -8,9 +8,9 @@ import (
 	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
-// This file pins a defect as PRESENT. It is not asserting desired behaviour.
+// This file pins a defect as PRESENT. It is not asserting desired behavior.
 //
-// OnToolResult used to gate every auto-workflow behaviour — auto-format,
+// OnToolResult used to gate every auto-workflow behavior — auto-format,
 // build-and-test-on-write, the per-file auto-commit, and the population of
 // h.changedFiles — behind
 //
@@ -91,7 +91,7 @@ func TestWorkflowHookNamesMatchNoRealTool(t *testing.T) {
 		if known[gated] {
 			t.Errorf("OnToolResult gates on %q and a tool now HAS that name — "+
 				"the auto-workflow hook is live again. Delete this test and assert "+
-				"the real behaviour instead (todo af237d64).", gated)
+				"the real behavior instead (todo af237d64).", gated)
 		}
 	}
 

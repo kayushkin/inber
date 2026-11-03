@@ -5,7 +5,7 @@
 **Project**: [Roo Code](https://github.com/RooCodeInc/Roo-Code)
 **Status**: **Shut down.** The README says the extension was shut down on 2026-05-15, the repo is archived on GitHub, and the last release is v3.54.0. The README points users to [Zoo Code](https://github.com/Zoo-Code-Org/Zoo-Code), a community continuation that is active, and back to Cline. This file now records the ideas, not a live project; there is nothing upstream to watch.
 **Language**: TypeScript (VS Code extension, a fork of Cline)
-**Focus**: One coding agent whose behaviour changes by mode rather than by switching agents.
+**Focus**: One coding agent whose behavior changes by mode rather than by switching agents.
 **Key Strengths**: Mode system (Code/Architect/Ask/Debug/custom), codebase semantic indexing, skills as slash commands, auto-approval policies, tool repetition detection.
 
 ## Architecture Overview
@@ -27,7 +27,7 @@ At shutdown `src/core/tools/` held about 25 tools, among them `CodebaseSearchToo
 
 ### 1. Mode System for Agent Specialization ⭐️
 
-Instead of separate agents, Roo Code used modes: a `ModeConfig` with a `slug`, tool `groups` and prompts. Five built-in modes plus user-defined ones. One agent, several behaviours, switchable mid-conversation.
+Instead of separate agents, Roo Code used modes: a `ModeConfig` with a `slug`, tool `groups` and prompts. Five built-in modes plus user-defined ones. One agent, several behaviors, switchable mid-conversation.
 
 **Inber connection**: inber uses separate named agents from agent-store, each with its own tool allowlist. It also has per-session execution modes in `guard/guard.go` (`observe`, `assist`, `autonomous`), set per request, which restrict tools without changing the agent. Those modes control trust, not prompt or role, so they cover half of Roo's idea.
 

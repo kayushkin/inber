@@ -42,7 +42,7 @@ func TestBusDeltaLeavesAnUnnamedMessageUnnamed(t *testing.T) {
 
 // TestBusDeltaKeepsDoneAndUnknownKindsOffTheStream covers the second return
 // value. "done" is published by the caller once Stream returns, so publishing
-// it here would deliver the end of a turn twice; an unrecognised kind carries
+// it here would deliver the end of a turn twice; an unrecognized kind carries
 // nothing a consumer can render.
 func TestBusDeltaKeepsDoneAndUnknownKindsOffTheStream(t *testing.T) {
 	for _, kind := range []string{"done", "status", "wat"} {

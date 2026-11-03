@@ -8,7 +8,7 @@ import (
 // An OpenAI-compatible provider reports the cached part of a prompt in exactly
 // one place — prompt_tokens_details.cached_tokens — and OpenAIUsage used to
 // have no home for it, so it was dropped where the response was unmarshalled.
-// Nothing downstream could see it, which made this path's cache behaviour
+// Nothing downstream could see it, which made this path's cache behavior
 // unmeasurable rather than merely unmeasured.
 //
 // These tests are written against literal response bodies rather than a
@@ -72,7 +72,7 @@ func TestAProviderThatSendsNoDetailsBlockReportsZeroRatherThanFailing(t *testing
 // charges the cached span twice — the same class of error as the one recorded
 // at session/timeline_cost.go:30-43 and closed as todo 00093e48, sign flipped.
 //
-// Where that normalisation belongs is the open half of todo 0d052752 and it is
+// Where that normalization belongs is the open half of todo 0d052752 and it is
 // the owner's call. Until it is answered the conversion says nothing about
 // caching at all, and this asserts that silence: making the number visible was
 // not permission to price it.

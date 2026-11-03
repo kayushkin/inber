@@ -22,7 +22,7 @@ import (
 // segment itself, so the root is shared by every agent that runs there — and
 // two agents do land in one workspace, because nothing stops two agents being
 // configured with the same one. Walking once per agent would therefore report
-// every session in a shared root once per agent sharing it, each copy labelled
+// every session in a shared root once per agent sharing it, each copy labeled
 // with whichever agent the loop happened to be on.
 //
 // There are two sources for that set and both are needed. The agents' configured

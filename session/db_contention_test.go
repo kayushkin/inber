@@ -20,7 +20,7 @@ import (
 //
 // Holding a write transaction makes that deterministic rather than
 // roughly-half-the-time. Against the DSN version this fails on every run, and it
-// fails instantly: the 0s is the assertion, because a store that had honoured
+// fails instantly: the 0s is the assertion, because a store that had honored
 // its own 5s busy_timeout would have outlasted a 150ms lock.
 func TestOpenDBWaitsOutAConversionItLoses(t *testing.T) {
 	repoRoot := t.TempDir()
@@ -67,7 +67,7 @@ func TestOpenDBWaitsOutAConversionItLoses(t *testing.T) {
 	}
 
 	// Surviving is not enough: a session database left on the rollback journal
-	// serialises the readers WAL exists to let run alongside a writer.
+	// serializes the readers WAL exists to let run alongside a writer.
 	var settled string
 	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&settled); err != nil {
 		t.Fatalf("read back journal_mode: %v", err)

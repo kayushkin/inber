@@ -5,7 +5,7 @@ import "github.com/kayushkin/bus/messages"
 // busDeltaFor builds the bus delta that carries one stream event to
 // chat.stream. The second return value reports whether the event belongs on
 // the bus at all: "done" is published by the caller once the run returns, and
-// an unrecognised kind carries nothing a consumer can render.
+// an unrecognized kind carries nothing a consumer can render.
 //
 // This is a seam and it exists for one line. StreamEvent.MessageID names the
 // assistant message an event came from, and that is how a consumer joins a run

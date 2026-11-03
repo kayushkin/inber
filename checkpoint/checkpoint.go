@@ -8,7 +8,7 @@
 // doing nothing is worse than an absent one, because the absent one cannot be
 // planned on.
 //
-// The design below is intent, not behaviour. Building it needs three answers
+// The design below is intent, not behavior. Building it needs three answers
 // that are not mechanical, and they are the reason this is a sketch rather than
 // an implementation:
 //
@@ -71,7 +71,7 @@ func New(repoRoot, sessionID string) (*Manager, error) {
 	return nil, ErrNotImplemented
 }
 
-// Take would create a checkpoint of the current workspace state, labelled with
+// Take would create a checkpoint of the current workspace state, labeled with
 // a human-readable description (e.g., "before turn 3"). It returns
 // ErrNotImplemented.
 func (m *Manager) Take(label string, turnNum int) (*Checkpoint, error) {

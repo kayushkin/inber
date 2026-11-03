@@ -51,11 +51,11 @@ Tab switches between primary agents. Subagents run as background jobs that repor
 
 ## Provider System
 
-- Provider-agnostic through the AI SDK and the models.dev catalogue (`core/src/models-dev.ts`); Anthropic, OpenAI, Google, GitHub Copilot, local models and more.
+- Provider-agnostic through the AI SDK and the models.dev catalog (`core/src/models-dev.ts`); Anthropic, OpenAI, Google, GitHub Copilot, local models and more.
 - OAuth sign-in for providers that support it (`core/src/oauth`).
 - "OpenCode Zen" offers hosted model access for pay.
 
-**Comparison to inber:** inber is no longer Anthropic-only. It has a second turn loop for OpenAI-compatible endpoints (`engine/turn_openai.go`) and can send OpenAI requests through a ChatGPT subscription (`agent/codex_subscription.go`). It has no model catalogue of its own; models and prices come from model-store.
+**Comparison to inber:** inber is no longer Anthropic-only. It has a second turn loop for OpenAI-compatible endpoints (`engine/turn_openai.go`) and can send OpenAI requests through a ChatGPT subscription (`agent/codex_subscription.go`). It has no model catalog of its own; models and prices come from model-store.
 
 ## Tools and Extensions
 

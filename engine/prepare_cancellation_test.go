@@ -31,7 +31,7 @@ func summarizableTranscript(turns int) []anthropic.MessageParam {
 // client so a call that should not have happened panics instead of quietly
 // going out over the network.
 
-func TestSummarizeIfNeededStopsOnACancelledTurn(t *testing.T) {
+func TestSummarizeIfNeededStopsOnACanceledTurn(t *testing.T) {
 	messages := summarizableTranscript(40) // 80 messages, past the 60-message trigger
 	e := &Engine{Messages: messages}
 
@@ -40,20 +40,20 @@ func TestSummarizeIfNeededStopsOnACancelledTurn(t *testing.T) {
 
 	err := e.summarizeIfNeeded(ctx)
 	if err == nil {
-		t.Fatal("summarizeIfNeeded returned nil on a cancelled context — the summary API call was made anyway")
+		t.Fatal("summarizeIfNeeded returned nil on a canceled context — the summary API call was made anyway")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want one wrapping context.Canceled", err)
 	}
 	if len(e.Messages) != len(messages) {
-		t.Fatalf("a cancelled summarization still rewrote the conversation: %d → %d messages",
+		t.Fatalf("a canceled summarization still rewrote the conversation: %d → %d messages",
 			len(messages), len(e.Messages))
 	}
 }
 
 // The complement, so the test above cannot pass merely because this fixture
 // never triggers summarization. On a live context the same engine reaches the
-// API call and dies on its nil client — which is exactly the work a cancelled
+// API call and dies on its nil client — which is exactly the work a canceled
 // turn used to pay for.
 func TestSummarizeIfNeededOnALiveContextReachesTheAPICall(t *testing.T) {
 	e := &Engine{Messages: summarizableTranscript(40)}
@@ -79,7 +79,7 @@ func TestCompactContextStopsOnItsOwnCallersContext(t *testing.T) {
 
 	_, err := e.CompactContext(ctx, "")
 	if err == nil {
-		t.Fatal("CompactContext returned nil on a cancelled request context — " +
+		t.Fatal("CompactContext returned nil on a canceled request context — " +
 			"a client that hung up still paid for a summary")
 	}
 	if !errors.Is(err, context.Canceled) {

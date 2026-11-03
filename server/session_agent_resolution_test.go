@@ -51,7 +51,7 @@ func TestAChildKeyOnItsOwnNamesNoAgentAtAll(t *testing.T) {
 
 // The last resort must not invent a name. With no record and a key that cannot
 // be read, every caller reports the session as unknown; the old code would have
-// handed back "claxon" and run the turn under the default agent's neighbour.
+// handed back "claxon" and run the turn under the default agent's neighbor.
 func TestAnUnrecordedChildSessionResolvesToNothing(t *testing.T) {
 	server := &Server{store: tempStore(t)}
 

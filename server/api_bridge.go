@@ -770,7 +770,7 @@ func (g *Server) handleBridgeFork(w http.ResponseWriter, r *http.Request, id str
 // That is also why the field carries no omitempty: the tag cannot tell an empty
 // slice from a nil one and drops both, so a caller that marshals this struct to
 // build the request would send `{}` for the very request the handler was
-// written to honour. llm-bridge's msg.ConfigSessionRequest — the type
+// written to honor. llm-bridge's msg.ConfigSessionRequest — the type
 // bridge-server re-marshals on the way here — had exactly that tag, and the
 // re-enable-everything request arrived at this handler as an absent field.
 type ConfigRequest struct {

@@ -142,7 +142,7 @@ func TestEntriesWithoutUsageCarryNoStats(t *testing.T) {
 // Entry.TotalCost is the session's running total, re-reported on every turn. In
 // TurnStats.Cost — a per-turn field — a consumer summing it over a session
 // counts that session's cost once per turn. It stays in Metadata, where it is
-// labelled cumulative, and MaxUsage prices the tokens itself.
+// labeled cumulative, and MaxUsage prices the tokens itself.
 func TestCumulativeCostIsNotReportedAsTurnCost(t *testing.T) {
 	entry := Entry{
 		Timestamp:    time.Now(),
@@ -158,7 +158,7 @@ func TestCumulativeCostIsNotReportedAsTurnCost(t *testing.T) {
 		t.Errorf("Stats.Cost = %v, want 0 — Entry.TotalCost is cumulative, not this turn's", logEntry.Stats.Cost)
 	}
 	if logEntry.Metadata["cost_usd"] != 12.34 {
-		t.Errorf("Metadata[cost_usd] = %v, want the cumulative figure to stay where it is labelled", logEntry.Metadata["cost_usd"])
+		t.Errorf("Metadata[cost_usd] = %v, want the cumulative figure to stay where it is labeled", logEntry.Metadata["cost_usd"])
 	}
 }
 
@@ -221,7 +221,7 @@ func collectSessionEntries(t *testing.T, drive func(*Session)) []logstackmodels.
 	// Two waits, and they are different questions. The closing entry says the
 	// session is finished; the idle window says the turn entries that raced it
 	// have landed. Log is fire-and-forget on its own goroutine, so the closing
-	// entry regularly overtakes the turns it summarises — draining only up to it
+	// entry regularly overtakes the turns it summarizes — draining only up to it
 	// undercounts, which in this test would read as the defect being absent.
 	var entries []logstackmodels.LogEntry
 	deadline := time.After(10 * time.Second)

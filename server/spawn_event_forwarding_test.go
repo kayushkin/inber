@@ -25,7 +25,7 @@ func provenance(t *testing.T, ev StreamEvent) map[string]any {
 	return data
 }
 
-// TestForwarderWrapsChildProgressForTheParentStream pins the behaviour the
+// TestForwarderWrapsChildProgressForTheParentStream pins the behavior the
 // forwarder existed for: a sub-agent's own progress reaches the parent's stream
 // as an agent_update that says which session produced it.
 func TestForwarderWrapsChildProgressForTheParentStream(t *testing.T) {

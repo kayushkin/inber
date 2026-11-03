@@ -147,7 +147,7 @@ func autoSaveToMemory(
 // fragment of 11-20 bytes is kept by the truncator and refused here. Which
 // threshold is right, and whether these two functions are one question or two,
 // is open — todo 86347015-9924-40f4-99db-1d79c1e767ca. Nothing about the
-// behaviour below has changed.
+// behavior below has changed.
 func substantialLeadingFragments(text string, maxFragmentsScanned int) []string {
 	fragments := strings.FieldsFunc(text, func(r rune) bool {
 		return r == '.' || r == '!' || r == '?'

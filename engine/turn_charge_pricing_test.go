@@ -17,7 +17,7 @@ import (
 // The helper is pinned by fourteen assertions in session/timeline_cost_test.go,
 // and max_cost_wiring_test.go's TestTurnCostReachesTheGuard used to say in
 // prose that the price of a turn "belongs to the model registry and is pinned
-// by the cost tests in session/, not here". That handoff cannot be honoured.
+// by the cost tests in session/, not here". That handoff cannot be honored.
 // Those tests hand the helper a registry themselves; they cannot see whether
 // this caller passes e.modelStore or nil, because that argument is chosen here.
 // Measured before these tests were written: replacing e.modelStore with nil in

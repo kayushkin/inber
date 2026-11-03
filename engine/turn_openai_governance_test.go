@@ -57,7 +57,7 @@ import (
 // `APICallUsage.CachedTokensIncludedInInputTokens` to a report in
 // `recordTurnUsage`. Nothing prices it. That is not an oversight to port: OpenAI's
 // `prompt_tokens` INCLUDES the cached span where Anthropic's `input_tokens`
-// excludes it, so where the normalisation belongs is the open decision on
+// excludes it, so where the normalization belongs is the open decision on
 // `0d052752` and it is the owner's. The test below now pins the pricing half
 // only, and asserts the wire half as PRESENT so it cannot silently regress.
 //
@@ -289,7 +289,7 @@ func TestTheOpenAILoopPricesEveryCachedTokenAsFreshInput(t *testing.T) {
 	}
 	// 800 of those 1000 were cached and are still billed as if they were not:
 	// CalcCostWithCache is handed cacheRead=0 because nothing fills these.
-	// Whichever way the normalisation lands, it changes this assertion.
+	// Whichever way the normalization lands, it changes this assertion.
 	if result.CacheReadTokens != 0 || result.CacheCreationTokens != 0 {
 		t.Errorf("Anthropic cache counters reached the result (read=%d write=%d) — the cached span is being priced "+
 			"and the table above is stale", result.CacheReadTokens, result.CacheCreationTokens)

@@ -12,7 +12,7 @@ import "github.com/kayushkin/inber/agent"
 // That is a real defect, tracked as noteboard todo
 // e2d0b07b-5034-4f7d-b97f-2a534141dfc1; it needs a policy decision (reject a
 // duplicate at registration, or keep the first and warn), so this function
-// preserves the existing behaviour rather than guessing at it.
+// preserves the existing behavior rather than guessing at it.
 //
 // This loop used to exist twice — engine.initTools and buildEngineWithTiming —
 // so a fix to one left the other wrong.

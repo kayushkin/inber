@@ -24,7 +24,7 @@ func TestTurnContextDropsCallerCancellation(t *testing.T) {
 
 	select {
 	case <-turnCtx.Done():
-		t.Fatal("the caller hanging up cancelled the turn")
+		t.Fatal("the caller hanging up canceled the turn")
 	case <-time.After(50 * time.Millisecond):
 	}
 }

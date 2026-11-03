@@ -50,7 +50,7 @@ func NewWorkspace(baseDir, agentName string) *Workspace {
 
 // WriteSystem regenerates system/ from the given blocks, deleting whatever was
 // there. Anything a user put in that directory, edit or new file, is lost here;
-// see the type comment for why that is the behaviour and not a bug.
+// see the type comment for why that is the behavior and not a bug.
 func (w *Workspace) WriteSystem(blocks []NamedBlock) error {
 	sysDir := filepath.Join(w.Dir, "system")
 	// Remove old system dir and recreate

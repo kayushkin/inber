@@ -19,7 +19,7 @@ import (
 // of the process. N `new_session` calls leaked N engines' worth of file
 // descriptors on the same long-lived server the reaper exists to keep alive.
 //
-// The behavioural half is worse than the resource half. Engine.Close is what
+// The behavioral half is worse than the resource half. Engine.Close is what
 // calls SaveSessionSummary, which distils a finished conversation into memory.
 // Starting a fresh session is exactly the moment you would want the one you are
 // replacing summarized, and it was the one path that never did.

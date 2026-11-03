@@ -85,7 +85,7 @@ type OpenAIUsage struct {
 	// endpoint that caches reports the cached part here and nowhere else, so
 	// leaving it off the struct dropped it at the JSON boundary: nothing
 	// downstream could see it, and no measurement of this path's cache
-	// behaviour was possible even in principle.
+	// behavior was possible even in principle.
 	PromptTokensDetails OpenAIPromptTokensDetails `json:"prompt_tokens_details"`
 }
 

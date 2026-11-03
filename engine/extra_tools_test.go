@@ -40,9 +40,9 @@ func TestMergeExtraToolsReplacesInPlaceWithoutGrowing(t *testing.T) {
 }
 
 // A pre-existing duplicate in the base set survives the merge: the loop breaks
-// at the first match. This is the behaviour that ships, and the fix for it
+// at the first match. This is the behavior that ships, and the fix for it
 // needs a policy decision (noteboard todo e2d0b07b), so the test pins the
-// defect as present rather than asserting the behaviour we want.
+// defect as present rather than asserting the behavior we want.
 func TestMergeExtraToolsLeavesAPreExistingDuplicateInPlace(t *testing.T) {
 	base := []agent.Tool{
 		{Name: "read_files", Description: "first"},

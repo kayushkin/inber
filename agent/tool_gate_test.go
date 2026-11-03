@@ -21,7 +21,7 @@ func refuseTools(names ...string) func(tool, input string) string {
 }
 
 // TestARefusedToolNeverRuns is the property the whole gate exists for. A
-// refusal that still ran the tool and only relabelled the output would be no
+// refusal that still ran the tool and only relabeled the output would be no
 // gate at all, so the assertion is on the tool's own record of being called,
 // not on the text handed back.
 func TestARefusedToolNeverRuns(t *testing.T) {

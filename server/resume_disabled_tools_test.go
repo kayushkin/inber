@@ -55,7 +55,7 @@ func TestResumingASessionKeepsTheToolsItHadTakenAway(t *testing.T) {
 
 // TestResumingASessionThatReEnabledEverythingDoesNotTakeToolsBackAway. The
 // re-enable-everything request is an empty set, and a save that skipped it
-// would leave the earlier record in place — so the rebuild would honour a
+// would leave the earlier record in place — so the rebuild would honor a
 // request the caller had already withdrawn.
 func TestResumingASessionThatReEnabledEverythingDoesNotTakeToolsBackAway(t *testing.T) {
 	server := &Server{config: Config{DataDir: t.TempDir()}}

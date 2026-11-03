@@ -255,9 +255,9 @@ Pi, OpenCode and OpenClaw. Seven canonical subsystems, **29 recurring design pat
 recommendations, a 90-line minimum-viable-harness scaffold. Two absences hold across ~4M
 lines: **no runtime imports a general-purpose agentic framework, and none retrieves code
 with vector embeddings.** `SKILL.md` skills lead MCP 9/11 vs 8/11. A controlled one-quarter
-diff shows behavioural policy migrating from prompt prose into configuration.
+diff shows behavioral policy migrating from prompt prose into configuration.
 
-- **What inber should consider:** the 29-pattern catalogue is the largest external set
+- **What inber should consider:** the 29-pattern catalog is the largest external set
   `docs/comparisons/agentic-design-patterns.md` has had to check itself against — read it
   as a coverage audit of that file, not as a bullet. The no-embeddings finding validates
   `codeindex/`; the prose→config migration is an audit target for `engine/build.go`.
@@ -981,7 +981,7 @@ task a coding agent is scored on: real business records, a client holding requir
 production API, an inherited codebase, and serving-cost limits; the delivered agent is then
 deployed against held-out simulated users. Across **53 tasks in four domains** the strongest
 configuration — **Claude Opus 5 under Claude Code — passes 23.9%** against an expert-authored
-reference ceiling of **82.2%**. The named failure modes are behavioural, not capability limits:
+reference ceiling of **82.2%**. The named failure modes are behavioral, not capability limits:
 shallow queries instead of deep comprehension of the records, near-zero communication back to the
 client, and too little experimentation with architecture and serving spend — shipping the first
 design that runs.
@@ -1064,7 +1064,7 @@ HuggingFace blog, **"Give Your Coding Agents a Memory You Own"** (funes) —
 agent session traces into a searchable local store: traces from Claude Code, Codex, pi and Hermes
 normalized to one turn-and-block format, chunked, embedded with a pinned local model, written to
 a Lance dataset; retrieval fuses vector search with BM25, reranks with a cross-encoder, reweights
-by recency and pulls in neighbouring chunks. Two numbers worth carrying: on handoff-versus-recall
+by recency and pulls in neighboring chunks. Two numbers worth carrying: on handoff-versus-recall
 tasks, **recall was 8× cheaper than a written handoff on one task and 4× on another**, while
 **compaction failed outright on one of the two**; and on a 19,195-session corpus with 100 test
 questions, **hit@1 was 9/100 with a 30-day recency half-life and 19/100 with recency weighting
@@ -1108,8 +1108,8 @@ in `.inber/sessions.db`.
   (Throughput Paradox, Production-Qualified Change, Verification Tax, SDLC Control Plane) are
   decent vocabulary for writing up inber's cost story and nothing more.
 - **2609.04909** *Hallucination in LLM-based Automated Program Repair* — good numbers (**72.7%**
-  of 812 manually-analysed repairs contain repair hallucinations, including patches passing all
-  tests) but about APR model behaviour on Defects4J, not about anything a harness controls.
+  of 812 manually-analyzed repairs contain repair hallucinations, including patches passing all
+  tests) but about APR model behavior on Defects4J, not about anything a harness controls.
 - **2609.04629** *SiLR: Structure-Preserving Admission and Process Reward for LLM Tool Agents* —
   the closest thing here to a permission-model paper, with real results (21/21 vs 0/21 recovery;
   support-only admits **63.2% of 42,410 unsafe actions** where the product order admits 0).
@@ -1406,7 +1406,7 @@ once at turn start) means the whole turn. A recall that only ever **appends** �
 the block at the tail as a fresh observation rather than restoring it in place — costs
 ordering fidelity and keeps the prefix. That trade is the decision, and nothing here settles it.
 
-## 5. The tool list is a prior, not a catalogue
+## 5. The tool list is a prior, not a catalog
 
 [arXiv:2609.09395](https://arxiv.org/abs/2609.09395) — **The Menu Is an Execution Prior:
 State-Path Tool Menus for Online Agents** (2026-09-08, cs.AI, EMNLP 2026 Main). On ToolBench,

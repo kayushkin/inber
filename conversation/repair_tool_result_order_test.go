@@ -138,7 +138,7 @@ func TestRepairKeepsRealResultsAheadOfTextToo(t *testing.T) {
 			Role: anthropic.MessageParamRoleUser,
 			Content: []anthropic.ContentBlockParamUnion{
 				{OfToolResult: &anthropic.ToolResultBlockParam{ToolUseID: "tool-1"}},
-				anthropic.NewTextBlock("and then summarise them"),
+				anthropic.NewTextBlock("and then summarize them"),
 			},
 		},
 	}

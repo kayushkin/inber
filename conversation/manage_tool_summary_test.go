@@ -8,7 +8,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// A pruned tool result used to be labelled by sniffing its content, and the
+// A pruned tool result used to be labeled by sniffing its content, and the
 // first guess — "more than five lines means a shell command" — swallowed
 // everything else. A file read must be reported as a file read.
 func TestPrunedResultNamesTheToolThatProducedIt(t *testing.T) {
@@ -16,10 +16,10 @@ func TestPrunedResultNamesTheToolThatProducedIt(t *testing.T) {
 	summary := summarizeToolResult("read_files", content)
 
 	if !strings.HasPrefix(summary, "[read_files:") {
-		t.Fatalf("a read_files result was summarised as %q", summary)
+		t.Fatalf("a read_files result was summarized as %q", summary)
 	}
 	if strings.Contains(summary, "shell") {
-		t.Fatalf("a read_files result was labelled shell: %q", summary)
+		t.Fatalf("a read_files result was labeled shell: %q", summary)
 	}
 }
 
@@ -34,7 +34,7 @@ func TestEverySummaryKeepsBothCounts(t *testing.T) {
 		{"memory_search", "found 3 results\nresults follow\nfirst\nsecond"},
 		{"write_files", "wrote 4096 bytes to /tmp/out"},
 		{"web_fetch", strings.Repeat("a paragraph of prose fetched from the web. ", 10)},
-		{"", "an unpaired result with no tool_use to name it, padded out past a hundred bytes so it is summarised"},
+		{"", "an unpaired result with no tool_use to name it, padded out past a hundred bytes so it is summarized"},
 	}
 	for _, c := range cases {
 		summary := summarizeToolResult(c.name, c.content)
@@ -52,7 +52,7 @@ func TestEverySummaryKeepsBothCounts(t *testing.T) {
 func TestUnpairedResultIsNamedAsUnknown(t *testing.T) {
 	summary := summarizeToolResult("", "exit code 0\nand five\nmore\nlines\nof\noutput\n")
 	if !strings.HasPrefix(summary, "[tool result:") {
-		t.Fatalf("an unpaired result was summarised as %q", summary)
+		t.Fatalf("an unpaired result was summarized as %q", summary)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestSummaryLabelIsAlwaysTheToolName(t *testing.T) {
 			content := strings.TrimSuffix(strings.Repeat(body+"\n", lines), "\n")
 			summary := summarizeToolResult("shell_commands", content)
 			if !strings.HasPrefix(summary, "[shell_commands: ") {
-				t.Fatalf("%d lines of %q summarised as %q", lines, body, summary)
+				t.Fatalf("%d lines of %q summarized as %q", lines, body, summary)
 			}
 		}
 	}

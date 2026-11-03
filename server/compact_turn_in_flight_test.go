@@ -154,7 +154,7 @@ func TestCompactDoesNotRaceALiveTurn(t *testing.T) {
 }
 
 // runTurnAsFarAsATestCanTakeIt drives the real Session.turn and swallows the
-// one failure that is an artefact of the test rather than of the code.
+// one failure that is an artifact of the test rather than of the code.
 //
 // A turn on an engine built in a test reaches the provider and dereferences a
 // client nothing configured, because there are no credentials here and there

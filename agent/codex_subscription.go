@@ -184,7 +184,7 @@ func responsesRequestFromChatCompletion(request OpenAIRequest) (map[string]any, 
 		case "tool":
 			// A call's images go in its output with its text, which the
 			// subscription endpoint accepts (checked 2026-10-31: given a 32px
-			// red square there, gpt-5.6-terra named its colour).
+			// red square there, gpt-5.6-terra named its color).
 			var output any = text
 			if len(message.ToolResultImages) > 0 {
 				parts := []any{map[string]any{"type": "input_text", "text": text}}

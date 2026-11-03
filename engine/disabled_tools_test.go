@@ -48,7 +48,7 @@ func TestDisablingASecondToolDoesNotKeepTheFirstOneHidden(t *testing.T) {
 	e.SetDisabledTools([]string{"write_files"})
 	if got, want := enabledNames(e), []string{"read_files", "shell"}; !equal(got, want) {
 		t.Errorf("after asking for write_files alone to be disabled: got %v, want %v — "+
-			"the set is cumulative, so shell stayed hidden and the request was not honoured", got, want)
+			"the set is cumulative, so shell stayed hidden and the request was not honored", got, want)
 	}
 }
 

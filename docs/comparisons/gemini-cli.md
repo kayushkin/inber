@@ -12,7 +12,7 @@
 
 - **Chapters survive as a tool the model calls.** There is no boundary heuristic or classifier: the model calls `update_topic` with a title and a 5-10 sentence summary when it starts a new "Chapter (logical phase)" (`packages/core/src/tools/topicTool.ts`, declaration in `packages/core/src/tools/definitions/dynamic-declaration-helpers.ts`). That answers this doc's closing question: chapter intent is agent-emitted.
 - **Subagents, local and remote.** `packages/core/src/agents/` has a subagent registry and scheduler, built-in agents (`generalist-agent`, `codebase-investigator`, `cli-help-agent`, `skill-extraction-agent`) and remote agents over A2A (`a2a-client-manager.ts`, `remote-invocation.ts`).
-- **Auth**: Google sign-in (OAuth, including Code Assist licences), Gemini API key, or Vertex AI.
+- **Auth**: Google sign-in (OAuth, including Code Assist licenses), Gemini API key, or Vertex AI.
 - **Unchanged basics**: `GEMINI.md` context files, checkpointing, token caching, MCP servers, extensions, custom commands, sandboxing, trusted folders, headless mode.
 
 inber has no Gemini path. It calls Anthropic natively and OpenAI-compatible endpoints (`engine/turn_openai.go`), so a Gemini model would need an OpenAI-compatible endpoint.

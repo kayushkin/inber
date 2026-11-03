@@ -30,11 +30,11 @@ func generateSummary(
 	maxTokens int,
 ) (summary string, cutOffAtTokenLimit bool, err error) {
 	// Stop before the round-trip, not during it. The SDK would reject a
-	// cancelled context anyway, but only after building the request and opening
+	// canceled context anyway, but only after building the request and opening
 	// the connection, and a caller that has already been told to stop should not
 	// be assembling a prompt out of the whole transcript to do it.
 	if err := ctx.Err(); err != nil {
-		return "", false, fmt.Errorf("summarization cancelled before the API call: %w", err)
+		return "", false, fmt.Errorf("summarization canceled before the API call: %w", err)
 	}
 
 	systemPrompt := `You are an expert at summarizing conversations between a user and an AI assistant.

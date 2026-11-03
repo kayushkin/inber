@@ -165,7 +165,7 @@ func TestANon200StatusReachesTheWarning(t *testing.T) {
 }
 
 // An unreachable registry is reported, and the name check goes off rather than
-// on. The fail-open behaviour is asserted so that changing it is a decision
+// on. The fail-open behavior is asserted so that changing it is a decision
 // somebody has to make against a red test, not a silent drift.
 func TestAnUnreachableRegistryIsReportedAndLeavesTheCheckOpen(t *testing.T) {
 	srv, _ := routingRegistry(t, http.StatusOK, "application/json", inberAgentsBody)

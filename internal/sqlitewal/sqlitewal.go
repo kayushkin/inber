@@ -36,7 +36,7 @@ const JournalMode = "WAL"
 // ConnectionDSN builds the connection string for a database at dbPath.
 //
 // modernc.org/sqlite only understands _pragma=NAME(VALUE); it silently ignores
-// DSN keys it does not recognise, so a mattn-style ?_journal_mode=WAL&_busy_timeout=5000
+// DSN keys it does not recognize, so a mattn-style ?_journal_mode=WAL&_busy_timeout=5000
 // applies neither pragma and reports no error.
 //
 // journal_mode is deliberately not in here with busy_timeout. The driver

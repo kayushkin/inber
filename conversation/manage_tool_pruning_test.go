@@ -17,7 +17,7 @@ func TestTruncateToolCallRendersRawMessageInputAsText(t *testing.T) {
 		OfToolUse: &anthropic.ToolUseBlockParam{
 			ID:    "toolu_01",
 			Name:  "spawn_agent",
-			Input: json.RawMessage(`{"agent":"brigid","task":"summarise the release notes"}`),
+			Input: json.RawMessage(`{"agent":"brigid","task":"summarize the release notes"}`),
 		},
 	}
 

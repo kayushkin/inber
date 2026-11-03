@@ -11,7 +11,7 @@ import (
 
 // statusToolWithStore builds the agents_status tool over a real, empty
 // agent-store. Empty matters: ListStatuses on an empty store answers with a
-// recognisable sentence, so a test can tell the roster path from an error
+// recognizable sentence, so a test can tell the roster path from an error
 // without needing to seed rows.
 func statusToolWithStore(t *testing.T) (func(string) (string, error), *agentstore.Store) {
 	t.Helper()

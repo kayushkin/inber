@@ -9,7 +9,7 @@ import (
 	"github.com/kayushkin/inber/logger"
 )
 
-// Serve starts the HTTP API server. Blocks until ctx is cancelled.
+// Serve starts the HTTP API server. Blocks until ctx is canceled.
 func (g *Server) Serve(ctx context.Context) error {
 	if g.config.SettingsHandler == nil {
 		return errors.New("serve: no settings handler: the command must set Config.SettingsHandler")

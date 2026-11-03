@@ -108,30 +108,30 @@ func TestTheTwoTurnLoopsShareOneCapValue(t *testing.T) {
 	}
 }
 
-// TestAnOpenAIServedTurnStopsWhenItsContextIsCancelled. Cancellation did reach
+// TestAnOpenAIServedTurnStopsWhenItsContextIsCanceled. Cancellation did reach
 // the in-flight request, so this was never a wedged-forever bug — but the loop
 // checked nothing at its head, so a cancel arriving between calls was noticed
 // only by the next paid request failing. The cancel must end the turn at the
 // top of the iteration, before another call is built.
 //
 // The cancel fires from inside the TOOL, not from inside the request, and the
-// difference is the whole test. Cancelling mid-request kills the round trip, so
+// difference is the whole test. Canceling mid-request kills the round trip, so
 // the loop returns "OpenAI API call failed: context canceled" from the error
 // path and the head check is never reached — an earlier draft of this test
 // passed that way and proved nothing. A stop button pressed while a tool is
 // running leaves the loop to arrive at its own head with a live conversation
 // and a dead context, which is the state the guard exists for.
-func TestAnOpenAIServedTurnStopsWhenItsContextIsCancelled(t *testing.T) {
+func TestAnOpenAIServedTurnStopsWhenItsContextIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	f := newAlwaysToolCallingOpenAI(t)
-	e := openAIEngine(t, f.engineClientHost(), cancellingTool("spin", cancel))
+	e := openAIEngine(t, f.engineClientHost(), cancelingTool("spin", cancel))
 
 	result, err := e.runOpenAITurn(ctx, nil)
 
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("a cancelled turn returned %v, which recordModelHealth cannot tell from a provider failure", err)
+		t.Fatalf("a canceled turn returned %v, which recordModelHealth cannot tell from a provider failure", err)
 	}
 	if strings.Contains(err.Error(), "OpenAI API call failed") {
 		t.Fatalf("the turn ended because a later request failed, not because the loop noticed the cancel: %v", err)
@@ -140,7 +140,7 @@ func TestAnOpenAIServedTurnStopsWhenItsContextIsCancelled(t *testing.T) {
 		t.Errorf("the provider was called %d times, want 1 — the loop built another paid call after the stop", got)
 	}
 	if !strings.Contains(result.Text, "stopped") {
-		t.Errorf("a cancelled turn reported %q, so the stop is invisible to the user", result.Text)
+		t.Errorf("a canceled turn reported %q, so the stop is invisible to the user", result.Text)
 	}
 }
 
@@ -158,9 +158,9 @@ func TestTheCapDoesNotOverwriteAnAnswerTheTurnAlreadyHas(t *testing.T) {
 	}
 }
 
-// cancellingTool stops the turn from inside a tool call, the way a stop button
+// cancelingTool stops the turn from inside a tool call, the way a stop button
 // pressed while a tool is running does.
-func cancellingTool(name string, cancel context.CancelFunc) agent.Tool {
+func cancelingTool(name string, cancel context.CancelFunc) agent.Tool {
 	return agent.Tool{
 		Name:        name,
 		Description: name,

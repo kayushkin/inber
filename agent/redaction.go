@@ -39,7 +39,7 @@ func ArmEgressRedactor(environment []string, keys ProviderCredentials) {
 }
 
 // newEgressRedactor is the redactor ArmEgressRedactor installs: the secrets in
-// environment, and each configured provider key labelled by its provider.
+// environment, and each configured provider key labeled by its provider.
 func newEgressRedactor(environment []string, keys ProviderCredentials) *redact.Redactor {
 	redactor := redact.NewFromEnvironment(environment)
 	for provider, key := range map[string]string{

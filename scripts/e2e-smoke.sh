@@ -179,7 +179,7 @@ step "SANDBOX: the pid-file lock must have landed in the TEMP data dir"
 # place it resolves to is the live one, whose pid file names the live server.
 # Assert it here, loudly, rather than discovering it from a dead prod process.
 [ -f "$DATA_DIR/inber.pid" ] \
-  || fail "no pid file at $DATA_DIR/inber.pid — data_dir was NOT honoured, and this process may have taken the LIVE lock"
+  || fail "no pid file at $DATA_DIR/inber.pid — data_dir was NOT honored, and this process may have taken the LIVE lock"
 LOCKED_PID="$(cat "$DATA_DIR/inber.pid")"
 [ "$LOCKED_PID" = "$SERVER_PID" ] \
   || fail "the temp pid file names $LOCKED_PID, not our server ($SERVER_PID)"
@@ -193,7 +193,7 @@ HARNESSES=$(curl -fsS --max-time 10 "$BASE/harnesses") || fail "GET /harnesses f
 echo "    $(jq -c . <<<"$HARNESSES")"
 
 step "GET /api/memory — must be EMPTY (proves we are on a fresh temp memory DB)"
-# A nil slice serialises as `null` here, not `[]` — so accept either, but nothing
+# A nil slice serializes as `null` here, not `[]` — so accept either, but nothing
 # else. A non-empty list means we opened a REAL memory database.
 MEMS=$(curl -fsS --max-time 10 "$BASE/api/memory?agent=$AGENT") || fail "GET /api/memory failed"
 COUNT=$(jq -r 'if . == null then 0 else length end' <<<"$MEMS")
@@ -213,11 +213,11 @@ echo "    created memory id=$MEM_ID"
 # The memory DB is the workspace's, not the data dir's. If this file is absent,
 # workspaceForAgent() gave back something other than our temp workspace.
 [ -f "$WORKSPACE/.inber/memory.db" ] \
-  || fail "no memory db at $WORKSPACE/.inber/memory.db — the agent's workspace was not honoured"
+  || fail "no memory db at $WORKSPACE/.inber/memory.db — the agent's workspace was not honored"
 
 step "GET /api/memory/{id} — read the write back out of SQLite"
 # ⚠ memory-store's Memory struct carries NO json tags (memory-store/memory.go:11),
-# so inber serialises it with Go FIELD NAMES: .Content, .Tags, .Importance —
+# so inber serializes it with Go FIELD NAMES: .Content, .Tags, .Importance —
 # capitalised. It is NOT the lowercase DTO that memory-store's own HTTP server
 # returns. Read the struct; never guess the wire shape.
 GOT=$(curl -fsS --max-time 10 "$BASE/api/memory/$MEM_ID?agent=$AGENT") || fail "GET /api/memory/$MEM_ID failed"

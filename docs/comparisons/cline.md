@@ -192,7 +192,7 @@ recoverable** — refresh and retry once before bubbling a failure the parent mu
 to a human. All three failure modes only appear once delegates run *long and parallel*,
 which is exactly inber's target regime.
 
-## Harness-watch — 2026-07-31: cancelling a turn must reach the *process group*, resume must restore the state *derived from* the transcript, and compaction should be a projection whose fingerprint ignores transport identity
+## Harness-watch — 2026-07-31: canceling a turn must reach the *process group*, resume must restore the state *derived from* the transcript, and compaction should be a projection whose fingerprint ignores transport identity
 
 ### 1. The shell/cancel contract — and inber's interrupt is wired to a context nothing observes
 

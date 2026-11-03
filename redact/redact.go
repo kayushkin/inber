@@ -19,7 +19,7 @@
 // spans and sends everything else through untouched: a redactor that could
 // refuse a call would be a second, unreviewed way for a turn to die.
 //
-// Two kinds of secret are recognised:
+// Two kinds of secret are recognized:
 //
 //   - Literals — credentials this process actually holds: the values of its
 //     secret-looking environment variables, plus every provider key it
@@ -249,7 +249,7 @@ func sanitizeLabel(label string) string {
 	return cleaned
 }
 
-// builtinPatterns are credential shapes recognised wherever they appear, so a
+// builtinPatterns are credential shapes recognized wherever they appear, so a
 // key inber never held is still caught. Each is anchored on a vendor prefix
 // and a length no ordinary word reaches, because a shape match has no second
 // piece of evidence behind it.
@@ -314,7 +314,7 @@ func marker(label string) string {
 	return fmt.Sprintf("[redacted: %s]", label)
 }
 
-// RedactString removes every recognised secret from s and reports what it
+// RedactString removes every recognized secret from s and reports what it
 // removed. The result is deterministic: the same input always produces the
 // same output, which is what lets a redacted prompt prefix stay byte-identical
 // across turns and keep its cache hit.

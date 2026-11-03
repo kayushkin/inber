@@ -167,7 +167,7 @@ func TestAConversationTooShortToSummarizeKeepsItsFrozenBoundary(t *testing.T) {
 }
 
 // pruneIfNeeded is the next line after summarizeIfNeeded in both callers, and it is
-// the reader that turns a stale boundary into behaviour. This drives the real pair in
+// the reader that turns a stale boundary into behavior. This drives the real pair in
 // the real order and pins that the second one does not repair the first — a flush
 // would, by calling Flush(FreezePoint), but a flush is three turns away by default,
 // so the wrong boundary governs the turns in between.

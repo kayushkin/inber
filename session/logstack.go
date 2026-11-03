@@ -119,7 +119,7 @@ func (e Entry) reportsSessionCumulativeTotals() bool {
 //
 //   - Cost: Entry.TotalCost is the session's running total, not this turn's, so
 //     any consumer summing it over a session would count the session's cost
-//     once per turn. It stays in Metadata where it is labelled cumulative.
+//     once per turn. It stays in Metadata where it is labeled cumulative.
 //     MaxUsage prices the tokens itself, so nothing observable is lost.
 //   - DurationMs and ToolCalls: session.Entry carries neither.
 //
@@ -159,7 +159,7 @@ func (e Entry) toLogstackEntry(agentName, sessionID string) logstackmodels.LogEn
 	// TokensIn/TokensOut are deprecated on logstack's model, but FileStore.Stats
 	// still sums them, and it is the one reader with no type filter — so this is
 	// the pair that actually double-counts a session. They go the same way as
-	// Stats. The cumulative figures stay in Metadata, where they are labelled.
+	// Stats. The cumulative figures stay in Metadata, where they are labeled.
 	tokensIn, tokensOut := e.InputTokens, e.OutputTokens
 	if e.reportsSessionCumulativeTotals() {
 		tokensIn, tokensOut = 0, 0

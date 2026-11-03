@@ -23,7 +23,7 @@ const (
 )
 
 // startBridgeSessionReaper launches the background reaper goroutine.
-// It returns immediately; the goroutine shuts down when ctx is cancelled.
+// It returns immediately; the goroutine shuts down when ctx is canceled.
 func (g *Server) startBridgeSessionReaper(ctx context.Context) {
 	ttl := g.config.BridgeSessionTTL
 	if ttl == 0 {

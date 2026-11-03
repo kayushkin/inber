@@ -23,7 +23,7 @@ func OpenDB(repoRoot string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("open sessions db: %w", err)
 	}
 	// busy_timeout alone does not stop modernc surfacing SQLITE_BUSY to concurrent
-	// writers; a single connection serialises them. Safe here: this package uses no
+	// writers; a single connection serializes them. Safe here: this package uses no
 	// transactions, so nothing can hold the connection while waiting for another.
 	db.SetMaxOpenConns(1)
 

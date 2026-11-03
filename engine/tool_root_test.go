@@ -70,7 +70,7 @@ func TestAnInjectedReplacementOfABuiltInToolIsRooted(t *testing.T) {
 }
 
 // A session with no root — inber started somewhere that is not a repository —
-// keeps the behaviour it has always had rather than being given a guess.
+// keeps the behavior it has always had rather than being given a guess.
 func TestASessionWithNoRootLeavesToolArgumentsAlone(t *testing.T) {
 	var recorded string
 	e := &Engine{}

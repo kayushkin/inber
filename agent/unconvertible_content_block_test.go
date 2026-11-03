@@ -15,7 +15,7 @@ import (
 // one. Building the fixture through the SDK rather than writing a
 // ContentBlockUnion literal is deliberate: the defect is what the SDK does with
 // a frame, so a hand-built block would be a fixture derived from the conclusion
-// and would keep passing if Accumulate's behaviour changed underneath it.
+// and would keep passing if Accumulate's behavior changed underneath it.
 func accumulateFrames(t *testing.T, rawFrames []string) (*anthropic.Message, []error) {
 	t.Helper()
 	var accumulated anthropic.Message
