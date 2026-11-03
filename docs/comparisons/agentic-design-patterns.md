@@ -1937,12 +1937,12 @@ kills orphans. Both leave exactly the mid-turn state cline lost.
 > is the part still worth running on paths this pass did not walk.
 
 [cline #12702](https://github.com/cline/cline/pull/12702) is the sharpest instance of this class in a
-long time, and the payload is one line of behaviour. A legacy single-file `.clinerules` at the
+long time, and the payload is one line of behavior. A legacy single-file `.clinerules` at the
 workspace root — the format long-time users still have — sits where the unified config watcher
 expects a *directory*, so scanning `.clinerules/skills` throws `ENOTDIR`, and that error aborted the
 whole refresh in `discoverRulesLikeFiles`. Consequence: **workspace rules, global rules and
 `AGENTS.md` were all silently ignored in every task.** A fresh task answered "NO RULES PRESENT"
-while the same setup on the old extension honoured both project and global rules; the only signal
+while the same setup on the old extension honored both project and global rules; the only signal
 was one log line. The fix treats `ENOTDIR` like `ENOENT`. Its sibling landed the same week —
 [cline #12260](https://github.com/cline/cline/pull/12260), where `parseKeyPairsIntoRecord` wrapped
 its whole `forEach` in one `try/catch` with an empty body, so a single un-decodable entry dropped
@@ -1967,7 +1967,7 @@ is nil. The trigger is not exotic: `memory-store/builder.go:62-64` returns the e
 `s.db.Query`, the store is a single-writer SQLite pool, and a `SQLITE_BUSY` under concurrent
 sessions is enough. So a transient lock makes the agent forget who it is for exactly one turn, then
 recover — while also changing every system block and so destroying the cached prefix, meaning the
-failure is a behaviour change *and* a cost spike. Note the contrast one function down:
+failure is a behavior change *and* a cost spike. Note the contrast one function down:
 `memory-store/builder.go:75-78` already skips a bad **row** with `continue`, the per-entry tolerance
 cline moved to; it is the whole-query failure that is all-or-nothing at the caller. Two decisions
 worth naming rather than silently picking, since they differ in blast radius: fail the turn loudly,
@@ -2433,7 +2433,7 @@ so `Engine.Close()` (`engine/engine.go:453-484`) never runs, which skips per lea
 `MemStore.Close()`, `SessionDB.Close()`, `forgeDB.Close()`, `Session.Close()` (JSONL writers) — and
 `SaveSessionSummary(e.MemStore, e.Messages, e.AgentName)` at `:463-465`. Go's `sql.DB` has no
 finalizer, so those descriptors are held for the process lifetime; N `new_session` calls leak N
-engines on the same long-lived `inber-server` the reaper exists to keep from OOMing. The behavioural
+engines on the same long-lived `inber-server` the reaper exists to keep from OOMing. The behavioral
 half is worse than the resource half: `SaveSessionSummary` is what distils a finished conversation
 into memory, and **starting a fresh session is precisely when you want the old one summarized** —
 it is the one path that never does. Note the second-order question #36389 also raises: `new_session`
@@ -2448,7 +2448,7 @@ types in `codex-sandboxing`, emitted through one tracing channel, classified by 
 **reason**, carrying an optional path and a bounded output snippet, plus a sandbox-type field on
 exec-server responses so a *remote* denial can be classified rather than guessed. It is recorded
 across every enforcement path (exec, apply-patch, shell escalation, unified exec, managed network)
-and explicitly **does not change denial behaviour** — it only makes the denial a typed, named
+and explicitly **does not change denial behavior** — it only makes the denial a typed, named
 record, because filesystem denials and network blocks previously surfaced in different shapes and
 every consumer downstream parsed backend-specific output to learn anything had been denied at all.
 
@@ -2601,14 +2601,14 @@ comment says "regardless of success/failure" — and `engine/failover.go:97-98` 
 `err` to `modelStore.RecordError`. Three of the errors reaching it are not provider failures:
 `agent/agent.go:284` returns `ctx.Err()` on **user cancellation**, `:293` returns inber's own local
 `exceeded max API calls (50)` cap, and `:393` returns `unexpected stop reason` (model/protocol
-behaviour — `refusal`, `pause_turn`, `stop_sequence` all land there). model-store marks a model
+behavior — `refusal`, `pause_turn`, `stop_sequence` all land there). model-store marks a model
 unhealthy the moment `LastErrorAt` is after `LastSuccessAt` — a single error flips it, no threshold
 — and `engine/failover.go:41-53` then fails over. Because model-store is a **host-shared SQLite
 store**, one user pressing stop in dash degrades model selection for every other inber session on
 the box until some session records a success, and the log line reads `model X is unhealthy (last
 error: context canceled)` — a provider outage report naming a user action. cline's one `recoverable`
 bit is not enough here; inber needs at least three classes (provider/infrastructure, model
-behaviour, local policy or cancel), because only the first is evidence about a *model*.
+behavior, local policy or cancel), because only the first is evidence about a *model*.
 
 ### 3. "Sent" is not "accepted" — a submission is admitted when some turn takes ownership of it
 
@@ -2813,7 +2813,7 @@ so inber's own context-management failure marks a healthy model unhealthy for ev
 session on the box, and `selectModel` then fails over, possibly to a model with a
 *smaller* window, which cannot fix an over-long prompt. This is the same class the
 function was written to exclude, and it is a fourth error class beyond the three the
-2026-08-02 entry asked for: not provider, not model behaviour, not local policy, but
+2026-08-02 entry asked for: not provider, not model behavior, not local policy, but
 **a fault in inber's own context assembly**.
 
 ### 2. A fallback is legitimate only when scoped to "this is not the endpoint I asked for" — inber's spawn validation fails open on a registry outage
@@ -2912,7 +2912,7 @@ produced two copies.
 
 **Correction to the framing this sweep started with, recorded so the next one does not
 repeat it:** this is *not* a prompt-cache fix. Neither the PR body nor the diff mentions
-caching, and world-state fragments are **appended**, so the old behaviour bloated the
+caching, and world-state fragments are **appended**, so the old behavior bloated the
 tail and put two contradictory-looking permission blocks in context rather than
 invalidating a cached prefix. Read it as context hygiene and single-ownership, and note
 that the same PR's sibling [#36815](https://github.com/openai/codex/pull/36815) — which
@@ -2971,7 +2971,7 @@ shipped the structured-snapshot answer to it.
   do the refresh, debounced 300 ms per server per list kind, looking the connection up
   **fresh by name when the timer fires** so it is safe across delete/reconnect races.
 - **Rejected this window, so the next sweep does not re-triage:** codex #36787 (model-
-  instruction SSoT refactor; the one real behaviour change is that a model with no
+  instruction SSoT refactor; the one real behavior change is that a model with no
   template now gets *empty* instructions rather than a silent default — the right
   direction, and inber has no template registry), #36830 (code-mode transport timeout),
   #36809 (state-db-first `exec resume --last`; the id-match guard against a stale index
@@ -3248,7 +3248,7 @@ the exact thing #10030 and #10937 exist to prevent.
   is filed twice on noteboard (*"a duplicated tool name puts two definitions on the wire
   and dispatches to the second"*, *"tool names are load-bearing control flow, and no name
   is reserved"*). Re-verified: `engine/extra_tools.go:19-41` handles extras-vs-base
-  explicitly **and logs a warning**, which is better than codex's pre-#36954 behaviour;
+  explicitly **and logs a warning**, which is better than codex's pre-#36954 behavior;
   the unhandled case is duplicates *within* the base set (`engine/build_tools.go:24-45`,
   no dedupe on an unvalidated `AgentConfig.Tools` list). The MCP dimension stays moot —
   `tools/mcp` still has zero non-test importers.
@@ -3299,7 +3299,7 @@ share 7% → 63%, cached tokens per request 26% → 85%. The rule goose landed i
 **Responses-stack models keep turn-context stationary on the user message it first arrived on;
 everything else keeps the #10937 relocation.**
 
-**inber already has the restored behaviour on Anthropic, and this changes what the open todo
+**inber already has the restored behavior on Anthropic, and this changes what the open todo
 should do.** `agent/agent_run.go:92-121` injects `VolatileContext` into the last user message
 once per turn and clears the field, so the block stays where it landed and the tool loop's own
 prefix is byte-stable — stationary, which is #10993's rule, not #10937's. Anthropic's cache is
@@ -3400,12 +3400,12 @@ the two providers disagree about what the input count *contains*. Anthropic's `i
 `prompt_tokens` as `inTok` alongside `cached_tokens` as `cacheRead` double-charges the cached
 span — which is the mirror image of the bug the comment at `session/timeline_cost.go:30-43`
 records inber already shipped once, and closed as `00093e48`. So the decision is where the
-inclusive→exclusive normalisation happens: in the conversion (making `anthropic.Usage` mean one
+inclusive→exclusive normalization happens: in the conversion (making `anthropic.Usage` mean one
 thing everywhere, at the cost of a lossy transform in a layer that is supposed to be
 transparent), or in the cost function (which then needs to know which provider produced the
 numbers it was handed, and today it does not).
 
-### 4. The session's configured caps and the mid-turn injection channel are attached inside `buildAgent` — so the OpenAI turn honours neither
+### 4. The session's configured caps and the mid-turn injection channel are attached inside `buildAgent` — so the OpenAI turn honors neither
 
 [codex #37114](https://github.com/openai/codex/pull/37114) adds per-session execution limits to
 code mode; the transferable part is only that a limit belongs to the *session*, not to whichever
@@ -3588,7 +3588,7 @@ Three live consequences, each verified in code:
   reaches the switch. If a placeholder key is stored to get past that guard, the request POSTs to a
   bare `/chat/completions` with no host. The 2026-08-03 cline entry already reasoned about ollama's
   timeout on this path; that reasoning was about a provider that cannot currently be selected.
-- **zhipu is invented at `:143-144` and honoured nowhere.** `guessProvider` returns it for `glm-*`
+- **zhipu is invented at `:143-144` and honored nowhere.** `guessProvider` returns it for `glm-*`
   and `zai/*` ids; it is absent from the client switch, the env-key map and the base-URL switch, so
   it falls through the `:97` catch-all to `NewOpenAIClient("")` — the same hostless POST.
 
@@ -4001,7 +4001,7 @@ deadline, written down next to the code that has none.
 **What a fix would have to decide:** what a timeout *means* here. Killing a `git push` mid-transfer
 is safe; killing `git commit` between index and ref update is the partial-state class todo
 `321d7d49` already fought in this exact function, so one deadline for all six call sites is the
-wrong shape and a per-verb budget is a judgement about which verbs may be interrupted. Filed
+wrong shape and a per-verb budget is a judgment about which verbs may be interrupted. Filed
 together with §1 — one helper, one `cmd`, one fix site.
 
 ### 3. Checked and NOT worth a finding — recorded so the next sweep does not re-walk them
@@ -4073,7 +4073,7 @@ rather than a policy.
 
 **What inber should consider — and what a fix would have to decide:** whether an unresolvable root
 is a *session-creation failure* (return the error `setupRepoRoot` already has a slot for, and let
-`createSession` refuse) or a *degraded mode* that is explicitly modelled — in which case the
+`createSession` refuse) or a *degraded mode* that is explicitly modeled — in which case the
 degradation has to be enforced, not implied: no auto-commit, no unrooted file tools. Do not pick by
 default. Refusing loudly will break any agent whose config has no `workspace` and which today runs
 on cwd inference, and how many of those exist on a given host is a fact about deployment, not about
@@ -4118,7 +4118,7 @@ new data pointer with the old length gets a garbage slice. `go test -race` will 
 sets the semantics. An `atomic.Pointer[Config]` swapped whole gives every in-flight request a
 consistent snapshot of the registry it started with; an `RWMutex` around the two fields is smaller
 but lets one request read a pre-reload agent map and a post-reload default. Todo `54a046c8` already
-asks the neighbouring question — whether a running session should see a config edit at all — and
+asks the neighboring question — whether a running session should see a config edit at all — and
 whichever way that lands constrains this. Filed.
 
 ### 4. Checked and NOT worth a finding
@@ -4494,7 +4494,7 @@ inber's version of the hole is already written up at `agentic-design-patterns.md
 as noteboard `9e31d359` — `server/spawn.go:224` and `server/session_forking.go:47` pass a zero
 `RunRequest`, `guard.ParseMode("")` yields `Unset`, and `guard/guard.go:38-44` documents `Unset` as
 full access. Not re-filed; that todo owns it. What #38205 adds is the contract to fix it *to*, which
-the existing entry lacked: **the failing behaviour is the default, not the inheritance** — so the fix
+the existing entry lacked: **the failing behavior is the default, not the inheritance** — so the fix
 is to make spawn state a policy, not to make it inherit the parent's.
 
 Read it alongside `claude-code.md:335-339`, which measures the layer beneath: `guard.CheckTool` has
@@ -4533,7 +4533,7 @@ for `9e31d359` rather than work of its own.
 
 [goose #11179](https://github.com/block/goose/pull/11179) stamps `disable_prompt_cache` on the
 fast-model config behind `complete_fast` (compaction, session naming, tool-pair summaries,
-orchestrator routing), and every breakpoint site honours it: the Anthropic format skips the tools,
+orchestrator routing), and every breakpoint site honors it: the Anthropic format skips the tools,
 system and last-two-user-message breakpoints, the three `apply_chat_payload_breakpoints` callers
 (Databricks-Claude, OpenRouter, LiteLLM) skip theirs, and Bedrock skips `cachePoint`. The reasoning
 is the idea worth keeping: these calls summarize a payload that **never recurs**, so the entry
@@ -4697,7 +4697,7 @@ policy contributor pays nothing.
 - **[codex #38394](https://github.com/openai/codex/pull/38394)** (a *required* managed hook that
   fails to load kills the session; an optional one warns — identical failure, severity chosen by the
   declaring layer) — a refinement of the fail-closed thread at `:1488` and `:4026`, not its own idea.
-- **[codex #38445](https://github.com/openai/codex/pull/38445)'s neighbours** — #38456 (thread queue
+- **[codex #38445](https://github.com/openai/codex/pull/38445)'s neighbors** — #38456 (thread queue
   APIs) is `:3451-3452` and open as todo `5320b48f`; #38414 (bounded Guardian transcript) is `:4354`
   plus `:1733`; #38424 and #38390 are instances of `:4026` and `:1623`.
 - **[cline #13230](https://github.com/cline/cline/pull/13230) / [#13231](https://github.com/cline/cline/pull/13231)**
@@ -4890,7 +4890,7 @@ and acting on the remembered answer**:
   instructions — it spans the rest of the scan plus the eviction loop. `s.close()` → `s.stop()`
   (`server/session.go:329-336`) cancels the live turn and `s.Engine.Close()` (`:342`) tears the
   engine down. A bridge session that was idle when scanned and receives work before eviction reaches
-  it has that turn cancelled and its row deleted, logged as `reaped … idle bridge session(s)`.
+  it has that turn canceled and its row deleted, logged as `reaped … idle bridge session(s)`.
 - `server/session_release.go:43-53` has the same shape in a few instructions, and its own log line
   at `:48-49` already describes the outcome ("its engine is left open rather than closed under the
   turn, and it leaks").
@@ -4922,7 +4922,7 @@ deny-read is rejected, and a recursive glob rooted at a filesystem root is rejec
 **Checked against inber, and the analogous path is clean.** `guard.New` is unconditional
 (`engine/engine.go:205`), so there is no "a guard was requested and could not be built" state that
 degrades to the nil which `buildToolRefusal` reads as ungated (`engine/build_hooks.go:89-92`). The
-one place inber genuinely cannot honour a request — no client for the selected model — does not
+one place inber genuinely cannot honor a request — no client for the selected model — does not
 collapse the two either: `resolveModelClient` (`engine/model_client.go:34-55`) returns the model
 actually in force, logs the substitution with both names, and `turn_execute.go:23` records health
 against what really ran. Recorded as a shape to keep, with no action.
@@ -4985,7 +4985,7 @@ compatibility**. The bug it names is that a client's permission setting was "dis
 notification". [codex #38916](https://github.com/openai/codex/pull/38916) is the same defect with
 the opposite remedy — a legacy `:project_roots` token read as unknown "can drop filesystem
 restrictions", so it is aliased rather than refused. Together they state the rule: **a setting that
-bears on behaviour must never be silently treated as absent — alias it or refuse it, but do not
+bears on behavior must never be silently treated as absent — alias it or refuse it, but do not
 ignore it.**
 
 **inber ignores one, and then advertises the capability it did not wire.** The chain is four files
@@ -5082,7 +5082,7 @@ streaming tag parser, which buffered every delta while a tag candidate stayed am
 re-scanned the accumulated suffix per chunk — an unterminated quoted attribute from a hostile
 *provider* (note the threat model: the upstream model API, not the user) gave unbounded heap plus
 superlinear CPU. The cap is `MAX_BUFFERED_THINK_TAG_BYTES = 8 * 1024`, and the design substance is
-the overflow behaviour: **"overflow is preserved as malformed text rather than silently discarded."**
+the overflow behavior: **"overflow is preserved as malformed text rather than silently discarded."**
 The cheap fix — drop the buffer at 8 KiB — would have traded a denial of service for silent content
 loss. It also releases the spiked allocation rather than leaving it at high-water mark, a trap that
 exists identically for Go slices.
@@ -5106,7 +5106,7 @@ references it, and `README.md:35` / `ARCHITECTURE.md:20` list the "MCP adapter" 
 anyway. That gap is the same defect as §1 in a second subsystem, and it is why the scanner bug has
 never been observed. **What inber should consider:** whoever settles the §1 delete-or-wire question
 should settle this one in the same pass, and if the answer is *wire*, the scanner needs a `Buffer`
-call **and** an overflow behaviour chosen on goose's criterion — a bound that silently truncates a
+call **and** an overflow behavior chosen on goose's criterion — a bound that silently truncates a
 tool result is the failure this corpus already rejects at
 [codex #38621/#38645](https://github.com/openai/codex/pull/38621) (transport-layer size caps
 mangling tool errors before they reach the host). Note the framing correction the two make together:
@@ -5138,7 +5138,7 @@ reader can see**, not inherited from a library default.
   overlap, and no-safe-location is a hard error rather than a fallback into the writable area. No
   inber surface today; inber writes no editor scratch buffer.
 - **[codex #38899](https://github.com/openai/codex/pull/38899)** — a 42-line type relocation with no
-  behaviour change, listed only because its one claim is the banal-but-real one: a type belongs in
+  behavior change, listed only because its one claim is the banal-but-real one: a type belongs in
   the crate that owns the concept, not the crate that reads config.
 - **[codex #38650](https://github.com/openai/codex/pull/38650)** (canonicalize default namespaces in
   gRPC subscription filters) — trivial, and the same shape as #38916 on a non-security path:
@@ -5152,7 +5152,7 @@ reader can see**, not inherited from a library default.
   returns 200). Older links in this corpus still resolve; new ones should use the new path. All three goose PRs this window are
   remediations of findings from an automated audit bot ("Project Loupe"), which shows in their
   shape — narrow resource-exhaustion fixes with heavy test matrices. Weight them accordingly as
-  evidence of human design judgement.
+  evidence of human design judgment.
 
 ## Harness-watch — 2026-08-18: past the classifier's edge is dangerous, not unknown; a redirect is a fresh authorization decision; and a write nobody checks makes the disk lie about the conversation
 
@@ -5267,7 +5267,7 @@ describes messages that are not there". **Filed as a todo.**
 **What inber should consider:** logging is the floor, not the decision. The open question is
 ordering, and it is the same one three entries in this file have now reached from different sides:
 if the transcript write fails, should the turn counter and guard state be written anyway? Writing
-them is the current behaviour and it is the one that loses the most; skipping them keeps the three
+them is the current behavior and it is the one that loses the most; skipping them keeps the three
 records consistent but silently discards a real spend, which the ceiling exists to prevent. There
 is a third answer — write the counter and guard state **first**, so a torn persist over-counts
 rather than under-counts — and that is the direction this corpus has taken before (2026-08-12,
@@ -5344,7 +5344,7 @@ in that block mentions the cache consequence — `engine/head_drop_frozen_bounda
 a different bug in the same lines.
 
 **No finding, and the near-miss is the point.** Two claims in this file have previously overstated
-what the code did; this one was checked by running it. The one behaviour worth knowing about is the
+what the code did; this one was checked by running it. The one behavior worth knowing about is the
 mirror image: inside a **single** long tool loop the backstop stops firing entirely, because
 `dropTo` walks to `len(messages)` without finding a user turn and the `dropTo < len(messages)` guard
 fails — 60 round-trips in one turn leaves 121 messages against a cap of 40. That is not a defect
@@ -5479,7 +5479,7 @@ already handles the create race with `LoadOrStore`. **What a fix must decide:** 
 /sessions` builds the engine eagerly, allocating a model client and a workspace for a session that may
 never be sent to, or whether the read paths fall back to the store row — the second turns `GET
 /sessions` from "live sessions" into "every session ever recorded", which is a different endpoint from
-the one that exists. `auto_start` is the caller's own vote and should be honoured or removed.
+the one that exists. `auto_start` is the caller's own vote and should be honored or removed.
 
 ### 3. The redactor was scoped to "what inber sends to a model provider", and tool arguments leave by three other doors
 
@@ -5550,9 +5550,9 @@ the decision, not the wiring.
   required to cite specific evidence per objection, plus a pass that rejects unsupported agreement —
   not a third agent for its own sake.
 
-## Harness-watch — 2026-08-21: a request context is cancelled when the handler returns, so every sub-agent inber accepts over HTTP is enqueued under a dead context — measured, half are refused outright; and the one delete that bounds the tool-input cache sits behind a hook a failed call never reaches
+## Harness-watch — 2026-08-21: a request context is canceled when the handler returns, so every sub-agent inber accepts over HTTP is enqueued under a dead context — measured, half are refused outright; and the one delete that bounds the tool-input cache sits behind a hook a failed call never reaches
 
-### 1. `POST /api/spawn` hands the async spawn goroutine a context net/http has already cancelled
+### 1. `POST /api/spawn` hands the async spawn goroutine a context net/http has already canceled
 
 Not an upstream finding — this one came out of reading `server/spawn.go` while checking codex #39792's
 subagent-settings hypothesis, and it is the sharpest thing in this sweep.
@@ -5568,8 +5568,8 @@ returns** — so by the time the goroutine has done its `CreateRequest` write, i
 **Measured, not inferred.** Two probes:
 
 - `net/http` cancellation: a handler that captures `r.Context()`, spawns a goroutine, and returns — the
-  goroutine found the context already cancelled **200 times out of 200**.
-- `Queue.Enqueue` with an already-cancelled caller context: with a **free** lane slot both select arms are
+  goroutine found the context already canceled **200 times out of 200**.
+- `Queue.Enqueue` with an already-canceled caller context: with a **free** lane slot both select arms are
   ready, so Go's uniform pseudo-random choice refuses **103 of 200** runs; with the lane **saturated** it
   refuses **every** time, because `ctx.Done()` is the only arm that can proceed.
 
@@ -6034,7 +6034,7 @@ tool _id_ on this exact path** — `internal/toolid/toolid.go:24`, called at
 
 | Upstream | What landed | Where it would go in inber |
 |---|---|---|
-| [codex #40174](https://github.com/openai/codex/pull/40174) / [#40177](https://github.com/openai/codex/pull/40177) / [#40180](https://github.com/openai/codex/pull/40180) | Classification travels *with* the rendered fragment to the API boundary — `ContentItemKind` as an open-ended string, unknown values preserved, malformed treated as absent; every contextual fragment must supply a stable `<feature>.<name>` kind | inber's producers already mint stable ids and the consumer discards them one hop later: `server/session_context.go:92-94` returns `NamedBlock{ID: "agent-fleet"}`, `:134-136` `{ID: "server-sessions"}`, then `engine/turn_prompt.go:140-148` keeps only `.Text` and `:153` flattens everything into one `"[Context]\n"` blob, inserted unlabelled into the last user message at `agent/agent_run.go:99-117`. Make `NamedBlock` (`session/prompts.go:8`) the rendered fragment and carry `ID` through. Distinct channel from the filed injection-principal defect `ceedbf75`, and cheaper because the ids already exist |
+| [codex #40174](https://github.com/openai/codex/pull/40174) / [#40177](https://github.com/openai/codex/pull/40177) / [#40180](https://github.com/openai/codex/pull/40180) | Classification travels *with* the rendered fragment to the API boundary — `ContentItemKind` as an open-ended string, unknown values preserved, malformed treated as absent; every contextual fragment must supply a stable `<feature>.<name>` kind | inber's producers already mint stable ids and the consumer discards them one hop later: `server/session_context.go:92-94` returns `NamedBlock{ID: "agent-fleet"}`, `:134-136` `{ID: "server-sessions"}`, then `engine/turn_prompt.go:140-148` keeps only `.Text` and `:153` flattens everything into one `"[Context]\n"` blob, inserted unlabeled into the last user message at `agent/agent_run.go:99-117`. Make `NamedBlock` (`session/prompts.go:8`) the rendered fragment and carry `ID` through. Distinct channel from the filed injection-principal defect `ceedbf75`, and cheaper because the ids already exist |
 | [codex #40161](https://github.com/openai/codex/pull/40161) / [#40150](https://github.com/openai/codex/pull/40150) | `--thread-source` set at creation, never overridden on resume; the classifier then reads it and *deletes* the two ad-hoc booleans it replaces | `server/store.go:246-255` already writes a `kind` at creation with `ON CONFLICT DO UPDATE SET last_active` only — upstream's set-once semantics for free. Three values are written (`"main"`, `"spawn"`, `"fork"`) and the only reader is a list scan at `server/store.go:450`. No gate, prompt or limit consults it. It is the natural key for the permission floor open todo `9e31d359` needs. The type comment at `server/store.go:222` still says `"main" \| "spawn"` and is already stale |
 | [codex #40021](https://github.com/openai/codex/pull/40021) | The tool call's cancellation token propagates *into* the approval review, so interrupting a tool aborts its pending review | `agent/agent.go:110` declares `ToolRefusal func(tool, input string) string` — no `context.Context` — and `agent/chain.go:388-394` calls it inside a loop that has `ctx` in scope. Latent today (nothing sets `ApprovalFunc`, per `engine/build_hooks.go:85-88`), but `guard/guard.go:115-118` anticipates an approver that "blocks on a person". Adding `ctx` is two lines now and a breaking change once an approver exists |
 | [goose #11425](https://github.com/block/goose/pull/11425) | The visibility predicate must be applied to *every* catalog derived from the tool list, before hashing/registration — not just the inference one | inber's one derived catalog is prose, not schema: `loadToolsIntoMemory` (`engine/engine_new.go:409-435`, called once at `:629`) writes every tool name and description into memory-store as an `AlwaysLoad`, truncation-exempt memory. See §6 — this one *is* a live defect, held back only by the cap |
@@ -6152,7 +6152,7 @@ open: whether `saveSpawnToMemory` should store the error at all, given
 - [goose #11381](https://github.com/block/goose/pull/11381) (suppress sensitive OTLP traces) — `trace/trace.go:106-119` is a stub whose `RecordTurn` only appends in memory and whose `WriteSummary` is a `TODO` returning nil. The redaction-scope point is already §3 of the 2026-08-22 entry.
 - [goose #11415](https://github.com/block/goose/pull/11415) (bind ACP permissions to request generations) — there is no approver to over-scope; `opencode.md:614`.
 - [cline #13418](https://github.com/cline/cline/pull/13418) — already at `cline.md:761-764`: `server/session.go:178` `s.Status = Error` is a dead store overwritten by the defer at `:168`. Re-read, still true, not re-filed.
-- [cline #13419](https://github.com/cline/cline/pull/13419) — `Turn.Counter` and `staged.FrozenIdx` **are** restored via `RestoreSession` (`engine/engine_new.go:670-691`), so `cline.md:249-282` is stale in inber's favour. Separately, `session.LoadMessages` (`session/resume.go:30-136`) has **zero non-test callers**, as does `LoadMessagesFromDir` (`:179`) — dead path, no finding. Worth a name sweep: `session.LoadMessages` and `(*Workspace).LoadMessages` are two different functions in one package with one name, and the comment at `session/workspace.go:29` credits the wrong one.
+- [cline #13419](https://github.com/cline/cline/pull/13419) — `Turn.Counter` and `staged.FrozenIdx` **are** restored via `RestoreSession` (`engine/engine_new.go:670-691`), so `cline.md:249-282` is stale in inber's favor. Separately, `session.LoadMessages` (`session/resume.go:30-136`) has **zero non-test callers**, as does `LoadMessagesFromDir` (`:179`) — dead path, no finding. Worth a name sweep: `session.LoadMessages` and `(*Workspace).LoadMessages` are two different functions in one package with one name, and the comment at `session/workspace.go:29` credits the wrong one.
 - [dexto #907](https://github.com/truffle-ai/dexto/pull/907) — already at `dexto.md:354-358`.
 
 One increment to a documented item, too small for its own entry: §3 of the
@@ -6179,7 +6179,7 @@ Two properties make it more than telemetry.
 
 **It is required at construction.** `#40177` changes `PromptFragment::new`,
 `developer_policy` and `developer_capability` to *take* `content_kind` as a parameter —
-there is no way to build an unlabelled fragment. The same PR then deletes two `PromptSlot`
+there is no way to build an unlabeled fragment. The same PR then deletes two `PromptSlot`
 variants (`ContextualUser`, `SeparateDeveloper`): once every fragment declares its kind,
 the slot no longer has to encode it structurally.
 
@@ -6275,7 +6275,7 @@ set is a hazard the type system does not express — which is the general form o
   the mixed message itself at `engine/turn_openai.go:167-175`, which appends the
   post-write-hook text into the *same* user message as the tool results. `conversation/repair.go:208-221`
   documents this exact rule as measured against the live API and prepends synthesized
-  results to honour it; the OpenAI converter breaks it four files away.
+  results to honor it; the OpenAI converter breaks it four files away.
 - **The assistant branch of `FilterMessagesForAnthropic` has no empty-message guard.**
   `agent/openai_conversion.go:320-327` appends a `MessageParam` even when every block was
   filtered out; the user branch at `:339-345` has the `len(newBlocks) > 0` guard it lacks.
@@ -6444,7 +6444,7 @@ against that claim produced.
 Todo `24bdb603-ed00-4d57-9cb5-bf0df1e0d5b3`. Exposed by goose
 [#10500](https://github.com/block/goose/pull/10500).
 
-`findTurnBoundary` (`conversation/message_utils.go:47`) initialises `splitAt := 0`
+`findTurnBoundary` (`conversation/message_utils.go:47`) initializes `splitAt := 0`
 at `:53` and assigns it in exactly one place — inside `if turns >= keepTurns` at
 `:60`. So a transcript with **fewer than `keepTurns` user turns returns 0 however
 many messages it holds**. `StartsUserTurn` (`conversation/message_utils.go:29-41`)
@@ -6566,7 +6566,7 @@ isolation") was closed pointing at `ceedbf75` as the filed defect, so a curator
 has already folded the isolation question into it once.
 
 Recorded here so the axis is not lost: **`ceedbf75` asks what a message is
-labelled; #40464 asks whether the caller was allowed to send it, and a correct
+labeled; #40464 asks whether the caller was allowed to send it, and a correct
 label on an unauthorized injection is still an unauthorized injection.** Whoever
 takes `ceedbf75` should decide explicitly whether ownership is in scope, and the
 choice to name is what "own" means — descendants-only, self-and-descendants, or a
@@ -6584,7 +6584,7 @@ nothing, and completion is hard-routed to the spawn-time parent at
 result". So agent A steering agent B produces work delivered to *B's* parent while
 A gets a bare "Message injected into %s mid-turn" and never hears again. That is
 latent today and becomes a defect the moment the ownership question is answered
-in favour of allowing cross-subtree steers. One field — the originating session
+in favor of allowing cross-subtree steers. One field — the originating session
 key on the injected message — serves both this and `ceedbf75`'s principal label;
 it should not become a second parallel mechanism.
 
@@ -6601,7 +6601,7 @@ it should not become a second parallel mechanism.
   `engine/engine.go:395-401`. So `{"disabled_tools":["shell_command"]}` — the
   singular typo, and `guard/guard.go:314-316` records that tool-store really did
   rename `write_file` → `write_files` once — leaves `shell_commands` on the wire
-  and returns 200. Held back deliberately as well as by the cap: the behaviour is
+  and returns 200. Held back deliberately as well as by the cap: the behavior is
   *documented* at `engine/engine.go:360-362` ("An unknown name is not an error.
   The set is a filter over the tools this session holds, not a registry"), and
   that rationale is real, so filing it as a defect would decide a stated design
@@ -6614,7 +6614,7 @@ it should not become a second parallel mechanism.
   one package over: `guard.ParseMode` (`guard/mode.go:16-27`) errors on an unknown
   mode *and* returns `Observe` on the error path, so a caller who ignores the
   error still lands strict.
-- **A non-empty configured tool list is authoritative, and every unrecognised name
+- **A non-empty configured tool list is authoritative, and every unrecognized name
   in it is dropped without a word.** cline
   [#13476](https://github.com/cline/cline/pull/13476) /
   [#13465](https://github.com/cline/cline/pull/13465) landed the same polarity
@@ -6707,7 +6707,7 @@ cap skip.
   `agentic-design-patterns.md:3922-3949` with an open todo.
 - **codex #40488, #40486, #40496, #40465** are analytics and metrics only —
   #40496's "control tools" turns out to be a telemetry classification with no
-  behavioural split, which is worth saying because the title reads like a
+  behavioral split, which is worth saying because the title reads like a
   permission model. **#40460, #40447, #40443, #40499, #40398, #40508/#40509,
   #40501, #40450** are runtime/Windows/CI plumbing or further ContentItemKind
   work already covered by the 08-24 entry at line 6151.
@@ -6845,7 +6845,7 @@ an operator reading model-store sees, and the same string is the input to
 `errorIsEvidenceAboutTheModel` (`failover.go:166`) and to the overflow-substring
 match named by open todo *"a byte-size request-limit error matches none of the
 four overflow substrings"* — so a truncation point chosen carelessly can turn a
-recognised error into an unrecognised one. **A fix must decide whether the cap
+recognized error into an unrecognized one. **A fix must decide whether the cap
 lands at the read, at the error construction, or at the store, and only the first
 is free.**
 
@@ -6891,13 +6891,13 @@ is free.**
   because sanitizing a keyspace can *merge* two distinct identifiers, and the
   surviving value is whichever the map iteration order handed over last.
   `internal/toolid/toolid.go:12-17` describes exactly this hazard for inber's own
-  tool-id normaliser (`"call:1"` and `"call.1"` both become `"call_1"`) and
+  tool-id normalizer (`"call:1"` and `"call.1"` both become `"call_1"`) and
   records the choice as open on todo
   `c114a30b-acc0-4c0f-8d0f-00761348dea9`. Upstream chose **refuse over resolve**,
   with the argument that refusing to execute beats silently picking. That is a
   precedent for the todo, not a decision made here. They also split
   `strip_unicode_tags` (filter only) from `sanitize_unicode_tags`
-  (NFC-normalise, then filter) and used *strip* on schemas, because NFC on a key
+  (NFC-normalize, then filter) and used *strip* on schemas, because NFC on a key
   is itself a silent contract change that can manufacture the collision.
 - **goose #11449's tri-state hook verdict.**
   [#11449](https://github.com/block/goose/pull/11449) replaces
@@ -6951,7 +6951,7 @@ is free.**
   group so it doesn't bust cache on redeploy"*, and `BuildSystemPrompt`
   (`:59-72`) documents the two destinations that enforce it. Worth recording as a
   thing inber gets right. The half worth borrowing is
-  `redactRemoteUrlCredentials` — they recognised that pushing remote URLs into a
+  `redactRemoteUrlCredentials` — they recognized that pushing remote URLs into a
   prompt leaks embedded tokens — which is the same hazard as goose #11148 above.
 - **cline [#13498](https://github.com/cline/cline/pull/13498) /
   [#13522](https://github.com/cline/cline/pull/13522)** widen MCP auto-approval
@@ -7027,7 +7027,7 @@ is free.**
   provider work) instead of the tool id (the unit of iteration). Checked against
   inber's compaction: `toolNamesByUseID` (`conversation/manage_tool_pruning.go:13`)
   builds a map and `pruneToolResult` runs per block, so there is no per-tool-id
-  provider call to duplicate — inber's summarisation is one call over a range,
+  provider call to duplicate — inber's summarization is one call over a range,
   not one per pair. The rejected half of that PR is the transferable lesson:
   review killed the version that drained all eligible calls because each costs a
   serial provider completion. *Do not unbound a loop whose body is a network
@@ -7102,7 +7102,7 @@ is free.**
   `server/api_sessions_history.go:233`) are unbounded in the same way and equally
   unmeasured; measuring is the prerequisite, not the fix.
 - **codex [#40692](https://github.com/openai/codex/pull/40692)** deletes a
-  hand-rolled dual-WebSocket transport (+153/−2766) in favour of gRPC/HTTP2,
+  hand-rolled dual-WebSocket transport (+153/−2766) in favor of gRPC/HTTP2,
   which already multiplexes — a negative result worth recording. Its incidental
   fix is the transferable one: a silent catch-all that *assumed* any non-http
   scheme was WebSocket, which had also skipped credential validation, so
@@ -7120,7 +7120,7 @@ is free.**
   `edit_files`, which is open todo `af237d64` and already documented at
   `harness-control-matrix.md:108`. Recorded here so that whoever re-arms it knows
   the re-arming must add a context and an output bound in the same change —
-  `engine/engine.go:237-244` promises that cancelling a turn stops its running
+  `engine/engine.go:237-244` promises that canceling a turn stops its running
   tool, and these four would not be stopped.
 - **codex [#40665](https://github.com/openai/codex/pull/40665)** (turn trigger
   metadata) and **[#40709](https://github.com/openai/codex/pull/40709)** (rename)
@@ -7128,7 +7128,7 @@ is free.**
   lines and type positions.
 - **opencode**, whole window: `#45061` (recover legacy migration history by
   reconstructing identity from a `strftime` timestamp prefix, and `Effect.die` on
-  an unrecognised one rather than guessing) is the only PR with design content,
+  an unrecognized one rather than guessing) is the only PR with design content,
   and inber has no migration journal to recover. Everything else is Zen billing,
   console streaming, provider slug rewriting and docs.
 - **claude-code**, ten CHANGELOG commits spanning 2.1.236–2.1.246, with no 2.1.242
@@ -7211,7 +7211,7 @@ bypasses `AddChainAndSidebandFields`.
 
 **The claim, stated once:** *a default of "harmless" is a decision nobody made.
 A classifier, a capability set or an inherited value that answers "safe" for the
-inputs it does not recognise has not classified them — it has approved them.*
+inputs it does not recognize has not classified them — it has approved them.*
 
 ### 2. Filed: the read-cache classifier has a completeness test, and it cannot see the seven tools the server injects
 
@@ -7631,7 +7631,7 @@ asks it anything. **The fix is not decision-free**, which is why it is filed: th
 constructor runs before `initModelClient` so ordering must move or a setter must
 exist, and `engine/turn_execute.go:23` reassigns `e.Model` on every failover, so
 "the session's model" has to be defined as the configured one, the per-turn one,
-or abolished in favour of pricing per entry. codex #41162 chose per-step. It is
+or abolished in favor of pricing per entry. codex #41162 chose per-step. It is
 still a choice.
 
 ### 3. Filed: a stopped session runs the whole turn anyway
@@ -7641,7 +7641,7 @@ still a choice.
 `stop()` (`server/session.go:328-335`) is documented as marking a session
 "completed (terminal)" and does two things: cancel `s.cancel` **if it is
 non-nil**, and set `Status = Completed`. `Session.turn` (`server/session.go:145-151`)
-is the only function that would have to honour that, and its first act under the
+is the only function that would have to honor that, and its first act under the
 lock is `s.Status = Running`, unconditionally. `Completed` is read nowhere in any
 run path — grep finds it in `String()` (`server/session.go:31`) and one bridge
 state mapping (`server/api_bridge.go:1001`). For a session that is not already
@@ -7650,7 +7650,7 @@ mid-turn, `stop()` is a status write that the next turn erases.
 The context does not save it. `withoutCallerCancellation` (`server/session.go:134`)
 is `context.WithoutCancel` plus the caller's deadline, and `WithoutCancel` strips
 a cancellation that has **already fired** — so a child whose parent context is
-already cancelled gets a live context with a fresh deadline.
+already canceled gets a live context with a fresh deadline.
 
 The cascade is not the missing piece. `StopSession` (`server/session_management.go:87-99`)
 copies `s.Children` and recurses; it reaches the child and calls `child.stop()`,
@@ -7662,7 +7662,7 @@ per-session mutex and the `subagent` lane semaphore (`server/queue.go:44-53`,
 concurrency 8 by default). A child queued behind a busy lane sits there for as
 long as its siblings take. The only thing that might refuse it is that queue's
 `select` racing the semaphore against `<-ctx.Done()`, and Go picks uniformly when
-both are ready: measured over 1000 iterations with an already-cancelled context
+both are ready: measured over 1000 iterations with an already-canceled context
 and a free lane, **480 ran anyway, 520 were refused.**
 
 So a user who stops an orchestrator with three queued sub-agents gets a 200, an
@@ -8115,7 +8115,7 @@ list, which said it "should be the first thing the next run files". It is.
 
 **What a fix must decide:** whether `AgentRole` is a closed enum that agent-store
 validates on write — which makes 28 rows wrong today and needs a migration — or a
-substring match like its neighbour, which makes the tier assignment depend on
+substring match like its neighbor, which makes the tier assignment depend on
 prose nobody edits with tiers in mind. Two rules over one field is the defect;
 picking one is the fix. A third answer is legitimate: delete the unreachable tiers
 so the single default is honest and nobody re-derives a tier that never ran.
@@ -8398,7 +8398,7 @@ systemd pins to `~/repos/inber` (`deploy/systemd/*`, `WorkingDirectory=__HOME__/
 
 **Not a duplicate of `aace7fc1`**, which owns the *lock* on `:194`/`:196` and says explicitly that
 it is about the tear, not the contents; nor of `0e0a1245`, which owns `setupRepoRoot` returning
-`("", nil)` for the `$HOME` case. This is the third thing in that neighbourhood: two builders, one
+`("", nil)` for the `$HOME` case. This is the third thing in that neighborhood: two builders, one
 map, different answers.
 
 **What a fix must decide.** Either (a) delete the fallback, and make an empty workspace a refusal
@@ -8516,7 +8516,7 @@ bumps (`#13675`), shared UI components (`#13567`), Windows signing (`#13021`). g
 removal (`#11650`), canonical models json (`#11641`), AGENTS.md structure (`#11614`), docs
 (`#11597`, `#11592`, `#11565`, `#11564`), release bumps (`#11542`, `#11547`), desktop provider save
 (`#11517`, taken above), issue automation (`#11345`). opencode: docs, console, stats and provider
-catalogue throughout (`#46213`, `#45269`, `#45221`, `#45042`, `#38395`). aider, roo-code and dexto:
+catalog throughout (`#46213`, `#45269`, `#45221`, `#45042`, `#38395`). aider, roo-code and dexto:
 no commits in the window.
 
 ## Harness-watch — 2026-08-31: a cache entry is a bet you should be allowed to size, and a record that knows why the turn ended is worth nothing if the replay never asks — goose made the Anthropic prompt-cache TTL configurable and then clamped it away from the surfaces that cannot win the bet, and inber's history endpoint replays 99 of 265 requests as a question with no answer while the same file emits `msg.EventError` on the live path eighty lines above
@@ -8831,7 +8831,7 @@ case. It reads `s.Children`, recurses depth-first, and only then stops itself. T
 real and it works.
 
 What has no cascade is the *return path*. A stopped child's work closure runs on past its
-cancelled turn, computes `status = "error"`, and calls `g.deliverResult`
+canceled turn, computes `status = "error"`, and calls `g.deliverResult`
 (`server/spawn.go:417`). That lands in `server/spawn_delivery.go:101`:
 
 ```go
@@ -9032,7 +9032,7 @@ default id is part of the same question.
   or model-feature list to empty. Only the *shape* of the bug transfers, which is §2.
 - **Already open, recorded so they are not refiled.** A child stopped before its turn starts runs
   anyway (`7de193b1` — this is §1's twin at the entry point). Every sub-agent accepted over
-  `POST /api/spawn` enqueued under a context `net/http` has already cancelled (`656ff657`). The
+  `POST /api/spawn` enqueued under a context `net/http` has already canceled (`656ff657`). The
   session log priced at the flat unknown-model rate (`79e0551c`, still true — 328 rows in
   `.inber/sessions.db`, every one with an empty `model`). An empty tool allowlist meaning *all*
   tools (`83e084f8` — seven unshelved agents have zero rows in `agent_harness_tools` and run with
@@ -9129,12 +9129,12 @@ bounded, and it must die with its caller.**
   capture off the command critical path, gated on the turn's *resolved* configuration rather
   than its request. A failed speculative capture "remains retryable by actual commands
   without consuming retry budgets" — the optimist can never spend the pessimist's retries —
-  and outstanding prewarming is cancelled at shutdown.
+  and outstanding prewarming is canceled at shutdown.
 - **[#42146](https://github.com/openai/codex/pull/42146)** resolves permission paths against
   *the executor that will run the command* — its home, workspace roots and temp dirs —
-  rejecting mismatched conventions outright rather than normalising them into something
+  rejecting mismatched conventions outright rather than normalizing them into something
   plausible, and retaining the originating environment beside a pending request so a delayed
-  answer normalises the way the question did. The rule: **a path is only a permission if you
+  answer normalizes the way the question did. The rule: **a path is only a permission if you
   also know whose filesystem it names.**
 
 **What inber should consider:** the coalescing half has no analog —
@@ -9166,7 +9166,7 @@ Shutdown RETURNED at 3.82s
 
 `run()`'s defers then fire LIFO — `cancel()` (`cmd/inber-server/main.go:109`),
 `pidFile.Release()` (`:102`), `g.Close()` (`:95`) — 2.7 seconds before the turn finishes.
-Three costs. The in-flight turn is cancelled when the listener closes, so the graceful window
+Three costs. The in-flight turn is canceled when the listener closes, so the graceful window
 is effectively zero and `persistSessionState` never runs for it — tool calls the turn already
 made leave side effects with no transcript record. Its request and usage rows are written to
 a closed `*sql.DB`, since `Server.Close()` (`server/server.go:166-184`) shuts `g.store`,
@@ -9187,10 +9187,10 @@ it. `cline.md` is corrected in place; the todo is cross-referenced from the new 
 genuinely unbounded, and `deploy/systemd/inber-server.service.template` sets no
 `TimeoutStopSec` — so an unbounded wait converts a slow turn into a SIGKILL of the whole
 process group, strictly worse than today's bounded cancel. A bounded `Shutdown(ctx)` needs a
-number, and that number is a judgement about how long a turn may hold up a deploy. (b)
+number, and that number is a judgment about how long a turn may hold up a deploy. (b)
 *Ordering inside `Server.Close()`*, which currently cancels turns and closes the stores those
 turns write to, with no persist. Persisting first records a conversation a live turn is still
-appending to — the unlocked-`Engine.Messages` race owned by todo `3f157f67`. Cancelling first
+appending to — the unlocked-`Engine.Messages` race owned by todo `3f157f67`. Canceling first
 loses everything since the last persist. The defer order is picking this today; whoever fixes
 shutdown must pick it deliberately.
 
@@ -9856,7 +9856,7 @@ But the shape has two known instances here already —
 `writesNamedPaths` (`agent/read_cache.go:227-249`), whose partition is pinned by
 `TestEveryToolIsNamedByTheReadCacheInvalidationRules`. Both are already guarded
 in the direction that fails open. Nothing new to file; the entry is here so the
-next reader recognises the shape rather than re-deriving it.
+next reader recognizes the shape rather than re-deriving it.
 
 ### cline #13744: imported history has to survive being sent back to a provider
 
@@ -9952,7 +9952,7 @@ pending requests so an aborted turn leaves no answerable ghosts.
 
 goose [#11383](https://github.com/aaif-goose/goose/pull/11383) is the same theme
 in a config file: two processes each held an in-memory `permission.yaml`
-snapshot, and the second writer serialised its **older** map over the newer one,
+snapshot, and the second writer serialized its **older** map over the newer one,
 silently restoring a permission the user had revoked. The fix is lock → reload
 from disk under the lock → atomic replace, with symlinked targets replaced
 rather than the link. Stated invariant: *an unrelated permission update from a
@@ -9989,7 +9989,7 @@ costume**, and this host has several such files (agent-store, permission-store).
 - **codex [#43524](https://github.com/openai/codex/pull/43524) — capabilities
   scoped to a host-owned identity.** `userVerification` is advertised only to
   the host-owned apps MCP server, and requests from any other server are
-  cancelled before the client is prompted — **explicitly including servers that
+  canceled before the client is prompted — **explicitly including servers that
   reuse the hosted apps *name***. Paired with
   `get_chatgpt_account_user_id()` returning nothing when the claim is missing or
   the workspace does not match, rather than the next-best id. Both halves are
@@ -10213,7 +10213,7 @@ and *new*. Refuse the third, count the second, wait for both.
 
 **inber's side, and why it is not filed.** `server/queue.go:43` takes the
 session lock uncancellably — `smu.Lock()` with no context — before reaching the
-semaphore select at `:47` that *does* honour `ctx.Done()`. A caller whose
+semaphore select at `:47` that *does* honor `ctx.Done()`. A caller whose
 context is already dead still blocks at `:43`. That is exactly codex's second
 population: work admitted into a queue no drain can see or refuse. It is **not**
 reachable today — the `main` lane is guarded by `injectIfBusy` upstream of
@@ -10317,7 +10317,7 @@ missing rather than a new defect, so it attaches there rather than filing again.
   the failure mode is orphan rows in a local SQLite file, not a wrong answer on
   any read path. Recorded, not filed.
 - **codex [#44002](https://github.com/openai/codex/pull/44002)** — reads like a
-  behaviour change, is not: `Option<Arc<ExecutedToolCallRecorder>>` becomes a
+  behavior change, is not: `Option<Arc<ExecutedToolCallRecorder>>` becomes a
   null-object `ExecutedToolCalls` so call sites stop re-reading the feature
   flag. **codex [#43912](https://github.com/openai/codex/pull/43912)** — 7
   production lines clearing a token-budget config flag; the rest is fixture
@@ -10545,7 +10545,7 @@ later hook short-circuits to `next(e)` when the built-in already holds `/diff`.
 - **codex #44255 / #44273** (streamed remote compaction, legacy path deleted) —
   one change in two commits: a flag retirement plus dead-code removal. **#44276**
   is a single-condition fix, **#44297** is 13 test-only lines, **#44252** is a
-  core/extension boundary move with no stated behaviour change, and **#44289 /
+  core/extension boundary move with no stated behavior change, and **#44289 /
   #44327 / #44286** are Linux-WSL and Windows-ACL sandbox specifics. Plumbing;
   do not read architecture into them.
 - **goose [#11938](https://github.com/block/goose/pull/11938)** — interrupted
@@ -10572,7 +10572,7 @@ later hook short-circuits to `next(e)` when the built-in already holds `/diff`.
   `5cd8e68f` was screened correctly, and even it carries three prompt
   instructions worth keeping (`opencode.md` 2026-09-12 §2).
 
-## Harness-watch — 2026-09-11: a revocation that one reader honours and the other ignores — codex spent the week making instructions, approvals and evidence *snapshots with a refresh rule*, and inber's `memory_forget` is enforced by `Search` and served anyway by the automatic context that opens every turn
+## Harness-watch — 2026-09-11: a revocation that one reader honors and the other ignores — codex spent the week making instructions, approvals and evidence *snapshots with a refresh rule*, and inber's `memory_forget` is enforced by `Search` and served anyway by the automatic context that opens every turn
 
 ### 1. The inber defect of the week, measured
 
@@ -10597,7 +10597,7 @@ what is true now, so record it, and say when it is re-read*:
 - **Instructions** — [#44675](https://github.com/openai/codex/pull/44675) reloads global
   `AGENTS.md` "at model-request boundaries, including after tools within the same turn", keeps
   the last good read on failure, suppresses repeat warnings until recovery, clears on removal,
-  serialises refreshes, and hands a **subagent the parent's applied snapshot, not the
+  serializes refreshes, and hands a **subagent the parent's applied snapshot, not the
   provider**. [#44701](https://github.com/openai/codex/pull/44701) adds a host-supplied
   thread-scoped provider composed *after* global and *before* repository instructions, with its
   own 10,000-token budget and the same snapshot-inheritance rule. inber sits at both wrong
@@ -10609,10 +10609,10 @@ what is true now, so record it, and say when it is re-read*:
 - **Approvals** — [#44617](https://github.com/openai/codex/pull/44617) invalidates a cached
   Guardian score when an `exec_command` widens its permissions; [#44575](https://github.com/openai/codex/pull/44575)
   binds a background command's network review to the environment snapshot of the execution that
-  launched it, denies requests from an already-cancelled execution, and resolves a pending
-  approval as *denied* when the execution is cancelled mid-review. inber has no approver to
+  launched it, denies requests from an already-canceled execution, and resolves a pending
+  approval as *denied* when the execution is canceled mid-review. inber has no approver to
   cancel (`c6dabd49`) and its `ApprovalFunc` is `func(tool, input string) bool` with no context
-  (`guard/guard.go:90`) — the day one is wired, it cannot be cancelled. Not filed: it is
+  (`guard/guard.go:90`) — the day one is wired, it cannot be canceled. Not filed: it is
   unreachable until `c6dabd49` is decided, and filing the shape of a thing that does not exist
   is how the queue got 154 rows.
 - **Evidence** — [#44569](https://github.com/openai/codex/pull/44569) removes action
@@ -10635,7 +10635,7 @@ what is true now, so record it, and say when it is re-read*:
   runs the same cleanup path as EOF, blocking stdio moves off the runtime threads, and a shared
   45 s watchdog exits `1` if teardown stalls "even when logging is blocked" — `ef6be5a4` and
   `2a7831d5` are inber's. [#44691](https://github.com/openai/codex/pull/44691) warns on
-  unrecognised config fields, up to three, with sources and *without values*, deduped across
+  unrecognized config fields, up to three, with sources and *without values*, deduped across
   startups. inber's `LoadConfig` (`server/config.go:75-82`) is a plain `json.Unmarshal` that
   drops unknown fields silently — checked and **not filed**: the running unit passes no
   `--config`, so the path is unexercised on this host and config comes from agent-store.
@@ -10732,7 +10732,7 @@ only in the flush path at `engine/lifecycle.go:211`, gated on
 behind its transcript end while the child's is pinned to the end, and **the two coincide only when
 the parent happened to flush on its final turn — 1 turn in 3, or 1 in 5.**
 
-Two consequences, and only the first is certain. Certain, needing no API behaviour at all: the child
+Two consequences, and only the first is certain. Certain, needing no API behavior at all: the child
 writes a cache entry at a position that was never cached before, and the parent's last up-to-four
 turns are frozen in the child, so `ManageStaging` can never dedupe or tool-prune them. Uncertain and
 **not claimed here**: whether Anthropic's automatic prefix lookback still reaches the parent's
@@ -10832,7 +10832,7 @@ read from — a capability gate here needs a schema before it needs code.
 *"`server/session_creation.go:65` is the only place `modelExplicitlySet` is set."* False —
 `engine/engine.go:320-322 SetModel` also sets it, reachable at runtime via
 `server/api_bridge.go:698`. `:4823` records this correctly, so the two lines contradict each other.
-The behaviour itself (an explicit model opts the session out of failover for life) is consistent
+The behavior itself (an explicit model opts the session out of failover for life) is consistent
 with `applyRequestOverrides` and is not a defect.
 
 ### 8. Screened and rejected, with the reason
@@ -11435,7 +11435,7 @@ already on record.
 `function_call_output` items before the user's input. Context the application wrote stays in
 developer messages. Outputs are deduplicated by name plus truncated value, so a change hidden
 in the truncated tail does not re-send the item. inber puts every recalled memory's content
-verbatim into a system block, labelled only by id prefix, importance and tags
+verbatim into a system block, labeled only by id prefix, importance and tags
 (`engine/turn_prompt.go:100-124`), whatever the memory's source. The 2026-06 notes
 (`docs/papers/2026-06-harness-research.md`, memory-poisoning entry) asked for provenance on
 memory writes. codex now ships the read-side half of that.

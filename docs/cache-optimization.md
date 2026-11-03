@@ -303,7 +303,7 @@ written, and the entry did not check: `engine/turn_prompt.go:131-160` puts every
 fleet status, volatile memories, injector output, the source ref — into `e.Turn.VolatileContext`
 instead of a system block, and `agent/agent_run.go:90-121` splices that into the last user message on
 the first call of the turn. The system array carries stable blocks only.** What the 07-30 entry below
-adds is that the placement is right and the *authority* is wrong: those bytes arrive labelled as if
+adds is that the placement is right and the *authority* is wrong: those bytes arrive labeled as if
 the user typed them. Full analysis + measurements: `comparisons/goose.md`
 (07-01 entry). Companion paper: TokenPilot ([arXiv:2606.17016](https://arxiv.org/abs/2606.17016),
 `papers/2026-06-harness-research.md`) — batch-turn eviction so shrinking context doesn't churn the prefix.
@@ -321,7 +321,7 @@ coming from the end user" and that system instructions win when the two conflict
 does the cache half of this and pays the priority half: `engine/turn_prompt.go:130-155` packs fleet
 status, volatile memories and injector output into `e.Turn.VolatileContext`, and
 `agent/agent_run.go:92-119` splices it into the **last user message** — so inber's own operator
-facts arrive labelled as if the user typed them. Second, the beta decouples the `tools` array from
+facts arrive labeled as if the user typed them. Second, the beta decouples the `tools` array from
 the prefix: declare the full tool set once, never edit it, and use `tool_addition` / `tool_removal`
 blocks (which *reference* tools — `tool_reference`, `mcp_tool_reference`, `mcp_toolset_reference`)
 to change what is offered from a point in the conversation onward. `defer_loading: true` withholds
@@ -329,7 +329,7 @@ a declared tool until an addition surfaces it.
 
 **What inber should consider:**
 - Move `VolatileContext` from the last *user* message to a mid-conversation *system* message. Same
-  cache behaviour, correct authority — and it removes the current situation where "[Context]" text
+  cache behavior, correct authority — and it removes the current situation where "[Context]" text
   competes with the user's own words. Placement rules are strict and inber's loop already satisfies
   them: the message must immediately follow a `user` turn (a turn carrying `tool_result` blocks
   counts), must not be first, and must not sit between a `tool_use` and its `tool_result`.

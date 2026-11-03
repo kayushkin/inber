@@ -335,7 +335,7 @@ marker (`server/api_bridge.go:371-374`). The frames it feeds are written as `eve
 (`server/api_bridge.go:397-399`), with no `id:` field, so a client that fell behind during a burst of
 deltas receives a transcript with a hole in it and no way to know. This is exactly the shape 2.1.235
 and 2.1.236 closed on `SendMessage` twice — refuse up front rather than report a delivery that did
-not occur. The neighbouring drop in this repo is not the same: `offerToTurnInFlightLocked`
+not occur. The neighboring drop in this repo is not the same: `offerToTurnInFlightLocked`
 (`server/session.go:280-287`) also selects with a `default:`, but it logs a warning, returns `false`,
 and `deliver` falls the message back to the pending queue, so nothing is lost.
 
@@ -351,7 +351,7 @@ different blast radii, and this entry does not pick one.
 - **"Fixed prompt caching for sessions using an LLM gateway or custom base URL" (2.1.237)** — inber
   never sets a base URL on the Anthropic path (`agent/clients.go:103-129` passes auth and headers and
   no `option.WithBaseURL`), so there is no inber-side gateway path to break. Worth recording, since it
-  is not obvious: the SDK still honours `ANTHROPIC_BASE_URL` from the environment
+  is not obvious: the SDK still honors `ANTHROPIC_BASE_URL` from the environment
   (`anthropic-sdk-go@v1.35.0/client.go:34`), so a gateway *can* be interposed on this host without a
   line of inber config — and the OAuth branch would send its `sk-ant-oat01-` token there in a header,
   which body-side egress redaction cannot see by construction.
@@ -558,8 +558,8 @@ it is the third harness this month to meet the giant-single-line file.
 
 **Routine, recorded so it is not re-read.** The bulk of 2.1.238, 2.1.243 and
 2.1.246 is terminal rendering (fullscreen repaint, scroll, resize, focus-click,
-theme colours, mouse reports), keybinding and vim-mode edge cases, `/resume` and
-session-picker behaviour, Remote Control connection resilience (a dozen-plus
+theme colors, mouse reports), keybinding and vim-mode edge cases, `/resume` and
+session-picker behavior, Remote Control connection resilience (a dozen-plus
 entries), plugin install/update plumbing, BOM handling, `NO_PROXY` casing, and
 VS Code extension polish. Operational note: 2.1.243's native binary is
 zstd-compressed, ~75 MB instead of ~340 MB on Linux x64.
@@ -911,7 +911,7 @@ The answer CC converged on is one rule stated three ways: **the tool block and
 system prefix are recorded once and replayed, never re-derived** — plus a
 deliberate escape hatch, `--system-prompt-snapshot off`, *"to render the system
 prompt fresh on every request … (for iterating on prompt text)"*, which is the
-honest admission that a snapshot is the right default and the wrong behaviour
+honest admission that a snapshot is the right default and the wrong behavior
 while you are editing the prompt.
 
 Two things make this the sharpest CC entry in weeks. First, the coupling: a tool
@@ -1000,7 +1000,7 @@ wrap. It is in-process and the code makes that unambiguous — `mods/diff` holds
 `let isPaneOpen` across events, returns live component trees with callbacks, and
 holds cancellable `Timer` handles from `$.clock.every(...)`.
 
-The design content is in the three ordering rules, all analysed in
+The design content is in the three ordering rules, all analyzed in
 `agentic-design-patterns.md` 2026-09-10 §4: provenance is a **tier**
 (`prepend`/`user`/`append`/`builtin`/`core`) with the *caller's* tier
 (`next.origin.tier`) kept separate from the *subject provider's* (`e.provider.tier`);

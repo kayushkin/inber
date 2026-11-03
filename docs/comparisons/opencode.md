@@ -515,7 +515,7 @@ reinserts the summary as an ordinary user message at the head of the new list
 (`conversation/summary_generation.go:40-53`) asks for topics, decisions, information, status and
 next steps; it never mentions a prior summary, never says the old one is about to be dropped, and
 gives no conflict rule. Two things keep this a prompt-quality gap rather than a data-loss defect.
-The block is at least *labelled* — `[Conversation Summary — %d earlier turns condensed]`
+The block is at least *labeled* — `[Conversation Summary — %d earlier turns condensed]`
 (`summarize.go:107`) — so the model is not blind to what it is re-summarizing; and the turns being
 replaced are archived to memory-store first (`summarize.go:83-97`), so a dropped fact is recoverable
 by `memory_expand` rather than destroyed.
@@ -568,7 +568,7 @@ the session id on the permission event itself; the handler's gate goes from
 `permission.sessionID !== sessionID` to `!sessions.has(permission.sessionID)`. Without the flag the
 default for in-tree asks is reject, and an out-of-tree ask gets no answer from this run at all.
 
-The docs already record the two neighbouring halves and not this one:
+The docs already record the two neighboring halves and not this one:
 `agentic-design-patterns.md:523-590` covers denies propagating *into* a spawned subagent, and `:1530-1534`
 covers a `disallowed` floor preserved when a sub-agent delegates upward. Both restrict the child. Neither
 scopes the *approver*.
@@ -646,7 +646,7 @@ existing transcript) are on the todo and should not be picked unattended.
 - **[#43821](https://github.com/sst/opencode/pull/43821)** fails the parent's Task
   tool if *any* tool inside the subagent errored, even when the subagent recovered
   and returned good text. That is over-strict — a subagent handling its own tool
-  failure is correct behaviour — and inber's `SpawnResult`
+  failure is correct behavior — and inber's `SpawnResult`
   (`server/spawn.go:109-127`) already carries `Status` plus `Error` to the parent,
   which is the right granularity.
 - **[#43915](https://github.com/sst/opencode/pull/43915)** turns `textVerbosity`
@@ -896,7 +896,7 @@ deliberately **removed** the tool name from the rejection string, on the grounds
 that tool results are already paired with their tool-call blocks. That cuts
 against inber's `RefuseToolCall` interpolating it — cosmetic, not filed.
 
-## Harness-watch — 2026-09-12 (#48269, #48057): a capability flag the registry already hands you must not be re-derived from the model names you happened to recognise
+## Harness-watch — 2026-09-12 (#48269, #48057): a capability flag the registry already hands you must not be re-derived from the model names you happened to recognize
 
 ### 1. `a9a6fad0` (#48269) — ⛔ correcting this repo's own screening of it
 
@@ -922,7 +922,7 @@ reporter with a live A/B on raw `--format json`. The `opus-4.7` substring was co
 written and silently wrong for every adaptive model shipped afterwards.
 
 **The rule: an opt-in the registry already tells you the model supports must be sent on the strength
-of that capability flag, never on the subset of model names you recognised when you wrote the
+of that capability flag, never on the subset of model names you recognized when you wrote the
 line.** Third upstream instance of the technique (`agentic-design-patterns.md:1570`; goose #10439 at
 `goose.md:1450`; now this) and the first where the deleted allowlist was a *model-id substring*
 rather than a provider name — this box's no-hardcoded-allowlists directive being learned upstream
@@ -974,7 +974,7 @@ delta is style policing. Three instructions are not:
   reminder blocks as harness instructions rather than user-authored content. inber injects volatile
   context into the last user message (`agent/agent_run.go:90-120`) with no such declaration, so that
   content is currently indistinguishable from something the user typed.
-- **Anti-safety-theatre steering** — *"Do not introduce unsolicited warnings, disclaimers, approval
+- **Anti-safety-theater steering** — *"Do not introduce unsolicited warnings, disclaimers, approval
   flows, or safety/compliance checklists due to hypothetical risk,"* alongside delegation default-off
   and no tests for reversible low-impact changes. All three suppress self-generated process overhead.
 

@@ -238,7 +238,7 @@ and `RunTurn` (`engine/engine.go:201`) takes no `context.Context` at all — mea
 (`:169-173`) calls `s.cancel()`. That derived context is stored and then **dropped**:
 `s.Engine.RunTurn(input)` at `server/session.go:139` never receives it. So `agent/agent.go:202`'s
 `ctx.Err()` check and the shell tool's `exec.CommandContext(ctx, …)` both observe a context that is
-never cancelled, and **the interrupt endpoint cannot stop a running turn or a running command**.
+never canceled, and **the interrupt endpoint cannot stop a running turn or a running command**.
 Threading the caller's `ctx` through `RunTurn` is the single highest-value line here; without it the
 rest is unreachable. Then: `tool-store/tools/shell.go:51` runs `exec.CommandContext(ctx, "bash", "-c", c)`
 with no `SysProcAttr{Setpgid: true}` anywhere in either tree, so Go's default cancel kills only the
@@ -532,7 +532,7 @@ adjacent to the above and neither independently filed. First, `server/api_onesho
 `Encode` error, handing the client a truncated body with a 200. That is the same finding one layer
 out, and it should be settled by whatever `123a27c8` decides rather than separately. Second,
 `agent/openai.go:62` is a single `c.client.Do` with no retry layer at all, so the openai, google,
-openrouter and ollama paths get none of the bounded, exponential, jittered, `Retry-After`-honouring
+openrouter and ollama paths get none of the bounded, exponential, jittered, `Retry-After`-honoring
 retry the Anthropic SDK gives the other path (`MaxRetries: 2`, 0.5s×2ⁿ capped at 8s, jittered, and
 cancellable on `ctx.Done()`). That is a real asymmetry but it belongs to the standing "OpenAI turn
 loop is governed by less than the Anthropic one" decision (`5902f7b9`), not to a new todo.
@@ -622,7 +622,7 @@ Shutdown RETURNED at 3.82s
 
 So `run()`'s defers fire LIFO — `cancel()` (`cmd/inber-server/main.go:109`),
 `pidFile.Release()` (`:102`), `g.Close()` (`:95`) — 2.7 seconds before the turn finishes, and the
-process then exits. Three costs follow. The in-flight turn is cancelled roughly when the listener
+process then exits. Three costs follow. The in-flight turn is canceled roughly when the listener
 closes, so the graceful window is effectively zero and `persistSessionState` never runs for it —
 tool calls the turn already made leave side effects with no transcript record. The turn's
 request and usage rows are written to a closed `*sql.DB`, since `Server.Close()` shuts
@@ -680,7 +680,7 @@ turn and the `Completed` mislabel, not an unbounded leak.
 
 [cline #13300](https://github.com/cline/cline/pull/13300) fixes a regression where `emitAiSdkEvents`
 diverted every AI-SDK part with `providerExecuted: true` off the normal pipeline, re-emitted the two it
-recognised (`web_search`, `image_generation`) as observational events, and **silently dropped everything
+recognized (`web_search`, `image_generation`) as observational events, and **silently dropped everything
 else**. Because `ai-sdk-provider-claude-code` marks *every* tool the CLI runs as provider-executed, whole
 sessions read and edited the workspace with no tool activity in events, transcripts or UI. The fix routes
 all provider-executed parts onto the observational path and widens `toolName` from the closed
@@ -856,7 +856,7 @@ repaired — a status nobody can observe is worse than an absent one.
   #43248 malformed model costs, #43188 session request headers) are all covered by the 2026-08-19 entry at
   `opencode.md:570-591`. Everything else in that repo this window is model and pricing churn.
 
-## Harness-watch — 2026-08-21: a synthetic delimiter inber emits is a delimiter a tool result can also emit, and a hook whose output nobody reads cannot honour the contract it advertises
+## Harness-watch — 2026-08-21: a synthetic delimiter inber emits is a delimiter a tool result can also emit, and a hook whose output nobody reads cannot honor the contract it advertises
 
 ### 1. The hook-context channel, and the injective escape that makes it forgeable-proof
 
@@ -896,7 +896,7 @@ prefix — `agent/agent.go:555` anchors `cache_control` on the last block of thi
 fixed and the *tool output* is scanned and neutralized on the way in (cache-safe, but it is a scan on
 every tool result). Those two have different costs and only one of them is free.
 
-### 2. A fire-and-forget hook cannot honour a control contract
+### 2. A fire-and-forget hook cannot honor a control contract
 
 [cline #13298](https://github.com/cline/cline/pull/13298) found PostToolUse hooks running detached with
 `stdio: ["pipe","ignore","ignore"]`, so *"their entire JSON output is discarded — contextModification
@@ -924,7 +924,7 @@ delegated subagents`, [#13647](https://github.com/cline/cline/pull/13647) `Propa
 to teammates`, [#13678](https://github.com/cline/cline/pull/13678) `fix(desktop): keep Stop
 available for running child agents`.
 
-The first two are the signal travelling down — a parent abort that left delegated children running.
+The first two are the signal traveling down — a parent abort that left delegated children running.
 The third is the one worth stealing, because it is not about the signal at all: a Stop control that
 disappeared while a child was still running is a system deciding, on the user's behalf, that the
 abort is over. Together they say an abort is a state the system has to keep being in, not an event
@@ -1115,7 +1115,7 @@ full in `agentic-design-patterns.md` (§ 2026-09-08); the short form:
   started with.
 - **[#13649](https://github.com/cline/cline/pull/13649)** retires built-in
   `.clineignore` — it only filtered automatic context loading and any shell
-  command walked around it — in favour of a `PreToolUse` hook that cancels the
+  command walked around it — in favor of a `PreToolUse` hook that cancels the
   call. `.clineignore` itself is write-protected, found when the model edited the
   ignore file to add `!key.pem` and then read the file. **An advisory filter is
   not a control, and a policy file the model can edit is not a policy.**

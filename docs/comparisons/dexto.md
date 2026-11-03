@@ -297,7 +297,7 @@ text-centric truncation + transparent-bridge model.
 
 **1. Age-tiered media retention ([PR 837](https://github.com/truffle-ai/dexto/pull/837)).**
 Fixes a context-manager bug where images/media returned *by tool results* were dropped before
-LLM formatting, so the model couldn't analyse media a tool produced. The fix rehydrates recent
+LLM formatting, so the model couldn't analyze media a tool produced. The fix rehydrates recent
 tool-returned media within the existing media-retention window, while keeping *older* tool
 media compacted/excluded (blob-backed resources preserved) so large tool outputs don't inflate
 later prompts. The idea worth extracting is the **age-tiered media policy**: media is a
@@ -314,7 +314,7 @@ compact-when-old — not flat text.
 Providers/models don't consistently accept *text* documents (e.g. markdown attachments) as
 native file parts. At the formatter boundary (the Vercel provider-adapter), dexto now inlines
 text-like local uploads as plain text into the message, while preserving non-text and remote
-files as native file parts — UI/history attachment behaviour stays intact. The design point:
+files as native file parts — UI/history attachment behavior stays intact. The design point:
 the provider bridge is the correct place to project an attachment into whatever shape *that*
 provider accepts, because file-part support is a per-provider capability the canonical message
 shouldn't assume.
@@ -384,7 +384,7 @@ pays for the presentation.
 names only 9 of the ~20 registered tools.
 
 **No finding, and the reason is worth stating.** The two unpinned tables are display and dedup, so a
-miss degrades output rather than breaking behaviour, and the three that carry safety or correctness
+miss degrades output rather than breaking behavior, and the three that carry safety or correctness
 are already pinned. This is not a defect.
 
 **What inber should consider:** the pinning is *per-table*, and every new table has to remember to
@@ -425,7 +425,7 @@ name/alias split and closed with *"the alias question is real for anything that 
 the string a user types."* Dexto had exactly that hole and **fixed it by deleting the second key
 rather than reconciling the two** — `local-skills.test.ts` pins it, `skills.load('Audit')` (the old
 displayName for `review:audit`) now returns `null`. Two harnesses, one failure mode, opposite
-remedies; that contrast is the centre of gravity here.
+remedies; that contrast is the center of gravity here.
 
 **How a skill reaches the model: three levels, no truncation at any of them.** The system prompt
 lists the *entire* catalog as `name - description` every turn, no cap and no per-turn resolution;
@@ -456,7 +456,7 @@ vanish from the catalog with no log and no warning** — `DiscoveredSkill` even 
 
 ⚠️ **The rename did not propagate to their HTTP surface**, which matters if anyone writes a client
 against it: `GET /skills/{id}` still destructures `const { id } = …` and passes it to
-`skills.load(id)` — a name in a slot labelled id — and `skill_create` returns
+`skills.load(id)` — a name in a slot labeled id — and `skill_create` returns
 `{id: skillId, name: skillId}`, two fields carrying one string. By this box's rename-up-the-stack
 rule that is the lie that ships.
 
@@ -504,8 +504,8 @@ or custom HTTP client (`agent/clients.go:172-188`), `CompleteStreaming` passes o
 until someone cancels it. `agentic-design-patterns.md` (goose #10620 entry) said this in September; no
 open todo carried it, so one was filed this run.
 
-- **What inber should consider:** a per-call child context cancelled by a timer reset on every event;
-  cancelling it aborts the HTTP read in Go, so this does not wait on todo `1c951f8d` (no `Close`). Reuse
+- **What inber should consider:** a per-call child context canceled by a timer reset on every event;
+  canceling it aborts the HTTP read in Go, so this does not wait on todo `1c951f8d` (no `Close`). Reuse
   the partial path at `agent/agent_run.go:213-216` for the "text already shown" case, as dexto does.
 
 **Screened:** opencode #61015 (after an overflow rejection, compaction resent the rejected conversation

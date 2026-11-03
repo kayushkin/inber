@@ -134,7 +134,7 @@ Insertion: kanban-store event bus (it still has none on 2026-10-29) + the coordi
 
 ### 3. Name the coherence mode explicitly (MEDIUM PRIORITY)
 
-Make coarse-vs-fine a labelled property of shared state rather than an unspoken rule. Default every artifact to **coarse** (published at subagent exit — matches today's forge-branch merge gate and workspace read-first/rewrite-last). Allow **fine** only behind the existing first-writer-wins card-claim protocol (TEAM-ORCHESTRATION §6), for the rare live-shared case (a shared counter, a progress ledger). This turns "concurrent writers are always an invariant violation" (§3/§13) into "concurrent writers require a fine-grained claim" — same safety, one more supported pattern.
+Make coarse-vs-fine a labeled property of shared state rather than an unspoken rule. Default every artifact to **coarse** (published at subagent exit — matches today's forge-branch merge gate and workspace read-first/rewrite-last). Allow **fine** only behind the existing first-writer-wins card-claim protocol (TEAM-ORCHESTRATION §6), for the rare live-shared case (a shared counter, a progress ledger). This turns "concurrent writers are always an invariant violation" (§3/§13) into "concurrent writers require a fine-grained claim" — same safety, one more supported pattern.
 
 Insertion: the `Coherence` field in §1's `ArtifactHandle`; enforce the claim in the kanban-store `claimed`-tag path that already exists.
 

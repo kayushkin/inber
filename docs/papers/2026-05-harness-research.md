@@ -231,7 +231,7 @@ cheaper tier (or refusing them) so the agent can be sloppy about importance
 without polluting the store; (2) *aggressive* — strip the admission burden
 off the agent entirely and run a write-side classifier over every assistant
 turn, removing `memory_save` from the tool list. The former is a one-shot
-experiment compatible with current behaviour; the latter is the bigger
+experiment compatible with current behavior; the latter is the bigger
 architectural bet but would also free up an agent-visible tool slot. Worth
 sketching in `docs/memory-extraction-evaluation.md` alongside the
 ByteRover/ContextWeaver thread, since all three papers are now arguing
@@ -296,7 +296,7 @@ done". It returns immediately with an acknowledgement — `server/spawn.go:445-4
 — and the result is delivered later. The gap itself is real: `SpawnResult.Status`
 is derived purely from mechanics at `server/spawn.go:309-320`, never from
 content.)* A parent has no rubric for "did I get enough back to commit?" beyond
-model judgement. Worth a `BACKLOG.md` entry on a
+model judgment. Worth a `BACKLOG.md` entry on a
 sufficiency-check before the parent acts on a child's return value, since
 the paper flags this as the place where every existing system is winging
 it.
@@ -348,14 +348,14 @@ slice it was trained for.
 
 **What inber should consider:** ⚠️ *Corrected 2026-08-07 — the premise below
 is false.* `spawn_agent` takes a `model` parameter
-(`server/spawn_tools.go:90-93`) and honours it (`server/spawn.go:174-176`);
+(`server/spawn_tools.go:90-93`) and honors it (`server/spawn.go:174-176`);
 absent an override the child runs on **its own agent config's** model
 (`server/spawn.go:170`), never inherited from the parent. The experiment this
 passage proposes is therefore a config change, not a code change. Original text:
 Inber's `spawn_agent` is currently same-model — a child invocation runs on
 whatever the parent runs on.
 Terminus-4B argues the model tier should itself be a delegation knob: the
-subagent that summarises a 50KB build log doesn't need a frontier model,
+subagent that summarizes a 50KB build log doesn't need a frontier model,
 and putting a small model there saves money and keeps the parent's
 context clean for the same reason SWE-Edit's viewer/editor split does.
 The concrete inber-shaped experiment: register a "shell-summariser"
@@ -390,7 +390,7 @@ search verb to agents (semantic vector search with importance/decay).
 MemFlow says that's two abstractions short: agents shouldn't be
 choosing between "look up a fact I told you" and "trawl long-term
 context for relevant evidence" inside the same tool — that decision
-collapses cheap and expensive paths into one prompt-time judgement.
+collapses cheap and expensive paths into one prompt-time judgment.
 Concrete inber move: split the existing memory tool into a tiered
 surface (`memory.profile_get(key)`, `memory.recall(query)`,
 `memory.deep_search(query)`) and let an internal classifier — not the
@@ -451,7 +451,7 @@ over e.g. "score these 50 candidate files for relevance" without spawning
 50 children or writing a model-generated loop that the engine can't
 verify. Worth a section in `docs/multi-agent-design.md` as a complement
 to spawn_agent rather than a replacement, since the use cases differ
-(spawn_agent: open-ended sub-task with judgement; LLM-Map: bounded,
+(spawn_agent: open-ended sub-task with judgment; LLM-Map: bounded,
 schema-validated transform). Volt is open-source, so the implementation
 shape is inspectable rather than guessed.
 

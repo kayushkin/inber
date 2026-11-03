@@ -63,7 +63,7 @@ Agent: brigid (agent:claxon:main:sub:28939)
 Tokens: 14981 in / 5979 out ($0.577)
 ```
 
-**58 such lines across 20 transcripts.** A fork taken after that turn inherits a *sibling's* spend as an unlabelled fact about its own conversation. This is the closest thing in the tree to the codex finding the audit was asked about, and it arrives by a route the todo did not name — not from the parent's own usage, but from a third session's, forwarded through the parent.
+**58 such lines across 20 transcripts.** A fork taken after that turn inherits a *sibling's* spend as an unlabeled fact about its own conversation. This is the closest thing in the tree to the codex finding the audit was asked about, and it arrives by a route the todo did not name — not from the parent's own usage, but from a third session's, forwarded through the parent.
 
 ### What this is not
 

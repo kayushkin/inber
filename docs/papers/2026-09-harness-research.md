@@ -1512,7 +1512,7 @@ rows and rows that conflict with their replacement.
 
 **inber has this defect, and it is measured rather than inferred.** `memory_forget` is a soft
 delete by `UPDATE memories SET importance = 0` (`memory-store/management.go:47`). `Search`
-honours it (`search.go:75`, `importance > 0`). The automatic context that opens *every* turn
+honors it (`search.go:75`, `importance > 0`). The automatic context that opens *every* turn
 does not: `BuildContext` filters `WHERE importance >= ?` (`builder.go:64`) and only raises a
 zero floor to 0.4 when `!IncludeAlwaysLoad` (`builder.go:36-37`) — and inber asks with
 `IncludeAlwaysLoad: true` (`memory/auto_context.go:101`) and a `minImportance` that
@@ -1695,7 +1695,7 @@ on a single prompt fall significantly behind position correction on freshly writ
 Reliance on Unreliable Tools** (2026-09-04, cs.AI). Fourteen LLMs, three tools with deliberately
 corrupted returns — web search, **LLM sub-agent delegation**, and code execution. **Mean adoption of
 corrupted content exceeds one third for every tool, reaching 68.0% for web search.** The failure
-mode is the finding: reasoning traces show agents **often recognise the conflict and recover the
+mode is the finding: reasoning traces show agents **often recognize the conflict and recover the
 correct answer internally, then present only the corrupted answer without warning the user**.
 Interventions at three levels — user prompting, tool-provider metadata, builder post-training — each
 help for particular models or tools and **none consistently mitigates overtrust**.
@@ -1774,7 +1774,7 @@ protocol published.
 via EventTree Partitioning and Progressive Merging** (2026-09-08, cs.AI). Partitions memory into
 event-centric units using global semantic similarity **and** local temporal continuity, builds a
 maximum spanning tree per unit, then progressively merges redundant nodes along high-weight edges,
-with anchor-guided retrieval pulling from the temporal neighbourhood of key nodes rather than by
+with anchor-guided retrieval pulling from the temporal neighborhood of key nodes rather than by
 similarity alone. Under Mem0 it retains **97.1%** of performance at **50%** compression across
 LoCoMo, LongMemEval and PersonaMem with a **1.89×** retrieval speedup; under multimodal M3-Agent,
 **99.7%** at the same 50% and **2.24×**.
@@ -1788,7 +1788,7 @@ LoCoMo, LongMemEval and PersonaMem with a **1.89×** retrieval speedup; under mu
 - [arXiv:2608.23953](https://arxiv.org/abs/2608.23953) — **Architectural Convergence in Three LLM
   Agent Harnesses** (2026-08-25, cs.SE). Three harnesses built on deliberately opposing philosophies
   (LangChain `deepagents`, Earendil `pi`, DeepSeek `dsh`), read at pinned commits with history
-  followed. The two mature ones travelled in **opposite directions** — deepagents subtracting
+  followed. The two mature ones traveled in **opposite directions** — deepagents subtracting
   scaffolding, pi accreting infrastructure — and converged on five elements: a commoditised loop, an
   **append-only replayable session record**, model quirks kept as data, progressive disclosure of
   context, and explicit extension seams. One dimension shows no convergence and no presence at all:
@@ -1798,7 +1798,7 @@ LoCoMo, LongMemEval and PersonaMem with a **1.89×** retrieval speedup; under mu
   a question with no answer) is the current evidence that it cannot.
 - [arXiv:2609.11677](https://arxiv.org/abs/2609.11677) — **Ecdysis** (2026-09-10, cs.SE). The
   bottleneck in harness evolution is **failure diagnosis**: a failure is either a model-specific
-  deficiency or a systematic harness one, and optimising per-incident produces accommodation that
+  deficiency or a systematic harness one, and optimizing per-incident produces accommodation that
   does not generalise. Batch-level cross-instance failure aggregation gives **1.84×** faster harness
   training and **+18.56%** reasoning accuracy. **For inber:** the request log should be queryable
   for *recurring cross-task* failure shapes, because a per-incident patch to the compactor or a tool
@@ -1920,7 +1920,7 @@ prefetching plus execution-phase-aware scheduling cuts the slowdown from **3.1×
 Staleness in Agentic AI* (cs.SE, v1 10 Sep 2026) — <https://arxiv.org/abs/2609.11515>
 
 Generates the data fabric as a *timeline* with an append-only ground-truth ledger, so an answer
-correct at retrieval time but wrong at evaluation time is labelled a **freshness error**, distinct
+correct at retrieval time but wrong at evaluation time is labeled a **freshness error**, distinct
 from a reasoning error. Across cache ages of **1, 14 and 28 days the freshness errors were 7, 4 and
 4** — age does not predict staleness. Ablating tiered refresh takes 28-day freshness errors from
 **4 to 45** while leaving 1-day identical.
@@ -2005,7 +2005,7 @@ races** all reached valid terminal outcomes. The authors explicitly disclaim pro
   negative result is the one to keep: on an H100 the average request from the Bailian trace **falls
   below the break-even point** and GPU memory alone retains enough prefixes. Self-hosted paths only;
   irrelevant to Anthropic prompt caching, which is server-side. Argues against any global
-  cache-everything policy in favour of a measured per-deployment break-even.
+  cache-everything policy in favor of a measured per-deployment break-even.
 - **arXiv:2609.11381** *Agent-Integrated Software: Interaction Contracts and Continuous Assurance*
   (cs.SE, cs.AI). **Position paper, no experimental numbers** — flagged as such. Names the
   coordination problem when users revise goals and mutate shared objects *while delegated execution
@@ -2087,11 +2087,11 @@ typed tools by 21.8–24.5 pp on TheAgentCompany and 4.8–7.4 pp on APEX-Agents
 produced *no detectable pooled gain*.
 
 - **What inber should consider:** this cuts against expanding the provisioned tool
-  catalogue. Before adding tools, A/B one agent with shell only against its current
+  catalog. Before adding tools, A/B one agent with shell only against its current
   provisioned set and read the token bill. The caveat that keeps it honest: typed
   provisioning is what grant-store and permission-store gate against, and a shell-only agent
   is one tool call the rule engine cannot see inside — so this is an argument about the
-  *default* set, not about deleting the catalogue.
+  *default* set, not about deleting the catalog.
 
 ## 3. Ten short sessions beat one long session by 355 Elo
 
@@ -2461,7 +2461,7 @@ and acting on it up to 46 hours later.**
   the benchmark §7 shows structured memory losing 22 points on. Read with §7 or not at all.
 - **[2609.13582](https://arxiv.org/abs/2609.13582)** *Same Patient, Different Order* (11 Sep) —
   **all 43 ordering groups emitted a different set of orders across five identical runs**, and
-  **22 of 43 got the same failing verdict for materially different behaviour**. Held back:
+  **22 of 43 got the same failing verdict for materially different behavior**. Held back:
   two sub-10B 4-bit models, and the paper says no rate generalises.
 - **[2609.17306](https://arxiv.org/abs/2609.17306)** *Mo' Models, Mo' Problems* (15 Sep) —
   directly relevant to `engine/failover.go`: **expanding the candidate pool often degrades
@@ -2470,7 +2470,7 @@ and acting on it up to 46 hours later.**
   re-checking, because it is the independent argument for the provider-filtered chain that
   todo `905a5e68`'s amendment asks for.
 - **[2609.16305](https://arxiv.org/abs/2609.16305)** *BLINDSPOT* (14 Sep) — 22 attack
-  families, 2,500+ trajectories at 14.7 turns average; results self-labelled "preliminary"
+  families, 2,500+ trajectories at 14.7 turns average; results self-labeled "preliminary"
   with no figure. Re-check on v2.
 
 ## Rejected after opening the abstract

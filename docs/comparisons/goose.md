@@ -253,7 +253,7 @@ detection on by default for internal users — kept on, with no way for the user
 disable it. The mechanically interesting bit: a single `get_override` helper reads
 the value **strictly from `std::env::var`, never the config store**, so a value a
 user persisted into their own config can't masquerade as the org-managed setting.
-When the env vars are unset, behaviour is unchanged and the user's own settings
+When the env vars are unset, behavior is unchanged and the user's own settings
 apply. ([PR 9690](https://github.com/block/goose/pull/9690) then re-tunes the
 detector's confidence thresholds.) This is the same *non-overridable policy layer*
 shape as codex's org-level managed permission allowlists (agentic-design-patterns,
@@ -720,7 +720,7 @@ blobs.** Anthropic/Google message formatting flattened every MCP tool result to 
 string, keeping only `as_text()` blocks, so any `ContentBlock::Image` and any `BlobResourceContents`
 (a screenshot, a PDF) was **silently dropped** — a screenshot tool returned nothing to the model.
 The fix emits typed `image`/`document` blocks with `source: {type: base64, media_type, data}` when
-media is present and keeps the plain-string form when it is not, so no existing behaviour shifts.
+media is present and keeps the plain-string form when it is not, so no existing behavior shifts.
 The guardrail is a hard allowlist (`image/jpeg|png|gif|webp` plus `application/pdf`); everything
 else, `image/svg+xml` included, falls through to a `[Image: <mime>]` **text marker** rather than
 being handed to a provider that will 400 the turn.
@@ -857,7 +857,7 @@ off:
 - **A restart.** Nothing persists the set, so a revived session comes back with everything enabled.
 
 **What a fix would have to decide, and this entry does not.** Whether `disabled_tools` is a *safety
-boundary* or a *context/behaviour knob*. The `ConfigRequest` doc comment (`server/api_bridge.go:656-667`)
+boundary* or a *context/behavior knob*. The `ConfigRequest` doc comment (`server/api_bridge.go:656-667`)
 argues only about nil-versus-empty and never claims the former; if it is only a knob, losing it on
 fork is a UX bug and persisting it is enough. If it is a boundary, then inheritance has to be
 decided too — a child that inherits the parent's denials is the safe default and also the one that
@@ -959,7 +959,7 @@ Vertex and Databricks. Observed in the wild at message index 3, so not a compact
 fix is targeted rather than blunt: when serializing history, drop signed thinking blocks whose
 originating model — read from `message.metadata.inference` — differs from the model this request
 targets. Text and tool content still go. When provenance is unknown (older rows, no metadata) the
-old behaviour stands, so single-model conversations are untouched.
+old behavior stands, so single-model conversations are untouched.
 
 The generalization: **credential rotation is not the only thing that invalidates a signature, and
 provenance is what lets you drop the right blocks instead of all of them.** A harness that stores
@@ -1049,7 +1049,7 @@ both now have upstream precedent rather than only a preference behind them.
 
 [goose #11179](https://github.com/block/goose/pull/11179) stamps `disable_prompt_cache` on the
 fast-model config behind `complete_fast` — compaction, session naming, tool-pair summaries,
-orchestrator routing — and every breakpoint site honours it: the Anthropic format skips the tools,
+orchestrator routing — and every breakpoint site honors it: the Anthropic format skips the tools,
 system and last-two-user-message breakpoints, the three `apply_chat_payload_breakpoints` callers
 (Databricks-Claude, OpenRouter, LiteLLM) skip theirs, Bedrock skips `cachePoint`. These calls
 summarize a payload that never recurs, so the entry written can never be read back and only bills
@@ -1122,7 +1122,7 @@ tokens fell from **157 to 53** once the disable was sent. Two model classes are 
 carve-outs are the substance: always-on models such as `claude-fable-5` **reject** an explicit
 disable, and pre-adaptive models such as `claude-haiku-4-5` already read omission as disabled. So
 the rule is not "always send disabled" — it is **the registry has to say which of the three
-behaviours a model has, and the request builder has to read it.**
+behaviors a model has, and the request builder has to read it.**
 
 **inber has one branch where three are needed.** `agent/agent_run.go:82-88`:
 
@@ -1153,7 +1153,7 @@ have `agent_run.go` branch on it, or (b) hardcode a model-id list in inber, whic
 single-source-of-truth directive forbids and which would silently mis-handle every model added
 after the list was written. Whoever takes it also has to decide what a *zero* budget means on an
 always-on model like `claude-fable-5`, where the explicit disable is rejected outright: refuse the
-request, or send nothing and log that the setting cannot be honoured. Note the cost asymmetry that
+request, or send nothing and log that the setting cannot be honored. Note the cost asymmetry that
 makes this worth doing rather than watching — the failure is silent in both directions, since the
 tokens are invisible in the response and show up only on the bill.
 
@@ -1211,7 +1211,7 @@ spawn session, so this lands a child's progress in whatever real conversation th
 but the decision underneath it is not mechanical and should not be made by whoever writes the patch.
 (a) It is **wire-visible** — anything subscribed on `session_id == "main"` today stops matching, and
 `si`, the dash chat surface and llm-bridge-adapter are all downstream. (b) It needs an answer for an
-*absent* `SessionID`, and "fall back to main" is the behaviour that caused this; the alternative is
+*absent* `SessionID`, and "fall back to main" is the behavior that caused this; the alternative is
 to mint a per-connection key so two anonymous senders still cannot merge. (c) `msg.Model` and
 `msg.Effort` are the same bug with a smaller blast radius and should be decided in the same pass
 rather than left as the next sweep's finding — note that a per-request model override arriving over
@@ -1396,7 +1396,7 @@ omit-means-disabled (pre-adaptive), omit-means-enabled (adaptive), and rejects-a
 (always-on) — so a boolean is not enough, and the default has to be the pre-adaptive one to leave
 today's Sonnet-4-family defaults untouched. The third state still needs the answer the 08-18 entry
 asked for: what a zero budget *means* on a model that will not accept a disable — refuse the request,
-or send nothing and log that the setting cannot be honoured.
+or send nothing and log that the setting cannot be honored.
 
 ### Also in-window, checked and not worth a finding
 
@@ -1505,7 +1505,7 @@ entangled with the decision below.
 
 **What inber should consider:** #11391's shape — two named limits, not one. **What a fix must decide:**
 whether the JSONL is a context artifact or an audit artifact. If resume is its only reader, today's
-behaviour is correct and the log should say so; if a human or a later analysis reads it, the context
+behavior is correct and the log should say so; if a human or a later analysis reads it, the context
 budget has no business truncating it. That is a real choice about what the file is for, and it should be
 made deliberately rather than inherited from a shared struct field.
 
@@ -1937,7 +1937,7 @@ exporting one name produced a silently ambiguous tool list. `machine.rs` threads
 inber's twin is open as `e2d0b07b-5034-4f7d-b97f-2a534141dfc1` and is documented
 in the code itself — `engine/extra_tools.go:8-15` says the fix *"needs a policy
 decision (reject a duplicate at registration, or keep the first and warn), so this
-function preserves the existing behaviour rather than guessing at it."* **goose
+function preserves the existing behavior rather than guessing at it."* **goose
 just shipped the first option**, and that is the whole contribution of this entry:
 new evidence for a decision that was parked for want of any. Mechanism re-read
 this run: `agent/agent_run.go:29-45` builds `toolParams` as a **list** over every
@@ -1980,7 +1980,7 @@ Written up in full in `agentic-design-patterns.md` (§ 2026-09-08). Short form:
   copy *if* one is built, not a defect to file.
 - **[#11383](https://github.com/aaif-goose/goose/pull/11383) (`27d08b69`) —
   preserve permission revocations across managers.** Two processes each held an
-  in-memory `permission.yaml` snapshot; the second writer serialised its older
+  in-memory `permission.yaml` snapshot; the second writer serialized its older
   map over the newer one and silently restored a revoked permission. Fix: file
   lock → reload from disk **while holding the lock** → atomic replace, preserving
   a symlinked target rather than the link. Honest about scope: it does not
@@ -1994,14 +1994,14 @@ Written up in full in `agentic-design-patterns.md` (§ 2026-09-08). Short form:
   assistant blocks in the persisted child session*, collapsing fragments and
   excluding compaction scaffolding and continuation prompts. **Count from the
   durable record, not the stream** — stream events fragment on network and
-  provider behaviour. inber's counter is already `e.Turn.Counter`, incremented
+  provider behavior. inber's counter is already `e.Turn.Counter`, incremented
   per turn and restored through `RestoreSession`; no twin.
 
 Checked and boring: **#11827** is a protocol-version bump whose diff is 540/553
 lines of `Cargo.lock`. **#11798** deletes an 87-line timeout that had been put
 on a *blocking human password dialog* — too short for a person to type a
 password and conceptually wrong, but one line of insight. **#11789** deletes
-`local_model_registry.rs` (824 lines) in favour of reading the HF cache directly
+`local_model_registry.rs` (824 lines) in favor of reading the HF cache directly
 and puts `hf-hub` behind an optional feature — good dependency hygiene,
 local-inference specific. **#11745** rejects non-HTTPS Snowflake URLs across
 redirects; correct, single-provider, no design content.
@@ -2012,7 +2012,7 @@ redirects; correct, single-provider, no design content.
 
 [#11697](https://github.com/block/goose/pull/11697) removes two lines from
 `crates/goose/src/agents/agent.rs`. `goal_check_pending` is a volatile boolean,
-initialised `false`, that was **reset to `false` on every tool call**. The
+initialized `false`, that was **reset to `false` on every tool call**. The
 goal-nudge arm fires when `goal.is_some() && !goal_check_pending` and sets it
 true. The PR spells out the cycle:
 
