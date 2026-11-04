@@ -2263,3 +2263,33 @@ Also screened, carrying nothing: `ed359351` (#11619) adds EUrouter as pure
 hardcoded provider switch in `agent/clients.go`, but not a defect; `53672c3f` (#12011,
 gpt-live) needs a realtime surface inber does not have; `bfe2d996`, `426967db`, `abb47465`,
 `1c5d8092` are desktop, release, npm publish and docs.
+
+## Harness-watch — 2026-11-03 (#13106, #12589): a finished delegate can take a follow-up
+
+[goose #13106](https://github.com/aaif-goose/goose/pull/13106) stops refusing a resume of a
+completed delegate ("already completed"). A resume keeps the child's earlier context, needs
+`instructions` (otherwise there is nothing new to do), and waits for a new answer instead of
+returning the old one. The design choice is that a message to a finished child **starts a turn**.
+
+inber has the same gap and has not chosen yet. A spawned child runs exactly one turn
+(`server/spawn.go:378`, `child.turn(ctx, req.Task)`) and then stays loaded in `g.sessions`, idle;
+the reaper removes only `:bridge-` keys (`server/session_reaper.go:59`). `steer_agent` on that child
+goes to `Session.deliver` (`server/session.go:309-317`), lands in `pendingMessages`, and the model
+is told "It will be delivered at the start of that session's next turn"
+(`server/spawn_tools.go:56`). Nothing ever starts that turn, so the parent waits for an answer no
+one will write. Open todo `5320b48f-3ddb-472d-b740-747211b78aab`, point 3, already holds the
+decision: does a queued message start a turn? Not filed again.
+
+- **What inber should consider:** goose's answer is one data point for `5320b48f`: a follow-up to
+  a *finished* child starts a turn and returns its answer by the normal `deliverResult` path. Until
+  that is decided, `steer_agent` could at least say when its target has already finished.
+
+Also screened: #12589 adds an opt-in, observation-only "context relevance" pass that runs only
+when compaction would, records what a relevance judge would have dropped, and changes nothing the
+model sees. Running a new context strategy in shadow before it acts is the right way to trial the
+model-run compaction from the 2026-11-02 paper notes (CTXAgent). #10462 (context window viewer)
+is UX. dexto #1052 (move an imported call's real result back next to its call) has no inber
+producer: inber imports no transcripts, and injected text goes into the same message as the
+results, after them (`agent/agent.go:510-522`). If such a history ever did arrive,
+`RepairMissingToolResults` (`conversation/repair.go:153`) would add an "interrupted" result and leave
+the real one stranded, so it would be a latent 400.
