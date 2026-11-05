@@ -95,3 +95,55 @@ throwaway test measured it today: a tool result of
 does not help, because the payload fits. It is a sibling of open todo
 `2bd78eb0-994a-4867-9180-15afa2face30` (the unescaped steer wrapper), which forges the same
 thing at a different site. Filed as todo `498a011e-0f00-4b8b-a19b-9f0782531894`.
+
+# 2026-11-04 sweep
+
+arXiv API queries sorted by submission date (coding agent, agent harness, context management,
+prompt caching, multi-agent tool use, agent memory). Two of the new in-scope ids are below.
+
+Upstream commits screened this week and not written up, each checked against inber's code: cline
+#15254 (a second, tighter cap cut `read_files` results the tool had already bounded) has no inber
+counterpart, since inber puts no per-result cap after the tool's own; codex #59404 (queued agent
+messages lost across compaction) is covered by done todo `06e97ad2-0d37-4a20-87a5-28cf986f009a`
+and open `fc6323ca-1577-4975-aae4-0a597437f25e`; codex #59445 (warn when project instructions pass
+a byte budget) does not apply, as inber reads no project instruction files; opencode #60049 (do
+not start a background summary from an expired cache) does not apply, as inber's summarizer sends
+a fresh prompt that shares no prefix with the session (`conversation/summary_generation.go:62-71`).
+
+## 4. A rule that survives compaction is still broken twice as often
+
+[arXiv:2611.03223](https://arxiv.org/abs/2611.03223) — **Do Agents Still Follow the Rules?
+Benchmarking Rule Compliance under Agent Context Compaction** (2026-11-02). ARCBench runs on the pi
+harness and scores compliance from the actions the agent takes. Compaction seldom deletes the rule:
+most violations happen while the rule is still in the compacted history, with the agent reading a
+later request as permission. How the rule is delivered decides whether the agent breaks it even
+without compaction; the compactor and its budget decide whether it survives. Runs whose summary kept
+the rule still broke it more than twice as often as runs with the full history, and the strongest
+attack on the compactor more than doubled violations. Read from the abstract.
+
+**What inber should consider:** the 2026-10 entry on 2610.31778 proposed asking the summary prompt
+to keep the user's prohibitions verbatim. This paper says that alone leaves most of the loss: a
+rule kept inside the summary is still obeyed far less. The stronger option is to lift a rule the
+user states in chat out of the conversation and re-deliver it every turn beside the volatile
+context (`engine/volatile_context.go:31-45` already folds queued notes into each turn), where
+compaction cannot touch it. Which rules qualify, and who decides, is a design choice for open todo
+`421a8162-c057-4182-a404-8c13366a2fb4`, not one to make here. No new todo.
+
+## 5. Prompt-cache mistakes in agent code are mostly silent; inber's main path checks out
+
+[arXiv:2610.34817](https://arxiv.org/abs/2610.34817) — **Silent and Costly: Characterizing and
+Detecting Prompt-Caching Mis-Integration in LLM Agents** (2026-10-26). A study of 120
+caching-related pull requests in 10 open-source agents finds two kinds of fault: requests that set
+caching up wrong, and code that miscounts the cached tokens it reads back. Most fail with no error.
+Their CodeQL-based checker, CACHELINT, found 32 more in 571 projects at 0.86 precision and led to
+18 upstream fixes, one in Anthropic's SDK. Read from the abstract.
+
+**What inber should consider:** a read of both sides today. Request side: four breakpoints at most
+(tools at `agent/agent_run.go:36`, system at `engine/turn_prompt.go:240-243`, two in history placed
+by `agent/agent.go:HistoryCacheBreakpointIndices`, which clears every other `cache_control`). Read
+side: Anthropic cache reads and writes reach session totals (`engine/build_hooks.go:201-206`), and
+OpenAI's `cached_tokens`, a subset of input, stays separate from Anthropic's disjoint count
+(`engine/turn_openai.go:131-137`). The one miscount found is the summarizer, which drops
+`response.Usage` (`conversation/summary_generation.go:74-97`); that is open todo
+`7be5a692-28af-42c2-963e-ea7b9e5ea3b0`. Worth running CACHELINT on inber once its code is out, as a
+check that does not depend on a reader. No new todo.
