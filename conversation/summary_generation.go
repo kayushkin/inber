@@ -76,6 +76,18 @@ Create a concise summary that captures the key points and context needed to cont
 		return "", false, fmt.Errorf("summarization API call failed: %w", err)
 	}
 
+	// A refusal is not a summary, even when it carries text: the text is a
+	// refusal notice or whatever the model wrote before it was stopped. Checked
+	// before the text is read, because the caller exchanges the older turns for
+	// whatever this returns, and on an error it keeps them. The main loop fails
+	// on the same stop reason (agent.go's "unexpected stop reason").
+	//
+	// What to do next — retry with another model, reword, or run on uncompacted
+	// — is left to the caller; this only refuses to call a refusal a summary.
+	if response.StopReason == anthropic.StopReasonRefusal {
+		return "", false, fmt.Errorf("summarization model %s refused (stop_reason %q); the transcript was not exchanged for its reply", model, response.StopReason)
+	}
+
 	// Extract text from response
 	var summaryParts []string
 	for _, block := range response.Content {
