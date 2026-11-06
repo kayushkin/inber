@@ -2293,3 +2293,25 @@ producer: inber imports no transcripts, and injected text goes into the same mes
 results, after them (`agent/agent.go:510-522`). If such a history ever did arrive,
 `RepairMissingToolResults` (`conversation/repair.go:153`) would add an "interrupted" result and leave
 the real one stranded, so it would be a latent 400.
+
+## Harness-watch — 2026-11-05 (#13340): the model can refuse to compact
+
+[goose #13340](https://github.com/aaif-goose/goose/pull/13340) (issue #13336): Opus 5.5 sometimes
+refuses goose's compaction call ("restrictions on reverse engineering or duplicating model
+outputs") and the session cannot continue. The PR changes "distill… your responses… quote
+liberally" to "write working notes… the work done so far", and leaves handling the refusal to
+a later PR. The author could not trigger the refusal on demand, so the rewording is untested.
+
+inber's prompt (`conversation/summary_generation.go:40-60`) avoids the wording goose dropped, but
+its handling is weaker than goose's: it never looks for `stop_reason: "refusal"`. A refusal with
+no text fails at line 87 and the transcript is kept. A refusal *with* text (a notice, or partial
+output) passes as the summary, replaces the older turns at `engine/lifecycle.go:111`, and is
+logged as a success. The main loop already errors on that stop reason (`agent/agent.go:606`).
+Filed as todo `7fd27a7e-1960-4a3c-a2d9-8ee9610b333b`.
+
+- **What inber should consider:** treat `refusal` as an error in `generateSummary`; what to do
+  after (another model, other wording, or run uncompacted) is the todo's open decision, next to
+  `2a0289a6` for `max_tokens`.
+
+Also screened: #13279 (do not tell the model about a screenshot tool it lacks) was covered
+2026-11-04; #13169 (GDK hooks) and #10462 are UX and SDK surface.

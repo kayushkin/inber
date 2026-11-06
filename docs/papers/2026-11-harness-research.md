@@ -147,3 +147,31 @@ OpenAI's `cached_tokens`, a subset of input, stays separate from Anthropic's dis
 `response.Usage` (`conversation/summary_generation.go:74-97`); that is open todo
 `7be5a692-28af-42c2-963e-ea7b9e5ea3b0`. Worth running CACHELINT on inber once its code is out, as a
 check that does not depend on a reader. No new todo.
+
+# 2026-11-05 sweep
+
+arXiv API queries sorted by submission date (coding agent, agent harness, context management,
+prompt caching, multi-agent tool use). One new in-scope id is below; 2611.07238 (token waste
+judged by an LLM, 41-46% of reasoning removable) and 2611.06876 (SpecCompact, speeding up
+compaction with a small drafter model) were read and carry nothing inber can act on now.
+
+Upstream: goose [#13340](https://github.com/aaif-goose/goose/pull/13340) rewords its compaction
+prompt because Opus 5.5 refuses some of them as "duplicating model outputs", and leaves handling
+the refusal for later. inber's summarizer accepts any reply with text in it and checks
+`stop_reason` only for `max_tokens` (`conversation/summary_generation.go:81-95`), so a refusal
+with text would replace the older turns. Filed as todo `7fd27a7e-1960-4a3c-a2d9-8ee9610b333b`;
+details in `docs/comparisons/goose.md`.
+
+## 6. Score a summary by how much of the transcript it can rebuild ([2611.06445](https://arxiv.org/abs/2611.06445))
+
+SumOne trains a small summarizer with a reward that needs no labels and no task runs: hide random
+spans of the old history, ask a frozen model to fill them back in from the summary alone, and
+score the summary by how well it does, minus a length penalty. The summarizer it trains cuts
+estimated cost by 75% on SWE-bench Verified with an absolute drop of 0.04, and it works with
+other agent harnesses and other agent models without retraining.
+
+- **What inber should consider:** inber will not train a summarizer, but the reward also works
+  as a cheap test of a summary prompt. Changing the prompt for todo `421a8162` (dates and rules
+  lost) or `7fd27a7e` (refusals) can then be checked by replaying archived transcripts through the
+  old and new prompt and comparing the masked-span rebuild score, rather than by reading the
+  summaries. That comparison belongs in eval-store, not a script.
