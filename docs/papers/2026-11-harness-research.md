@@ -175,3 +175,17 @@ other agent harnesses and other agent models without retraining.
   lost) or `7fd27a7e` (refusals) can then be checked by replaying archived transcripts through the
   old and new prompt and comparing the masked-span rebuild score, rather than by reading the
   summaries. That comparison belongs in eval-store, not a script.
+
+# 2026-11-06 sweep
+
+The arXiv API timed out on every query, so two web searches stood in for it. Every in-scope hit was
+older than 30 days (newest 2610.02163), and each was already in these files except 2604.14228
+(April, outside the window). No paper written up.
+
+Upstream screened and not written up, each checked against inber's code: codex #60034 (credentials
+in spawn trace logs) has no counterpart, since inber logs neither the arguments nor the environment
+of what it spawns (`tools/mcp/client.go:107-111`); dexto #1089 (SSRF through IPv6 and redirects)
+does not apply, as inber has no fetch tool of its own; cline #15256 (compaction that cannot be
+stopped) does not apply, as `engine/lifecycle.go:95` passes the turn's context to the summarizer.
+gemini-cli #30180 is written up in `docs/comparisons/gemini-cli.md` and filed as todo
+`c91cb46f-9dc5-4ac7-bf2c-1ce90eb06c7b`.

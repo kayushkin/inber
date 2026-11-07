@@ -446,3 +446,11 @@ pattern-match against.
 > **Shelf status after this pass:** every comparison doc is now walked. What remains
 > unmined is the three paper files, which the onboarding note's §1 already prices as
 > low-yield.
+
+## Harness-watch — 2026-11-06 ([#30180](https://github.com/google-gemini/gemini-cli/pull/30180)): an image in a tool result has to be counted as an image
+
+gemini-cli ran out of heap on long sessions because its history size skipped images nested inside tool responses, and its masking of old tool output kept those images, so masking freed less than nothing and gave up. The fix counts nested image bytes, strips them from tool responses older than three turns, and starts collapsing on a byte threshold as well as a token one.
+
+inber has the same blind spot pointed the other way. Since `inber@188f607` a tool can put images in its result (`agent/tool_result_images.go:59`). The token estimator prices a block as its marshalled JSON (`conversation/manage_text_utils.go:98,129`), so an image counts as its base64 text: measured, one 200 KB base64 image estimates at 68,329 tokens, against the ~1,600 the API charges for an image at its size limit (Anthropic's vision docs). Two such images pass the 100,000-token emergency-flush line (`engine/lifecycle.go:182`). The pruner reads only text (`conversation/manage_tool_pruning.go:120`) and keeps any result whose text is under 100 bytes (`:51`), so an image beside a short caption stays until `ToolResultDrop`, and the drop marker gives the caption's byte count with no word of the image.
+
+- **What inber should consider:** price an image by its pixels, not its base64, and age images on a rule that does not depend on the length of the text beside them. Filed as todo `c91cb46f-9dc5-4ac7-bf2c-1ce90eb06c7b`, which lists what a fix has to decide.
