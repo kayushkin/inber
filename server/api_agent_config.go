@@ -179,9 +179,25 @@ func (g *Server) reloadRegistry() {
 		logger.WithComponent("server").Warn("failed to reload registry", map[string]interface{}{"error": err})
 		return
 	}
-	newAgents := make(map[string]AgentConfig, len(cfg.Agents))
-	for name, rc := range cfg.Agents {
-		newAgents[name] = AgentConfig{
+	g.config.Agents = AgentConfigsFromRegistry(cfg)
+	if cfg.Default != "" {
+		g.config.DefaultAgent = cfg.Default
+	}
+	logger.WithComponent("server").Info("reloaded agent registry", map[string]interface{}{"count": len(cfg.Agents)})
+}
+
+// AgentConfigsFromRegistry turns agent-store's registry into the server's agent
+// map, keyed on each agent's slug. It is the only builder of that map: startup
+// and reloadRegistry both call it, so a PATCH that reloads the registry cannot
+// change what the map holds for agents it did not touch.
+//
+// Name is the agent's display name and Workspace is the stored workspace
+// exactly as agent-store holds it. An agent with no stored workspace gets none:
+// there is no guessed fallback directory.
+func AgentConfigsFromRegistry(cfg *registry.RegistryConfig) map[string]AgentConfig {
+	agents := make(map[string]AgentConfig, len(cfg.Agents))
+	for slug, rc := range cfg.Agents {
+		agents[slug] = AgentConfig{
 			Name:      rc.Name,
 			Project:   rc.Project,
 			Projects:  rc.Projects,
@@ -191,9 +207,5 @@ func (g *Server) reloadRegistry() {
 			Tools:     rc.Tools,
 		}
 	}
-	g.config.Agents = newAgents
-	if cfg.Default != "" {
-		g.config.DefaultAgent = cfg.Default
-	}
-	logger.WithComponent("server").Info("reloaded agent registry", map[string]interface{}{"count": len(cfg.Agents)})
+	return agents
 }

@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -173,32 +172,8 @@ func buildConfigFromRegistry(agentStorePath string) server.Config {
 	regCfg, err := registry.LoadFromAgentStore(agentStorePath)
 
 	agents := make(map[string]server.AgentConfig)
-
 	if err == nil && regCfg != nil && regCfg.Agents != nil {
-		for name, ac := range regCfg.Agents {
-			workspace := ac.Workspace
-			if workspace == "" {
-				home, _ := os.UserHomeDir()
-				lookupName := name
-				if ac.Project != "" {
-					lookupName = ac.Project
-				}
-				candidate := filepath.Join(home, "life", "repos", lookupName)
-				if _, err := os.Stat(candidate); err == nil {
-					workspace = candidate
-				}
-			}
-
-			agents[name] = server.AgentConfig{
-				Name:      name,
-				Project:   ac.Project,
-				Projects:  ac.Projects,
-				Workspace: workspace,
-				Model:     ac.Model,
-				Thinking:  ac.Thinking,
-				Tools:     ac.Tools,
-			}
-		}
+		agents = server.AgentConfigsFromRegistry(regCfg)
 	}
 
 	defaultAgent := ""
