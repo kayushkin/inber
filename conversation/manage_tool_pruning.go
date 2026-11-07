@@ -34,12 +34,14 @@ func pruneToolResult(block anthropic.ContentBlockParamUnion, age int, cfg Manage
 
 	toolResult := block.OfToolResult
 	originalContent := extractToolResultContent(toolResult.Content)
+	imageCount := countToolResultImages(toolResult.Content)
 
 	// Drop entirely if too old. The marker still names the tool and the size,
-	// so the transcript records what was lost rather than only that something was.
+	// and says how many images went with it, so the transcript records what
+	// was lost rather than only that something was.
 	if age >= cfg.ToolResultDrop {
 		return replaceToolResultText(block,
-			fmt.Sprintf("[%s: dropped - too old, %d bytes]", toolLabel(toolName), len(originalContent))), true
+			fmt.Sprintf("[%s: dropped - too old, %d bytes%s]", toolLabel(toolName), len(originalContent), imagesClause(imageCount))), true
 	}
 
 	// Keep full if recent
@@ -47,12 +49,42 @@ func pruneToolResult(block anthropic.ContentBlockParamUnion, age int, cfg Manage
 		return block, false
 	}
 
-	// Summarize if in middle range
-	if originalContent == "" || len(originalContent) < 100 {
-		return block, false // Keep short results as-is
+	// Summarize if in middle range. A short text result is kept as it is,
+	// but only when it carries no image: the text of a result with an image
+	// is usually a caption ("saved image"), and judging the result by its
+	// caption kept the image, its most expensive part, until the drop age.
+	if imageCount == 0 && (originalContent == "" || len(originalContent) < 100) {
+		return block, false
+	}
+	if len(originalContent) < 100 {
+		return replaceToolResultText(block,
+			fmt.Sprintf("[%s: %d bytes%s] %s", toolLabel(toolName), len(originalContent), imagesClause(imageCount), strings.TrimSpace(originalContent))), true
 	}
 
-	return replaceToolResultText(block, summarizeToolResult(toolName, originalContent)), true
+	return replaceToolResultText(block, summarizeToolResult(toolName, originalContent)+imagesDroppedNote(imageCount)), true
+}
+
+// imagesClause names how many images a pruned tool result lost, for the
+// inside of a marker's brackets, so the marker never hides that an image was
+// there. It is empty when there were none.
+func imagesClause(imageCount int) string {
+	switch imageCount {
+	case 0:
+		return ""
+	case 1:
+		return ", 1 image dropped"
+	default:
+		return fmt.Sprintf(", %d images dropped", imageCount)
+	}
+}
+
+// imagesDroppedNote is imagesClause for the end of a summary line, whose
+// brackets are already closed.
+func imagesDroppedNote(imageCount int) string {
+	if imageCount == 0 {
+		return ""
+	}
+	return " [" + strings.TrimPrefix(imagesClause(imageCount), ", ") + "]"
 }
 
 // replaceToolResultText swaps a tool result's content for text and leaves every

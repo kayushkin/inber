@@ -92,13 +92,16 @@ func extractTextBlockContent(content []anthropic.ContentBlockParamUnion) string 
 // zero, which is exactly how this got here. A block that fails to marshal is
 // counted as zero because it cannot be sent either.
 //
+// An image is the one exception: it is priced by its pixels, not its base64
+// text, which ran about 40 times high (estimateContentBlockTokens).
+//
 // The number this returns runs slightly high — JSON field names and escaping
 // are not tokens — and that is the safe direction for an overflow guard: it
 // prunes a little early rather than letting a request exceed the window.
 func estimateMessageTokens(msg anthropic.MessageParam) int {
 	total := 0
 	for _, block := range msg.Content {
-		total += estimateMarshalled(block)
+		total += estimateContentBlockTokens(block)
 	}
 	return total
 }
