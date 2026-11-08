@@ -2315,3 +2315,33 @@ Filed as todo `7fd27a7e-1960-4a3c-a2d9-8ee9610b333b`.
 
 Also screened: #13279 (do not tell the model about a screenshot tool it lacks) was covered
 2026-11-04; #13169 (GDK hooks) and #10462 are UX and SDK surface.
+
+## Harness-watch — 2026-11-07 (#13279, read again): a budget notice that names a tool the request withholds
+
+[goose #13279](https://github.com/aaif-goose/goose/pull/13279) stopped goose's prompt naming a
+screenshot tool the model did not have. The 2026-11-04 pass grepped inber for tool names left
+over from the tool-store rename and found none stale. That grep did not cover a second way to
+name a missing tool: naming one that exists but is withheld from this request.
+
+inber's response-time limit does exactly that. Past `max_response_time`, `engine/build_hooks.go:58-69`
+tells the model "You are an orchestrator … Either give your answer now or spawn_agent for the
+work." `agent/agent.go:530-547` wraps that in "[BUDGET LIMIT REACHED] … You must stop making
+tool calls" and sets `forceSummary`, and `agent/agent_run.go:78` sends the request with no tools.
+So the model is told to call spawn_agent and to stop calling tools, with no tools to call. The
+"orchestrator" wording is also sent to any agent with the limit set, whether or not it holds
+spawn_agent. Live in agent-store today: claxon (300 s, holds spawn_agent); bran (20 s) is shelved.
+Filed as todo `564835a7-4a5f-495e-b994-62e4e137de2a`.
+
+- **What inber should consider:** decide whether the response-time limit forces a tool-less
+  summary (then drop the spawn option from the notice) or offers spawn_agent alone (what the
+  notice describes); build the wording from the tools the request actually carries, as
+  `conversation/stash.go:69` already does for memory recall.
+
+Also screened this run, nothing new to inber: codex incremental Code Mode tool definitions
+(#60157, #60163) and lazy cached MCP startup (#60039); cline #15254 (re-cutting read results)
+and #15256 (stoppable compaction); dexto #1057/#1061 (deferred and per-call approval — inber
+refuses NeedsApproval outright, `engine/build_hooks.go:85-104`) and #1095 (path canonicalization;
+inber resolves paths against a root but does not confine to it, `tools/root.go`); gemini-cli
+#30165 (mid-stream retry concatenates text — inber does not retry a stream mid-way,
+`agent/agent_run.go:181-235`). No paper in the 7-30 day window that the 2026-11 research note
+does not already cover.
