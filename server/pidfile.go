@@ -34,9 +34,9 @@ func (p *PIDFile) Acquire() error {
 			// Check if the process is still alive.
 			proc, err := os.FindProcess(oldPID)
 			if err == nil && proc.Signal(syscall.Signal(0)) == nil {
-				// Process exists. Is it actually an inber serve?
-				if isInberServe(oldPID) {
-					log.Warn("killing stale inber serve", map[string]interface{}{
+				// Process exists. Is it running the same program we are?
+				if runsThisExecutable(oldPID) {
+					log.Warn("killing stale inber-server", map[string]interface{}{
 						"pid": oldPID,
 					})
 					// Graceful shutdown first.
@@ -79,12 +79,43 @@ func (p *PIDFile) Release() {
 	os.Remove(p.path)
 }
 
-// isInberServe checks if a PID is an "inber serve" process by reading /proc/PID/cmdline.
-func isInberServe(pid int) bool {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+// runsThisExecutable reports whether the process with the given pid runs the
+// same executable file as this process, read from /proc/<pid>/exe.
+//
+// The pid comes out of a file an unclean exit leaves behind, and Linux reuses
+// pids, so the live process at that number may be anything. This used to ask
+// whether its command line contained "inber" and "serve", which an ordinary
+// shell running a command that mentions this repo satisfies. The executable
+// path is a fact the kernel asserts. When either path cannot be read, the
+// answer is false: refusing to kill leaves two servers to fail on the port,
+// which is loud; killing a stranger is not.
+func runsThisExecutable(pid int) bool {
+	log := logger.WithComponent("pidfile")
+	ownExecutable, err := os.Readlink("/proc/self/exe")
 	if err != nil {
+		log.Warn("cannot read own executable; not killing the pid in the pid file", map[string]interface{}{
+			"pid": pid, "error": err.Error(),
+		})
 		return false
 	}
-	cmdline := string(data)
-	return strings.Contains(cmdline, "inber") && strings.Contains(cmdline, "serve")
+	otherExecutable, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		log.Warn("cannot read executable of the pid in the pid file; not killing it", map[string]interface{}{
+			"pid": pid, "error": err.Error(),
+		})
+		return false
+	}
+	return sameExecutablePath(ownExecutable, otherExecutable)
+}
+
+// deletedExecutableSuffix is what the kernel appends to /proc/<pid>/exe when
+// the file has been replaced or removed since the process started, as a
+// deploy does to the incumbent's binary.
+const deletedExecutableSuffix = " (deleted)"
+
+// sameExecutablePath compares two /proc/<pid>/exe link targets, treating a
+// binary replaced in place by a deploy as the same path.
+func sameExecutablePath(ownExecutable, otherExecutable string) bool {
+	return strings.TrimSuffix(ownExecutable, deletedExecutableSuffix) ==
+		strings.TrimSuffix(otherExecutable, deletedExecutableSuffix)
 }
