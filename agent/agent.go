@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -72,6 +73,30 @@ func StopForCanceledTurn(result *TurnResult, err error, completedAPICalls int) e
 // inber's own dependency version. engine.recordModelHealth reads it for that
 // reason.
 var ErrUnconvertibleContentBlock = errors.New("response carries a content block this SDK cannot convert")
+
+// ErrStreamIdle ends a streaming call that went quiet: the provider opened the
+// stream and then sent no event, not even a ping, for the agent's stream idle
+// limit. Before it existed nothing bounded that silence, so a stalled socket
+// held the turn until someone pressed stop.
+//
+// Unlike ErrUnconvertibleContentBlock this IS evidence about the provider — it
+// stopped answering — so engine.recordModelHealth records it as the model's
+// error, the same as the OpenAI client's flat request timeout. It deliberately
+// does not wrap context.Canceled, which inber reads as "the user pressed stop".
+var ErrStreamIdle = errors.New("stream went silent")
+
+// DefaultStreamIdleLimit is how long a stream may go without any event.
+// Anthropic sends a ping event while a response is being produced, and
+// thinking streams its own deltas, so a healthy stream is never quiet for long.
+// Fifteen minutes is the idle limit dexto chose from thirty days of production
+// gaps between stream events (truffle-ai/dexto PR 1029): long enough that no
+// slow-but-alive response trips it, short enough that a dead socket ends.
+const DefaultStreamIdleLimit = 15 * time.Minute
+
+// SetStreamIdleLimit sets how long a streaming call may go without an event
+// before it fails with ErrStreamIdle. A limit of zero or less turns the bound
+// off.
+func (a *Agent) SetStreamIdleLimit(limit time.Duration) { a.streamIdleLimit = limit }
 
 // isContextLengthError checks if an API error is due to exceeding the model's context window.
 //
@@ -183,8 +208,8 @@ type Tool struct {
 
 // Hooks allows callers to observe tool calls and results (e.g., for logging).
 type Hooks struct {
-	OnRequest    func(params *anthropic.MessageNewParams)                    // called before each API request
-	OnResponse   func(resp *anthropic.Message)                               // called after each API response
+	OnRequest  func(params *anthropic.MessageNewParams) // called before each API request
+	OnResponse func(resp *anthropic.Message)            // called after each API response
 	// OnMessageID reports the provider's own identifier for the assistant
 	// message the turn is producing, as soon as the provider names it. On a
 	// streamed response that is the message_start event, which arrives before
@@ -193,8 +218,8 @@ type Hooks struct {
 	// not streamed it fires once the response is in hand, alongside
 	// OnResponse. It may fire more than once with the same id.
 	OnMessageID  func(messageID string)
-	OnThinking   func(text string)                                           // called when thinking blocks are received
-	OnTextDelta  func(text string)                                           // called for each text chunk during streaming
+	OnThinking   func(text string) // called when thinking blocks are received
+	OnTextDelta  func(text string) // called for each text chunk during streaming
 	OnToolCall   func(toolID, name string, input []byte)
 	OnToolResult func(toolID, name, output string, isError bool)
 	// ModifyToolResult is called before a tool result is added to the conversation.
@@ -209,18 +234,23 @@ type Hooks struct {
 
 // Agent runs the conversation loop with Claude.
 type Agent struct {
-	provider       Provider
-	system         string
-	systemBlocks   []anthropic.TextBlockParam
-	tools          []Tool
-	hooks              *Hooks
-	sidebandCallbacks  *SidebandCallbacks
-	readCache          *ReadCache
-	agentName          string
-	sessionID      string
-	thinkingBudget int64 // 0 = disabled, >0 = budget tokens for extended thinking
-	contextWindow  int   // max context tokens for the model (0 = no guard)
-	isOAuth        bool  // true = Claude Max OAuth token; requires Claude Code identity in system prompt
+	provider          Provider
+	system            string
+	systemBlocks      []anthropic.TextBlockParam
+	tools             []Tool
+	hooks             *Hooks
+	sidebandCallbacks *SidebandCallbacks
+	readCache         *ReadCache
+	agentName         string
+	sessionID         string
+	thinkingBudget    int64 // 0 = disabled, >0 = budget tokens for extended thinking
+	contextWindow     int   // max context tokens for the model (0 = no guard)
+	isOAuth           bool  // true = Claude Max OAuth token; requires Claude Code identity in system prompt
+
+	// streamIdleLimit is the longest a streaming call may go without an event
+	// before it is abandoned with ErrStreamIdle. New sets it to
+	// DefaultStreamIdleLimit; SetStreamIdleLimit changes it.
+	streamIdleLimit time.Duration
 
 	// BeforeRequest is called before each API call with a mutable reference to
 	// the messages slice. Use it to prune/compact if the conversation is too large.
@@ -283,20 +313,22 @@ type Agent struct {
 // New creates an agent with the given system prompt.
 func New(provider Provider, system string) *Agent {
 	return &Agent{
-		provider:      provider,
-		system:        system,
-		readCache:     NewReadCache(),
-		turnAnchorIdx: -1,
+		provider:        provider,
+		system:          system,
+		streamIdleLimit: DefaultStreamIdleLimit,
+		readCache:       NewReadCache(),
+		turnAnchorIdx:   -1,
 	}
 }
 
 // NewWithSystemBlocks creates an agent with pre-built system blocks.
 func NewWithSystemBlocks(provider Provider, blocks []anthropic.TextBlockParam) *Agent {
 	return &Agent{
-		provider:      provider,
-		systemBlocks:  blocks,
-		readCache:     NewReadCache(),
-		turnAnchorIdx: -1,
+		provider:        provider,
+		systemBlocks:    blocks,
+		streamIdleLimit: DefaultStreamIdleLimit,
+		readCache:       NewReadCache(),
+		turnAnchorIdx:   -1,
 	}
 }
 

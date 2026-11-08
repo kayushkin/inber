@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -185,14 +187,27 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 	var apiErr error
 
 	if a.hooks != nil && a.hooks.OnTextDelta != nil {
-		// Streaming API call
-		streamResp, err := a.provider.CompleteStreaming(ctx, params)
+		// Streaming API call. The stream runs under its own context so that
+		// a stream which goes silent can be cancelled without cancelling the
+		// turn: the watchdog fires after streamIdleLimit with no event, and
+		// every event pushes it back.
+		streamCtx, cancelStream := context.WithCancelCause(ctx)
+		defer cancelStream(nil)
+		var watchdog *time.Timer
+		if a.streamIdleLimit > 0 {
+			watchdog = time.AfterFunc(a.streamIdleLimit, func() { cancelStream(ErrStreamIdle) })
+			defer watchdog.Stop()
+		}
+		streamResp, err := a.provider.CompleteStreaming(streamCtx, params)
 		if err != nil {
-			apiErr = err
+			apiErr = streamIdleError(streamCtx, a.streamIdleLimit, err)
 		} else {
 			var accumulated anthropic.Message
 			var announcedID string
 			for streamResp.Next() {
+				if watchdog != nil {
+					watchdog.Reset(a.streamIdleLimit)
+				}
 				event := streamResp.Current()
 				if err := accumulated.Accumulate(event); err != nil {
 					continue
@@ -212,7 +227,7 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 				}
 			}
 			if err := streamResp.Err(); err != nil {
-				apiErr = err
+				apiErr = streamIdleError(streamCtx, a.streamIdleLimit, err)
 				partial = &accumulated
 			} else {
 				resp = &accumulated
@@ -253,6 +268,18 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 	}
 
 	return resp, nil
+}
+
+// streamIdleError names the cause of a failed stream. When the idle watchdog
+// cancelled the stream, the error the SDK hands back is a bare context
+// cancellation, which inber elsewhere reads as the user pressing stop; it is
+// replaced by ErrStreamIdle so the turn reports what actually happened. Any
+// other error passes through unchanged.
+func streamIdleError(streamCtx context.Context, limit time.Duration, err error) error {
+	if errors.Is(context.Cause(streamCtx), ErrStreamIdle) {
+		return fmt.Errorf("%w: no event for %s", ErrStreamIdle, limit)
+	}
+	return err
 }
 
 // unconvertibleContentBlock reports the first content block that Message.ToParam
