@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -240,6 +241,13 @@ func TestBuildLimitCheck_ResponseTimeExceeded(t *testing.T) {
 	}
 	if reason == "" {
 		t.Error("should provide a reason")
+	}
+	// Crossing a limit makes the next request carry no tools, so the reason
+	// must not tell the model to call one (todo 564835a7).
+	for _, toolWord := range []string{"spawn_agent", "spawn"} {
+		if strings.Contains(reason, toolWord) {
+			t.Errorf("reason names %q, but the request it goes into has no tools: %q", toolWord, reason)
+		}
 	}
 }
 

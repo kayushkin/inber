@@ -54,16 +54,20 @@ func (e *Engine) buildLimitCheck() func(result *agent.TurnResult) (bool, string)
 			)
 		}
 
-		// Check response time limit (orchestrator speed enforcement)
+		// Check response time limit.
+		//
+		// Like the token and turn limits, crossing it makes the agent loop send
+		// the next request with no tools (forceSummary in agent.Run), so the
+		// reason must not tell the model to call one. It used to say "spawn_agent
+		// for the work", which the model could not do in that request and tended
+		// to write out as text instead. Whether an orchestrator should keep
+		// spawn_agent past this limit is an open decision (todo 564835a7).
 		if e.Limits.MaxResponseTime > 0 && !e.Turn.StartTime.IsZero() {
 			elapsed := time.Since(e.Turn.StartTime)
 			limit := time.Duration(e.Limits.MaxResponseTime) * time.Second
 			if elapsed > limit {
 				return true, fmt.Sprintf(
-					"Response time exceeded: %.0fs elapsed (limit: %ds). "+
-						"You are an orchestrator — respond or spawn immediately. "+
-						"Do NOT continue reading files or running commands. "+
-						"Either give your answer now or spawn_agent for the work.",
+					"Response time exceeded: %.0fs elapsed (limit: %ds). Give your answer now.",
 					elapsed.Seconds(), e.Limits.MaxResponseTime,
 				)
 			}
