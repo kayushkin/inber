@@ -3,51 +3,30 @@ package engine
 import (
 	"crypto/sha256"
 	"fmt"
-	"runtime/debug"
 	"strings"
-	"sync"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/internal/buildinfo"
 	"github.com/kayushkin/inber/memory"
 	sessionMod "github.com/kayushkin/inber/session"
 )
 
 // sourceRef returns a short string identifying the build (git commit + dirty flag).
 // Cached after first call. Goes in the dynamic group so it doesn't bust cache on redeploy.
-var (
-	sourceRefOnce  sync.Once
-	sourceRefValue string
-)
-
 func sourceRef() string {
-	sourceRefOnce.Do(func() {
-		info, ok := debug.ReadBuildInfo()
-		if !ok {
-			sourceRefValue = "unknown"
-			return
-		}
-		var rev, modified string
-		for _, s := range info.Settings {
-			switch s.Key {
-			case "vcs.revision":
-				rev = s.Value
-			case "vcs.modified":
-				modified = s.Value
-			}
-		}
-		if rev == "" {
-			sourceRefValue = "dev"
-			return
-		}
-		if len(rev) > 8 {
-			rev = rev[:8]
-		}
-		sourceRefValue = "inber@" + rev
-		if modified == "true" {
-			sourceRefValue += "+dirty"
-		}
-	})
-	return sourceRefValue
+	build := buildinfo.Current()
+	if build.Revision == "" {
+		return "unknown"
+	}
+	ref := build.Revision
+	if len(ref) > 8 {
+		ref = ref[:8]
+	}
+	ref = "inber@" + ref
+	if build.Modified {
+		ref += "+dirty"
+	}
+	return ref
 }
 
 // cachedPrefix stores the hash and blocks of the last stable system prefix,

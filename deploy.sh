@@ -113,11 +113,21 @@ sleep 2
 systemctl --user is-active "$UNIT_NAME"
 
 echo "==> Health check..."
-curl -fsS http://127.0.0.1:8200/api/health || {
+health="$(curl -fsS http://127.0.0.1:8200/api/health)" || {
   echo "FAILED — health check did not respond"
   exit 1
 }
-echo
+echo "$health"
+
+# A health answer alone also comes from the OLD binary, so check that the server
+# answering is the build this script just installed.
+echo "==> Checking the running build..."
+running_revision="$(printf '%s' "$health" | jq -r '.build.revision // empty')"
+if [ "$running_revision" != "$vcs_revision" ]; then
+  echo "FAILED — the server reports build '${running_revision:-<none>}', but this deploy built $vcs_revision" >&2
+  exit 1
+fi
+echo "    running vcs.revision=$running_revision"
 
 echo "==> Done. inber-server is live on :8200."
 

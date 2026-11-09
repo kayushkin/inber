@@ -3,9 +3,12 @@ package server
 import (
 	"net/http"
 	"time"
+
+	"github.com/kayushkin/inber/internal/buildinfo"
 )
 
-// handleHealth returns server health status.
+// handleHealth returns server health status and the commit the running binary
+// was built from, so a deploy can check that the new build is the one answering.
 func (g *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -46,6 +49,7 @@ func (g *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"nats_connected":  natsConnected,
 		"active_sessions": activeSessions,
 		"agents_loaded":   agentsLoaded,
+		"build":           buildinfo.Current(),
 	}
 
 	if lastErr != "" {

@@ -5,6 +5,7 @@
 //	inber-server                  # default port :8200
 //	inber-server --addr :9000     # custom port
 //	inber-server --config gw.json # custom config file
+//	inber-server --version        # print the commit this binary was built from
 package main
 
 import (
@@ -19,18 +20,35 @@ import (
 
 	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/inber/agent/registry"
+	"github.com/kayushkin/inber/internal/buildinfo"
 	"github.com/kayushkin/inber/logger"
 	"github.com/kayushkin/inber/server"
 	"github.com/kayushkin/llm-bridge/servicesettings"
 	toolstoretools "github.com/kayushkin/tool-store/tools"
 )
 
+// printBuild writes the binary's commit stamp to stdout and returns the exit
+// code: 1 when there is no stamp, because then nothing ties the binary to a commit.
+func printBuild(build buildinfo.Build) int {
+	if build.Revision == "" {
+		fmt.Fprintln(os.Stderr, "inber-server: this binary carries no vcs.revision stamp")
+		return 1
+	}
+	fmt.Printf("revision=%s time=%s modified=%t\n", build.Revision, build.Time, build.Modified)
+	return 0
+}
+
 func main() {
 	addr := flag.String("addr", ":8200", "API listen address")
 	configFile := flag.String("config", "", "Config file (JSON)")
 	requireChecks := flag.String("require", "", "Comma-separated allowlist of selftest checks that are fatal at startup (nats,agent-store,workspace,anthropic-key). Unlisted checks are demoted to WARN. Empty = legacy default (agent-store only).")
 	apiKeyFromAuthStore := flag.String("api-key-from-auth-store", "", "If non-empty, resolve ANTHROPIC_API_KEY from auth-store (AUTH_STORE_URL, default http://127.0.0.1:8303) at startup using this value as X-Auth-App. Requires AUTH_STORE_TOKEN.")
+	printVersion := flag.Bool("version", false, "Print the commit this binary was built from, then exit. Exits 1 when the binary carries no commit stamp.")
 	flag.Parse()
+
+	if *printVersion {
+		os.Exit(printBuild(buildinfo.Current()))
+	}
 
 	if err := run(*addr, *configFile, *requireChecks, *apiKeyFromAuthStore); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
