@@ -1093,3 +1093,19 @@ session's servers with its engine, `server/server.go`), #60498 and goose #13222 
 turns; inber appends `resp.ToParam()`, which keeps thinking blocks and their signatures,
 `agent/agent.go:577`). codex: Guardian context budgeting, TUI and host-embedding work. cline: cloud
 sessions and desktop UX. claude-code: changelog and plugin moves only. gemini-cli, dexto: bug fixes.
+
+## 2026-11-09: cache warming counts from send time and stops after a miss
+
+opencode's opt-in cache warming (pings that keep a session's prompt cache alive while the user is
+idle) got three fixes in one day. [#62831](https://github.com/anomalyco/opencode/pull/62831) times
+pings from the model's `cache.ttl` by default and skips a 1-hour cache. [#62926](https://github.com/anomalyco/opencode/pull/62926)
+stops warming once a ping reads less from cache than it writes, and starts again on the next real
+request. [#62941](https://github.com/anomalyco/opencode/pull/62941) counts the interval from when
+the request was *sent*, because the provider's cache lifetime starts then. Counted from the end
+of the response, any reply slower than about 30 seconds made the ping land after a 5-minute cache
+had expired.
+
+- **What inber should consider:** inber does not warm, and nothing in it is timed against the cache
+  lifetime today. If anything ever is (warming, or a "cache is cold, compact now" rule), take three
+  rules from these fixes: time it from send, use the TTL the request asked for, and treat
+  `cache_read < cache_creation` on the result as proof that the cache had gone cold.

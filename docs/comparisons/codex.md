@@ -178,3 +178,16 @@ the endpoint, and its own measurement agrees with Codex on why the `session-id` 
 two things most worth taking next are reasoning replay, which changes answer quality on every
 subscription call, and an OS sandbox, which inber has no answer for today. Codex's per-tool
 approval policy also shows what inber's assist mode needs to become useful: someone to ask.
+
+## 2026-11-09: one recovery path for context-window errors, whatever the transport
+
+[#60482](https://github.com/openai/codex/pull/60482) sends `context_length_exceeded` from HTTP 400,
+status-less events and SSE through one shared parser, so manual compaction can retry with less
+history, and it ends a stream as soon as it reports the failure. inber also has one recovery path
+(prune to half the window, retry once), but the retry ignores how the first call was made. A
+streamed call that fails on context length is retried through `a.provider.Complete`
+(`agent/agent_run.go:252`), so the retried reply sends no `delta` events and runs with no stream
+idle bound. Its text reaches the chat only in the turn's final `done` event.
+
+- **What inber should consider:** retry through the same streaming branch the call started on.
+  Filed as todo `25ef6454-54c4-4c7c-a652-d6850782b330`.

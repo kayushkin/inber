@@ -189,3 +189,65 @@ does not apply, as inber has no fetch tool of its own; cline #15256 (compaction 
 stopped) does not apply, as `engine/lifecycle.go:95` passes the turn's context to the summarizer.
 gemini-cli #30180 is written up in `docs/comparisons/gemini-cli.md` and filed as todo
 `c91cb46f-9dc5-4ac7-bf2c-1ce90eb06c7b`.
+
+# 2026-11-09 sweep
+
+arXiv API queries sorted by submission date (coding agent, agent harness, context compaction,
+prompt caching, agent memory, tool calling). The listing returned ids that do not match the
+papers; each id below comes from a title query and resolves to the paper named. Two papers are
+written up. 2611.09088 (routine operations, such as reapplying a plugin, silently break the order a
+guardrail needs) was read and does not apply now, since inber's guard has no production caller.
+
+Upstream: codex [#60482](https://github.com/openai/codex/pull/60482) sends context-window errors
+from every transport through one recovery path. Checking inber's single recovery path found that
+its retry drops the transport: a streamed call that fails on context length is retried with
+`Complete` rather than streamed (`agent/agent_run.go:252`). So the retried reply sends no deltas
+and runs with no idle bound. Filed as todo `25ef6454-54c4-4c7c-a652-d6850782b330`; details in
+`docs/comparisons/codex.md`. opencode's cache-warming fixes are in `docs/comparisons/opencode.md`.
+
+One finding is written down here and **not filed**. dexto [#1183](https://github.com/truffle-ai/dexto/pull/1183)
+and [#1169](https://github.com/truffle-ai/dexto/pull/1169) give MCP stdio servers and shell commands
+only an allowlisted environment. inber's MCP client starts each server with the whole server
+environment plus the session's entries (`tools/mcp/client.go:111`, called from
+`server/session_mcp.go:101`). I read the live inber-server's variable *names* on 2026-11-09:
+the list includes `AUTH_STORE_TOKEN` and `SSH_AUTH_SOCK`, so any third-party MCP server a session
+starts can read every credential in auth-store. Shell commands are already the open decision
+`51822d74`, and the operator chose on 2026-09-27 to leave the auth-store token in agents'
+environments. Whether that choice also covers MCP servers, which are third-party code rather than
+the agent, is the operator's to make. A cron job should not decide it.
+
+Screened and not written up: codex #60473 (compaction honors retry advice) does not apply, since
+inber's summarizer does not retry; codex #60487 / #60342 (untrusted context as tool output) is
+the 2026-10-26 entry in `agentic-design-patterns.md`; gemini-cli #30204 (kill child processes on
+abort) lives in tool-store's shell tool, not this repo; goose #13378 and codex #60423 (deferred MCP
+tools) add nothing new.
+
+## 7. A state machine outside the context keeps a long run on its procedure ([2611.10884](https://arxiv.org/abs/2611.10884))
+
+Agents drift from a procedure given once at the start of a long unattended run, and restating it
+or resuming the agent only moves the drift elsewhere. An executable finite-state machine holds the
+workflow state outside the model and enforces it at three points: tool calls, state transitions
+and the end of the turn. On 200-account SOP-Bench batches, Haiku 4.5 with the FSM made 139
+correct, on-procedure decisions against 48 for the best baseline, and beat plain Sonnet 4.6 at
+38% of the cost. The gain tracked how far the plain agent drifted.
+
+- **What inber should consider:** inber's unattended work (scheduled jobs, autoworker runs) carries its
+  procedure only as prompt text, and its workflow hooks (`engine/workflow_*.go`) run after tools
+  with no idea of a current step. A job with numbered steps, such as this one (scan, document,
+  file at most three), could declare its steps and their allowed tools, with a turn-end check that
+  refuses to stop before the last step. That is a new feature, not a defect.
+
+## 8. A stale instruction file costs every later session, and no agent fixes it ([2611.09802](https://arxiv.org/abs/2611.09802))
+
+The authors ran 732 trajectories over 22 tasks, each under a stale, corrected or removed
+instruction in AGENTS.md / CLAUDE.md. Agents followed stale guidance whenever it touched their
+task, even when the right answer was in the repo. A stale test command cost Sonnet 5.5 about two
+extra tool calls per run (a third more). Agents recovered from the failures, but **none repaired
+the instruction file**. Task success hid the cost.
+
+- **What inber should consider:** inber itself loads no instruction file; the bridge delivers the
+  prompts. The finding still applies to the repo prompt this host renders for inber: a run that
+  hits a stale path or command should report it, so the next session does not pay again.
+  Harness-watch has found doc paragraphs here that overstated the code twice already. The cheap
+  check is a lint that runs every `file:line` and command named in a repo prompt, and that belongs
+  in agent-store, not in inber.
