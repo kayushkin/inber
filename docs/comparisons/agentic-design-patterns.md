@@ -3871,8 +3871,8 @@ loops consult. That is the same fork already named for `maxAPICalls` at
   arguments were truncated by the output limit" half is already satisfied: both loops return before
   dispatch on `MaxTokens` (`agent/agent.go:415`, `engine/turn_openai.go:107`). The other half —
   `mapOpenAIFinishReason`'s `default: return EndTurn` (`agent/openai_conversion.go:253`) reporting
-  `content_filter` as a clean completion — is a correction that belongs on existing todo `6b4a9ab5`,
-  not a new filing.
+  `content_filter` as a clean completion — was sent to todo `6b4a9ab5`, which does not exist
+  (noteboard 404, checked 2026-11-10); filed as `f338b981-c783-44cc-b284-c5b5975f8bd5` — see `goose.md` 2026-11-10.
 - **`agent/chain.go:64-66`** (held back for slot reasons, not merit): `props, ok :=
   schema.Properties.(map[string]any); if !ok { return schema }` returns the schema **unchanged**, so a
   zero-arg tool spelled `{"type":"object"}` (nil `Properties`) is silently denied the sideband and

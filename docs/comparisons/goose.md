@@ -2345,3 +2345,24 @@ inber resolves paths against a root but does not confine to it, `tools/root.go`)
 #30165 (mid-stream retry concatenates text — inber does not retry a stream mid-way,
 `agent/agent_run.go:181-235`). No paper in the 7-30 day window that the 2026-11 research note
 does not already cover.
+
+## Harness-watch — 2026-11-10 ([#13226](https://github.com/aaif-goose/goose/pull/13226)): a reply the provider cut short is not a finished reply
+
+goose now rejects the turn when a Responses or Anthropic stream reports an error, or
+closes without its terminal event. It holds tool calls until the response completes, so
+a failed response cannot run them, and keeps the partial text. A `context_length_exceeded`
+that arrives inside a 200 stream now takes the same compaction path as the HTTP error.
+
+inber already holds tool calls until the response ends. The Anthropic early-close case is
+open todo `2b6cb49e`, and the empty `choices` case is open todo `d30c5145`. A third route
+was documented but never filed: `agentic-design-patterns.md` sent it to todo `6b4a9ab5`,
+which noteboard answers 404. inber's own Responses reader names a filtered reply —
+`agent/codex_subscription.go:357-358` sets `finishReason = "content_filter"` — and then
+`mapOpenAIFinishReason`'s `default:` (`agent/openai_conversion.go:287-288`) turns it into
+`end_turn`. `engine/turn_openai.go:162` takes that as a clean finish. So on the API-key
+Responses route and the Codex-subscription route, a reply the provider stopped part-way
+reaches the user, the bus and the transcript as complete, with no error.
+
+- **What inber should consider:** a finish reason that means "stopped early" should never
+  map to `end_turn`. Filed as todo `f338b981-c783-44cc-b284-c5b5975f8bd5`; the fix has to decide which stop reason it becomes and
+  whether the partial text is kept, as the stream-error path keeps it.
