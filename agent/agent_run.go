@@ -182,10 +182,48 @@ func toolsWereWithheld(params *anthropic.MessageNewParams, tools *toolInfo) bool
 // partially accumulated message comes back alongside the error, so the caller
 // can keep what the user saw instead of discarding it.
 func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNewParams, messages *[]anthropic.MessageParam) (*anthropic.Message, error) {
-	var resp *anthropic.Message
-	var partial *anthropic.Message
-	var apiErr error
+	resp, partial, apiErr := a.callProvider(ctx, params)
 
+	if apiErr != nil {
+		// If we hit a context length error, try pruning and retry once
+		if a.BeforeRequest != nil && a.contextWindow > 0 && isContextLengthError(apiErr) {
+			pruned, tokensFreed := a.BeforeRequest(ctx, *messages, a.contextWindow/2)
+			if pruneDidSomething(*messages, pruned, tokensFreed) {
+				a.shiftBreakpointIndicesAfterHeadDrop(len(*messages) - len(pruned))
+				*messages = pruned
+				params.Messages = *messages
+				// The breakpoints were placed against the longer slice, and the
+				// messages carrying them may be the ones that just went away.
+				placeHistoryCacheBreakpoints(params.Messages, a.FrozenIdx, a.turnAnchorIdx)
+				resp, partial, apiErr = a.callProvider(ctx, params)
+			}
+		}
+		if apiErr != nil {
+			return partial, fmt.Errorf("api call failed: %w", apiErr)
+		}
+	}
+
+	// A response carrying a block the SDK cannot convert must not leave this
+	// function unreported: the next thing done with it is resp.ToParam(), and
+	// that is a nil pointer dereference rather than an error return. Report it
+	// here, at the point of failure, and hand the response back so the caller
+	// keeps the text the user already read — the same partial-response path a
+	// mid-stream failure takes.
+	if index, blockType, found := unconvertibleContentBlock(resp); found {
+		return resp, fmt.Errorf("%w: content block %d has type %q", ErrUnconvertibleContentBlock, index, blockType)
+	}
+
+	return resp, nil
+}
+
+// callProvider sends one request, streaming it when the hooks want text
+// deltas and sending it whole otherwise. Every send in a turn goes through
+// here, the context-length retry included, so a retried call emits deltas and
+// runs under the stream idle watchdog exactly as the first attempt did.
+//
+// When a streaming call fails after the model has written text, partial holds
+// what was accumulated so far, and resp is nil.
+func (a *Agent) callProvider(ctx context.Context, params *anthropic.MessageNewParams) (resp *anthropic.Message, partial *anthropic.Message, apiErr error) {
 	if a.hooks != nil && a.hooks.OnTextDelta != nil {
 		// Streaming API call. The stream runs under its own context so that
 		// a stream which goes silent can be cancelled without cancelling the
@@ -238,36 +276,7 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 		resp, apiErr = a.provider.Complete(ctx, params)
 	}
 
-	if apiErr != nil {
-		// If we hit a context length error, try pruning and retry once
-		if a.BeforeRequest != nil && a.contextWindow > 0 && isContextLengthError(apiErr) {
-			pruned, tokensFreed := a.BeforeRequest(ctx, *messages, a.contextWindow/2)
-			if pruneDidSomething(*messages, pruned, tokensFreed) {
-				a.shiftBreakpointIndicesAfterHeadDrop(len(*messages) - len(pruned))
-				*messages = pruned
-				params.Messages = *messages
-				// The breakpoints were placed against the longer slice, and the
-				// messages carrying them may be the ones that just went away.
-				placeHistoryCacheBreakpoints(params.Messages, a.FrozenIdx, a.turnAnchorIdx)
-				resp, apiErr = a.provider.Complete(ctx, params)
-			}
-		}
-		if apiErr != nil {
-			return partial, fmt.Errorf("api call failed: %w", apiErr)
-		}
-	}
-
-	// A response carrying a block the SDK cannot convert must not leave this
-	// function unreported: the next thing done with it is resp.ToParam(), and
-	// that is a nil pointer dereference rather than an error return. Report it
-	// here, at the point of failure, and hand the response back so the caller
-	// keeps the text the user already read — the same partial-response path a
-	// mid-stream failure takes.
-	if index, blockType, found := unconvertibleContentBlock(resp); found {
-		return resp, fmt.Errorf("%w: content block %d has type %q", ErrUnconvertibleContentBlock, index, blockType)
-	}
-
-	return resp, nil
+	return resp, partial, apiErr
 }
 
 // streamIdleError names the cause of a failed stream. When the idle watchdog
