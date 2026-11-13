@@ -164,10 +164,20 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 			return result, agent.ErrEmptyReply
 		}
 
+		// A reply cut off at max_tokens keeps only its text. See
+		// agent.ErrReplyCutOffAtOutputLimit.
+		if anthropicResp.StopReason == anthropic.StopReasonMaxTokens {
+			if message, text, keep := agent.CutOffReplyMessage(anthropicResp); keep {
+				e.Messages = append(e.Messages, message)
+				result.Text += text
+				result.Incomplete = true
+			}
+			return result, agent.ErrReplyCutOffAtOutputLimit
+		}
+
 		e.Messages = append(e.Messages, anthropicResp.ToParam())
-		
-		if anthropicResp.StopReason == anthropic.StopReasonEndTurn || 
-		   anthropicResp.StopReason == anthropic.StopReasonMaxTokens {
+
+		if anthropicResp.StopReason == anthropic.StopReasonEndTurn {
 			for _, block := range anthropicResp.Content {
 				if block.Type == "text" {
 					result.Text += block.Text

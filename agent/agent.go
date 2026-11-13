@@ -448,7 +448,7 @@ type TurnResult struct {
 	// cheap ones is invisible in every total inber records.
 	APICalls []APICallUsage
 	// Incomplete is set when the turn ended on an error after the model had
-	// already written text. Text then holds what the user watched arrive, not
+	// already written text, including a reply cut off at max_tokens. Text then holds what the user watched arrive, not
 	// a finished answer. Callers must still treat the turn as failed.
 	Incomplete bool
 }
@@ -611,11 +611,21 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 			return result, ErrEmptyReply
 		}
 
+		// A reply cut off at max_tokens keeps only its text. See
+		// ErrReplyCutOffAtOutputLimit.
+		if resp.StopReason == anthropic.StopReasonMaxTokens {
+			if message, text, keep := CutOffReplyMessage(resp); keep {
+				*messages = append(*messages, message)
+				result.Text += text
+				result.Incomplete = true
+			}
+			return result, ErrReplyCutOffAtOutputLimit
+		}
+
 		// Append assistant message
 		*messages = append(*messages, resp.ToParam())
 
-		// If stop reason is "end" or "max_tokens", extract text and return
-		if resp.StopReason == anthropic.StopReasonEndTurn || resp.StopReason == anthropic.StopReasonMaxTokens {
+		if resp.StopReason == anthropic.StopReasonEndTurn {
 			for _, block := range resp.Content {
 				if block.Type == "text" {
 					result.Text += block.Text

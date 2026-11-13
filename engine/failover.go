@@ -150,6 +150,9 @@ func (e *Engine) recordModelHealth(turnContext context.Context, model string, du
 //     provider answered; Anthropic documents the empty end_turn as ordinary
 //     model behaviour after a tool result, so one is no reason to demote the
 //     model for every session on the box.
+//   - agent.ErrReplyCutOffAtOutputLimit — the reply reached the MaxTokens
+//     inber put on the request. The limit is inber's own, not a fault in the
+//     model or provider.
 //
 // The deadline case has to ask whose clock fired, because inber runs two kinds
 // and only one of them is its own. Its own are on the turn context: a sub-agent
@@ -194,7 +197,8 @@ func errorIsEvidenceAboutTheModel(turnContext context.Context, err error) bool {
 	case errors.Is(err, context.Canceled),
 		errors.Is(err, agent.ErrMaxAPICallsExceeded),
 		errors.Is(err, agent.ErrUnconvertibleContentBlock),
-		errors.Is(err, agent.ErrEmptyReply):
+		errors.Is(err, agent.ErrEmptyReply),
+		errors.Is(err, agent.ErrReplyCutOffAtOutputLimit):
 		return false
 	case errors.Is(err, context.DeadlineExceeded):
 		return turnContext.Err() == nil
