@@ -146,6 +146,10 @@ func (e *Engine) recordModelHealth(turnContext context.Context, model string, du
 //     mark a working model unhealthy in host-shared model-store on every turn
 //     that meets the new block, and failover would walk the whole roster into
 //     the same wall.
+//   - agent.ErrEmptyReply — the model ended its turn with nothing in it. The
+//     provider answered; Anthropic documents the empty end_turn as ordinary
+//     model behaviour after a tool result, so one is no reason to demote the
+//     model for every session on the box.
 //
 // The deadline case has to ask whose clock fired, because inber runs two kinds
 // and only one of them is its own. Its own are on the turn context: a sub-agent
@@ -189,7 +193,8 @@ func errorIsEvidenceAboutTheModel(turnContext context.Context, err error) bool {
 	switch {
 	case errors.Is(err, context.Canceled),
 		errors.Is(err, agent.ErrMaxAPICallsExceeded),
-		errors.Is(err, agent.ErrUnconvertibleContentBlock):
+		errors.Is(err, agent.ErrUnconvertibleContentBlock),
+		errors.Is(err, agent.ErrEmptyReply):
 		return false
 	case errors.Is(err, context.DeadlineExceeded):
 		return turnContext.Err() == nil

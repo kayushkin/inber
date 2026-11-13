@@ -157,6 +157,13 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 			hooks.OnResponse(anthropicResp)
 		}
 
+		// An empty end_turn reply (an empty choices array converts to one) is
+		// not appended: mid-conversation it is a 400 from Anthropic after any
+		// failover, and it hands the user an empty answer as a success.
+		if anthropicResp.StopReason == anthropic.StopReasonEndTurn && agent.ReplyAnswersNothing(anthropicResp) {
+			return result, agent.ErrEmptyReply
+		}
+
 		e.Messages = append(e.Messages, anthropicResp.ToParam())
 		
 		if anthropicResp.StopReason == anthropic.StopReasonEndTurn || 

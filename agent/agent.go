@@ -605,6 +605,12 @@ func (a *Agent) Run(ctx context.Context, model string, messages *[]anthropic.Mes
 		// Process response and update result stats
 		a.processResponse(resp, result, toolsWereWithheld(params, tools))
 
+		// An empty end_turn reply is not appended: mid-conversation it is a 400
+		// on every later request. See ErrEmptyReply.
+		if resp.StopReason == anthropic.StopReasonEndTurn && ReplyAnswersNothing(resp) {
+			return result, ErrEmptyReply
+		}
+
 		// Append assistant message
 		*messages = append(*messages, resp.ToParam())
 
