@@ -251,3 +251,17 @@ the instruction file**. Task success hid the cost.
   Harness-watch has found doc paragraphs here that overstated the code twice already. The cheap
   check is a lint that runs every `file:line` and command named in a repo prompt, and that belongs
   in agent-store, not in inber.
+
+## 9. A memory tier that wins nothing on one-question benchmarks ([2610.07782](https://arxiv.org/abs/2610.07782))
+
+The authors measure a persistent memory tier in a multi-agent inference stack: across eight paired
+datasets (n=100 per arm) it raised the peak KV-cache working set by 0.37 MiB and changed accuracy
+by +0.015, with a 95% interval of −0.011 to +0.046 that includes zero. They argue the null comes
+from the benchmark design, not noise: each item brings its own evidence and is scored alone, and a
+fair run must clear stored traces between conditions, so recall has nothing to find. Reaching the
+null took four measurement corrections; three of them had inflated the gain, and none showed in the
+results table.
+
+- **What inber should consider:** any test of inber's memory auto-context (`memory/auto_context.go`)
+  must use tasks that span sessions and need facts from earlier ones, and must reset `memory.db`
+  between arms. A one-shot coding benchmark will show memory as worthless whether or not it helps.

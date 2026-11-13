@@ -1109,3 +1109,22 @@ had expired.
   lifetime today. If anything ever is (warming, or a "cache is cold, compact now" rule), take three
   rules from these fixes: time it from send, use the TTL the request asked for, and treat
   `cache_read < cache_creation` on the result as proof that the cache had gone cold.
+
+## 2026-11-12: a changed system prompt or tool list voids earlier thinking signatures
+
+[#63592](https://github.com/anomalyco/opencode/pull/63592): nine running Claude child sessions
+failed together after `AGENTS.md` changed in their checkout. Anthropic binds each signed thinking
+block to the system prompt and tools it was made under, so replaying an old block after either
+changes returns 400 with "Invalid `signature` in `thinking` block … The `system` prompt differs
+from the one this block was created with". opencode now tells the Claude process to drop
+mismatched blocks rather than fail.
+
+- **What inber should consider:** inber has a strip-and-retry for this case
+  (`engine/turn_execute.go:45-50`), but its trigger can never fire. `IsThinkingSignatureError`
+  (`internal/apiutil/apiutil.go:12`) returns `msg == "Error"`, while anthropic-sdk-go v1.35.0
+  formats every API error as `POST "<url>": 400 Bad Request … <json>`
+  (`internal/apierror/apierror.go:35-43` in the module), and `Agent.Run` wraps it again as
+  `api call failed: …` (`agent/agent_run.go:202`). So with thinking on (`server/api_bridge.go:824`),
+  a mid-session change to the system blocks or tools fails the turn instead of retrying. Resumed
+  sessions do not hit this, because resume strips all thinking (`server/session_creation.go:260`).
+  Added to the open todo cf3b6b4c, which already names this predicate.
