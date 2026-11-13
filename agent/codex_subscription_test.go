@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
 )
 
 // writeCodexAuthFile writes an auth file shaped like the Codex CLI's, holding
@@ -190,6 +192,28 @@ func TestAnIncompleteResponseFromTheCodexSubscriptionEndsWithFinishReasonLength(
 	}
 	if reply.Choices[0].FinishReason != "length" {
 		t.Errorf("finish reason = %q, want length", reply.Choices[0].FinishReason)
+	}
+}
+
+// TestAResponseStoppedByTheContentFilterConvertsToARefusal: the Responses
+// reader names the filter, and the conversion used to turn it into end_turn.
+func TestAResponseStoppedByTheContentFilterConvertsToARefusal(t *testing.T) {
+	authFile, _ := writeCodexAuthFile(t, "chatgpt", time.Now().Add(time.Hour))
+	f := newFakeResponsesEndpoint(t,
+		`{"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"partial"}]}}`,
+		`{"type":"response.incomplete","response":{"id":"resp_3","status":"incomplete","incomplete_details":{"reason":"content_filter"}}}`)
+	client := NewOpenAIClientThroughCodexSubscription(f.server.URL, authFile, "gpt-test")
+
+	reply, err := client.ChatCompletion(context.Background(), OpenAIRequest{Messages: []OpenAIMessage{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatalf("ChatCompletion: %v", err)
+	}
+	message, err := ConvertOpenAIResponseToAnthropic(reply)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if message.StopReason != anthropic.StopReasonRefusal {
+		t.Errorf("stop reason = %q, want refusal", message.StopReason)
 	}
 }
 

@@ -175,6 +175,18 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 			return result, agent.ErrReplyCutOffAtOutputLimit
 		}
 
+		// A reply the provider's content filter stopped keeps only its text.
+		// On this route refusal comes only from finish_reason content_filter.
+		// See agent.ErrReplyStoppedByContentFilter.
+		if anthropicResp.StopReason == anthropic.StopReasonRefusal {
+			if message, text, keep := agent.ContentFilteredReplyMessage(anthropicResp); keep {
+				e.Messages = append(e.Messages, message)
+				result.Text += text
+				result.Incomplete = true
+			}
+			return result, agent.ErrReplyStoppedByContentFilter
+		}
+
 		e.Messages = append(e.Messages, anthropicResp.ToParam())
 
 		if anthropicResp.StopReason == anthropic.StopReasonEndTurn {

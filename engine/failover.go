@@ -192,13 +192,18 @@ func (e *Engine) recordModelHealth(turnContext context.Context, model string, du
 // stop reason". Whether a refusal, or a pause_turn inber has no branch for, is a
 // provider fault, a model fault or a gap in inber is an open question on todo
 // 4c511c8f; deciding it here would settle it by accident.
+//
+// agent.ErrReplyStoppedByContentFilter is the one refusal classified here: an
+// OpenAI-compatible provider's content filter stopping a reply is not an outage.
+// A refusal on the Anthropic route still reaches "unexpected stop reason".
 func errorIsEvidenceAboutTheModel(turnContext context.Context, err error) bool {
 	switch {
 	case errors.Is(err, context.Canceled),
 		errors.Is(err, agent.ErrMaxAPICallsExceeded),
 		errors.Is(err, agent.ErrUnconvertibleContentBlock),
 		errors.Is(err, agent.ErrEmptyReply),
-		errors.Is(err, agent.ErrReplyCutOffAtOutputLimit):
+		errors.Is(err, agent.ErrReplyCutOffAtOutputLimit),
+		errors.Is(err, agent.ErrReplyStoppedByContentFilter):
 		return false
 	case errors.Is(err, context.DeadlineExceeded):
 		return turnContext.Err() == nil

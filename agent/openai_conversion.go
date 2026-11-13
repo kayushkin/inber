@@ -284,6 +284,10 @@ func mapOpenAIFinishReason(reason string) anthropic.StopReason {
 		return anthropic.StopReasonMaxTokens
 	case "tool_calls":
 		return anthropic.StopReasonToolUse
+	case "content_filter":
+		// The provider stopped the reply part way. See
+		// ErrReplyStoppedByContentFilter.
+		return anthropic.StopReasonRefusal
 	default:
 		return anthropic.StopReasonEndTurn
 	}
