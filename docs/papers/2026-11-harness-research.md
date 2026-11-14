@@ -265,3 +265,20 @@ results table.
 - **What inber should consider:** any test of inber's memory auto-context (`memory/auto_context.go`)
   must use tasks that span sessions and need facts from earlier ones, and must reset `memory.db`
   between arms. A one-shot coding benchmark will show memory as worthless whether or not it helps.
+
+# 2026-11-13 sweep
+
+The arXiv API returned nothing to every query; two web searches stood in. Every in-scope hit was
+older than 30 days (SWE-Pruner Pro 2607.18213, the harness surveys 2605.29682 and 2605.18747). No
+paper written up.
+
+Upstream: codex [#61390](https://github.com/openai/codex/pull/61390) is written up in
+`docs/comparisons/codex.md` and filed as todo `dbbd2104-8df7-4def-bb99-c661ec07c84f` (a mid-turn
+prune drops reads the read cache still reports as in context). Screened and not written up: goose
+#13325 (do not retry a 400 that rejects the thinking setting) does not apply, since inber retries
+only context-length errors (`agent/agent_run.go:197`) and the SDK does not retry 400s; gemini-cli
+#30204 and codex #61434 (cancelled tool calls left without an end) do not apply, since
+`executeTools` (`agent/agent_run.go:411`) returns a result for every tool_use and never errors out
+early; opencode #63699 (timed-out shells move to the background) lives in tool-store's shell tool;
+opencode #63675 (a subagent report with work still running says `running`) has no counterpart, as
+inber's subagents have no background work.

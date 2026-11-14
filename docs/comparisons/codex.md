@@ -191,3 +191,21 @@ idle bound. Its text reaches the chat only in the turn's final `done` event.
 
 - **What inber should consider:** retry through the same streaming branch the call started on.
   Filed as todo `25ef6454-54c4-4c7c-a652-d6850782b330`.
+
+## 2026-11-13: a dedup cache must forget what compaction removed
+
+[#61390](https://github.com/openai/codex/pull/61390) fixes a pair of mechanisms that each worked
+alone: compaction dropped context the client had injected, and deduplication then refused to
+resend it because the value had not changed. Codex now tracks injected items by history id and
+restores the live ones after compaction. inber has the same pair. Its read cache
+(`agent/read_cache.go:111`) answers a re-read with "already in context … read earlier this turn",
+and it is scoped to the turn on the premise that this turn's reads are still in the transcript.
+They need not be. The mid-turn prune (`agent/agent_run.go:135`, from `engine/build.go:119`) ages
+messages by counting user-role messages (`conversation/manage.go:75-82`), and each tool_result
+counts, so a long tool loop summarizes its own reads after 3 round trips and drops them after 10.
+A throwaway test against `PruneConversation` on 2026-11-13 turned a 3400-byte read from 11 round
+trips back into `[read_files: dropped - too old, 3400 bytes]`, while the cache still held it.
+
+- **What inber should consider:** after any prune that changed the slice, clear or narrow the read
+  cache, or keep the pruner off the current turn's results. Filed as todo
+  `dbbd2104-8df7-4def-bb99-c661ec07c84f`; the todo lists the choices without picking one.
