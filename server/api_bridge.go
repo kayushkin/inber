@@ -12,10 +12,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/kayushkin/inber/agent"
 	"github.com/kayushkin/llm-bridge/msg"
 )
 
@@ -799,6 +801,18 @@ func (g *Server) handleBridgeConfig(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 
+	// Refuse a bad effort before changing anything, so a refused request
+	// leaves the session exactly as it was rather than half-applied.
+	var thinkingBudget int64
+	if req.Effort != "" {
+		budget, err := thinkingBudgetForEffort(req.Effort)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		thinkingBudget = budget
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -807,21 +821,7 @@ func (g *Server) handleBridgeConfig(w http.ResponseWriter, r *http.Request, id s
 	}
 
 	if req.Effort != "" {
-		var budget int64
-		switch req.Effort {
-		case "high":
-			budget = 32000
-		case "medium":
-			budget = 10000
-		case "low":
-			budget = 0
-		default:
-			// Try parsing as raw token count.
-			if n, err := parseIntFromString(req.Effort); err == nil {
-				budget = int64(n)
-			}
-		}
-		s.Engine.SetThinkingBudget(budget)
+		s.Engine.SetThinkingBudget(thinkingBudget)
 	}
 
 	// nil, not length: an explicit empty list is the request that re-enables
@@ -1007,11 +1007,42 @@ func extractMessageText(m anthropic.MessageParam) string {
 	return strings.Join(parts, "\n")
 }
 
-// parseIntFromString tries to parse a string as an integer.
-func parseIntFromString(s string) (int, error) {
-	var n int
-	_, err := fmt.Sscanf(s, "%d", &n)
-	return n, err
+// thinkingBudgetForEffort turns a config request's effort into the thinking
+// budget the session's requests will carry: "high", "medium" and "low", or a
+// raw token count. It refuses, rather than adjusts, a value no request could
+// be sent with:
+//
+//   - text that is neither a level nor a whole number. This used to set a
+//     budget of 0 and answer 200, so a typo switched thinking off unseen.
+//   - a negative count.
+//   - a budget not below agent.RequestMaxTokens. Anthropic rejects such a
+//     request, and the budget lasts for the session, so accepting it made
+//     every later turn on the session fail. "high" (32000) is one of these
+//     until requests carry a max_tokens from the model (todo 79b8f9e5).
+func thinkingBudgetForEffort(effort string) (int64, error) {
+	var budget int64
+	switch effort {
+	case "high":
+		budget = 32000
+	case "medium":
+		budget = 10000
+	case "low":
+		budget = 0
+	default:
+		n, err := strconv.ParseInt(effort, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("effort %q is not high, medium, low or a whole number of tokens", effort)
+		}
+		if n < 0 {
+			return 0, fmt.Errorf("effort %q is a negative thinking budget", effort)
+		}
+		budget = n
+	}
+	if budget >= agent.RequestMaxTokens {
+		return 0, fmt.Errorf("effort %q asks for a %d-token thinking budget, and every request carries max_tokens %d; Anthropic requires max_tokens above the budget, so every turn would fail",
+			effort, budget, agent.RequestMaxTokens)
+	}
+	return budget, nil
 }
 
 // streamEventToBridge converts inber's StreamEvent to llm-bridge's msg.Event.

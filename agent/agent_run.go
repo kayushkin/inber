@@ -52,12 +52,20 @@ func (a *Agent) prepareTools() *toolInfo {
 	}
 }
 
+// RequestMaxTokens is the max_tokens every model request inber builds carries,
+// on the Anthropic route here and on the OpenAI-compatible route in engine.
+// It is a harness constant, not a property of the model: no store holds a
+// model's output ceiling yet (todo 79b8f9e5). Anthropic refuses a request whose
+// thinking budget is not below max_tokens, so any thinking budget a session is
+// given must be checked against this number.
+const RequestMaxTokens = 16384
+
 // buildRequest creates the API request parameters
 func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anthropic.MessageParam, tools *toolInfo, forceSummary bool) *anthropic.MessageNewParams {
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(model),
 		Messages:  *messages,
-		MaxTokens: 16384,
+		MaxTokens: RequestMaxTokens,
 	}
 
 	if len(a.systemBlocks) > 0 {

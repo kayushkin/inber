@@ -101,9 +101,9 @@ func (e *Engine) runOpenAITurn(ctx context.Context, systemBlocks []sessionMod.Na
 		// providers this loop serves speak the older field, so the split is
 		// by provider, not by guessing from the model's name.
 		if e.modelClient.Provider == "openai" {
-			req.MaxCompletionTokens = 16384
+			req.MaxCompletionTokens = agent.RequestMaxTokens
 		} else {
-			req.MaxTokens = 16384
+			req.MaxTokens = agent.RequestMaxTokens
 		}
 		if len(openAITools) > 0 {
 			req.Tools = openAITools
