@@ -135,8 +135,7 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 	if a.BeforeRequest != nil && a.contextWindow > 0 {
 		pruned, tokensFreed := a.BeforeRequest(ctx, *messages, a.contextWindow)
 		if pruneDidSomething(*messages, pruned, tokensFreed) {
-			a.shiftBreakpointIndicesAfterHeadDrop(len(*messages) - len(pruned))
-			*messages = pruned
+			a.adoptPrunedMessages(messages, pruned)
 			params.Messages = *messages
 		}
 	}
@@ -148,6 +147,27 @@ func (a *Agent) buildRequest(ctx context.Context, model string, messages *[]anth
 	}
 
 	return &params
+}
+
+// adoptPrunedMessages replaces the conversation with the one BeforeRequest
+// returned, and forgets every read the read cache holds.
+//
+// The read cache answers a repeat read with "already in context ... No need to
+// re-read." on the premise that a read made this turn is still in the
+// transcript. Pruning breaks that premise inside the turn: the pruner ages a
+// message by the user-role messages after it, and every tool_result is
+// user-role, so ten round trips into one tool loop a read_files result comes
+// back as "[read_files: dropped - too old, N bytes]", and stashing can move a
+// large one out sooner. The pruner does not say which results it cut, so the
+// cache cannot forget only those. A re-read costs tokens; a stub over a file
+// the model no longer has costs it the file, and nothing reports it. So, as
+// with shell_commands, the blunt instrument (see ReadCache.InvalidateAll).
+func (a *Agent) adoptPrunedMessages(messages *[]anthropic.MessageParam, pruned []anthropic.MessageParam) {
+	a.shiftBreakpointIndicesAfterHeadDrop(len(*messages) - len(pruned))
+	*messages = pruned
+	if a.readCache != nil {
+		a.readCache.InvalidateAll()
+	}
 }
 
 // pruneDidSomething reports whether a BeforeRequest call is worth adopting.
@@ -197,8 +217,7 @@ func (a *Agent) executeAPICall(ctx context.Context, params *anthropic.MessageNew
 		if a.BeforeRequest != nil && a.contextWindow > 0 && isContextLengthError(apiErr) {
 			pruned, tokensFreed := a.BeforeRequest(ctx, *messages, a.contextWindow/2)
 			if pruneDidSomething(*messages, pruned, tokensFreed) {
-				a.shiftBreakpointIndicesAfterHeadDrop(len(*messages) - len(pruned))
-				*messages = pruned
+				a.adoptPrunedMessages(messages, pruned)
 				params.Messages = *messages
 				// The breakpoints were placed against the longer slice, and the
 				// messages carrying them may be the ones that just went away.

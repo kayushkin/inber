@@ -15,6 +15,10 @@ import (
 // outlives the turn that filled it. That is why the stub says "earlier this
 // turn".
 //
+// The turn scope does not make "read earlier this turn" mean "still in the
+// transcript": a prune inside the turn can cut the read out, so every adopted
+// prune clears the cache (Agent.adoptPrunedMessages).
+//
 // The scope does NOT make the invalidation set safe to narrow to the file
 // tools, and this comment used to say it did — the claim was that "a shell
 // `sed -i`, a `git checkout` or a human editing a file between turns all happen
