@@ -209,3 +209,26 @@ trips back into `[read_files: dropped - too old, 3400 bytes]`, while the cache s
 - **What inber should consider:** after any prune that changed the slice, clear or narrow the read
   cache, or keep the pruner off the current turn's results. Filed as todo
   `dbbd2104-8df7-4def-bb99-c661ec07c84f`; the todo lists the choices without picking one.
+
+## 2026-11-14: a spend budget is checked before each new piece of work, not once per turn
+
+Codex's rollout-budget series checks the budget again at every point where new spending can
+start: [#61578](https://github.com/openai/codex/pull/61578) after a tool call gets its execution
+slot, and again just before the handler or MCP handoff runs;
+[#61582](https://github.com/openai/codex/pull/61582) before every model request, hook and
+compaction, through one gate shared by the whole tree of threads. A response that has already
+been paid for is kept even when its bill uses up the budget. Work already running may finish, and
+no new work starts. [#61581](https://github.com/openai/codex/pull/61581) records the stop as a
+neutral `developer` marker, so the transcript does not blame the user for the interruption.
+inber checks `max_cost` only at the top of `RunTurn` (`engine/engine.go:270`), and adds the
+turn's cost only after the turn ends (`engine/turn_postprocess.go:87`). The hook that runs before
+each API call (`engine/build_hooks.go:38`) checks tokens, tool calls and response time, but not
+cost. So one turn of up to `MaxAPICallsPerTurn = 50` round trips can spend any amount, and on a
+session's first turn the cap does nothing. (Found by reading the code at baf1332; not reproduced
+by a run.)
+
+- **What inber should consider:** price the turn so far inside `buildLimitCheck` from the usage
+  fields `TurnResult` already carries, and decide whether hitting the cap mid-turn should force a
+  summary call (more spending past the cap), stop at once, or stop and leave a marker as codex does.
+  Filed as todo `764feeb0-a9bb-4568-98c8-f4dbe80f7807`, which leaves that choice open, along
+  with whether a child's spend counts against its parent's cap.
