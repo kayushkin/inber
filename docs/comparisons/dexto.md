@@ -516,3 +516,33 @@ hidden from the model but callable by the host), opencode #60502/#60505 (web per
 requested URL and each redirect; inber's web tools come from tool-store), goose #13154 and opencode
 #60808 (typed overflow and retry metadata on errors; inber's overflow class is covered by `70ae784b`
 and `df1de352`). codex, cline, gemini-cli, claude-code: TUI, cloud, release and bug-fix work only.
+
+## Harness-watch — 2026-11-15: a rejected image must not break every later turn ([PR 1220](https://github.com/truffle-ai/dexto/pull/1220))
+
+On 12 November a dexto user sent an AVIF image labeled `image/png`; the provider answered 400 "Image
+could not be decoded", and every later turn failed the same way because core kept resending that
+message's media. Dexto now retries a 400 once, when history has not changed and the request carries
+media, with each image or file replaced by `[Image withheld: the model provider rejected the request
+that carried it]`. If the retry succeeds it marks those messages `mediaWithheldAt`, so no later request
+sends the media again. A request without media, or a second 400, fails as before.
+
+inber has the same trap, verified by reading the code this run, not live. An MCP tool's image goes to
+the model with the server's own `mimeType`, unchecked (`tools/mcp/client.go:461`), cast straight into
+the Anthropic block (`agent/tool_result_images.go:67`); the OpenAI loop does the same
+(`engine/turn_openai.go:222-247`). The tool-result message is appended to the conversation before the
+next call (`agent/agent.go:649`), and a failed call leaves it there: the only repair after an error is
+the thinking-signature one (`engine/turn_execute.go:45-50`). So an image the provider refuses — a type
+outside jpeg/png/gif/webp, bytes that do not match the label as in dexto's case, or one over the size
+limit — fails that turn and every turn after it until the session is reset. Filed as todo `1afb11bd`.
+
+- **What inber should consider:** a fix has to choose between checking images before they enter the
+  conversation (catches a bad label or size, not every bad image), withholding media after a 400 as
+  dexto does (catches everything, but must tell an image 400 from other 400s), or both — and whether a
+  withheld image stays withheld in the stored session.
+
+**Screened:** opencode #64107 (a model without a known window fell back to 200k); inber's Anthropic
+cap at 200k is already todo `52c9b341`. opencode #63967/#63984 (text cuts splitting characters);
+inber cuts on rune boundaries in `internal/textutil`. opencode #63808/#63810 (read limits) concern the
+read tool, which lives in tool-store. codex #61579–#61583 (rollout budgets) were covered on 2026-11-14.
+dexto #1201 (permission modes renamed), cline #15644 (non-interactive runs default to yolo), goose,
+gemini-cli, claude-code: UI, provider, release and bug-fix work only.
