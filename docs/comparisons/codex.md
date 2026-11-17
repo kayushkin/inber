@@ -232,3 +232,22 @@ by a run.)
   summary call (more spending past the cap), stop at once, or stop and leave a marker as codex does.
   Filed as todo `764feeb0-a9bb-4568-98c8-f4dbe80f7807`, which leaves that choice open, along
   with whether a child's spend counts against its parent's cap.
+
+## 2026-11-16: the date goes into the context, and which day it is matters
+
+[#61897](https://github.com/openai/codex/pull/61897) adds an opt-in `utc_environment_date`
+feature. Codex already tells the model the current date in its environment context, as
+`<current_date>` in local time; the flag sends it as `<current_date_utc>` instead, and records
+the time basis in the environment snapshot so that a switch between the two sends an update even
+when the date itself has not changed. The point is that "today" depends on the clock you read it
+from, and the model should be told which clock that is.
+
+- **What inber should consider:** inber does not tell the model the date at all. Nothing in
+  `engine/`, `agent/`, `conversation/` or `memory/` reads the clock into the prompt, the volatile
+  context holds only memories, fleet status, injectors and queued notes
+  (`engine/volatile_context.go:5-10`), and the only injectors are fleet status and session status,
+  for the orchestrator alone (`server/session_context.go:14-21`). So an inber agent asked for
+  "tomorrow", a due date or a `due_at` works the day out from its training cutoff. The volatile
+  context is the place for it, since a per-turn date there leaves the cached prefix alone. The open
+  choice is the clock: this host runs on UTC, while its operator is on Pacific time, which is a day
+  ahead of UTC from 5 pm Pacific. Filed as todo `388f84a5-3461-4897-b831-a3343656ff9f`, with that choice left open.
