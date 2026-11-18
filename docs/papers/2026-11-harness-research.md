@@ -282,3 +282,77 @@ only context-length errors (`agent/agent_run.go:197`) and the SDK does not retry
 early; opencode #63699 (timed-out shells move to the background) lives in tool-store's shell tool;
 opencode #63675 (a subagent report with work still running says `running`) has no counterpart, as
 inber's subagents have no background work.
+
+# 2026-11-17 sweep
+
+The arXiv API answered today. Three papers written up; two of them exposed live defects.
+
+## 10. A tool result cut before the model sees it costs work first, answers later ([2610.36114](https://arxiv.org/abs/2610.36114))
+
+In 720 runs of a trace-reading agent the largest prompt used 5.75% of the window, yet a third of
+tool results (3,827 of 11,189) were cut by the harness before the model saw them. The cut sliced
+the text at a fixed length, so which data survived depended on where it sat: one field reached
+the model in 4.7% of calls, another in the same results in 99.3%. In a controlled test the cost
+showed first as extra work (43% more tool calls, twice the computation), and the agent still
+answered right when it had another way to the data.
+
+- **What inber should consider:** inber cuts every tool result over 1,000 estimated tokens to its
+  first 500 and last 200 (`session/truncate.go:43-50`, applied at `agent/agent_run.go:562-567`)
+  for every agent name except `project` and `run`. The cut is marked, which the paper's was not.
+  But a file read is recorded in the read cache before the cut (`agent/agent_run.go:531-536`),
+  and the kept tail carries the footer `[complete file — N lines]`. Measured today: a 300-line,
+  16.5 KB read reaches a `coder` session as 2.8 KB, and a second read of the same file in that
+  turn gets "already in context — 300 lines" without running. Filed as todo
+  `b8df006b-3ed1-46ea-bdf4-6c64b9420af6`, which lists what a fix has to decide.
+
+## 11. Most destructive MCP tools run with nobody asked ([2611.02527](https://arxiv.org/abs/2611.02527))
+
+From source code: in 1,000 repositories of the official MCP registry, about 90% of destructive
+tools have no confirmation on the server side, and 32 of 41 popular hosts and agent SDKs have no
+approval step by default. Paired up, 60.7% of destructive tool and application pairs have no
+enforced approval. Prompting for every tool not annotated read-only or non-destructive would cut
+that to 5.4%. cline is plumbing the same annotations through its host now
+([#15381](https://github.com/cline/cline/pull/15381)), to show only read-only MCP tools in Plan
+mode.
+
+- **What inber should consider:** inber has run each session's MCP servers since 2026-10-29
+  (`server/session_mcp.go:123-147`), and its guard knows tools by a fixed list of names
+  (`guard/guard.go:319-334`). No `mcp__server__tool` name is on it, so Assist allows every MCP
+  tool without asking (`guard/guard.go:177-184`) while holding `write_files`, and Observe refuses
+  every one, read-only or not (`:172-176`). The annotations are dropped at decode
+  (`tools/mcp/client.go:45-49`). Measured today with `CheckTool`. Filed as todo
+  `d1e28770-ca5c-4736-b432-2ed5f41505ba`; whether to trust a server's own hints is one of its open
+  decisions.
+
+## 12. Removing old context can cost more than keeping it, once the cache is priced ([2611.22238](https://arxiv.org/abs/2611.22238))
+
+Over 20,000 runs of open models on SWE-bench Verified, SWE-bench and Loc-Bench, with uncached
+input, cached input and output counted apart. Removing old observations saved 19–36% with no
+cache discount and cost 38–116% more when cached input is a tenth of the price. Adding retrieved
+code cut read and search commands by 18–34% and raised cost 33–42% at the same discount, with no
+gain in tasks resolved. Shorter prompts also made agents take more steps. Runs in parallel shared
+cached prefixes and skewed the comparison.
+
+- **What inber should consider:** this supports the frozen zone (`conversation/staged.go:8-11`),
+  which never rewrites cached messages. It argues against judging the pruner by `tokensFreed`
+  (`agent/agent_run.go:135-141`): a prune that frees tokens inside the cached prefix can raise
+  the bill. Any test of inber's pruning or memory auto-context should report cost at real prices
+  with the three token kinds apart, and run its arms one at a time. Not a defect.
+
+Also read and not written up: 2611.20873 (cached reads were 94.8% of tokens in ten weeks of real
+coding sessions; parent logs undercounted subagent tokens tenfold), 2611.01718 (most memory
+entries delivered to coding agents were irrelevant or restated what the agent could still see),
+2611.22017 (a skills benchmark with no results yet).
+
+Upstream: opencode #64544 (GPT-6.2 does not cache `instructions`) was measured on inber's route
+and does not hold there; see `docs/comparisons/opencode.md`. Screened and not written up: goose
+#13572 (a compaction prompt that asks for an `<analysis>` scratchpad is refused) does not apply,
+since inber's summary prompt asks for no reasoning (`conversation/summary_generation.go:40-60`)
+and a refusal is now an error (`:91`); goose #12499 (a reply with thinking and no answer) is
+already an error here (`agent/empty_reply.go:35`, `agent/agent.go:610`); goose #12716 (send
+`tool_choice: auto`, because some OpenAI-compatible servers default to `none`) names no server
+inber is known to use, though inber's chat-completions requests also omit the field
+(`engine/turn_openai.go:89-110`); Claude Code 2.1.326 (retry when `max_tokens` is over the
+model's limit) is open todo `79b8f9e5-8ba8-4578-8fb8-ede0e6f7615c`, and its request-too-large fix
+is already handled (`agent/agent.go:127-132`); cline #15499 and gemini-cli #30258 have no
+counterpart beyond open todo `69f05f89-f755-4772-88fc-472d333ea1f9`.

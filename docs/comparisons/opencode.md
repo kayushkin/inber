@@ -1128,3 +1128,34 @@ mismatched blocks rather than fail.
   a mid-session change to the system blocks or tools fails the turn instead of retrying. Resumed
   sessions do not hit this, because resume strips all thinking (`server/session_creation.go:260`).
   Added to the open todo cf3b6b4c, which already names this predicate.
+
+## 2026-11-17: the system prompt as a developer message, measured here and not adopted
+
+[#64542](https://github.com/anomalyco/opencode/pull/64542) and
+[#64544](https://github.com/anomalyco/opencode/pull/64544): opencode found that GPT-6.2 never
+caches a Responses request's top-level `instructions`, so the system prompt was billed uncached
+on every step (14,163 uncached tokens per step on `github-copilot/gpt-6.2-sol`, 3 after the
+change). It now sends the system prompt as a leading `developer` message on every Responses
+route.
+
+inber sends the system prompt as `instructions` (`agent/codex_subscription.go:206`), on both the
+ChatGPT subscription route and the API-key route. Measured 2026-11-17 on the subscription route:
+an 8,690-token request sent three times in each shape, with a fresh `prompt_cache_key` and
+`session-id` per shape.
+
+| model | shape | cached tokens, calls 1 / 2 / 3 |
+|---|---|---|
+| gpt-6.2-sol | `instructions` | 0 / 8,576 / 8,576 |
+| gpt-6.2-sol | `developer` message | 0 / 0 / 8,576 |
+| gpt-6.2-astra | `instructions` | 0 / 8,576 / 0 |
+| gpt-6.2-astra | `developer` message | 0 / 8,576 / 8,576 |
+| gpt-5.6-terra | `instructions` | 0 / 7,936 / 7,936 |
+| gpt-5.6-terra | `developer` message | 0 / 7,936 / 7,936 |
+
+`instructions` is cached on this route, on GPT-6.2 too. The two misses fall one in each shape, so
+they say nothing for either. opencode's finding does not carry over to the subscription endpoint.
+
+- **What inber should consider:** leave the request shape alone. The API-key route
+  (`agent/clients.go:134-140`) was not measured, for want of an API key; repeat this probe there
+  before trusting either shape on it. Eighteen calls cannot rank the two shapes on hit rate, only
+  show that both hit.
