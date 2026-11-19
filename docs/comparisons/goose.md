@@ -2366,3 +2366,34 @@ reaches the user, the bus and the transcript as complete, with no error.
 - **What inber should consider:** a finish reason that means "stopped early" should never
   map to `end_turn`. Filed as todo `f338b981-c783-44cc-b284-c5b5975f8bd5`; the fix has to decide which stop reason it becomes and
   whether the partial text is kept, as the stream-error path keeps it.
+
+## Harness-watch — 2026-11-18 ([#13575](https://github.com/aaif-goose/goose/pull/13575)): compaction answered by the next model call, on the cached prefix
+
+goose no longer sends a separate summarization request when a session passes its threshold. It
+holds back the pending prompt, appends a compaction request marked `hide_response`, and lets the
+ordinary next model call answer it, so the whole history is read from the prompt cache. The reply
+is stored and not shown, history becomes summary plus continuation, and the held prompt is sent
+again. The standalone request stays for two cases: recovery after a context-length error, and an
+in-band reply that cannot be used (empty, tool calls, cut at the output limit, overflow). Usage
+is recorded as compaction.
+
+inber does what goose just stopped doing, read in the code this run. `SummarizeConversation`
+renders the older messages to text (`conversation/summarize.go:51`) and sends that text as one
+new user message under its own system prompt, with no tools
+(`conversation/summary_generation.go:67-78`), so nothing in it can match the session's cached
+prefix and every token is billed as fresh input. The rendering is also lossy before the model
+sees it: a tool call becomes its name with no arguments and a tool result is cut to 200
+characters (`conversation/message_utils.go:165`, `:233`). The request goes straight to the
+client, past the usage counters (open todo `7be5a692-28af-42c2-963e-ea7b9e5ea3b0`), and the flat
+`user:` labels are what let a tool result forge a user turn (open todo
+`498a011e-0f00-4b8b-a19b-9f0782531894`).
+
+- **What inber should consider:** an in-band compaction call would read the older turns at the
+  cache-read price instead of the full input price, let the model summarize the real tool
+  arguments and results, keep message roles, and pass through the normal usage path — one change
+  that bears on both todos above. What it has to settle first: the cache must still be warm when
+  compaction runs (it is not after an idle gap), the call needs the same model, tools and system
+  prompt as the turn (so a cheaper summary model is given up), the recent turns inber keeps are
+  read too, and a reply that is a tool call or a refusal needs the standalone path as a fallback.
+  Price both ways on real sessions with cached and fresh input counted apart, as paper 12 in
+  `docs/papers/2026-11-harness-research.md` asks. Not a defect; no todo filed.

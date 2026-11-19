@@ -356,3 +356,60 @@ inber is known to use, though inber's chat-completions requests also omit the fi
 model's limit) is open todo `79b8f9e5-8ba8-4578-8fb8-ede0e6f7615c`, and its request-too-large fix
 is already handled (`agent/agent.go:127-132`); cline #15499 and gemini-cli #30258 have no
 counterpart beyond open todo `69f05f89-f755-4772-88fc-472d333ea1f9`.
+
+# 2026-11-18 sweep
+
+Two arXiv listing searches by announce date and two web searches. Four ids new to these docs were
+read; one is written up.
+
+## 13. Keep the evidence addressable and bring it back when a conclusion is revised ([2611.24357](https://arxiv.org/abs/2611.24357))
+
+Semantic Context Handoff, 18 November. Each step the model returns its action and a small change
+to a structured state (constraints, facts, work items); a controller applies it, with no
+summarization call. Every action and observation goes to an append-only archive keyed by step
+number, and the harness, not the model, picks up to 12 old records to put back, by the links from
+state entries to the steps that support them and by revisions to those entries. On 150 SWE-bench
+tasks with DeepSeek, three runs, with only the selector changed: the most recent records gave
+80.9% Pass@1, BM25 83.3%, and revision-aware selection 86.9%. Two thirds of recovered records
+were more than ten steps old. Against full history (68.0%, 1,713k tokens a task) the full system
+used 209k. The paper does not price prompt caching, and it rewrites the context every step, so
+its token saving is not a cost saving on a cached route (paper 12 above).
+
+- **What inber should consider:** inber has the two halves and not the join. The summary carries
+  a pointer to an archive (`conversation/summarize.go:153-163`), but the archive is one blob per
+  compaction in which each tool result is cut to 200 characters and each tool call is a bare name
+  (`conversation/message_utils.go:165`, `:233`), so there is no single step to recover and little
+  in it if there were; that is open todo `a066fbc1-0cfa-4850-a308-9ef90ab1f741`. When that todo
+  is fixed, keying the archive by message and having the summary cite those keys would let
+  `memory_expand` return one step instead of the whole transcript. Do not copy the per-step
+  context rewrite: it breaks the cached prefix. No new todo.
+
+Also read and not written up: 2611.04367 (a rule in an agent context file phrased as a condition
+was followed less often than one phrased as an order or with a reason; 86 tasks, four pages, no
+rates in the abstract), 2611.23346 (hash-chained audit records at each point where state moves
+between context, history, memory and the outside; inber's nearest gap is the mid-turn message
+that never reaches `session.jsonl`, open todo `31cae01a-6582-49d8-adcd-65cfb3473a45`),
+2611.23844 (a warning label on a tool lowers how often a planted tool is called, and a memory
+that says the call worked before undoes much of it; no numbers in the abstract).
+
+Upstream, screened and not written up. codex #62356 and #62354 (end the Responses stream as soon
+as a `response.failed` or `error` event arrives): inber's reader already returns on both
+(`agent/codex_subscription.go:337-343`). codex #62348 (a child's queued reply was lost when its
+parent was interrupted): inber requeues what an ended turn never read
+(`server/session.go:239-252`), and a message already merged into the turn stays in the
+conversation (`agent/agent.go:542-557`). goose #13605 (answer a call to a tool the request did
+not offer): inber dispatches from the map built from that request's own tools
+(`agent/agent_run.go:20-52`), and an unknown name is an error result. goose #12917 (an edit whose
+replacement equals the match reported success) and opencode #64696 (reading a FIFO blocks)
+concern file tools that live in tool-store, not here. goose #12204 (strip terminal control
+sequences from model text): inber has no terminal client; its print helpers have no caller
+(todo `e7ab57e6-f3d3-44f8-8ccf-5a66b052be18`). gemini-cli #30338 and #30355 (shell text
+classified as read-only before expansion; rule patterns matching nested arguments): inber's guard
+decides by tool name and mode (`guard/guard.go:165-190`, `:319-333`) and reads no command text.
+codex #62314 (a fork must not inherit its parent's approvals): inber's guard asks its approver
+on each call and stores no approval (`guard/guard.go:88-90`). opencode #64692 (a timeout on
+every HTTP request) sits beside open todo `0769c4db-14a7-4969-bfc0-c75c6f7e2728`. cline #15378
+(search text spliced into a shell command): a grep for `sh -c` and `bash -c` in inber's non-test
+code found none; not checked further. codex #62366 (start an optional stdio MCP server on first
+call), opencode #64515 (tool set chosen by model), #64760, #62158, claude-code: no counterpart,
+or UI, provider and release work.

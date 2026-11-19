@@ -546,3 +546,41 @@ inber cuts on rune boundaries in `internal/textutil`. opencode #63808/#63810 (re
 read tool, which lives in tool-store. codex #61579–#61583 (rollout budgets) were covered on 2026-11-14.
 dexto #1201 (permission modes renamed), cline #15644 (non-interactive runs default to yolo), goose,
 gemini-cli, claude-code: UI, provider, release and bug-fix work only.
+
+## Harness-watch — 2026-11-18: a field copied into every tool schema is paid for once per tool ([PR 1219](https://github.com/truffle-ai/dexto/pull/1219))
+
+Every dexto tool schema carried a copy of `__meta.callActivity`. In a one-line chat with 43 tools
+those copies were about 32,900 characters, a quarter of the fixed prompt. Dexto cut the three long
+descriptions to two short examples (765 to 341 characters per tool), left the detailed guidance to
+be stated once in the system prompt, and dropped zod's 180-character uuid `pattern` where
+`format: "uuid"` already says it.
+
+inber does the same thing with more bytes. `AddChainAndSidebandFields` (`agent/chain.go:115-133`)
+puts the `then` schema and the `done`/`note`/`split` fields into every tool, on both routes
+(`agent/agent_run.go:28`, `engine/turn_openai.go:32`). The `then` schema lists every tool name as
+an `enum` (`agent/chain.go:50`), so each tool carries a copy of the whole list. Measured this run
+with a throwaway test over the real registry, padded with synthetic tools:
+
+| tools | before | after | added per tool |
+|---|---|---|---|
+| 6 (the registry) | 3,877 B | 11,515 B | 1,273 B |
+| 20 | 5,557 B | 37,737 B | 1,609 B |
+| 40 | 7,957 B | 91,517 B | 2,089 B |
+| 80 | 12,757 B | 256,677 B | 3,049 B |
+
+The number of tools a live session sends was not measured; session MCP tools join the same list.
+`agentic-design-patterns.md` recorded this cost months ago and nothing was filed. Filed now as
+todo `ae092191-1953-4e02-b50e-5ab252a06357`.
+
+- **What inber should consider:** the fixed 1.2 KB per tool is mostly description prose repeated
+  word for word, which dexto's fix removes; the growth with tool count comes from the `enum`. A
+  fix has to decide where the guidance lives, whether the `enum` stays (dispatch is the only
+  check without it, and a chained tool that does not exist is reported as a success today, todo
+  `5fea3278-4009-4dcf-b715-95fc84d05ab2`), and whether every tool needs the sideband fields.
+
+**Screened:** dexto #1252 (a flattened union schema lost its root `definitions`, so a `$ref`
+pointed nowhere and xAI answered 400) is the fault inber's open todo
+`6bbb440e-fe32-4202-8863-067f5ab012c7` already names. dexto #1218 (retry a 401 the host can
+renew) is open todo `7983aa25-2c52-43bb-8dfc-f84ebcd8fa12`. dexto #1226 and #1203 (replace an
+image or file type the provider cannot take with a note) sit beside open todo
+`1afb11bd-465e-4634-9fef-e208cf7f3f5a`.
