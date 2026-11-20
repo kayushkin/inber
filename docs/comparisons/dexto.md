@@ -584,3 +584,45 @@ pointed nowhere and xAI answered 400) is the fault inber's open todo
 renew) is open todo `7983aa25-2c52-43bb-8dfc-f84ebcd8fa12`. dexto #1226 and #1203 (replace an
 image or file type the provider cannot take with a note) sit beside open todo
 `1afb11bd-465e-4634-9fef-e208cf7f3f5a`.
+
+## Harness-watch — 2026-11-19: what a provider attaches to a tool call has to come back with it ([PR 1258](https://github.com/truffle-ai/dexto/pull/1258))
+
+Dexto kept the gateway's `reasoning_details` on each tool call in history, so the next request in
+the tool loop sends them back. Before, it dropped them after every step, and GPT models lost their
+earlier reasoning between tool calls. The rule is general: some providers attach state to a tool
+call that they expect to see again, and a harness that keeps only name, id and arguments throws it
+away.
+
+inber's chat-completions route (google, openrouter, ollama, and any unnamed provider:
+`agent/clients.go:143-150`) has that loss in two places. `OpenAIToolCall`
+(`agent/openai_types.go:28-32`) decodes only `id`, `type` and `function`, so anything else on a
+tool call is dropped when the reply is read. And the history is kept in Anthropic form: the
+conversion back into a `tool_use` block (`agent/openai_conversion.go:253-262`) would have nowhere to
+put it anyway. Gemini 3 and later return a `thought_signature` under `extra_content.google` on each
+tool call in Google's OpenAI-compatible API, and reject the next request in the loop when it is
+missing ([VS Code report](https://github.com/microsoft/vscode/issues/296713),
+[Google forum](https://discuss.ai.google.dev/t/openai-api-compatibility-broken-due-to-thought-signature-on-gemini-3-pro-preview/109823)).
+I put 85% on this: a Gemini 3+ model on inber's google route fails the second call of any
+multi-tool turn with a 400. That number comes from those reports and has not been measured here.
+It does not bite today, as checked this run: model-store's only google models are
+`gemini-2.5-pro` and `gemini-2.5-flash`, which do not enforce signatures, and this host has no
+Google key (`agent/clients.go:228`). goose #13673 the same day sends thinking levels to Gemini 4, so
+the newer models are what other harnesses now target. OpenRouter's `reasoning_details` would go
+the same way; whether OpenRouter rejects a request without them was not checked.
+
+- **What inber should consider:** a field on `OpenAIToolCall` (and the history block) that keeps
+  provider-attached tool-call data whole and sends it back unchanged, before a Gemini 3+ model is
+  added to model-store. A fix has to decide where that data lives in an Anthropic-shaped history,
+  and whether it should travel when failover moves a turn to another provider; dexto keeps it only
+  for named providers because OpenAI's own Responses item ids make later requests invalid. Not
+  filed as a todo: no route reaches it today.
+
+**Screened, nothing new to inber:** goose #12499 (a reply holding only thinking ended the turn
+silently) — inber already stops with `ErrEmptyReply` (`agent/agent.go:610-612`, `agent/empty_reply.go:35`).
+goose #12917 (an edit that changes nothing is an error) and opencode #64868 (refuse to rewrite a
+file that is not valid UTF-8) belong to `edit_files`, which tool-store implements, not inber.
+opencode #65034 (prompts describe one tag, code sends another) — no inber prompt describes the
+`[system: …]` or `[BUDGET LIMIT REACHED]` notes it injects, so there is no mismatch to fix. dexto
+#1252 was re-measured this run against the pinned SDK v1.35.0: decoding a schema into
+`anthropic.ToolInputSchemaParam` drops `$defs` and `additionalProperties` outright, as open todo
+`6bbb440e-fe32-4202-8863-067f5ab012c7` says.
