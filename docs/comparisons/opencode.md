@@ -1159,3 +1159,34 @@ they say nothing for either. opencode's finding does not carry over to the subsc
   (`agent/clients.go:134-140`) was not measured, for want of an API key; repeat this probe there
   before trusting either shape on it. Eighteen calls cannot rank the two shapes on hit rate, only
   show that both hit.
+
+## 2026-11-20: a tool name no tool declares is replayed, and chat completions refuses it
+
+[#65292](https://github.com/anomalyco/opencode/pull/65292) (issue
+[#50237](https://github.com/anomalyco/opencode/issues/50237)): a model calls a tool by a name
+nothing declares, such as `browser.tabs.open`. The call fails, but the name stays in history, and
+an endpoint that rejects dots in tool call names answers every later request with a 400, so the
+session cannot go on. opencode now rewrites characters outside `[a-zA-Z0-9_-]` to `_` in replayed
+names that no tool in the request declares, and leaves declared names and OpenAI's native
+Responses route alone.
+
+Measured 2026-11-20 with one request each against OpenAI, an assistant turn calling an undeclared
+tool followed by its error result. Chat completions (`gpt-5.4-nano`) refused
+`repo_browser.open_file` with `Invalid 'messages[1].tool_calls[0].function.name': string does not
+match pattern '^[a-zA-Z0-9_-]+$'` and accepted the undeclared but well-formed `read_file_unknown`.
+Responses accepted both. Anthropic could not be probed: its key answered "credit balance is too
+low" before validating anything.
+
+inber has the same shape. A name the model makes up gets `error: unknown tool` and its call stays
+in the conversation (`agent/chain.go:456-460`). The chat-completions route keeps the name as
+the provider sent it (`agent/openai_conversion.go:260`) and sends it back unchanged on every later
+request (`agent/openai_conversion.go:124-125`). On that route one bad name ends the session. It is
+latent on this host: the live `inber-server` has no Google or OpenRouter key, and every `openai`
+model goes through the Codex subscription's Responses endpoint (`agent/clients.go:85-90`), which
+accepts the name. Not filed for that reason, as with dexto #1258 on the same route.
+
+- **What inber should consider:** sanitize undeclared replayed names in
+  `ConvertAnthropicMessagesToOpenAI`, the one place the chat-completions history is built, before
+  a Google, OpenRouter or Ollama key is added. A fix has to decide whether to rewrite the name or
+  drop the failed call and its result from the history, and whether the Anthropic route needs the
+  same (unmeasured).

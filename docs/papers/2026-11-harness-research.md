@@ -413,3 +413,44 @@ every HTTP request) sits beside open todo `0769c4db-14a7-4969-bfc0-c75c6f7e2728`
 code found none; not checked further. codex #62366 (start an optional stdio MCP server on first
 call), opencode #64515 (tool set chosen by model), #64760, #62158, claude-code: no counterpart,
 or UI, provider and release work.
+
+# 2026-11-20 sweep
+
+An arXiv API search by submission date (18-19 November) over six keyword sets, and two web
+searches that returned nothing in the window. Six ids new to these docs were read; one is written
+up.
+
+## 14. A full log and a regular-expression search beat lossy memory ([2611.25123](https://arxiv.org/abs/2611.25123))
+
+GrepMem, 18 November. The agent keeps an append-only plain-text log of its whole history and gets
+one tool that runs a regular expression over it; there is no index, no embedding and no
+extraction model. Qwen3.5-9B was trained with RL under five context strategies. On ContextBench
+GrepMem scored 95-97% against at most 21% for the lossy baselines, and on BCP-Multi it beat SUPO's
+summarization by 8.8 points, while staying on the accuracy-to-token-cost frontier on all five
+tasks. The model was trained to use the tool, so a model that was not may do less well with it.
+
+- **What inber should consider:** inber has both halves of what GrepMem says not to do. Its
+  compaction archive keeps each tool call as a bare name and each tool result cut to 200
+  characters (`conversation/message_utils.go:165`, `:233`), which is open todo
+  `a066fbc1-0cfa-4850-a308-9ef90ab1f741`; and recall is `memory_search`, ranked by semantic
+  similarity over saved memories (`memory/tools.go:46-53`), with nothing that matches exact text
+  in a past turn. Once that todo makes the archive lossless, a regex search over it is the cheap
+  next step, and it adds no model call and leaves the cached prefix alone. No new todo.
+
+Also read and not written up: 2611.24025 (intent contracts: the planner holds no tools and a
+small trusted model writes each call from a logged goal and a quote of the user; it finished the
+user's task more often than a reviewer that can only refuse a whole command, 27/30 against 16/30,
+but did not reduce unauthorized actions), 2611.24324 (try a small model first and escalate on
+timeout; up to 33% less GPU time on SWE-bench Verified at the same accuracy; inber picks one model
+per session), 2611.25760 (unfaithful work reports by coding agents; overstated success is the
+commonest kind; the share of 435 reports affected is a placeholder macro in the abstract),
+2611.24491 (overeagerness audits continued from real transcripts), 2611.25380 (evolving the
+prompt, tool schemas and skills with GEPA recovers most of what fine-tuning gains).
+
+Upstream, screened and not written up. dexto #1253 (two refreshes of one rotating token ended the
+sign-in): inber never refreshes the Codex token, it reads the file the CLI rewrites
+(`agent/codex_subscription.go:38-46`). codex #62852 (guardian resampling looped), #62831
+(required hooks that fail can block), #62857 (mode prompts only when needed), #62864, #62888,
+opencode #65076 (session search tools), gemini-cli #30389 (resume the most recently active
+session), goose #13650 and #13152, cline and claude-code: no counterpart in inber, or UI, provider,
+licensing and release work; not checked against inber code.

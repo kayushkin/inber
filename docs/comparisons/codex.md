@@ -251,3 +251,23 @@ from, and the model should be told which clock that is.
   context is the place for it, since a per-turn date there leaves the cached prefix alone. The open
   choice is the clock: this host runs on UTC, while its operator is on Pacific time, which is a day
   ahead of UTC from 5 pm Pacific. Filed as todo `388f84a5-3461-4897-b831-a3343656ff9f`, with that choice left open.
+
+## 2026-11-20: drop the echoed tool list; keep pinned history outside the compaction budget
+
+[#62863](https://github.com/openai/codex/pull/62863) sends `x-codex-exclude: tools` on every
+Responses request, so the stream's `response.*` events stop repeating the request's tool
+definitions. That is bytes on the wire, not tokens. inber's subscription route sends no such
+header (`agent/codex_subscription.go:129-136`) and gets the tool list back in the events it reads
+up to `response.completed` (`:335`); with the sideband fields, six tools are about 11.5 KB.
+
+[#62677](https://github.com/openai/codex/pull/62677) and
+[#62654](https://github.com/openai/codex/pull/62654): an item marked as pinned survives compaction
+whole and in order, outside the token budget the rest of history shares, and its retention is set
+separately for the thread itself and for spawned children. inber's compaction has no pin: it keeps
+the last N turns and summarizes everything older (`conversation/summarize.go:39-47`), so the
+user's original request survives only as the summarizer chose to restate it.
+
+- **What inber should consider:** add the header after one probe on the subscription route,
+  checking that `response.completed` still carries usage and output. Consider a pin flag on
+  messages that compaction copies through, starting with the first user message of a session.
+  Neither is a defect.
