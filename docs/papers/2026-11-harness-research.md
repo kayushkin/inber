@@ -454,3 +454,46 @@ sign-in): inber never refreshes the Codex token, it reads the file the CLI rewri
 opencode #65076 (session search tools), gemini-cli #30389 (resume the most recently active
 session), goose #13650 and #13152, cline and claude-code: no counterpart in inber, or UI, provider,
 licensing and release work; not checked against inber code.
+
+# 2026-11-21 sweep
+
+An arXiv API search by submission date (19 November) over nine keyword sets. Seventeen ids new to
+these docs; five abstracts read; one is written up.
+
+## 15. Compaction most often fails by turning an open issue into a conclusion ([2611.25673](https://arxiv.org/abs/2611.25673))
+
+CompAct-Bench, 19 November. It takes successful agent runs on BrowseComp, SWE-bench and an
+internal workspace set, compacts the history at several points with the model under test, holds
+the retention ratio fixed across compactors, and lets the same executor carry on. Frontier models
+lose task accuracy under tight compaction, and the failures are as often a distorted task state as
+a missing fact: an unresolved issue written up as settled, or a result already established
+forgotten and redone.
+
+- **What inber should consider:** this is measured evidence for the merge noted at
+  `agentic-design-patterns.md` (codex `next_action`): inber's compaction prompt puts "any
+  unresolved questions or next steps" as item 5 of 5 in one list
+  (`conversation/summary_generation.go:42-47`), so nothing keeps the open items apart from the
+  settled ones. It belongs to open todo `421a8162-c057-4182-a404-8c13366a2fb4` (the compaction
+  prompt), not a new one. The benchmark's method is also the test that todo lacks: cut archived
+  inber runs at a few points, summarize with the old and new prompt at the same length, continue,
+  and compare completion — in eval-store, beside the rebuild score from §6.
+
+Also read and not written up: 2611.26361 (lessons mined from an agent's own runs, merged into
+guidelines; a strong model keeps gaining as guidelines are added, while gpt-oss-120b did better
+with about 29 chosen guidelines than with all 199 — the right amount of memory depends on the
+model), 2611.26427 (MemFolder: merge memory records by entity and time, then re-encode them and
+check that key facts can be recovered), 2611.25599 (Tether: run each action in a throwaway sandbox
+and enforce stateful policies written in Lean over the system calls seen), 2611.25470 (ToolPulse:
+a cache side channel on a shared host recovers which tools an agent ran).
+
+Upstream, screened against inber code. opencode #65513 (small result fields cut off after large
+output by head-only truncation): inber's tool-result truncation keeps head and tail
+(`session/truncate.go:98-128`), so a field after the output survives. codex #63075 (a reply to the
+server's own request resolved one of codex's pending calls with the same id): inber's MCP client
+speaks stdio only and drops any message carrying a method before it matches ids
+(`tools/mcp/client.go:215-219`). codex #62933 (an empty permissions wrapper sent as a message):
+inber writes `[Context]` only when it has something to put under it (`engine/turn_prompt.go:152-156`,
+`engine/volatile_context.go:39-46`). opencode #65269 and #65365 (shell permission and exit
+reasons): inber's guard reads no command text, and the shell tool lives in tool-store. codex
+#63069, #63077, cline #15781, goose, gemini-cli, dexto and claude-code: no counterpart, or UI,
+provider and release work.
