@@ -497,3 +497,52 @@ inber writes `[Context]` only when it has something to put under it (`engine/tur
 reasons): inber's guard reads no command text, and the shell tool lives in tool-store. codex
 #63069, #63077, cline #15781, goose, gemini-cli, dexto and claude-code: no counterpart, or UI,
 provider and release work.
+
+# 2026-11-22 sweep
+
+An arXiv API search by submission date (19-22 November) over nine keyword sets. Thirty-one ids
+new to these docs; seven abstracts read; one is written up.
+
+## 16. Recovery mechanisms are used often and rarely recover ([2611.27090](https://arxiv.org/abs/2611.27090))
+
+20 November. Under a protocol fixed before collection, the authors graded 26 coding-agent
+harnesses, 12 persistent runtimes and 12 research runtimes on eight recovery mechanisms, from
+"not found" to "exercised in a real run", with two blind coding passes. Nearly every harness has
+a real-use report of recovery, but of 128 such reports only 19 describe the run fully
+recovering; checkpoint/resume recovered once in 27 reports and rollback once in 15. Research
+runtimes show the reverse: guarantees measured on benchmarks, none reported in use, and no
+harness offers compensation of external effects.
+
+- **What inber should consider:** inber has both halves the paper counts as unrecovered. It writes
+  a conversation checkpoint every few user turns (`engine/lifecycle.go:228-235`,
+  `session/checkpoint.go:65`) that nothing reads (`LoadCheckpoint` has no callers), and its
+  workspace checkpoint package returns `ErrNotImplemented` from every method
+  (`checkpoint/checkpoint.go:70-108`). Both are open todos — `cf57e818-cbbc-4410-a775-b26b3b13eb94`
+  and `0963afe5-db6b-44db-8374-1fb6a390c8f4` — and the paper argues for deciding them by a
+  recovery that has been run end to end once, not by the writes that exist. No new todo.
+
+Also read and not written up: 2611.27112 (one rules file given to four coding agents acted as
+advice at every boundary, and a gate in front of the service decided what got through; it cost
+Codex CLI a third of its hidden-test score, and in 11 of 36 steps it reported all tests passing
+while under half did — the same overstated success as 2611.25760), 2611.27860 (SplitBench:
+separate running a task's tests from judging them, so an agent that owns the test environment
+cannot forge a pass), 2611.27443 (an advisor-executor pair fails until the small model is
+post-trained on when to ask), 2611.27294 (HookEvo: evolve a harness through its lifecycle hooks
+with a separate improver), 2611.27095 (signed receipts for MCP calls, checked against the prose
+that claims them), 2611.27107 (Omo: a persistent place to return to unattended agent work).
+
+Upstream, screened against inber code. goose #13622 (images in tool results on the Codex
+Responses route): inber already puts a call's images in its `function_call_output`
+(`agent/codex_subscription.go:184-198`). goose #13710 (a token refresh with no timeout held a lock
+and hung every model call): the refresh in aiauth uses `http.DefaultClient`, which has no timeout
+(`../aiauth/providers/anthropic.go:149`), but runs outside the store's lock
+(`../aiauth/resolve.go:57-59`), so a stall hangs one session's start, not the process; inber then
+drops the error `ResolveKey` returns and reports "no credentials found"
+(`agent/clients.go:94-102`). The live server sends with auth-store's Anthropic key, so this path is
+reached only for a provider with no key set; it sits beside open todo
+`7983aa25-2c52-43bb-8dfc-f84ebcd8fa12` (credentials resolved once per session), not filed. codex
+#63088 (a root `.codex` that is a file broke worktree config loading), #63219 (per-item usage
+attribution excluded by default), #63175, opencode #65562 and #65673 (watch loops that paused
+without telling the model, or replayed one oversized event), #65494 (misplaced tool calls
+repaired in one place): no counterpart in inber. The rest of codex, opencode, goose, cline,
+dexto, gemini-cli and claude-code: UI, provider catalog, release and dependency work.
