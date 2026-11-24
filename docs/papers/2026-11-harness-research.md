@@ -546,3 +546,60 @@ attribution excluded by default), #63175, opencode #65562 and #65673 (watch loop
 without telling the model, or replayed one oversized event), #65494 (misplaced tool calls
 repaired in one place): no counterpart in inber. The rest of codex, opencode, goose, cline,
 dexto, gemini-cli and claude-code: UI, provider catalog, release and dependency work.
+
+# 2026-11-23 sweep
+
+An arXiv API search by submission date (17-22 November) over ten keyword sets. Three abstracts
+new to these docs read; two are written up.
+
+## 17. An interrupted tool call may already have happened ([2611.23353](https://arxiv.org/abs/2611.23353))
+
+17 November. A fault-injection study of agent tool actions cut off part-way: ten fault classes,
+7,513 trials each on Windows and Linux, judged by an oracle on the target side. In 200
+crash-and-replay pairs, a runtime with an action ledger, target-side idempotency and
+reconciliation repeated no effect; each simpler baseline repeated it in 117. With reconciliation
+off, all 100 crashes after the effect stayed ambiguous. Suppressing a duplicate and knowing what
+happened are separate jobs. Read from the abstract.
+
+- **What inber should consider:** inber logs a tool call before it runs
+  (`agent/agent_run.go:441-443`, executed at `:471`) and its result after, so a call with no
+  result on disk never started, was killed part-way, or finished and lost its result. On resume
+  all three get one error result, `[session interrupted — tool call was not completed]`
+  (`conversation/repair.go:12`, applied from `session/resume.go:132`), which reads as "this did
+  not happen". A model that repeats the call repeats whatever landed. Filed as todo
+  `4ad2254d-2973-44fa-8549-c8eaff242c83`; the choice between new wording and a started/finished
+  mark per call is left there.
+
+## 18. A tool fault that returns partial data is the one agents build on ([2611.28341](https://arxiv.org/abs/2611.28341))
+
+20 November. 2,100 faulted runs of four agents on a real filesystem, SQLite, a local HTTP server
+and a shell. Recovery was correct in 19-68% of runs and 6-26% ended in a wrong answer stated as
+fact. The fault type mattered more than the model: partial data drove fabrication (up to 38%),
+a hard denial drove honest failure. A monitor that checks structured tool output and sends a
+correction, not a block, cut fabrication from 17.3% to 10.8%. Read from the abstract.
+
+- **What inber should consider:** the paper prices two open todos in which inber hands the model a
+  failure dressed as a result: `5fea3278-4009-4dcf-b715-95fc84d05ab2` (a chained tool that does not
+  exist is reported as a success) and `0ed28177-348d-4116-9f27-d43c64c83d8f` (a refused call looks
+  like a successful one on the wire). Its result says to fix those by making the failure a hard,
+  plain error. No new todo.
+
+Also read and not written up: 2611.29004 (a deferred approval used after its target changed
+overwrote a newer revision; inber has no approver to defer to — no session sets `ApprovalFunc`,
+`engine/build_hooks.go:90`).
+
+Upstream, screened against inber code. opencode #65788 (an unsaved reminder at the message tail
+sat under the last cache point, so every step after a compaction re-bought the history): inber
+writes its volatile context into the turn's opening message once and leaves it there
+(`agent/agent_run.go:103-131`), so the prefix does not move; the cost inber does pay there is
+open todo `a5b91a47-9931-47a0-855f-6b955d7a0b82` (the anchor never advances). dexto #1291 (a run
+aborted before its turn starts never ended): the inber case is open todo
+`7de193b1-9446-46fc-bebc-869375261ed8`. codex #63523 (a prompt lost when turn setup is
+interrupted): inber logs the prompt before setup (`engine/engine.go:278`). codex #63428 (a
+rejected `/compact` interrupted the running turn): inber refuses a compaction while a turn runs
+and leaves the turn alone (`server/api_bridge.go:885-889`). dexto #1285 (a permission request
+with no timeout): no approver exists in inber. opencode #65626, #65899, #65945, #65967 and
+#65861, codex #63415, #63440, #63461 and #63515, dexto #1282: shell, permission-rule, file-type,
+pricing-tier and CLI work with no counterpart in inber, whose shell and file tools live in
+tool-store. The rest of codex, opencode, goose, cline, dexto, gemini-cli and claude-code: UI,
+plugin signing, provider, release and dependency work.
