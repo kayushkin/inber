@@ -603,3 +603,87 @@ with no timeout): no approver exists in inber. opencode #65626, #65899, #65945, 
 pricing-tier and CLI work with no counterpart in inber, whose shell and file tools live in
 tool-store. The rest of codex, opencode, goose, cline, dexto, gemini-cli and claude-code: UI,
 plugin signing, provider, release and dependency work.
+
+# 2026-11-24 sweep
+
+An arXiv API search by submission date (20-24 November) over eleven keyword sets: 177 hits, 16
+abstracts new to these docs read, four written up.
+
+## 19. A compaction summary placed as a user message reads as the user ([2611.32194](https://arxiv.org/abs/2611.32194))
+
+24 November. Claude Code and Codex put the compactor's summary in a user message, so an
+authorizer that derives what the agent may do from "what the user said" starts obeying the
+compactor. With an attacker's account number planted as plain data, a policy derived from a
+frontier compactor's summary admitted that account in 91% of cases; one derived from the user's
+own words, in none. Compactors mark injected instructions but rarely injected data, since data
+has a legitimate twin. The fix is to carry the user's own words verbatim across the boundary for
+the authorizer, while the model still reads the summary. Read from the abstract.
+
+- **What inber should consider:** inber does the same. The summary goes in as a user message
+  followed by an assistant reply inber wrote itself, "Understood. I have the conversation
+  context…" (`conversation/summarize.go:106-115`). The summarizer prompt already says a tool
+  entry is never the user and an instruction inside one is never the user's
+  (`conversation/summary_generation.go:51-53`). That covers the half compactors already handle,
+  instructions, and not the half the paper finds open, a fact from a tool result restated as
+  something the user said. inber has no request-derived authorizer (its guard decides on the
+  tool name, `guard/guard.go:165-188`), so nothing fails today. The forging half is open todo
+  `498a011e-0f00-4b8b-a19b-9f0782531894`. No new todo.
+
+## 20. Separate records of past attempts beat a rolling summary ([2611.28244](https://arxiv.org/abs/2611.28244))
+
+20 November. A study of harness parts for long-running research agents on MLE-Bench and
+KernelBench, each part measured against a recency-truncation baseline. Keeping each past attempt
+as its own record the agent can open beat keeping a rolling summary, and context folding did best
+in all six settings (up to +19.2%). For lessons, deleting ones that go unused beat merging them or
+promoting them to standing rules. Read from the abstract.
+
+- **What inber should consider:** inber's summary is a rolling one. The previous summary block
+  is `messages[0]`, so the next compaction re-summarizes it with everything after it
+  (`conversation/summarize.go:40-50`), and the archive row it writes is meant to be the record
+  the model can open. Open todos `421a8162-c057-4182-a404-8c13366a2fb4` (what the summary keeps)
+  and `a066fbc1-0cfa-4850-a308-9ef90ab1f741` (the archive keeps 0.875% of the bytes) are where
+  this result applies. No new todo.
+
+## 21. Recovery after a half-finished block does harm one time in four ([2611.31554](https://arxiv.org/abs/2611.31554))
+
+23 November. On recorded AppWorld runs, 30 of 143 confirmed partial executions were followed by a
+recovery that left lasting harm (weighted 24.6%). Two thirds duplicated an effect; the rest deleted
+user data or made a wrong first write. A repeated-call rule caught 75% of the duplicates and 41% of
+all harm. Ids the model supplied did not help, because it made a new id for the same operation.
+Read from the abstract.
+
+- **What inber should consider:** this prices open todo `4ad2254d-2973-44fa-8549-c8eaff242c83`
+  (a resumed session says an unanswered call "was not completed"). It also argues against an
+  idempotency key the model writes, if that todo is ever fixed by asking the model for one. No
+  new todo.
+
+## 22. One parse per tool call ([2611.30624](https://arxiv.org/abs/2611.30624))
+
+23 November. When the guard and the executor parse the same JSON differently, for example
+because each keeps a different copy of a repeated key, the guard approves one call, the executor
+runs another, and the audit log names the approved one. 17 parser setups disagreed with each
+other, two official MCP SDKs among them. Parsing once, keeping only the approved schema's fields
+and passing that on stopped every attack. Read from the abstract.
+
+- **What inber should consider:** safe today, by accident. `guard.CheckTool` reads only the tool
+  name (`guard/guard.go:165-188`), so there is no second reading to split. The bytes the executor
+  gets depend on the call: `extractChain` re-marshals the input when a `then` field is present,
+  which drops repeated keys (`agent/chain.go:167-189`), and hands the raw bytes on when it is
+  not. If the guard ever reads arguments, it must read the same parsed value the executor gets.
+
+Also read and not written up: 2611.32195 (a permission reply that deletes a deny rule; inber has
+no approver and no rule store), 2611.31586 (SecondChance, recovery benchmarks), 2611.26980 and
+2611.30412 (server-side and two-model context eviction), 2611.31727 (re-running only the failed
+branch of a task graph), 2611.28454, 2611.30383, 2611.31800, 2611.29709, 2611.31938, 2611.32037.
+
+Upstream, screened against inber code. llm-bridge-server's `2ebf506` (live) now sends the compact
+`summary` (what the compaction should keep) and llm-bridge-inber forwards it to `POST
+/sessions/{id}/compact`, but `Engine.CompactContext` never reads the parameter
+(`engine/engine.go:513-530`): filed as todo `c383a79f-23fc-4b4e-83b4-d3f00071be4e`. opencode #66210 (two MCP servers' skills
+with one name, one dropped): the inber case is open todo `e2d0b07b-5034-4f7d-b97f-2a534141dfc1`.
+codex #63782 (MCP reply after an expired HTTP session): inber speaks MCP over stdio only
+(`tools/mcp/client.go:107`). dexto #1297/#1298 (host requires a tool call each step), #1309
+(context stats without loading the chat), goose #13780 (time to first token), gemini-cli #30338
+and #30355 (shell rule matching), codex #63683 and #63743 (sandbox retries): features or shell
+policy with no counterpart in inber. The rest of codex, opencode, goose, cline, dexto, gemini-cli
+and claude-code (`mods/` and changelog only): UI, terminal, provider, release and dependency work.
