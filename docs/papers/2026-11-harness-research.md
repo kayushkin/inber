@@ -687,3 +687,120 @@ codex #63782 (MCP reply after an expired HTTP session): inber speaks MCP over st
 and #30355 (shell rule matching), codex #63683 and #63743 (sandbox retries): features or shell
 policy with no counterpart in inber. The rest of codex, opencode, goose, cline, dexto, gemini-cli
 and claude-code (`mods/` and changelog only): UI, terminal, provider, release and dependency work.
+
+# 2026-11-25 sweep
+
+One arXiv API search by submission date (19-25 November) over eleven keyword sets: 120 hits, ten
+abstracts new to these docs read, three papers read in full, four written up.
+
+## 23. A model told when to compact mostly does not ([2611.34147](https://arxiv.org/abs/2611.34147))
+
+25 November. NVIDIA's harness gives the model a call that replaces a range of its own history
+with a summary, and compares that with compaction at a threshold, on document research and
+machine-learning engineering at budgets of 8K to 512K tokens. Models that use the call score
+higher, often on fewer input tokens, most at tight budgets (GPT 6.1: 21% to 56% at 32K). Use
+differs by model. GPT, Kimi and DeepSeek call it in 42-53% of tasks; Opus in 4%. Told to
+consider compacting only at 85% use, Opus almost never compacts; without that sentence it
+compacts regularly, first at a median of 16% of the budget. Kimi and DeepSeek without the
+sentence compact early and score about 8 points below the harness baseline at 128K and above.
+At the first context-pressure warning, Opus mostly returns an answer instead of carrying on.
+Read from the paper's HTML.
+
+- **What inber should consider:** this changes the trial entry 1 proposed. That entry said to
+  give Opus-class agents a compact tool and keep the count trigger as a backstop. Here the same
+  model family leaves the tool unused under one timing sentence and overuses it under none, so
+  the trial's variable is the sentence, not the tool. It also says what a pressure notice does
+  to Opus: it ends the work. inber sends no such notice today. Its three limit notices fire
+  only after the limit is crossed, in a request that carries no tools
+  (`engine/build_hooks.go:41-73`). If one is added, measure finish rate with and without it.
+  No todo.
+
+## 24. Parallel sub-agents buy a few points at three times the cost ([2611.33893](https://arxiv.org/abs/2611.33893))
+
+25 November. One agent against a main agent with parallel sub-agents, building whole programs
+(NL2Repo, ProgramBench), mostly on Codex with a smaller Claude Code replication. On randomly
+drawn tasks sub-agents raised the hidden-test pass rate by 1.2 to 4.7 points at 2.6 to 3.8
+times the cost, and at equal cost the single agent matched or beat them. The gain was larger
+on hard tasks, by three routes. Checking: the single agent stops when its own checks pass; one
+sentence telling it to probe the reference program first recovered most of the gain with the
+older model, and newer models check more unasked. Fresh context: a single agent restarted
+every 3 hours with an empty conversation on the code it left made faster early progress than
+the same session resumed. Structure: the multi-agent runs wrote more files and shorter
+functions. Most comparisons rest on one to three runs. Read from the paper's HTML.
+
+- **What inber should consider:** `spawn_agent`'s description says how to spawn and nothing
+  about when (`server/spawn_tools.go:76-78`), and its one piece of advice is `fork=true`, which
+  hands the child the parent's conversation and so gives up the fresh context the paper
+  credits. A sentence there could say: spawn for hard or separable work, and fork only when the
+  child cannot do the task without the conversation. For long coder sessions, a restart from
+  the code with an empty conversation is a cheaper thing to try than a rolling summary; entry
+  20 points the same way. Design, not a defect; no todo.
+
+## 25. A parent drops the limits its sub-agents stated ([2611.27139](https://arxiv.org/abs/2611.27139))
+
+20 November. RI-Bench changes what sub-agents hand a senior agent and watches what the senior
+does with it, in three settings with written duties: weigh (peer review), verify (appeals) and
+relay (parliamentary inquiry). Over eight models and 12,000 episodes, seniors rarely adopted a
+planted procedural error (2.9% of rulings), but followed a majority of generic reviews in up
+to 71% of decisions and repeated witnesses' claims without either stated limit in up to 65% of
+cited claims. A prompt that names the duty reduces both and removes neither. Read from the
+abstract and the paper's HTML.
+
+- **What inber should consider:** the parent itself gets the child's whole reply
+  (`server/spawn.go:394`, `server/spawn_delivery.go:54-67`), so inber cuts nothing on that
+  path, and the header it writes names no duty. One line there ("carry the limits the
+  sub-agent stated into what you report") is the paper's mitigation. A reply schema with a
+  required limits field, as in opencode #66278 (`docs/comparisons/opencode.md`, 2026-11-25),
+  is the stronger form.
+- **Seen in the code, not filed.** The second copy is cut. `updateMainSession` gives the
+  agent's main session the first 500 bytes of the reply (`server/spawn_delivery.go:212-215`),
+  so the end, where limits usually sit, is the part lost. It says "Completed spawned task"
+  whatever the status, and "Full details available via memory_search" although
+  `saveSpawnToMemory` saves nothing when the child has no memory store (`:168-170`; a raw or
+  system-override engine has none, `engine/engine_new.go:538-548`) and only logs a failed save
+  (`:196-198`). Both calls run unconditionally (`server/spawn.go:418-421`). Held back because it
+  could not be shown live: the server listed no sessions on 2026-11-25, so no
+  `agent:<name>:main` session existed to receive one.
+
+## 26. A command checker reads one string and the shell reads another ([2611.29546](https://arxiv.org/abs/2611.29546))
+
+22 November. ParseGap runs each command through a coding agent's own checker and through
+Bash, and flags any approved command whose effects break the policy. Eight production agents,
+17 root causes: a tree-sitter-bash defect that hides a second command, read-only binaries
+whose arguments write files or start programs (every checker allowed some, 9 to 47 of 55
+cases), and an allow rule that turns off Codex's read-only sandbox. Live trials broke policy
+in all 16 agent and model pairs. The authors' fix compiles a strict Bash subset to a plan and
+runs it with `execve`, with no shell. The same week gemini-cli
+[#30451](https://github.com/google-gemini/gemini-cli/pull/30451) taught its checker to look
+inside `env`, `nice`, `timeout`, `sudo`, `xargs`, `sh -c`, `eval` and encoded PowerShell,
+five levels deep, refusing past that. Read from the abstract.
+
+- **What inber should consider:** inber has no second reading, because its guard decides on
+  the tool name and `shell_commands` is all or nothing (`guard/guard.go:165-188`). Entry 2
+  called a command denylist "the paper's cheapest win". This paper prices it: a denylist over
+  a command string is a second Bash parser, and eight vendors' parsers were all wrong
+  somewhere. If inber adds one, it should deny on a parsed plan it then runs itself, or stay
+  with the tool-level gate. No todo.
+
+Also read and not written up: 2611.28763 (hidden text aimed at agents in 145M GitHub items;
+stripping HTML comments stopped every replayed attack; more evidence for open todo
+`2e61fdf1-4d10-40ab-a93b-5971de8149af`), 2611.33098 (Delegent: a small local model as the
+sub-agent cut frontier cost by about two thirds; `spawn_agent` already takes `model`),
+2611.32946 (ShellBench: across five harnesses pass@1 ran from 42.9 to 45.2, so the harness
+moved the score far less than the model), 2611.33480, 2611.29804, 2611.25583.
+
+Upstream, screened against inber code. Claude Code 2.1.332 is written up in
+`docs/comparisons/claude-code.md` and opencode #66278 in `docs/comparisons/opencode.md`, both
+dated 2026-11-25; the first led to todo `3d1e56d0-1591-4363-b955-ef76389c08fc`. dexto #1307 (a
+turn cancelled during setup sent no terminal event): inber's stream handler writes an error
+event when the run returns an error (`server/api_bridge.go:362-381`), and the stop-before-start
+case is open todo `7de193b1-9446-46fc-bebc-869375261ed8`. codex #64011 and gemini-cli #30454
+(MCP over HTTP, MCP OAuth): inber speaks MCP over stdio only. goose `fe5dd158` and `4b1fb70a`
+(security fixes: imported sessions kept tool approvals; a stored recipe was rendered as a
+template on load and fork): inber imports no sessions, stores no approvals and renders no
+templates. codex #64000 (a child's shutdown fired the session-end hook), #64002, #63926,
+#63940, #64015; opencode #66422 (an automation paused for good after one failed run), #66378,
+#66436, #66477, #65505; dexto #1359 (a saved sign-in now beats the environment key); goose
+#13805; gemini-cli #30448, #30441: hooks, automations, patch parsing, sign-in order and
+consent screens with no counterpart in inber. The rest of codex, opencode, goose, cline, dexto
+and gemini-cli: UI, terminal, provider, release and dependency work.

@@ -1190,3 +1190,28 @@ accepts the name. Not filed for that reason, as with dexto #1258 on the same rou
   a Google, OpenRouter or Ollama key is added. A fix has to decide whether to rewrite the name or
   drop the failed call and its result from the history, and whether the Anthropic route needs the
   same (unmeasured).
+
+## 2026-11-25: a sub-agent's reply can be held to a schema, and the accepted call ends its turn
+
+[#66278](https://github.com/anomalyco/opencode/pull/66278) (behind a flag) lets a Code Mode
+script call `agent(prompt, {schema})` and `llm(prompt, {schema})`. With a JSON Schema, the child
+session gets a `structured_output` tool scoped to that schema. A call that fails validation
+returns the exact failing paths so the child can fix it, an accepted call ends the child's turn
+at once, and a child that stops without calling it gets one reminder. The schema is stored with
+the child session, and the parent reads the accepted call back from saved history, so a restart
+loses nothing; a restart releases orphaned children instead of reviving them into a dead script.
+The host caps a script at 16 agents at once and 100 in all, and stops starting new ones after
+the first usage or rate limit error. The PR reports plain JSON Schema matched a builder DSL
+(97.5% against 97.2% F1 over 4 models and 48 PRs) with no schema errors.
+
+inber's `spawn_agent` takes a task string and returns the child's last text
+(`server/spawn_tools.go:74-103`, `server/spawn.go:394`). The parent has to parse prose, and
+nothing makes a child state what it did not check.
+
+- **What inber should consider:** an optional `schema` on `spawn_agent`, enforced by a tool the
+  child must call to finish. With a required field for limits it is also the structural answer
+  to arXiv:2611.27139 (`docs/papers/2026-11-harness-research.md`, entry 25), where parents
+  dropped their sub-agents' stated limits in up to 65% of cited claims. The stop-after-first-
+  rate-limit rule is worth copying on its own: inber counts children per parent in memory only
+  (open todo `d39c81b2-7c05-47a2-9b92-5ef11e0ef88e`) and has no such breaker. A design gap, not
+  a defect; no todo.

@@ -1164,3 +1164,45 @@ directories."* **permission-store has the same hole**: its splitter emits an `At
 `cp`, `install`, `truncate` and `sponge` appear only as an `AtomCall` with the destination buried in
 argv. One tool's allow rule launders another tool's deny rule. Recorded here rather than filed as an
 inber todo, because the defect is in `~/repos/permission-store`, not this repo.
+
+## Harness-watch — 2026-11-25 (CC 2.1.332): a summary cut off at the output limit is retried, and the last try asks for less
+
+[`eb8e6d25`](https://github.com/anthropics/claude-code/commit/eb8e6d25) adds 2.1.332 to the
+changelog, about 120 lines. Four bear on inber's code; the rest is model aliases on three clouds,
+Code Mode, terminal and desktop fixes.
+
+- **"Fixed compaction failing when a summary kept running past the output limit: after three
+  cut-off replies, the last try now asks for a shorter summary."** inber makes one try and keeps
+  what it gets. `generateSummary` returns the cut-off text with a flag
+  (`conversation/summary_generation.go:107-111`), the engine swaps the turns for it and logs a
+  warning (`engine/lifecycle.go:111-121`). What to do instead is open todo
+  `2a0289a6-a564-465e-8b2a-0f5fe4303b17`, whose option B is this retry; Claude Code's bound is
+  three, and its last attempt changes the request, not only repeats it.
+  Reading the prompt for this turned up a smaller fault: it tells the model "Keep the summary
+  under the token limit" (`conversation/summary_generation.go:57`) and never says what the limit
+  is. The number is in scope as `maxTokens` (`:30`) and is used only as the API's `MaxTokens`
+  (`:68`): 800 for a coder, 1024 otherwise (`conversation/summarize_config.go:37,44,51`). The
+  code's own comment calls the cut-off "the expected case rather than the edge" (`:107-110`).
+  Filed as todo `3d1e56d0-1591-4363-b955-ef76389c08fc`.
+- **"Fixed Read, @-mentions and compaction hanging on a named pipe that nothing writes to, such
+  as a `.env` mounted by a locked secrets manager; the read now fails after 20 seconds."**
+  `read_files` has the same hang, read in the code and not run: tool-store's `readSingleFile`
+  calls `os.ReadFile(path)` with no check that the path is a regular file and no use of the
+  context (`~/repos/tool-store/tools/fs.go:84`), and opening a pipe with no writer blocks. On
+  inber's side nothing bounds one tool call, which is open todo
+  `d9af91f9-6ee7-4457-a6ba-ca0b4b1d1df0`. The fault is in tool-store, so it is recorded here and
+  not filed as an inber todo.
+- **"Changed SDK and `claude -p` mid-turn messages to count as the user's … mark relayed text
+  `isSynthetic: true`."** Claude Code now makes the caller say which mid-turn text a person
+  wrote. inber's one injection channel stamps a steer, a sub-agent's result and a context update
+  all as the user: open todo `ceedbf75-fe23-43a2-aa2f-5fb90a5f67cd`.
+- **"Fixed tool calls that never ran being counted as done … after you declined a permission
+  prompt in a session that had restarted."** The mirror of open todo
+  `4ad2254d-2973-44fa-8549-c8eaff242c83`, where inber tells a resumed model an unanswered call
+  "was not completed" without knowing. Both come from guessing a call's fate after a restart.
+
+- **What inber should consider:** when todo `2a0289a6` is decided, take the shape of Claude
+  Code's retry (a small fixed count, the last attempt asking for a shorter summary) as option
+  B's starting point. Each retry sends the whole transcript again, and those calls reach no
+  spend cap today (open todo `7be5a692-28af-42c2-963e-ea7b9e5ea3b0`), so the count is a cost
+  decision as well.
