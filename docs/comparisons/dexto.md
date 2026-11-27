@@ -626,3 +626,13 @@ opencode #65034 (prompts describe one tag, code sends another) — no inber prom
 #1252 was re-measured this run against the pinned SDK v1.35.0: decoding a schema into
 `anthropic.ToolInputSchemaParam` drops `$defs` and `additionalProperties` outright, as open todo
 `6bbb440e-fe32-4202-8863-067f5ab012c7` says.
+
+## Harness-watch — 2026-11-26: an index into a history means nothing once the history is rewritten ([PR 1381](https://github.com/truffle-ai/dexto/pull/1381))
+
+Dexto's compaction summary stored `originalMessageCount`, an index into the history compaction was given. Manual compaction passed the full history and overflow compaction passed the model's view, which after a first compaction starts at the summary. The reader took every count as an index into the full history, so a second overflow compaction kept ten question-answer pairs it had already summarized. The fix records the id of the first message the summary keeps and cuts there; when that message is gone it keeps everything, on the rule that repeating summarized context is safer than losing some.
+
+inber has the same class of fault, already open as todo `3553efe9-d90e-4350-a33a-023e73817e90`. `summarizeIfNeeded` swaps the old turns for a summary (`engine/lifecycle.go:111`) and leaves `staged.FrozenIdx`, an index into the slice it just replaced, as it was. `pruneIfNeeded` reads it on the next line (`engine/turn_prepare.go:66-69`). Re-read this run: the code is unchanged, and `engine/summarize_frozen_boundary_test.go` pins the wrong answer on purpose until someone picks between resetting the boundary and freezing the summary.
+
+- **What inber should consider:** dexto's answer is a third option for that todo: name the boundary by a message, not a position, so no rewrite of the slice can move it. inber's messages carry no ids, so this costs a field; the head-drop shift (`conversation/staged.go:58`) and the fork freeze (open todo `faf3a202-0ca2-4581-9be1-82e4e1bb8fdf`) would stop needing their own arithmetic. No new todo.
+
+[PR 1372](https://github.com/truffle-ai/dexto/pull/1372) the same day is evidence for open todo `4ad2254d-2973-44fa-8549-c8eaff242c83`: Dexto's relay marks a tool call left `running` by a failed try as "interrupted before its result was persisted. Its external effects are unknown", and the model now gets that sentence instead of a bare "already failed". inber still tells a resumed model the call "was not completed" (`conversation/repair.go:12`).

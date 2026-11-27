@@ -804,3 +804,25 @@ templates. codex #64000 (a child's shutdown fired the session-end hook), #64002,
 #13805; gemini-cli #30448, #30441: hooks, automations, patch parsing, sign-in order and
 consent screens with no counterpart in inber. The rest of codex, opencode, goose, cline, dexto
 and gemini-cli: UI, terminal, provider, release and dependency work.
+
+**2026-11-26 run.** No new paper earned an entry. Screened by abstract: 2611.33519 (PRECEPT:
+agents that fixed a vulnerability reintroduced its class in a new session 26.7% of the time,
+against 27.5% for agents that never saw it, and a note of the fix in persistent context did
+not close the gap; a caution for what inber's memory extraction is expected to buy),
+2611.27041 (tool descriptions from an MCP server tuned to bend arguments past five filters;
+more weight on open todo `d1e28770-ca5c-4736-b432-2ed5f41505ba`, where inber holds no session MCP tool for approval),
+2611.34875 (11% of code units in agent patches are unneeded; pruning by the visible tests
+keeps 89% of patches passing), 2611.33639 (review effort: every setting accepted at least 45%
+of wrong patches), 2611.30483, 2611.33005, 2611.31307, 2611.30745, 2611.34584 (database
+damage, memory systems, shared-memory poisoning, argument mediation, serving-side cache).
+
+Upstream the same day: gemini-cli #30420 (a loopback server must check Host and Origin) led
+to todo `f8e6d62d-c7d7-4f1e-9a63-bc1be3b4f222`, in `docs/comparisons/gemini-cli.md`. dexto
+#1381 and #1372 and opencode #66646 are evidence for open todos `3553efe9-d90e-4350-a33a-023e73817e90`, `4ad2254d-2973-44fa-8549-c8eaff242c83` and
+`f338b981-c783-44cc-b284-c5b5975f8bd5`, in `docs/comparisons/dexto.md` and `opencode.md`. codex #64160 (an approval was
+recognised by its opening text, which hook output could copy): inber recognises no message by
+its text, and its own forgeable wrappers are open todos `2bd78eb0-994a-4867-9180-15afa2face30` and `ceedbf75-fe23-43a2-aa2f-5fb90a5f67cd`. codex
+#64236 (a turn still marked in progress after a crash): inber marks running requests
+interrupted at startup (`server/store.go:581-585`). codex #64164, #64157, #64166, #64187,
+dexto #1373, cline #15748 and the Claude Code `mods/` updates: nothing with a counterpart in
+inber. No new Claude Code release since 2.1.332.
