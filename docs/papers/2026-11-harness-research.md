@@ -826,3 +826,56 @@ its text, and its own forgeable wrappers are open todos `2bd78eb0-994a-4867-9180
 interrupted at startup (`server/store.go:581-585`). codex #64164, #64157, #64166, #64187,
 dexto #1373, cline #15748 and the Claude Code `mods/` updates: nothing with a counterpart in
 inber. No new Claude Code release since 2.1.332.
+
+## 27. Facts found by a worker are lost at the handoff to the lead ([2611.22245](https://arxiv.org/abs/2611.22245))
+
+17 November. The paper plants two conflicting claims in document-review tasks and tracks each
+one from retrieval to the lead's conclusion, over three models at matched spend. Requiring
+delegation raised retrieval of both claims from 50.2% to 68.7% against one agent, and detection
+of the conflict fell from 16.2% to 13.2%. Workers reported both claims for 35.2% of the pairs
+they had retrieved. Detection beat the single agent when one worker read both claims and fell
+below it when the claims were split across workers. Entry 25 measured the lead dropping what a
+worker stated; this is the worker dropping it first. Read from the abstract.
+
+- **What inber should consider:** a child gets the bare task string as its first message
+  (`server/spawn.go:378`), and the `spawn_agent` description says only that a sub-agent works
+  on a task and results come back (`server/spawn_tools.go:76-78`). Neither tells the child
+  that its last reply is all the parent will read, or tells the parent how to split. Two
+  sentences cover the paper's two losses: in the description, "give one sub-agent everything
+  that has to be checked against each other"; ahead of the child's task, "your final reply is
+  all the caller sees: report what you found that disagrees, and what you did not check". A
+  reply schema (opencode #66278, `docs/comparisons/opencode.md`, 2026-11-25) is the stronger
+  form, as in entry 25. This is an idea to weigh, not a defect, so no todo.
+
+**2026-11-27 run.** One paper written up, above. Screened by abstract: 2611.31668 (a compaction
+note written in a gendered language cannot show whether the user stated an attribute or the
+grammar forced it; eviction cut recall of stated attributes from 90% to 34%; same class as
+entry 15 and open todo `421a8162-c057-4182-a404-8c13366a2fb4`), 2611.30259 (on Agent Security Bench the
+order of the tool list moved attack success by up to 19 points; inber's tool order is fixed and
+tested, `tools/registry_order_test.go:13`), 2611.33318, 2611.33242, 2611.32085, 2611.30360,
+2611.31541, 2611.30494, 2611.33757, 2611.31457, 2611.32009 (agent-to-agent messages, routing,
+poisoned experience stores, argument disclosure, sandbox mediation, learned prompts, evolved
+harnesses, trace analysis, interfaces). arXiv's newest listing was 25 November.
+
+Upstream the same day, each checked against inber code. opencode #66919 (a tool that calls
+another tool goes through the same checks, hooks and permissions): inber's one such path, the
+`then` chain, puts the chained call and each rider to the same gate as the primary
+(`agent/chain.go:444-445` and `:497-498`). opencode #66819 (an MCP result with `isError: true` was
+parsed as an empty success): inber reads the flag (`tools/mcp/client.go:445`, `:470`). opencode
+#66798 (a retry header sent with a 200 decided the fate of a stream that dropped later): inber
+has no retry classifier of its own; a dropped stream is open todos
+`2b6cb49e-73b8-4473-bc9f-e8bcddc4e1b5` and `0769c4db-14a7-4969-bfc0-c75c6f7e2728`. opencode #66914 (one pooled MCP
+connection for equal configs): inber starts MCP servers per session and pools none
+(`server/session_mcp.go:86-101`). opencode #66757, #66755 and #66756 (a file type the provider
+refuses stays in history; replayed media labelled as the user's): open todos
+`1afb11bd-465e-4634-9fef-e208cf7f3f5a` and `ceedbf75-fe23-43a2-aa2f-5fb90a5f67cd`. opencode #66731 (ask before loading an
+MCP skill, once per content hash): inber asks about no MCP tool at all, open todo
+`d1e28770-ca5c-4736-b432-2ed5f41505ba`. codex #64368, #64341, #64349 and #64346 (cancel before
+a blocking history write; record a declined or failed command before the turn ends): inber has
+no approval prompt, and its stop and shutdown ordering are open todos
+`7de193b1-9446-46fc-bebc-869375261ed8` and `ef6be5a4-91ae-4066-89aa-c08cb9bc55b4`. codex #64310 (session hooks fired on a
+hosted worker's turns), #64388, #64398, #64415, #64416 (sandbox paths); dexto #1388 (an object's
+`toJSON` ran after redaction; inber redacts the serialized request bytes, `redact/http.go`),
+#1386, #1377; opencode #66229, #66711, #66879: no counterpart in inber. Claude Code: `mods/`
+updates and one issue-triage change, no release since 2.1.332. cline, goose, gemini-cli, aider:
+releases, dependencies and UI only since the last run.
